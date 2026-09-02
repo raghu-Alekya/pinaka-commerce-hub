@@ -1,21 +1,30 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { MerchantEntity, StoreStatus } from './merchant.entity';
-
-const CACHE_TTL_SECONDS = 600; // 10 minutes cache TTL for store config
+import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from './entities/merchant.entity';
+import { StoreEntity, StoreStatus, OperationalStatus } from './entities/store.entity';
+import { SubscriptionEntity, PlanCode, SubscriptionStatus } from './entities/subscription.entity';
+import { OnboardingAuditEntity } from './entities/onboarding-audit.entity';
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
   private dataSource?: DataSource;
   private merchantRepo?: Repository<MerchantEntity>;
+  private storeRepo?: Repository<StoreEntity>;
+  private subRepo?: Repository<SubscriptionEntity>;
+  private auditRepo?: Repository<OnboardingAuditEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
-  private inMemoryStore: MerchantEntity[] = [];
+
+  // In-Memory Fallback Stores
+  private merchantsStore: MerchantEntity[] = [];
+  private storesStore: StoreEntity[] = [];
+  private subscriptionsStore: SubscriptionEntity[] = [];
+  private auditLogsStore: OnboardingAuditEntity[] = [];
 
   async onModuleInit() {
-    // 1. PostgreSQL Connection
+    // 1. PostgreSQL Connection to pinaka_commerce_hub DB
     try {
       this.dataSource = new DataSource({
         type: 'postgres',
@@ -23,20 +32,23 @@ export class MerchantRepository implements OnModuleInit {
         port: Number(process.env.POSTGRES_PORT) || 5432,
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
-        entities: [MerchantEntity],
+        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
+        entities: [MerchantEntity, StoreEntity, SubscriptionEntity, OnboardingAuditEntity],
         synchronize: true,
       });
 
       await this.dataSource.initialize();
       this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
+      this.storeRepo = this.dataSource.getRepository(StoreEntity);
+      this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
+      this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
       this.isDbConnected = true;
-      console.log('🐘 [Merchant PostgreSQL] Connected to Database: pinaka_delivery_hub');
-      await this.seedDefaultMerchant();
+      console.log('🐘 [PCH Merchant DB] Connected to PostgreSQL Database: pinaka_commerce_hub');
+      await this.seedDefaultData();
     } catch (err: any) {
-      console.log(`⚠️ [Merchant PostgreSQL] Offline (${err.message}). Using In-Memory fallback.`);
+      console.log(`⚠️ [PCH Merchant DB] Offline (${err.message}). Using In-Memory Mode.`);
       this.isDbConnected = false;
-      this.seedDefaultMerchantInMemory();
+      this.seedDefaultInMemory();
     }
 
     // 2. Redis Connection
@@ -47,160 +59,331 @@ export class MerchantRepository implements OnModuleInit {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
       });
-
       await this.redisClient.connect();
       this.isRedisConnected = true;
-      console.log('⚡ [Merchant Redis] Connected to Redis Container on port 6379');
+      console.log('⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching');
     } catch (err: any) {
-      console.log(`⚠️ [Merchant Redis] Offline (${err.message}). Proceeding without cache.`);
+      console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
   }
 
-  private async seedDefaultMerchant() {
-    if (this.merchantRepo) {
-      const existing = await this.merchantRepo.findOne({ where: { merchantId: 'STORE-01' } });
-      if (!existing) {
-        const defaultMerchant = this.merchantRepo.create({
-          merchantId: 'STORE-01',
-          storeName: 'Pinaka Bistro Downtown',
-          status: StoreStatus.OPEN,
-          autoAcceptOrders: true,
-          operatingHours: { openTime: '09:00', closeTime: '22:00' },
-          channels: [
-            { platform: 'DOORDASH', externalStoreId: 'STORE-DOORDASH-01', apiKey: 'dd_sandbox_key_9982', enabled: true },
-            { platform: 'SWIGGY', externalStoreId: 'REST-SWIGGY-IND-01', apiKey: 'sw_sandbox_key_4410', enabled: true },
-          ],
-        });
-        await this.merchantRepo.save(defaultMerchant);
-        console.log('🏪 [Merchant Service] Seeded default store: STORE-01');
-      }
+  private async seedDefaultData() {
+    if (!this.merchantRepo || !this.storeRepo || !this.subRepo) return;
+    const existing = await this.merchantRepo.findOne({ where: { id: 'MCH-1001' } });
+    if (!existing) {
+      const mch1 = this.merchantRepo.create({
+        id: 'MCH-1001',
+        businessName: 'Fresh Mart Organics LLC',
+        businessType: BusinessType.RETAIL,
+        retailSubCategory: RetailSubCategory.GROCERY,
+        ownerName: 'Alex Johnson',
+        email: 'alex@freshmart.com',
+        phone: '+1 (555) 234-5678',
+        taxId: '12-3456789',
+        kycStatus: KycStatus.VERIFIED,
+        status: MerchantStatus.ACTIVE,
+        onboardingStep: 'COMPLETED',
+      });
+      await this.merchantRepo.save(mch1);
+
+      const str1 = this.storeRepo.create({
+        id: 'STR-5001',
+        merchantId: 'MCH-1001',
+        storeName: 'Fresh Mart - Downtown Branch',
+        storeCode: 'STR-DT-01',
+        storeType: 'GROCERY',
+        address: { street: '123 Main St, Suite 400', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
+        currency: 'USD',
+        timezone: 'America/Chicago',
+        taxRate: 8.25,
+        activationPin: '849201',
+        status: StoreStatus.ACTIVE,
+        operationalStatus: OperationalStatus.OPEN,
+        channels: [{ platform: 'POS', externalStoreId: 'POS-01', apiKey: 'key_pos_1', enabled: true }, { platform: 'UBER_EATS', externalStoreId: 'UBER-99', apiKey: 'key_uber', enabled: true }],
+      });
+      await this.storeRepo.save(str1);
+
+      const sub1 = this.subRepo.create({
+        id: 'SUB-9001',
+        merchantId: 'MCH-1001',
+        planCode: PlanCode.PRO,
+        planName: 'Pro Commerce Plan',
+        maxStoresAllowed: 3,
+        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
+        billingCycle: 'MONTHLY',
+        price: 99.00,
+        status: SubscriptionStatus.ACTIVE,
+      });
+      await this.subRepo.save(sub1);
+
+      await this.cacheStorePin(str1.activationPin, str1);
+      await this.recordAuditLog('MERCHANT_SEEDED', 'MCH-1001', 'STR-5001', 'system', { seed: true });
+      console.log('✅ [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-5001 (PIN: 849201)');
     }
   }
 
-  private seedDefaultMerchantInMemory() {
-    const existing = this.inMemoryStore.find((m) => m.merchantId === 'STORE-01');
-    if (!existing) {
-      this.inMemoryStore.push({
-        merchantId: 'STORE-01',
-        storeName: 'Pinaka Bistro Downtown',
-        status: StoreStatus.OPEN,
+  private seedDefaultInMemory() {
+    if (this.merchantsStore.length === 0) {
+      this.merchantsStore.push({
+        id: 'MCH-1001',
+        businessName: 'Fresh Mart Organics LLC',
+        businessType: BusinessType.RETAIL,
+        retailSubCategory: RetailSubCategory.GROCERY,
+        ownerName: 'Alex Johnson',
+        email: 'alex@freshmart.com',
+        phone: '+1 (555) 234-5678',
+        taxId: '12-3456789',
+        kycStatus: KycStatus.VERIFIED,
+        kycDocuments: [],
+        status: MerchantStatus.ACTIVE,
+        onboardingStep: 'COMPLETED',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      this.storesStore.push({
+        id: 'STR-5001',
+        merchantId: 'MCH-1001',
+        storeName: 'Fresh Mart - Downtown Branch',
+        storeCode: 'STR-DT-01',
+        storeType: 'GROCERY',
+        address: { street: '123 Main St, Suite 400', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
+        currency: 'USD',
+        timezone: 'America/Chicago',
+        taxRate: 8.25,
+        activationPin: '849201',
         autoAcceptOrders: true,
-        operatingHours: { openTime: '09:00', closeTime: '22:00' },
-        channels: [
-          { platform: 'DOORDASH', externalStoreId: 'STORE-DOORDASH-01', apiKey: 'dd_sandbox_key_9982', enabled: true },
-          { platform: 'SWIGGY', externalStoreId: 'REST-SWIGGY-IND-01', apiKey: 'sw_sandbox_key_4410', enabled: true },
-        ],
+        status: StoreStatus.ACTIVE,
+        operationalStatus: OperationalStatus.OPEN,
+        channels: [{ platform: 'POS', externalStoreId: 'POS-01', apiKey: 'key_pos_1', enabled: true }],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      this.subscriptionsStore.push({
+        id: 'SUB-9001',
+        merchantId: 'MCH-1001',
+        planCode: PlanCode.PRO,
+        planName: 'Pro Commerce Plan',
+        maxStoresAllowed: 3,
+        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
+        billingCycle: 'MONTHLY',
+        price: 99.00,
+        status: SubscriptionStatus.ACTIVE,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
     }
   }
 
-  async findAllMerchants(): Promise<MerchantEntity[]> {
-    if (this.isDbConnected && this.merchantRepo) {
+  async recordAuditLog(action: string, merchantId: string, storeId?: string, performedBy = 'system', details: Record<string, any> = {}): Promise<void> {
+    const entry: OnboardingAuditEntity = {
+      id: `AUDIT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      merchantId,
+      storeId,
+      action,
+      performedBy,
+      details,
+      createdAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.auditRepo) {
       try {
-        return await this.merchantRepo.find();
-      } catch {
-        // Fallback
-      }
-    }
-    return this.inMemoryStore;
-  }
-
-  async findMerchantById(merchantId: string): Promise<MerchantEntity | null> {
-    // 1. Check Redis Cache
-    const cached = await this.getCache<MerchantEntity>(`merchant:${merchantId}`);
-    if (cached) {
-      console.log(`⚡ [Redis Cache HIT] Served Merchant #${merchantId} configuration in <1ms`);
-      return cached;
-    }
-
-    // 2. Query Database
-    let merchant: MerchantEntity | null = null;
-    if (this.isDbConnected && this.merchantRepo) {
-      try {
-        merchant = await this.merchantRepo.findOne({ where: { merchantId } });
-      } catch {
-        // Fallback
-      }
-    }
-
-    if (!merchant) {
-      merchant = this.inMemoryStore.find((m) => m.merchantId === merchantId) || null;
-    }
-
-    // Save to Cache
-    if (merchant) {
-      await this.setCache(`merchant:${merchantId}`, merchant);
-    }
-    return merchant;
-  }
-
-  async saveMerchant(dto: Partial<MerchantEntity>): Promise<MerchantEntity> {
-    let saved: MerchantEntity;
-
-    if (this.isDbConnected && this.merchantRepo) {
-      const entity = this.merchantRepo.create(dto);
-      saved = await this.merchantRepo.save(entity);
+        const entity = this.auditRepo.create(entry);
+        await this.auditRepo.save(entity);
+      } catch {}
     } else {
-      const idx = this.inMemoryStore.findIndex((m) => m.merchantId === dto.merchantId);
-      const entry: MerchantEntity = {
-        merchantId: dto.merchantId || `STORE-${Date.now()}`,
-        storeName: dto.storeName || 'New Pinaka Store',
-        status: dto.status || StoreStatus.OPEN,
-        autoAcceptOrders: dto.autoAcceptOrders ?? true,
-        operatingHours: dto.operatingHours || { openTime: '09:00', closeTime: '22:00' },
-        channels: dto.channels || [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      if (idx >= 0) this.inMemoryStore[idx] = entry;
-      else this.inMemoryStore.unshift(entry);
-      saved = entry;
-    }
-
-    // Purge and Refresh Cache
-    await this.setCache(`merchant:${saved.merchantId}`, saved);
-    return saved;
-  }
-
-  async updateStoreStatus(merchantId: string, status: StoreStatus): Promise<MerchantEntity | null> {
-    const merchant = await this.findMerchantById(merchantId);
-    if (!merchant) return null;
-
-    merchant.status = status;
-    merchant.updatedAt = new Date();
-
-    return await this.saveMerchant(merchant);
-  }
-
-  async updateAutoAccept(merchantId: string, autoAccept: boolean): Promise<MerchantEntity | null> {
-    const merchant = await this.findMerchantById(merchantId);
-    if (!merchant) return null;
-
-    merchant.autoAcceptOrders = autoAccept;
-    merchant.updatedAt = new Date();
-
-    return await this.saveMerchant(merchant);
-  }
-
-  private async getCache<T>(key: string): Promise<T | null> {
-    if (!this.isRedisConnected || !this.redisClient) return null;
-    try {
-      const data = await this.redisClient.get(key);
-      return data ? (JSON.parse(data) as T) : null;
-    } catch {
-      return null;
+      this.auditLogsStore.unshift(entry);
     }
   }
 
-  private async setCache(key: string, value: any): Promise<void> {
-    if (!this.isRedisConnected || !this.redisClient) return;
-    try {
-      await this.redisClient.set(key, JSON.stringify(value), 'EX', CACHE_TTL_SECONDS);
-    } catch {
-      // Ignore cache write error
+  async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
+    const id = data.id || `MCH-${Math.floor(1000 + Math.random() * 9000)}`;
+    const merchant: MerchantEntity = {
+      id,
+      businessName: data.businessName || 'New Merchant Business',
+      businessType: data.businessType || BusinessType.RETAIL,
+      retailSubCategory: data.retailSubCategory || (data.businessType === BusinessType.RETAIL ? RetailSubCategory.GROCERY : undefined),
+      ownerName: data.ownerName || 'Owner Name',
+      email: data.email || `owner_${Date.now()}@pinaka.com`,
+      phone: data.phone || '',
+      taxId: data.taxId || '',
+      kycStatus: data.kycStatus || KycStatus.PENDING,
+      kycDocuments: data.kycDocuments || [],
+      status: data.status || MerchantStatus.PENDING,
+      onboardingStep: data.onboardingStep || 'STEP1_BUSINESS',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.merchantRepo) {
+      const entity = this.merchantRepo.create(merchant);
+      const saved = await this.merchantRepo.save(entity);
+      await this.recordAuditLog('MERCHANT_CREATED', saved.id, undefined, saved.email, { businessName: saved.businessName });
+      return saved;
+    } else {
+      this.merchantsStore.unshift(merchant);
+      await this.recordAuditLog('MERCHANT_CREATED', merchant.id, undefined, merchant.email, { businessName: merchant.businessName });
+      return merchant;
+    }
+  }
+
+  async getAllMerchants(): Promise<MerchantEntity[]> {
+    if (this.isDbConnected && this.merchantRepo) {
+      return await this.merchantRepo.find({ order: { createdAt: 'DESC' } });
+    }
+    return this.merchantsStore;
+  }
+
+  async getMerchantById(id: string): Promise<{ merchant: MerchantEntity | null; stores: StoreEntity[]; subscription: SubscriptionEntity | null }> {
+    let merchant: MerchantEntity | null = null;
+    let stores: StoreEntity[] = [];
+    let subscription: SubscriptionEntity | null = null;
+
+    if (this.isDbConnected && this.merchantRepo && this.storeRepo && this.subRepo) {
+      merchant = await this.merchantRepo.findOne({ where: { id } });
+      if (merchant) {
+        stores = await this.storeRepo.find({ where: { merchantId: id } });
+        subscription = await this.subRepo.findOne({ where: { merchantId: id } });
+      }
+    } else {
+      merchant = this.merchantsStore.find(m => m.id === id) || null;
+      if (merchant) {
+        stores = this.storesStore.filter(s => s.merchantId === id);
+        subscription = this.subscriptionsStore.find(sub => sub.merchantId === id) || null;
+      }
+    }
+
+    return { merchant, stores, subscription };
+  }
+
+  async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+    const id = data.id || `STR-${Math.floor(5000 + Math.random() * 5000)}`;
+    const activationPin = data.activationPin || Math.floor(100000 + Math.random() * 900000).toString();
+    const storeCode = data.storeCode || `STR-${Date.now().toString().slice(-4)}`;
+
+    const store: StoreEntity = {
+      id,
+      merchantId,
+      storeName: data.storeName || 'Store Branch',
+      storeCode,
+      storeType: data.storeType || 'RETAIL',
+      address: data.address || { street: '', city: '', state: '', zipCode: '', country: 'USA' },
+      currency: data.currency || 'USD',
+      timezone: data.timezone || 'America/Chicago',
+      taxRate: data.taxRate !== undefined ? Number(data.taxRate) : 8.25,
+      activationPin,
+      autoAcceptOrders: data.autoAcceptOrders ?? true,
+      status: data.status || StoreStatus.ACTIVE,
+      operationalStatus: data.operationalStatus || OperationalStatus.OPEN,
+      channels: data.channels || [{ platform: 'POS', externalStoreId: id, apiKey: `key_${id}`, enabled: true }],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.storeRepo) {
+      const entity = this.storeRepo.create(store);
+      const saved = await this.storeRepo.save(entity);
+      await this.cacheStorePin(activationPin, saved);
+      await this.recordAuditLog('STORE_CREATED', merchantId, saved.id, 'merchant', { storeName: saved.storeName, pin: activationPin });
+      return saved;
+    } else {
+      this.storesStore.unshift(store);
+      await this.cacheStorePin(activationPin, store);
+      await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName, pin: activationPin });
+      return store;
+    }
+  }
+
+  async activateTerminalByPin(pin: string): Promise<{ success: boolean; store?: StoreEntity; entitlements?: string[]; message?: string }> {
+    if (this.isRedisConnected && this.redisClient) {
+      try {
+        const cached = await this.redisClient.get(`pin:${pin}`);
+        if (cached) {
+          const store = JSON.parse(cached) as StoreEntity;
+          const { subscription } = await this.getMerchantById(store.merchantId);
+          return {
+            success: true,
+            store,
+            entitlements: subscription?.entitlements || ['POS'],
+          };
+        }
+      } catch {}
+    }
+
+    let store: StoreEntity | null = null;
+    if (this.isDbConnected && this.storeRepo) {
+      store = await this.storeRepo.findOne({ where: { activationPin: pin } });
+    } else {
+      store = this.storesStore.find(s => s.activationPin === pin) || null;
+    }
+
+    if (!store) {
+      return { success: false, message: 'Invalid 6-digit Activation PIN. Terminal pairing failed.' };
+    }
+
+    const { subscription } = await this.getMerchantById(store.merchantId);
+    await this.cacheStorePin(pin, store);
+
+    return {
+      success: true,
+      store,
+      entitlements: subscription?.entitlements || ['POS', 'BARCODE_SCANNING'],
+    };
+  }
+
+  async createOrUpdateSubscription(merchantId: string, data: Partial<SubscriptionEntity>): Promise<SubscriptionEntity> {
+    const planCode = data.planCode || PlanCode.PRO;
+    let defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'];
+    let maxStores = 3;
+    let price = 99.00;
+
+    if (planCode === PlanCode.STARTER) {
+      defaultEntitlements = ['POS', 'BASIC_INVENTORY', 'RECEIPT_PRINTER'];
+      maxStores = 1;
+      price = 49.00;
+    } else if (planCode === PlanCode.ENTERPRISE) {
+      defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY', 'CUSTOM_ERP'];
+      maxStores = 999;
+      price = 199.00;
+    }
+
+    const sub: SubscriptionEntity = {
+      id: data.id || `SUB-${Math.floor(9000 + Math.random() * 1000)}`,
+      merchantId,
+      planCode,
+      planName: data.planName || `${planCode} Plan`,
+      maxStoresAllowed: data.maxStoresAllowed || maxStores,
+      entitlements: data.entitlements || defaultEntitlements,
+      billingCycle: data.billingCycle || 'MONTHLY',
+      price: data.price || price,
+      status: data.status || SubscriptionStatus.ACTIVE,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.subRepo) {
+      let entity = await this.subRepo.findOne({ where: { merchantId } });
+      if (!entity) entity = this.subRepo.create(sub);
+      else Object.assign(entity, sub);
+      const saved = await this.subRepo.save(entity);
+      await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: saved.planCode, entitlements: saved.entitlements });
+      return saved;
+    } else {
+      const idx = this.subscriptionsStore.findIndex(s => s.merchantId === merchantId);
+      if (idx >= 0) this.subscriptionsStore[idx] = sub;
+      else this.subscriptionsStore.unshift(sub);
+      await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: sub.planCode, entitlements: sub.entitlements });
+      return sub;
+    }
+  }
+
+  private async cacheStorePin(pin: string, store: StoreEntity): Promise<void> {
+    if (this.isRedisConnected && this.redisClient) {
+      try {
+        await this.redisClient.set(`pin:${pin}`, JSON.stringify(store), 'EX', 86400 * 30);
+      } catch {}
     }
   }
 }

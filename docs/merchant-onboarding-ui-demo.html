@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pinaka Commerce Hub (PCH) — Merchant Onboarding & Backoffice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-dark: #0B0F19;
+      --bg-card: rgba(22, 30, 49, 0.75);
+      --bg-card-hover: rgba(30, 41, 69, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-focus: #6366F1;
+      --primary: #6366F1;
+      --primary-hover: #4F46E5;
+      --emerald: #10B981;
+      --emerald-glow: rgba(16, 185, 129, 0.25);
+      --amber: #F59E0B;
+      --text-main: #F8FAFC;
+      --text-muted: #94A3B8;
+      --text-subtle: #64748B;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.1) 0px, transparent 50%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Navigation Bar */
+    header {
+      border-bottom: 1px solid var(--border-color);
+      backdrop-filter: blur(12px);
+      background: rgba(11, 15, 25, 0.8);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, #6366F1, #10B981);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+    }
+
+    .brand-text h1 {
+      font-size: 1.1rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .brand-text p {
+      font-size: 0.75rem;
+      color: var(--emerald);
+      font-weight: 600;
+    }
+
+    .header-badge {
+      background: rgba(99, 102, 241, 0.12);
+      color: #A5B4FC;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 6px 14px;
+      border-radius: 30px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Container */
+    .container {
+      max-width: 1100px;
+      margin: 2.5rem auto;
+      padding: 0 1.5rem;
+      flex: 1;
+      width: 100%;
+    }
+
+    /* Stepper Tracker */
+    .stepper {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .step-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 1rem 1.25rem;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .step-item.active {
+      border-color: var(--primary);
+      background: rgba(99, 102, 241, 0.1);
+      box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+    }
+
+    .step-item.completed {
+      border-color: var(--emerald);
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    .step-item.active .step-num {
+      background: var(--primary);
+      color: #FFF;
+    }
+
+    .step-item.completed .step-num {
+      background: var(--emerald);
+      color: #FFF;
+    }
+
+    .step-info h4 {
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    .step-info p {
+      font-size: 0.75rem;
+      color: var(--text-subtle);
+    }
+
+    /* Form Card Container */
+    .wizard-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 2.5rem;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .section-header {
+      margin-bottom: 2rem;
+    }
+
+    .section-header h2 {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+    }
+
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Grid Layouts */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+    }
+
+    .col-span-2 {
+      grid-column: span 2;
+    }
+
+    /* Inputs & Labels */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #CBD5E1;
+    }
+
+    input, select, textarea {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 0.85rem 1rem;
+      color: var(--text-main);
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    }
+
+    /* Vertical Selector Cards */
+    .vertical-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 4px;
+    }
+
+    .vertical-card {
+      border: 1.5px solid var(--border-color);
+      background: rgba(15, 23, 42, 0.4);
+      padding: 1.25rem;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      transition: all 0.2s;
+    }
+
+    .vertical-card.selected {
+      border-color: var(--primary);
+      background: rgba(99, 102, 241, 0.12);
+    }
+
+    .vertical-icon {
+      font-size: 2rem;
+    }
+
+    .vertical-text h5 {
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+
+    .vertical-text p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* Activation PIN Highlight Box */
+    .pin-box {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 78, 59, 0.2));
+      border: 1.5px dashed var(--emerald);
+      border-radius: var(--radius-md);
+      padding: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 1rem;
+    }
+
+    .pin-code-display {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: 6px;
+      color: var(--emerald);
+      text-shadow: 0 0 12px var(--emerald-glow);
+    }
+
+    .btn-copy {
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid var(--emerald);
+      color: #A7F3D0;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-copy:hover {
+      background: var(--emerald);
+      color: #064E3B;
+    }
+
+    /* Subscription Plan Cards */
+    .plans-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+    }
+
+    .plan-card {
+      background: rgba(15, 23, 42, 0.5);
+      border: 1.5px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.75rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.3s;
+      position: relative;
+    }
+
+    .plan-card.popular {
+      border-color: var(--emerald);
+      background: rgba(16, 185, 129, 0.06);
+      box-shadow: 0 0 25px rgba(16, 185, 129, 0.15);
+    }
+
+    .plan-badge {
+      position: absolute;
+      top: -12px;
+      right: 20px;
+      background: var(--emerald);
+      color: #064E3B;
+      font-size: 0.7rem;
+      font-weight: 800;
+      padding: 3px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+
+    .plan-price {
+      font-size: 2rem;
+      font-weight: 800;
+      margin: 1rem 0;
+    }
+
+    .plan-price span {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .plan-features {
+      list-style: none;
+      font-size: 0.85rem;
+      color: #CBD5E1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 1.5rem;
+    }
+
+    .plan-features li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* File Upload Drop Zone */
+    .dropzone {
+      border: 2px dashed rgba(99, 102, 241, 0.4);
+      background: rgba(99, 102, 241, 0.03);
+      border-radius: var(--radius-md);
+      padding: 2.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dropzone:hover {
+      border-color: var(--primary);
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .dropzone-icon {
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+    }
+
+    /* Action Buttons */
+    .wizard-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .btn {
+      padding: 0.9rem 1.8rem;
+      border-radius: var(--radius-sm);
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #FFF;
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-success {
+      background: var(--emerald);
+      color: #064E3B;
+      font-weight: 800;
+      box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+    }
+
+    /* Database Save Notification Banner */
+    .db-alert-banner {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid var(--emerald);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.5rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #A7F3D0;
+      font-size: 0.9rem;
+    }
+
+    /* Dashboard View (Post-Onboarding) */
+    .dashboard-view {
+      display: none;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.5rem;
+    }
+
+    .metric-title {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .metric-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      margin: 8px 0;
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--emerald);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Navigation -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">P</div>
+      <div class="brand-text">
+        <h1>Pinaka Commerce Hub</h1>
+        <p>Merchant Portal & POS Engine</p>
+      </div>
+    </div>
+    <div class="header-badge">
+      <span>🟢 Live Endpoint:</span>
+      <code>http://localhost:3003/api/v1</code>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <!-- ONBOARDING WIZARD CONTAINER -->
+    <div id="onboardingContainer">
+      <!-- 4-Step Stepper Tracker -->
+      <div class="stepper">
+        <div class="step-item active" id="stepIndicator1" onclick="goToStep(1)">
+          <div class="step-num">1</div>
+          <div class="step-info">
+            <h4>Business Profile</h4>
+            <p>merchants table</p>
+          </div>
+        </div>
+        <div class="step-item" id="stepIndicator2" onclick="goToStep(2)">
+          <div class="step-num">2</div>
+          <div class="step-info">
+            <h4>Store & Terminal</h4>
+            <p>stores table</p>
+          </div>
+        </div>
+        <div class="step-item" id="stepIndicator3" onclick="goToStep(3)">
+          <div class="step-num">3</div>
+          <div class="step-info">
+            <h4>Plan & Entitlements</h4>
+            <p>subscriptions table</p>
+          </div>
+        </div>
+        <div class="step-item" id="stepIndicator4" onclick="goToStep(4)">
+          <div class="step-num">4</div>
+          <div class="step-info">
+            <h4>KYC & Launch</h4>
+            <p>audit logs</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 1: BUSINESS PROFILE -->
+      <div class="wizard-card" id="step1">
+        <div class="section-header">
+          <h2>Step 1: Business Profile & Master Identity</h2>
+          <p>Maps to PostgreSQL <code>merchants</code> table. Defines business vertical and owner account.</p>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group col-span-2">
+            <label>Select Primary Business Type *</label>
+            <div class="vertical-grid">
+              <div class="vertical-card selected" id="cardRetail" onclick="selectVertical('RETAIL')">
+                <div class="vertical-icon">🛒</div>
+                <div class="vertical-text">
+                  <h5>1. Retail</h5>
+                  <p>Enables Barcode scanning, SKU units, weighing scale & store management.</p>
+                </div>
+              </div>
+              <div class="vertical-card" id="cardRestaurant" onclick="selectVertical('RESTAURANT')">
+                <div class="vertical-icon">🍔</div>
+                <div class="vertical-text">
+                  <h5>2. Restaurant</h5>
+                  <p>Enables Table layout, Dish modifiers, Kitchen Display System (KDS) & food delivery.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Retail Sub-Category Selection (shown when Retail is active) -->
+          <div class="form-group col-span-2" id="retailSubCategoryContainer" style="background: rgba(99, 102, 241, 0.08); padding: 1rem; border-radius: var(--radius-md); border: 1px dashed var(--primary);">
+            <label style="color: #A5B4FC; font-weight: 700;">Select Retail Store Category *</label>
+            <div class="vertical-grid" style="margin-top: 8px;">
+              <div class="vertical-card selected" id="cardGrocery" onclick="selectSubCategory('GROCERY')">
+                <div class="vertical-icon">🥦</div>
+                <div class="vertical-text">
+                  <h5>Grocery Store</h5>
+                  <p>Supermarkets, fresh produce, catch-weight scale, & pantry inventory.</p>
+                </div>
+              </div>
+              <div class="vertical-card" id="cardConvenience" onclick="selectSubCategory('CONVENIENCE')">
+                <div class="vertical-icon">🏪</div>
+                <div class="vertical-text">
+                  <h5>Convenience Store</h5>
+                  <p>Corner stores, quick impulse checkout, snacks & fast SKU turnover.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Business Legal Name *</label>
+            <input type="text" id="businessName" value="Fresh Mart Organics LLC" placeholder="e.g. Fresh Mart Organics LLC" />
+          </div>
+
+          <div class="form-group">
+            <label>Owner / Primary Contact Name *</label>
+            <input type="text" id="ownerName" value="Alex Johnson" placeholder="e.g. Alex Johnson" />
+          </div>
+
+          <div class="form-group">
+            <label>Owner Email Address (Login ID) *</label>
+            <input type="email" id="ownerEmail" value="alex@freshmart.com" placeholder="alex@freshmart.com" />
+          </div>
+
+          <div class="form-group">
+            <label>Contact Phone Number *</label>
+            <input type="tel" id="ownerPhone" value="+1 (555) 234-5678" placeholder="+1 (555) 000-0000" />
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <div></div>
+          <button class="btn btn-primary" onclick="goToStep(2)">Next: Store Setup ➔</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: STORE SETUP -->
+      <div class="wizard-card" id="step2" style="display: none;">
+        <div class="section-header">
+          <h2>Step 2: First Store Branch Setup</h2>
+          <p>Maps to PostgreSQL <code>stores</code> table. Generates unique 6-Digit PIN for Sunmi Flutter POS pairing.</p>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Store Name *</label>
+            <input type="text" id="storeName" value="Fresh Mart - Downtown Branch" />
+          </div>
+
+          <div class="form-group">
+            <label>Internal Store Code (Unique) *</label>
+            <input type="text" id="storeCode" value="STR-DT-01" />
+          </div>
+
+          <div class="form-group">
+            <label>Street Address *</label>
+            <input type="text" id="storeAddress" value="123 Main Street, Suite 400" />
+          </div>
+
+          <div class="form-group">
+            <label>City, State & Zip Code *</label>
+            <input type="text" id="storeCity" value="Austin, TX 78701" />
+          </div>
+
+          <div class="form-group">
+            <label>Currency *</label>
+            <select id="currency">
+              <option value="USD" selected>USD ($) - United States Dollar</option>
+              <option value="INR">INR (₹) - Indian Rupee</option>
+              <option value="CAD">CAD ($) - Canadian Dollar</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Default Tax Rate (%) *</label>
+            <input type="number" id="taxRate" value="8.25" step="0.01" />
+          </div>
+
+          <!-- 6-DIGIT ACTIVATION PIN HIGHLIGHT BOX -->
+          <div class="col-span-2">
+            <label>Store Terminal Activation PIN (Used to pair Sunmi POS / Flutter Terminal) *</label>
+            <div class="pin-box">
+              <div>
+                <p style="font-size: 0.8rem; color: #A7F3D0; font-weight: 600; margin-bottom: 4px;">🔑 6-DIGIT PAIRING PIN (Auto-Generated)</p>
+                <div class="pin-code-display" id="displayPin">849201</div>
+                <p style="font-size: 0.75rem; color: #6EE7B7;">Enter this PIN on your Sunmi D3 Pro POS screen to connect this store.</p>
+              </div>
+              <button class="btn-copy" onclick="regeneratePin()">🔄 Regenerate PIN</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" onclick="goToStep(1)">⬅ Back</button>
+          <button class="btn btn-primary" onclick="goToStep(3)">Next: Choose Plan ➔</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: SUBSCRIPTION PLAN -->
+      <div class="wizard-card" id="step3" style="display: none;">
+        <div class="section-header">
+          <h2>Step 3: Subscription & Feature Entitlements</h2>
+          <p>Maps to PostgreSQL <code>subscriptions</code> table. Provisions active feature tokens in Redis.</p>
+        </div>
+
+        <div class="plans-grid">
+          <!-- Starter Plan -->
+          <div class="plan-card" onclick="selectPlan('STARTER')">
+            <div>
+              <h3>Starter POS</h3>
+              <p style="color: var(--text-muted); font-size: 0.8rem;">Single store retail & cafe</p>
+              <div class="plan-price">$49 <span>/ month</span></div>
+              <ul class="plan-features">
+                <li>✅ 1 Store Location</li>
+                <li>✅ In-Store POS Checkout</li>
+                <li>✅ Basic Inventory & Tax</li>
+                <li>✅ Thermal Receipt Printer</li>
+              </ul>
+            </div>
+            <button class="btn btn-secondary" style="width: 100%;">Select Starter</button>
+          </div>
+
+          <!-- Pro Plan -->
+          <div class="plan-card popular" id="proCard" onclick="selectPlan('PRO')">
+            <div class="plan-badge">Popular Choice</div>
+            <div>
+              <h3 style="color: #A7F3D0;">Pro Commerce</h3>
+              <p style="color: var(--text-muted); font-size: 0.8rem;">Multi-store & delivery engine</p>
+              <div class="plan-price" style="color: var(--emerald);">$99 <span>/ month</span></div>
+              <ul class="plan-features">
+                <li>✅ Up to 3 Store Locations</li>
+                <li>✅ Barcode Scanner & Scales</li>
+                <li>✅ Uber Eats & DoorDash Hub</li>
+                <li>✅ Cash Safe Drop & Shifts</li>
+                <li>✅ Employee Attendance</li>
+              </ul>
+            </div>
+            <button class="btn btn-success" style="width: 100%;">Selected (Active) ✓</button>
+          </div>
+
+          <!-- Enterprise Plan -->
+          <div class="plan-card" onclick="selectPlan('ENTERPRISE')">
+            <div>
+              <h3>Enterprise</h3>
+              <p style="color: var(--text-muted); font-size: 0.8rem;">Unlimited chain stores</p>
+              <div class="plan-price">$199 <span>/ month</span></div>
+              <ul class="plan-features">
+                <li>✅ Unlimited Store Locations</li>
+                <li>✅ Custom ERP / Accounting</li>
+                <li>✅ Advanced Loyalty Engine</li>
+                <li>✅ 24/7 Dedicated Manager</li>
+              </ul>
+            </div>
+            <button class="btn btn-secondary" style="width: 100%;">Select Enterprise</button>
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" onclick="goToStep(2)">⬅ Back</button>
+          <button class="btn btn-primary" onclick="goToStep(4)">Next: KYC & Launch ➔</button>
+        </div>
+      </div>
+
+      <!-- STEP 4: KYC VERIFICATION -->
+      <div class="wizard-card" id="step4" style="display: none;">
+        <div class="section-header">
+          <h2>Step 4: KYC Verification & Launch</h2>
+          <p>Upload business registration documents to activate live payout processing.</p>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group col-span-2">
+            <label>Business Tax ID / EIN / GST Number *</label>
+            <input type="text" id="taxId" value="12-3456789" />
+          </div>
+
+          <div class="form-group col-span-2">
+            <label>Upload Business Registration / License (PDF or JPEG) *</label>
+            <div class="dropzone" onclick="simulateUpload()">
+              <div class="dropzone-icon">📁</div>
+              <h4 id="uploadStatus">Drag & drop business_license.pdf here or click to browse</h4>
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Supports PDF, JPEG, PNG up to 10 MB</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" onclick="goToStep(3)">⬅ Back</button>
+          <button class="btn btn-success" id="btnSubmitOnboarding" onclick="completeOnboarding()">🚀 Complete Onboarding & Launch Dashboard</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- POST-ONBOARDING DASHBOARD VIEW -->
+    <div class="dashboard-view" id="dashboardContainer">
+      
+      <!-- Live DB Save Confirmation Alert -->
+      <div class="db-alert-banner" id="dbSaveBanner">
+        <span style="font-size: 1.5rem;">💾</span>
+        <div>
+          <strong>Data Saved to PostgreSQL Database & Cached in Redis!</strong>
+          <div style="font-size: 0.8rem; opacity: 0.9;" id="dbSaveDetails">Persisted in tables: merchants, stores, subscriptions, and audit logs.</div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+          <h2 style="font-size: 1.8rem; font-weight: 800;">Merchant Backoffice Dashboard</h2>
+          <p style="color: var(--text-muted); font-size: 0.9rem;">Store: <strong style="color: var(--emerald);" id="dashStoreName">Fresh Mart - Downtown</strong> | Merchant ID: <code style="color: #A5B4FC;" id="dashMerchantId">MCH-1001</code></p>
+        </div>
+        <button class="btn btn-secondary" onclick="restartWizard()">🔄 Reset Onboarding Demo</button>
+      </div>
+
+      <!-- Metric KPI Cards -->
+      <div class="dashboard-grid">
+        <div class="metric-card">
+          <div class="metric-title">Today's Total Sales</div>
+          <div class="metric-value">$4,280.50</div>
+          <div class="metric-sub">↑ 18% vs yesterday</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">In-Store POS Orders</div>
+          <div class="metric-value">142</div>
+          <div class="metric-sub">Active Shift: Morning</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">Online Delivery (PDH)</div>
+          <div class="metric-value">38</div>
+          <div class="metric-sub">DoorDash (22), Uber (16)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">Cash in Drawer</div>
+          <div class="metric-value">$650.00</div>
+          <div class="metric-sub">Safe Drop Limit: $1,000</div>
+        </div>
+      </div>
+
+      <!-- Store Branches Card -->
+      <div class="wizard-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3>🏪 Active Store Branches (1 of 3 Stores Provisioned)</h3>
+          <button class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">+ Add Branch Store</button>
+        </div>
+
+        <div style="border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; background: rgba(15, 23, 42, 0.4); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h4 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 4px;" id="dashStoreBranchTitle">Fresh Mart - Downtown (STR-DT-01)</h4>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Vertical: <span style="color: var(--emerald); font-weight: 600;" id="dashVerticalTag">🛒 RETAIL / GROCERY</span> | Tax Rate: <strong>8.25%</strong> | Status: <span style="color: #10B981; font-weight: 700;">🟢 ACTIVE</span></p>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">Sunmi Flutter POS Pairing PIN:</div>
+            <div style="font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 800; color: var(--emerald);" id="dashPairingPin">849201</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let selectedVertical = 'RETAIL';
+    let selectedRetailSubCategory = 'GROCERY';
+    let currentPin = '849201';
+    let selectedPlan = 'PRO';
+
+    function selectVertical(type) {
+      selectedVertical = type;
+      document.getElementById('cardRetail').classList.toggle('selected', type === 'RETAIL');
+      document.getElementById('cardRestaurant').classList.toggle('selected', type === 'RESTAURANT');
+      const subCatContainer = document.getElementById('retailSubCategoryContainer');
+      if (subCatContainer) {
+        subCatContainer.style.display = type === 'RETAIL' ? 'block' : 'none';
+      }
+    }
+
+    function selectSubCategory(subType) {
+      selectedRetailSubCategory = subType;
+      document.getElementById('cardGrocery').classList.toggle('selected', subType === 'GROCERY');
+      document.getElementById('cardConvenience').classList.toggle('selected', subType === 'CONVENIENCE');
+    }
+
+    function goToStep(step) {
+      for (let i = 1; i <= 4; i++) {
+        document.getElementById(`step${i}`).style.display = i === step ? 'block' : 'none';
+        const indicator = document.getElementById(`stepIndicator${i}`);
+        indicator.classList.remove('active', 'completed');
+        if (i < step) indicator.classList.add('completed');
+        if (i === step) indicator.classList.add('active');
+      }
+    }
+
+    function regeneratePin() {
+      currentPin = Math.floor(100000 + Math.random() * 900000).toString();
+      document.getElementById('displayPin').innerText = currentPin;
+    }
+
+    function selectPlan(plan) {
+      selectedPlan = plan;
+      alert(`Selected ${plan} Plan! Entitlements mapped.`);
+    }
+
+    function simulateUpload() {
+      document.getElementById('uploadStatus').innerHTML = '✅ <strong>business_registration_license.pdf</strong> (1.4 MB) uploaded & validated!';
+      document.getElementById('uploadStatus').style.color = '#10B981';
+    }
+
+    async function completeOnboarding() {
+      const btn = document.getElementById('btnSubmitOnboarding');
+      btn.innerText = '⏳ Saving to PCH PostgreSQL & Redis...';
+      btn.disabled = true;
+
+      const payload = {
+        businessName: document.getElementById('businessName').value,
+        businessType: selectedVertical,
+        retailSubCategory: selectedVertical === 'RETAIL' ? selectedRetailSubCategory : null,
+        ownerName: document.getElementById('ownerName').value,
+        email: document.getElementById('ownerEmail').value,
+        phone: document.getElementById('ownerPhone').value,
+        taxId: document.getElementById('taxId').value,
+        storeName: document.getElementById('storeName').value,
+        storeCode: document.getElementById('storeCode').value,
+        taxRate: parseFloat(document.getElementById('taxRate').value) || 8.25,
+        planCode: selectedPlan
+      };
+
+      let merchantId = 'MCH-' + Math.floor(1000 + Math.random() * 9000);
+      let storeId = 'STR-' + Math.floor(5000 + Math.random() * 5000);
+
+      // Call Live Backend Hub if running
+      try {
+        const res = await fetch('http://localhost:3003/api/v1/onboarding/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          merchantId = data.merchant?.id || merchantId;
+          storeId = data.store?.id || storeId;
+          currentPin = data.terminalPairingPin || currentPin;
+          document.getElementById('dbSaveDetails').innerHTML = `Persisted live to PostgreSQL <code>merchants</code> (ID: ${merchantId}), <code>stores</code> (ID: ${storeId}), and Redis cache for instant POS pairing!`;
+        }
+      } catch (err) {
+        document.getElementById('dbSaveDetails').innerHTML = `Simulated In-Memory mode. Live endpoint reachable at <code>http://localhost:3003/api/v1/onboarding/complete</code>.`;
+      }
+
+      document.getElementById('onboardingContainer').style.display = 'none';
+      document.getElementById('dashboardContainer').style.display = 'block';
+      document.getElementById('dashStoreName').innerText = document.getElementById('storeName').value;
+      document.getElementById('dashStoreBranchTitle').innerText = `${document.getElementById('storeName').value} (${document.getElementById('storeCode').value})`;
+      document.getElementById('dashMerchantId').innerText = merchantId;
+      document.getElementById('dashPairingPin').innerText = currentPin;
+      document.getElementById('dashVerticalTag').innerText = selectedVertical === 'RETAIL' 
+        ? `🛒 RETAIL (${selectedRetailSubCategory})` 
+        : '🍔 RESTAURANT';
+      btn.innerText = '🚀 Complete Onboarding & Launch Dashboard';
+      btn.disabled = false;
+    }
+
+    function restartWizard() {
+      document.getElementById('dashboardContainer').style.display = 'none';
+      document.getElementById('onboardingContainer').style.display = 'block';
+      goToStep(1);
+    }
+  </script>
+</body>
+</html>
