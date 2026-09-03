@@ -1,24 +1,28 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
-import { OrderEntity } from './order.entity';
+import { Entity, PrimaryColumn, Column } from 'typeorm';
 
-@Entity('order_items')
+@Entity('order_line_items')
 export class OrderItemEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryColumn({ type: 'varchar', length: 100 })
   id!: string;
 
   @Column({ type: 'varchar', length: 100 })
-  externalItemId!: string;
+  orderId!: string;
+
+  @Column({ type: 'varchar', length: 100 })
+  productId!: string;
 
   @Column({ type: 'varchar', length: 255 })
-  name!: string;
+  productName!: string;
 
-  @Column({ type: 'integer', default: 1 })
+  @Column({ type: 'decimal', precision: 10, scale: 2 })
   quantity!: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 10, scale: 2 })
   unitPrice!: number;
 
-  @ManyToOne(() => OrderEntity, (order) => order.items, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'order_id' })
-  order!: OrderEntity;
+  @Column({ type: 'decimal', precision: 10, scale: 2 })
+  totalPrice!: number;
+
+  @Column({ type: 'jsonb', nullable: true })
+  modifiers?: any[];
 }

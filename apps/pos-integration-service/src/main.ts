@@ -6,11 +6,15 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableCors({
+    origin: '*',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: '*',
+  });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalInterceptors(new TracingInterceptor());
-  const port = process.env.PORT || 3007;
+  const port = process.env.POS_SERVICE_PORT || 3006;
   await app.listen(port);
   console.log(`🚀 POS Integration Service running on http://localhost:${port}`);
-  console.log(`🔌 Target POS Web App: https://merchantrestaurant.alektasolutions.com/ (Store: Pinaka_013)`);
 }
 bootstrap();

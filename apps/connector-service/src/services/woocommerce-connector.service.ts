@@ -1,171 +1,133 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as crypto from 'crypto';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
-import { SyncLogEntity } from '../entities/sync-log.entity';
-
-export interface WooCommerceProductPayload {
-  id: number | string;
-  name: string;
-  sku: string;
-  price: string | number;
-  stock_quantity: number;
-  categories?: Array<{ id: number; name: string }>;
-  status?: string;
-}
-
-export interface WooCommerceOrderPayload {
-  id: number | string;
-  order_key?: string;
-  status: string;
-  currency: string;
-  total: string;
-  billing?: { first_name: string; last_name: string; email: string; phone: string };
-  line_items: Array<{ id: number; name: string; product_id: number; quantity: number; total: string }>;
-}
+import crypto from 'crypto';
+import { WooCommerceConnectionEntity } from '../entities/woocommerce-connection.entity';
+import { WooCommerceSyncLogEntity } from '../entities/woocommerce-sync-log.entity';
 
 @Injectable()
-export class WooCommerceConnectorService {
-  private readonly logger = new Logger(WooCommerceConnectorService.name);
-  private syncLogRepo?: Repository<SyncLogEntity>;
+export class WooCommerceConnectorService implements OnModuleInit {
+  private dataSource?: DataSource;
+  private connRepo?: Repository<WooCommerceConnectionEntity>;
+  private logRepo?: Repository<WooCommerceSyncLogEntity>;
+  private isDbConnected = false;
 
-  constructor() {
-    this.initDatabaseConnection();
-  }
+  private inMemoryConns: WooCommerceConnectionEntity[] = [];
+  private inMemoryLogs: WooCommerceSyncLogEntity[] = [];
 
-  private async initDatabaseConnection() {
+  async onModuleInit() {
     try {
-      const dataSource = new DataSource({
+      this.dataSource = new DataSource({
         type: 'postgres',
         host: process.env.POSTGRES_HOST || 'localhost',
         port: Number(process.env.POSTGRES_PORT) || 5432,
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [SyncLogEntity],
+        database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
+        entities: [WooCommerceConnectionEntity, WooCommerceSyncLogEntity],
         synchronize: true,
       });
 
-      await dataSource.initialize();
-      this.syncLogRepo = dataSource.getRepository(SyncLogEntity);
-      this.logger.log('🐘 [SyncLog DB] Connected to PostgreSQL for Sync Audit Logging');
+      await this.dataSource.initialize();
+      this.connRepo = this.dataSource.getRepository(WooCommerceConnectionEntity);
+      this.logRepo = this.dataSource.getRepository(WooCommerceSyncLogEntity);
+      this.isDbConnected = true;
+      console.log('🐘 [WooCommerce Connector DB] Connected to PostgreSQL Database');
+      await this.seedDefaultConnection();
     } catch (err: any) {
-      this.logger.warn(`⚠️ [SyncLog DB] Offline (${err.message}). In-Memory logging active.`);
+      console.log(`⚠️ [WooCommerce Connector DB] Offline (${err.message}). Using In-Memory fallback.`);
+      this.isDbConnected = false;
+      this.seedInMemory();
     }
   }
 
-  /**
-   * Cryptographic HMAC-SHA256 Signature Verification for WooCommerce Webhooks
-   */
-  public validateHmacSignature(rawBody: string | Buffer, signatureHeader: string | string[] | undefined, secretKey?: string): boolean {
-    if (!signatureHeader) {
-      // If signature is omitted in demo mode, default to true
-      return true;
+  private async seedDefaultConnection() {
+    if (this.connRepo) {
+      const existing = await this.connRepo.findOne({ where: { storeId: 'STR-5001' } });
+      if (!existing) {
+        const conn = this.connRepo.create({
+          id: 'WC-CONN-1001',
+          merchantId: 'MCH-1001',
+          storeId: 'STR-5001',
+          storeUrl: 'https://pch.alekyatechsolutions.com',
+          consumerKey: 'ck_demo_982347102934812390',
+          consumerSecret: 'cs_demo_981234901238491023',
+          webhookSecret: 'secret_wc_hmac_991823',
+          autoSyncInventory: true,
+          syncStatus: 'ACTIVE',
+          lastSyncedAt: new Date(),
+        });
+        await this.connRepo.save(conn);
+        console.log('🛒 [WooCommerce Engine] Seeded connection for pch.alekyatechsolutions.com');
+      }
     }
-    const secret = secretKey || process.env.WOOCOMMERCE_WEBHOOK_SECRET || 'pch_secret_key_2026';
-    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
-    
-    const computedHmac = crypto
-      .createHmac('sha256', secret)
-      .update(rawBody)
-      .digest('base64');
-
-    return crypto.timingSafeEqual(Buffer.from(computedHmac), Buffer.from(signature));
   }
 
-  /**
-   * Sync incoming WooCommerce Product Payload to Catalog Service
-   */
-  public async syncProduct(merchantId: string, payload: WooCommerceProductPayload): Promise<SyncLogEntity> {
-    const logId = `SYNC-PRD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const syncLog: SyncLogEntity = {
+  private seedInMemory() {
+    if (this.inMemoryConns.length === 0) {
+      this.inMemoryConns.push({
+        id: 'WC-CONN-1001',
+        merchantId: 'MCH-1001',
+        storeId: 'STR-5001',
+        storeUrl: 'https://pch.alekyatechsolutions.com',
+        consumerKey: 'ck_demo_982347102934812390',
+        consumerSecret: 'cs_demo_981234901238491023',
+        webhookSecret: 'secret_wc_hmac_991823',
+        autoSyncInventory: true,
+        syncStatus: 'ACTIVE',
+        lastSyncedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+  }
+
+  // --- Validate HMAC SHA256 Webhook Signature ---
+  verifyHmacSignature(rawBody: string, signature: string, secret: string): boolean {
+    if (!signature || !secret) return true; // Dev mode bypass
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
+    return expected === signature;
+  }
+
+  // --- Ingest WooCommerce Webhook ---
+  async ingestWooCommerceWebhook(topic: string, body: any): Promise<WooCommerceSyncLogEntity> {
+    const logId = `LOG-WC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const log: WooCommerceSyncLogEntity = {
       id: logId,
-      merchantId,
-      source: 'WOOCOMMERCE',
-      entityType: 'PRODUCT',
-      entityId: String(payload.id || payload.sku),
+      merchantId: body.merchantId || 'MCH-1001',
+      storeId: body.storeId || 'STR-5001',
+      eventType: topic.toUpperCase(),
+      externalId: body.id ? body.id.toString() : `WC-${Date.now()}`,
       status: 'SUCCESS',
-      retryCount: 0,
-      payload: payload as any,
+      details: `Received WooCommerce webhook event '${topic}' for product/order '${body.name || body.id || 'Item'}'`,
       createdAt: new Date(),
-      updatedAt: new Date(),
     };
 
-    this.logger.log(`📦 [WooCommerce Sync] Processed Product #${payload.id} (${payload.name}) - SKU: ${payload.sku}, Stock: ${payload.stock_quantity}`);
-
-    return await this.saveSyncLog(syncLog);
+    if (this.isDbConnected && this.logRepo) {
+      const entity = this.logRepo.create(log);
+      const saved = await this.logRepo.save(entity);
+      console.log(`🛒 [WooCommerce Webhook Ingested] Event '${topic}' logged (ID: ${saved.id})`);
+      return saved;
+    } else {
+      this.inMemoryLogs.unshift(log);
+      return log;
+    }
   }
 
-  /**
-   * Sync incoming WooCommerce Order Payload to Order Service
-   */
-  public async syncOrder(merchantId: string, payload: WooCommerceOrderPayload): Promise<SyncLogEntity> {
-    const logId = `SYNC-ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const syncLog: SyncLogEntity = {
-      id: logId,
-      merchantId,
-      source: 'WOOCOMMERCE',
-      entityType: 'ORDER',
-      entityId: String(payload.id),
-      status: 'SUCCESS',
-      retryCount: 0,
-      payload: payload as any,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    this.logger.log(`🛒 [WooCommerce Sync] Processed Order #${payload.id} - Total: $${payload.total}, Items: ${payload.line_items?.length || 0}`);
-
-    return await this.saveSyncLog(syncLog);
-  }
-
-  /**
-   * Manual Trigger Catalog Sync for Merchant
-   */
-  public async triggerManualSync(merchantId: string, entityType: 'ALL' | 'PRODUCTS' | 'ORDERS' | 'INVENTORY') {
-    this.logger.log(`🔄 [Manual Sync Triggered] Merchant: ${merchantId}, Scope: ${entityType}`);
-    
-    // Simulate sync processing
-    const results = [
-      await this.syncProduct(merchantId, { id: 101, name: 'Organic Milk 1L', sku: 'SKU-MILK-01', price: 4.99, stock_quantity: 45 }),
-      await this.thisSyncOrder(merchantId, { id: 5001, status: 'processing', currency: 'USD', total: '24.50', line_items: [{ id: 1, name: 'Organic Milk 1L', product_id: 101, quantity: 2, total: '9.98' }] })
-    ];
-
+  // --- Trigger Full Catalog Sync ---
+  async triggerFullCatalogSync(storeId: string): Promise<{ success: boolean; syncedItemsCount: number; timestamp: string }> {
+    const syncedItemsCount = 18; // Simulated 18 products synced from WooCommerce REST API
+    await this.ingestWooCommerceWebhook('FULL_CATALOG_SYNC', { storeId, count: syncedItemsCount });
     return {
       success: true,
-      message: `Manual synchronization finished successfully for merchant '${merchantId}'`,
-      scope: entityType,
+      syncedItemsCount,
       timestamp: new Date().toISOString(),
-      itemsSynced: results.length,
     };
   }
 
-  private async thisSyncOrder(merchantId: string, payload: WooCommerceOrderPayload) {
-    return this.syncOrder(merchantId, payload);
-  }
-
-  /**
-   * Get Sync Logs History
-   */
-  public async getSyncLogs(merchantId?: string, limit = 50): Promise<SyncLogEntity[]> {
-    if (this.syncLogRepo) {
-      const queryBuilder = this.syncLogRepo.createQueryBuilder('log').orderBy('log.createdAt', 'DESC').take(limit);
-      if (merchantId) {
-        queryBuilder.where('log.merchantId = :merchantId', { merchantId });
-      }
-      return await queryBuilder.getMany();
+  async getConnection(storeId: string): Promise<WooCommerceConnectionEntity | null> {
+    if (this.isDbConnected && this.connRepo) {
+      return await this.connRepo.findOne({ where: { storeId } });
     }
-    return [];
-  }
-
-  private async saveSyncLog(log: SyncLogEntity): Promise<SyncLogEntity> {
-    if (this.syncLogRepo) {
-      try {
-        const entity = this.syncLogRepo.create(log);
-        return await this.syncLogRepo.save(entity);
-      } catch (err: any) {
-        this.logger.error(`Failed to persist SyncLog to PostgreSQL: ${err.message}`);
-      }
-    }
-    return log;
+    return this.inMemoryConns.find((c) => c.storeId === storeId) || null;
   }
 }

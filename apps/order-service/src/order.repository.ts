@@ -1,26 +1,25 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { CanonicalOrder, OrderStatus } from '@pinaka-delivery-hub/canonical-model';
-import { EventEnvelope } from '@pinaka-delivery-hub/event-contracts';
-import { GlobalOrderEventBus } from '@pinaka-delivery-hub/messaging';
-import { OrderEntity } from './entities/order.entity';
+import { OrderEntity, OrderType, PaymentMethod, PaymentStatus, OrderStatus } from './entities/order.entity';
 import { OrderItemEntity } from './entities/order-item.entity';
-
-const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const CACHE_TTL_SECONDS = 300; // 5 minutes cache TTL
+import { OrderStatusHistoryEntity } from './entities/order-status-history.entity';
 
 @Injectable()
 export class OrderRepository implements OnModuleInit {
   private dataSource?: DataSource;
   private orderRepo?: Repository<OrderEntity>;
+  private itemRepo?: Repository<OrderItemEntity>;
+  private historyRepo?: Repository<OrderStatusHistoryEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
-  private inMemoryStore: CanonicalOrder[] = [];
+
+  private inMemoryOrders: OrderEntity[] = [];
+  private inMemoryItems: OrderItemEntity[] = [];
+  private inMemoryHistory: OrderStatusHistoryEntity[] = [];
 
   async onModuleInit() {
-    // 1. Initialize PostgreSQL Connection
     try {
       this.dataSource = new DataSource({
         type: 'postgres',
@@ -29,20 +28,21 @@ export class OrderRepository implements OnModuleInit {
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
         database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
-        entities: [OrderEntity, OrderItemEntity],
-        synchronize: true, // Auto-create tables in local dev
+        entities: [OrderEntity, OrderItemEntity, OrderStatusHistoryEntity],
+        synchronize: true,
       });
 
       await this.dataSource.initialize();
       this.orderRepo = this.dataSource.getRepository(OrderEntity);
+      this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
+      this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
       this.isDbConnected = true;
-      console.log('🐘 [PostgreSQL] Connected successfully to Database: pinaka_delivery_hub');
+      console.log('🐘 [Order Service DB] Connected to PostgreSQL Database');
     } catch (err: any) {
-      console.log(`⚠️ [PostgreSQL] Connection fallback to In-Memory store (${err.message})`);
+      console.log(`⚠️ [Order Service DB] Offline (${err.message}). Using In-Memory fallback.`);
       this.isDbConnected = false;
     }
 
-    // 2. Initialize Redis Client Connection
     try {
       this.redisClient = new Redis({
         host: process.env.REDIS_HOST || 'localhost',
@@ -50,249 +50,166 @@ export class OrderRepository implements OnModuleInit {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
       });
-
       await this.redisClient.connect();
       this.isRedisConnected = true;
-      console.log('⚡ [Redis Cache] Connected successfully to Redis Container on port 6379');
+      console.log('⚡ [Order Service Redis] Connected to Redis Container');
     } catch (err: any) {
-      console.log(`⚠️ [Redis Cache] Redis offline (${err.message}). Proceeding without cache.`);
+      console.log(`⚠️ [Order Service Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
 
-    GlobalOrderEventBus.subscribe((envelope: EventEnvelope<CanonicalOrder>) => {
-      void this.saveOrderFromEnvelope(envelope);
+  async createOrder(orderData: any): Promise<{ order: OrderEntity; items: OrderItemEntity[] }> {
+    const id = `ORD-${Math.floor(10000 + Math.random() * 90000)}`;
+    const orderNumber = `#${Math.floor(1000 + Math.random() * 9000)}`;
+
+    let subtotal = 0;
+    const items: OrderItemEntity[] = (orderData.items || []).map((i: any, idx: number) => {
+      const lineTotal = Number(i.quantity || 1) * Number(i.unitPrice || 0);
+      subtotal += lineTotal;
+      return {
+        id: `ITEM-${id}-${idx + 1}`,
+        orderId: id,
+        productId: i.productId || `PROD-${idx + 1}`,
+        productName: i.productName || 'Sales Item',
+        quantity: Number(i.quantity || 1),
+        unitPrice: Number(i.unitPrice || 0),
+        totalPrice: lineTotal,
+        modifiers: i.modifiers || [],
+      };
     });
-    await GlobalOrderEventBus.subscribeToRabbitMQ(
-      async (envelope: EventEnvelope<CanonicalOrder>) => {
-        await this.saveOrderFromEnvelope(envelope);
-      },
-    );
+
+    const taxAmount = orderData.taxAmount !== undefined ? Number(orderData.taxAmount) : Math.round(subtotal * 0.0825 * 100) / 100;
+    const totalAmount = subtotal + taxAmount;
+
+    const order: OrderEntity = {
+      id,
+      orderNumber,
+      merchantId: orderData.merchantId || 'MCH-1001',
+      storeId: orderData.storeId || 'STR-5001',
+      shiftId: orderData.shiftId || 'SHIFT-8001',
+      customerName: orderData.customerName || 'Walk-in Customer',
+      customerPhone: orderData.customerPhone || '',
+      orderType: orderData.orderType || OrderType.IN_STORE_POS,
+      paymentMethod: orderData.paymentMethod || PaymentMethod.CASH,
+      paymentStatus: orderData.paymentStatus || PaymentStatus.PAID,
+      subtotal,
+      taxAmount,
+      discountAmount: 0.00,
+      tipAmount: 0.00,
+      totalAmount,
+      orderStatus: OrderStatus.CREATED,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.orderRepo && this.itemRepo) {
+      const orderEntity = this.orderRepo.create(order);
+      const savedOrder = await this.orderRepo.save(orderEntity);
+
+      for (const item of items) {
+        const itemEntity = this.itemRepo.create(item);
+        await this.itemRepo.save(itemEntity);
+      }
+
+      await this.recordStatusChange(id, 'NONE', OrderStatus.CREATED, 'POS System', 'Initial Order Creation');
+      await this.cacheOrder(savedOrder);
+      console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
+      return { order: savedOrder, items };
+    } else {
+      this.inMemoryOrders.unshift(order);
+      this.inMemoryItems.push(...items);
+      await this.recordStatusChange(id, 'NONE', OrderStatus.CREATED, 'POS System', 'Initial Order Creation');
+      await this.cacheOrder(order);
+      return { order, items };
+    }
   }
 
-  async saveOrderFromEnvelope(envelope: EventEnvelope<CanonicalOrder>): Promise<CanonicalOrder> {
-    const payload = envelope.payload;
-    console.log(`[Order Service Received Event] CorrelationID: ${envelope.correlationId}`);
-    console.log(`📥 Ingested Order #${payload.externalOrderId} from ${payload.platform}`);
-
-    let canonical: CanonicalOrder = payload;
+  async updateOrderStatus(orderId: string, toStatus: OrderStatus, changedBy: string, reason?: string): Promise<OrderEntity | null> {
+    let order: OrderEntity | null = null;
 
     if (this.isDbConnected && this.orderRepo) {
-      try {
-        let entity = await this.orderRepo.findOne({ where: { externalOrderId: payload.externalOrderId } });
-        if (!entity) {
-          entity = this.orderRepo.create({
-            merchantId: payload.merchantId,
-            externalOrderId: payload.externalOrderId,
-            platform: payload.platform,
-            status: payload.status,
-            subtotal: payload.subtotal || 0,
-            tax: payload.tax || 0,
-            deliveryFee: payload.deliveryFee || 0,
-            totalAmount: payload.totalAmount || 0,
-            customer: payload.customer,
-            deliveryAddress: payload.deliveryAddress,
-            items: (payload.items || []).map((item) => {
-              const itemEntity = new OrderItemEntity();
-              itemEntity.externalItemId = item.externalItemId;
-              itemEntity.name = item.name;
-              itemEntity.quantity = item.quantity;
-              itemEntity.unitPrice = item.unitPrice;
-              return itemEntity;
-            }),
-          });
-        } else {
-          entity.status = payload.status;
-        }
-
-        const saved = await this.orderRepo.save(entity);
-        canonical = this.mapToCanonical(saved);
-      } catch (err: any) {
-        // At-least-once delivery can race two attempts past the lookup above.
-        // A unique-key conflict means another attempt already persisted the
-        // order, so return that canonical record instead of creating divergent
-        // in-memory state.
-        if (err?.code === '23505') {
-          const existing = await this.orderRepo.findOne({
-            where: { externalOrderId: payload.externalOrderId },
-          });
-          if (existing) {
-            canonical = this.mapToCanonical(existing);
-            console.log(`♻️ Duplicate order #${payload.externalOrderId} already processed; skipping insert.`);
-          } else {
-            throw err;
-          }
-        } else {
-          console.error(`⚠️ DB Save Error: ${err.message}.`);
-          throw err;
-        }
+      order = await this.orderRepo.findOne({ where: { id: orderId } });
+      if (order) {
+        const fromStatus = order.orderStatus;
+        order.orderStatus = toStatus;
+        order = await this.orderRepo.save(order);
+        await this.recordStatusChange(orderId, fromStatus, toStatus, changedBy, reason);
       }
     } else {
-      const existingIdx = this.inMemoryStore.findIndex((o) => o.externalOrderId === payload.externalOrderId);
-      if (existingIdx >= 0) {
-        this.inMemoryStore[existingIdx] = payload;
-      } else {
-        this.inMemoryStore.unshift(payload);
+      order = this.inMemoryOrders.find((o) => o.id === orderId) || null;
+      if (order) {
+        const fromStatus = order.orderStatus;
+        order.orderStatus = toStatus;
+        order.updatedAt = new Date();
+        await this.recordStatusChange(orderId, fromStatus, toStatus, changedBy, reason);
       }
     }
 
-    // Cache order in Redis
-    await this.setCache(`order:${canonical.externalOrderId}`, canonical);
-    await this.setCache(`order:${canonical.id}`, canonical);
-    await this.deleteCache('orders:all');
-
-    return canonical;
-  }
-
-  async findAllOrders(): Promise<CanonicalOrder[]> {
-    // 1. Check Redis Cache First
-    const cachedOrders = await this.getCache<CanonicalOrder[]>('orders:all');
-    if (cachedOrders) {
-      console.log('⚡ [Redis Cache HIT] Served ALL orders from Redis RAM in <1ms');
-      return cachedOrders;
-    }
-
-    // 2. Cache Miss -> Query PostgreSQL DB
-    let orders: CanonicalOrder[] = [];
-    if (this.isDbConnected && this.orderRepo) {
-      try {
-        const entities = await this.orderRepo.find({ order: { createdAt: 'DESC' } });
-        orders = entities.map((e) => this.mapToCanonical(e));
-      } catch (err: any) {
-        console.error(`⚠️ DB FindAll Error: ${err.message}`);
-        orders = this.inMemoryStore;
-      }
-    } else {
-      orders = this.inMemoryStore;
-    }
-
-    // 3. Save to Redis Cache (TTL 300s)
-    await this.setCache('orders:all', orders);
-    return orders;
-  }
-
-  async findOrderById(id: string): Promise<CanonicalOrder | null> {
-    // 1. Check Redis Cache First
-    const cachedOrder = await this.getCache<CanonicalOrder>(`order:${id}`);
-    if (cachedOrder) {
-      console.log(`⚡ [Redis Cache HIT] Served Order #${id} from Redis RAM in <1ms`);
-      return cachedOrder;
-    }
-
-    // 2. Cache Miss -> Query PostgreSQL DB
-    let order: CanonicalOrder | null = null;
-    if (this.isDbConnected && this.orderRepo) {
-      try {
-        const isUuid = UUID_REGEX.test(id);
-        const whereCondition = isUuid ? [{ id }, { externalOrderId: id }] : { externalOrderId: id };
-
-        const entity = await this.orderRepo.findOne({ where: whereCondition as any });
-        if (entity) order = this.mapToCanonical(entity);
-      } catch (err: any) {
-        console.error(`⚠️ DB FindById Error: ${err.message}`);
-      }
-    }
-
-    if (!order) {
-      order = this.inMemoryStore.find((o) => o.id === id || o.externalOrderId === id) || null;
-    }
-
-    // 3. Save to Redis Cache
     if (order) {
-      await this.setCache(`order:${id}`, order);
-      await this.setCache(`order:${order.externalOrderId}`, order);
+      await this.cacheOrder(order);
+      console.log(`🔄 [Order State Machine] Order #${orderId} transition: ${order.orderStatus} (by ${changedBy})`);
     }
+
     return order;
   }
 
-  async updateOrderStatus(id: string, newStatus: OrderStatus): Promise<CanonicalOrder | null> {
-    let updatedOrder: CanonicalOrder | null = null;
-
+  async getOrdersByStore(storeId: string): Promise<OrderEntity[]> {
     if (this.isDbConnected && this.orderRepo) {
-      try {
-        const isUuid = UUID_REGEX.test(id);
-        const whereCondition = isUuid ? [{ id }, { externalOrderId: id }] : { externalOrderId: id };
-
-        const entity = await this.orderRepo.findOne({ where: whereCondition as any });
-        if (entity) {
-          entity.status = newStatus;
-          const saved = await this.orderRepo.save(entity);
-          updatedOrder = this.mapToCanonical(saved);
-        }
-      } catch (err: any) {
-        console.error(`⚠️ DB UpdateStatus Error: ${err.message}`);
-      }
+      return await this.orderRepo.find({ where: { storeId }, order: { createdAt: 'DESC' } });
     }
+    return this.inMemoryOrders.filter((o) => o.storeId === storeId);
+  }
 
-    if (!updatedOrder) {
-      const order = this.inMemoryStore.find((o) => o.id === id || o.externalOrderId === id);
+  async getOrderById(orderId: string): Promise<{ order: OrderEntity; items: OrderItemEntity[]; history: OrderStatusHistoryEntity[] } | null> {
+    let order: OrderEntity | null = null;
+    let items: OrderItemEntity[] = [];
+    let history: OrderStatusHistoryEntity[] = [];
+
+    if (this.isDbConnected && this.orderRepo && this.itemRepo && this.historyRepo) {
+      order = await this.orderRepo.findOne({ where: { id: orderId } });
       if (order) {
-        order.status = newStatus;
-        order.updatedAt = new Date().toISOString();
-        updatedOrder = order;
+        items = await this.itemRepo.find({ where: { orderId } });
+        history = await this.historyRepo.find({ where: { orderId }, order: { createdAt: 'ASC' } });
+      }
+    } else {
+      order = this.inMemoryOrders.find((o) => o.id === orderId) || null;
+      if (order) {
+        items = this.inMemoryItems.filter((i) => i.orderId === orderId);
+        history = this.inMemoryHistory.filter((h) => h.orderId === orderId);
       }
     }
 
-    // Invalidate Redis Cache for Stale Order State
-    if (updatedOrder) {
-      await this.setCache(`order:${id}`, updatedOrder);
-      await this.setCache(`order:${updatedOrder.externalOrderId}`, updatedOrder);
-      await this.deleteCache('orders:all');
-      console.log(`⚡ [Redis Cache Purged & Updated] Order #${updatedOrder.externalOrderId} -> Status: ${newStatus}`);
-    }
-
-    return updatedOrder;
+    if (!order) return null;
+    return { order, items, history };
   }
 
-  private async getCache<T>(key: string): Promise<T | null> {
-    if (!this.isRedisConnected || !this.redisClient) return null;
-    try {
-      const data = await this.redisClient.get(key);
-      return data ? (JSON.parse(data) as T) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async setCache(key: string, value: any, ttlSeconds = CACHE_TTL_SECONDS): Promise<void> {
-    if (!this.isRedisConnected || !this.redisClient) return;
-    try {
-      await this.redisClient.set(key, JSON.stringify(value), 'EX', ttlSeconds);
-    } catch {
-      // Ignore cache write errors
-    }
-  }
-
-  private async deleteCache(key: string): Promise<void> {
-    if (!this.isRedisConnected || !this.redisClient) return;
-    try {
-      await this.redisClient.del(key);
-    } catch {
-      // Ignore cache delete errors
-    }
-  }
-
-  private mapToCanonical(entity: OrderEntity): CanonicalOrder {
-    return {
-      id: entity.id,
-      merchantId: entity.merchantId,
-      externalOrderId: entity.externalOrderId,
-      platform: entity.platform,
-      status: entity.status,
-      customer: entity.customer || { fullName: 'Customer', phone: '' },
-      items: (entity.items || []).map((item) => ({
-        id: item.id,
-        externalItemId: item.externalItemId,
-        name: item.name,
-        quantity: Number(item.quantity),
-        unitPrice: Number(item.unitPrice),
-      })),
-      subtotal: Number(entity.subtotal),
-      tax: Number(entity.tax),
-      deliveryFee: Number(entity.deliveryFee),
-      totalAmount: Number(entity.totalAmount),
-      deliveryAddress: entity.deliveryAddress || { street: '', city: '', zipCode: '' },
-      createdAt: entity.createdAt ? entity.createdAt.toISOString() : new Date().toISOString(),
-      updatedAt: entity.updatedAt ? entity.updatedAt.toISOString() : new Date().toISOString(),
+  private async recordStatusChange(orderId: string, fromStatus: string, toStatus: string, changedBy: string, reason?: string) {
+    const entry: OrderStatusHistoryEntity = {
+      id: `HST-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      orderId,
+      fromStatus,
+      toStatus,
+      changedBy: changedBy || 'POS System',
+      reason: reason || 'State Machine Transition',
+      createdAt: new Date(),
     };
+
+    if (this.isDbConnected && this.historyRepo) {
+      try {
+        const entity = this.historyRepo.create(entry);
+        await this.historyRepo.save(entity);
+      } catch {}
+    } else {
+      this.inMemoryHistory.push(entry);
+    }
+  }
+
+  private async cacheOrder(order: OrderEntity) {
+    if (this.isRedisConnected && this.redisClient) {
+      try {
+        await this.redisClient.set(`order:${order.id}`, JSON.stringify(order), 'EX', 86400);
+      } catch {}
+    }
   }
 }

@@ -1,18 +1,9 @@
-import { Controller, Get, Post, Patch, Param, Body, NotFoundException } from '@nestjs/common';
-import { GlobalOrderEventBus } from '@pinaka-delivery-hub/messaging';
+import { Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InventoryRepository } from './inventory.repository';
+import { AdjustmentType } from './entities/inventory-adjustment.entity';
 
 const inventoryRepository = new InventoryRepository();
 inventoryRepository.onModuleInit();
-
-// Listen to order events for automatic stock deduction
-GlobalOrderEventBus.subscribe(async (envelope: any) => {
-  await inventoryRepository.deductStockForOrder(envelope);
-});
-
-GlobalOrderEventBus.subscribeToRabbitMQ(async (envelope: any) => {
-  await inventoryRepository.deductStockForOrder(envelope);
-});
 
 @Controller('api/v1/inventory')
 export class AppController {
@@ -21,56 +12,64 @@ export class AppController {
     return {
       status: 'ok',
       service: 'inventory-service',
+      version: '2.0.0 (PCH Module 4)',
       timestamp: new Date().toISOString(),
     };
   }
 
-  @Get('ready')
-  readiness() {
-    return {
-      status: 'ready',
-    };
-  }
-
-  @Get(':merchantId')
-  async getInventoryByMerchant(@Param('merchantId') merchantId: string) {
-    const items = await inventoryRepository.getInventoryByMerchant(merchantId);
-    const lowStockItems = items.filter((i) => i.isLowStock);
-
+  @Get()
+  async getInventory(@Query('storeId') storeId: string) {
+    const targetStore = storeId || 'STR-5001';
+    const items = await inventoryRepository.getInventoryByStore(targetStore);
     return {
       success: true,
-      merchantId,
-      totalItems: items.length,
-      lowStockCount: lowStockItems.length,
+      storeId: targetStore,
+      count: items.length,
       inventory: items,
     };
   }
 
-  @Patch(':merchantId/items/:ingredientId')
-  async updateStock(
-    @Param('merchantId') merchantId: string,
-    @Param('ingredientId') ingredientId: string,
-    @Body('currentStock') currentStock: number
-  ) {
-    const updated = await inventoryRepository.updateStock(merchantId, ingredientId, currentStock);
-    if (!updated) {
-      throw new NotFoundException(`Ingredient '${ingredientId}' for merchant '${merchantId}' not found`);
-    }
-
+  @Get('alerts/low-stock')
+  async getLowStockAlerts(@Query('storeId') storeId: string) {
+    const targetStore = storeId || 'STR-5001';
+    const alerts = await inventoryRepository.getLowStockAlerts(targetStore);
     return {
       success: true,
-      message: `Stock updated for ${updated.name} to ${updated.currentStock} ${updated.unit}`,
-      item: updated,
+      storeId: targetStore,
+      lowStockCount: alerts.length,
+      alerts,
     };
   }
 
-  @Post('events')
-  async handleOrderEvent(@Body() envelope: any) {
-    const result = await inventoryRepository.deductStockForOrder(envelope);
+  @Post('decrement')
+  async decrementStock(@Body() body: { storeId: string; productId: string; quantity: number; performedBy?: string; reason?: string }) {
+    if (!body.storeId || !body.productId || !body.quantity) {
+      throw new BadRequestException('storeId, productId, and quantity are required');
+    }
+    const result = await inventoryRepository.decrementStock(body.storeId, body.productId, Number(body.quantity), body.performedBy || 'POS Terminal', body.reason);
+    if (!result.success) {
+      throw new NotFoundException(result.message);
+    }
     return {
       success: true,
-      deductedItems: result.deductedItems,
-      lowStockAlerts: result.lowStockAlerts,
+      message: 'Stock decremented successfully',
+      item: result.item,
+    };
+  }
+
+  @Post('adjust')
+  async adjustStock(@Body() body: { storeId: string; productId: string; adjustmentType: AdjustmentType; quantityChange: number; performedBy?: string; reason?: string }) {
+    if (!body.storeId || !body.productId || !body.quantityChange) {
+      throw new BadRequestException('storeId, productId, and quantityChange are required');
+    }
+    const result = await inventoryRepository.adjustStock(body.storeId, body.productId, body.adjustmentType || AdjustmentType.REPLENISHMENT, Number(body.quantityChange), body.performedBy || 'Manager', body.reason);
+    if (!result.success) {
+      throw new NotFoundException(result.message);
+    }
+    return {
+      success: true,
+      message: 'Stock adjusted successfully',
+      item: result.item,
     };
   }
 }

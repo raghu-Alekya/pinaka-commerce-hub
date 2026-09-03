@@ -1,23 +1,22 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { EventEnvelope } from '@pinaka-delivery-hub/event-contracts';
-import { CanonicalOrder } from '@pinaka-delivery-hub/canonical-model';
-import { InventoryItemEntity } from './entities/inventory.entity';
-
-const CACHE_TTL_SECONDS = 300; // 5 minutes cache TTL
+import { InventoryItemEntity } from './entities/inventory-item.entity';
+import { InventoryAdjustmentEntity, AdjustmentType } from './entities/inventory-adjustment.entity';
 
 @Injectable()
 export class InventoryRepository implements OnModuleInit {
   private dataSource?: DataSource;
-  private inventoryRepo?: Repository<InventoryItemEntity>;
+  private itemRepo?: Repository<InventoryItemEntity>;
+  private adjRepo?: Repository<InventoryAdjustmentEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
-  private inMemoryStore: InventoryItemEntity[] = [];
+
+  private inMemoryItems: InventoryItemEntity[] = [];
+  private inMemoryAdjustments: InventoryAdjustmentEntity[] = [];
 
   async onModuleInit() {
-    // 1. PostgreSQL Connection
     try {
       this.dataSource = new DataSource({
         type: 'postgres',
@@ -26,22 +25,22 @@ export class InventoryRepository implements OnModuleInit {
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
         database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
-        entities: [InventoryItemEntity],
+        entities: [InventoryItemEntity, InventoryAdjustmentEntity],
         synchronize: true,
       });
 
       await this.dataSource.initialize();
-      this.inventoryRepo = this.dataSource.getRepository(InventoryItemEntity);
+      this.itemRepo = this.dataSource.getRepository(InventoryItemEntity);
+      this.adjRepo = this.dataSource.getRepository(InventoryAdjustmentEntity);
       this.isDbConnected = true;
-      console.log('🐘 [Inventory PostgreSQL] Connected to Database: pinaka_delivery_hub');
+      console.log('🐘 [Inventory DB] Connected to PostgreSQL Database');
       await this.seedDefaultInventory();
     } catch (err: any) {
-      console.log(`⚠️ [Inventory PostgreSQL] Offline (${err.message}). Using In-Memory fallback.`);
+      console.log(`⚠️ [Inventory DB] Offline (${err.message}). Using In-Memory fallback.`);
       this.isDbConnected = false;
-      this.seedDefaultInventoryInMemory();
+      this.seedInMemory();
     }
 
-    // 2. Redis Connection
     try {
       this.redisClient = new Redis({
         host: process.env.REDIS_HOST || 'localhost',
@@ -49,90 +48,88 @@ export class InventoryRepository implements OnModuleInit {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
       });
-
       await this.redisClient.connect();
       this.isRedisConnected = true;
-      console.log('⚡ [Inventory Redis] Connected to Redis Container on port 6379');
+      console.log('⚡ [Inventory Redis] Connected to Redis for <1ms stock check');
     } catch (err: any) {
-      console.log(`⚠️ [Inventory Redis] Offline (${err.message}). Proceeding without cache.`);
+      console.log(`⚠️ [Inventory Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
   }
 
   private async seedDefaultInventory() {
-    if (this.inventoryRepo) {
-      const defaultStock = [
-        {
-          merchantId: 'STORE-01',
-          ingredientId: 'ING-01',
-          name: 'Beef Patty 100g',
-          currentStock: 50,
-          reorderThreshold: 10,
-          unit: 'pcs',
-          isLowStock: false,
-          recipeMappings: [{ externalItemId: 'ITEM-101', quantityRequired: 1 }],
-        },
-        {
-          merchantId: 'STORE-01',
-          ingredientId: 'ING-02',
-          name: 'Burger Bun',
-          currentStock: 60,
-          reorderThreshold: 15,
-          unit: 'pcs',
-          isLowStock: false,
-          recipeMappings: [{ externalItemId: 'ITEM-101', quantityRequired: 1 }],
-        },
-        {
-          merchantId: 'STORE-01',
-          ingredientId: 'ING-03',
-          name: 'Truffle Oil Batch',
-          currentStock: 8,
-          reorderThreshold: 10,
-          unit: 'bottles',
-          isLowStock: true,
-          recipeMappings: [{ externalItemId: 'ITEM-102', quantityRequired: 1 }],
-        },
-      ];
+    if (this.itemRepo) {
+      const existing = await this.itemRepo.findOne({ where: { storeId: 'STR-5001' } });
+      if (!existing) {
+        const items = [
+          {
+            id: 'INV-7001',
+            merchantId: 'MCH-1001',
+            storeId: 'STR-5001',
+            productId: 'MILK-ORG-1G',
+            productName: 'Organic Whole Milk 1 Gal',
+            quantityOnHand: 50.00,
+            quantityReserved: 0.00,
+            quantityAvailable: 50.00,
+            reorderPoint: 10.00,
+            unitCost: 3.20,
+            unitPrice: 5.49,
+          },
+          {
+            id: 'INV-7002',
+            merchantId: 'MCH-1001',
+            storeId: 'STR-5001',
+            productId: '4131',
+            productName: 'Gala Apples (Fresh Produce)',
+            quantityOnHand: 100.00,
+            quantityReserved: 0.00,
+            quantityAvailable: 100.00,
+            reorderPoint: 20.00,
+            unitCost: 0.85,
+            unitPrice: 1.99,
+          },
+        ];
 
-      for (const item of defaultStock) {
-        let entity = await this.inventoryRepo.findOne({ where: { merchantId: 'STORE-01', ingredientId: item.ingredientId } });
-        if (!entity) {
-          entity = this.inventoryRepo.create(item);
-        } else {
-          entity.recipeMappings = item.recipeMappings;
+        for (const item of items) {
+          const entity = this.itemRepo.create(item);
+          await this.itemRepo.save(entity);
+          await this.cacheStock(item.storeId, item.productId, item.quantityAvailable);
         }
-        await this.inventoryRepo.save(entity);
+        console.log('📦 [Inventory Service] Seeded default stock ledger for STR-5001');
       }
-      console.log('📦 [Inventory Service] Seeded and updated stock recipes for STORE-01');
     }
   }
 
-  private seedDefaultInventoryInMemory() {
-    if (this.inMemoryStore.length === 0) {
-      this.inMemoryStore.push(
+  private seedInMemory() {
+    if (this.inMemoryItems.length === 0) {
+      this.inMemoryItems.push(
         {
-          id: 'uuid-ing-1',
-          merchantId: 'STORE-01',
-          ingredientId: 'ING-01',
-          name: 'Beef Patty 100g',
-          currentStock: 50,
-          reorderThreshold: 10,
-          unit: 'pcs',
-          isLowStock: false,
-          recipeMappings: [{ externalItemId: 'ITEM-101', quantityRequired: 1 }],
+          id: 'INV-7001',
+          merchantId: 'MCH-1001',
+          storeId: 'STR-5001',
+          productId: 'MILK-ORG-1G',
+          productName: 'Organic Whole Milk 1 Gal',
+          quantityOnHand: 50.00,
+          quantityReserved: 0.00,
+          quantityAvailable: 50.00,
+          reorderPoint: 10.00,
+          unitCost: 3.20,
+          unitPrice: 5.49,
           createdAt: new Date(),
           updatedAt: new Date(),
         },
         {
-          id: 'uuid-ing-2',
-          merchantId: 'STORE-01',
-          ingredientId: 'ING-02',
-          name: 'Burger Bun',
-          currentStock: 60,
-          reorderThreshold: 15,
-          unit: 'pcs',
-          isLowStock: false,
-          recipeMappings: [{ externalItemId: 'ITEM-101', quantityRequired: 1 }],
+          id: 'INV-7002',
+          merchantId: 'MCH-1001',
+          storeId: 'STR-5001',
+          productId: '4131',
+          productName: 'Gala Apples (Fresh Produce)',
+          quantityOnHand: 100.00,
+          quantityReserved: 0.00,
+          quantityAvailable: 100.00,
+          reorderPoint: 20.00,
+          unitCost: 0.85,
+          unitPrice: 1.99,
           createdAt: new Date(),
           updatedAt: new Date(),
         }
@@ -140,128 +137,106 @@ export class InventoryRepository implements OnModuleInit {
     }
   }
 
-  async getInventoryByMerchant(merchantId: string): Promise<InventoryItemEntity[]> {
-    const cached = await this.getCache<InventoryItemEntity[]>(`inventory:${merchantId}`);
-    if (cached) {
-      console.log(`⚡ [Redis Cache HIT] Served Inventory for Store #${merchantId} in <1ms`);
-      return cached;
+  async getInventoryByStore(storeId: string): Promise<InventoryItemEntity[]> {
+    if (this.isDbConnected && this.itemRepo) {
+      return await this.itemRepo.find({ where: { storeId }, order: { productName: 'ASC' } });
     }
-
-    let items: InventoryItemEntity[] = [];
-    if (this.isDbConnected && this.inventoryRepo) {
-      try {
-        items = await this.inventoryRepo.find({ where: { merchantId }, order: { name: 'ASC' } });
-      } catch {
-        // Fallback
-      }
-    }
-
-    if (items.length === 0) {
-      items = this.inMemoryStore.filter((i) => i.merchantId === merchantId);
-    }
-
-    await this.setCache(`inventory:${merchantId}`, items);
-    return items;
+    return this.inMemoryItems.filter((i) => i.storeId === storeId);
   }
 
-  async deductStockForOrder(envelope: EventEnvelope<CanonicalOrder>): Promise<{ deductedItems: number; lowStockAlerts: string[] }> {
-    const order = envelope.payload;
-    const merchantId = order.merchantId || 'STORE-01';
-    const lowStockAlerts: string[] = [];
-    let deductedCount = 0;
-
-    const inventoryItems = await this.getInventoryByMerchant(merchantId);
-
-    for (const orderItem of order.items || []) {
-      for (const invItem of inventoryItems) {
-        let quantityRequired = 0;
-        const mapping = (invItem.recipeMappings || []).find(
-          (m) => m.externalItemId === orderItem.externalItemId || (orderItem.name && orderItem.name.toLowerCase().includes('burger') && m.externalItemId === 'ITEM-101')
-        );
-
-        if (mapping) {
-          quantityRequired = mapping.quantityRequired;
-        } else if (orderItem.name && orderItem.name.toLowerCase().includes('burger') && (invItem.ingredientId === 'ING-01' || invItem.ingredientId === 'ING-02')) {
-          quantityRequired = 1;
-        }
-
-        if (quantityRequired > 0) {
-          const totalDeduction = quantityRequired * orderItem.quantity;
-          invItem.currentStock = Math.max(0, Number(invItem.currentStock) - totalDeduction);
-          invItem.isLowStock = Number(invItem.currentStock) <= Number(invItem.reorderThreshold);
-          invItem.updatedAt = new Date();
-
-          if (invItem.isLowStock) {
-            const alertMsg = `⚠️ [LOW STOCK WARNING] ${invItem.name} (${invItem.ingredientId}) stock is ${invItem.currentStock} ${invItem.unit} (<= threshold ${invItem.reorderThreshold})`;
-            console.warn(alertMsg);
-            lowStockAlerts.push(alertMsg);
-          }
-
-          if (this.isDbConnected && this.inventoryRepo) {
-            await this.inventoryRepo.save(invItem);
-          }
-          deductedCount++;
-        }
-      }
-    }
-
-    await this.deleteCache(`inventory:${merchantId}`);
-    console.log(`📦 [Auto-Stock Deduction Complete] Deducted stock for ${deductedCount} ingredient mappings (Order #${order.externalOrderId})`);
-
-    return { deductedItems: deductedCount, lowStockAlerts };
+  async getLowStockAlerts(storeId: string): Promise<InventoryItemEntity[]> {
+    const all = await this.getInventoryByStore(storeId);
+    return all.filter((i) => Number(i.quantityAvailable) <= Number(i.reorderPoint));
   }
 
-  async updateStock(merchantId: string, ingredientId: string, newStock: number): Promise<InventoryItemEntity | null> {
-    let updatedItem: InventoryItemEntity | null = null;
+  async decrementStock(storeId: string, productId: string, quantity: number, performedBy: string, reason?: string): Promise<{ success: boolean; item?: InventoryItemEntity; message?: string }> {
+    let item: InventoryItemEntity | null = null;
 
-    if (this.isDbConnected && this.inventoryRepo) {
-      const entity = await this.inventoryRepo.findOne({ where: { merchantId, ingredientId } });
-      if (entity) {
-        entity.currentStock = newStock;
-        entity.isLowStock = newStock <= Number(entity.reorderThreshold);
-        updatedItem = await this.inventoryRepo.save(entity);
+    if (this.isDbConnected && this.itemRepo) {
+      item = await this.itemRepo.findOne({ where: { storeId, productId } });
+      if (item) {
+        item.quantityOnHand = Number(item.quantityOnHand) - quantity;
+        item.quantityAvailable = Number(item.quantityAvailable) - quantity;
+        item = await this.itemRepo.save(item);
       }
     } else {
-      const item = this.inMemoryStore.find((i) => i.merchantId === merchantId && i.ingredientId === ingredientId);
+      item = this.inMemoryItems.find((i) => i.storeId === storeId && i.productId === productId) || null;
       if (item) {
-        item.currentStock = newStock;
-        item.isLowStock = newStock <= Number(item.reorderThreshold);
+        item.quantityOnHand = Number(item.quantityOnHand) - quantity;
+        item.quantityAvailable = Number(item.quantityAvailable) - quantity;
         item.updatedAt = new Date();
-        updatedItem = item;
       }
     }
 
-    if (updatedItem) {
-      await this.deleteCache(`inventory:${merchantId}`);
+    if (!item) {
+      return { success: false, message: `Product '${productId}' not found in inventory for store '${storeId}'` };
     }
-    return updatedItem;
+
+    // Record Stock Adjustment Audit Log
+    await this.recordAdjustment(storeId, productId, AdjustmentType.POS_SALE, -quantity, item.quantityAvailable, performedBy, reason || 'POS / Online Sale');
+    await this.cacheStock(storeId, productId, item.quantityAvailable);
+
+    console.log(`📉 [Stock Decrement] Product '${productId}' (Store ${storeId}) reduced by ${quantity}. New Stock: ${item.quantityAvailable}`);
+    return { success: true, item };
   }
 
-  private async getCache<T>(key: string): Promise<T | null> {
-    if (!this.isRedisConnected || !this.redisClient) return null;
-    try {
-      const data = await this.redisClient.get(key);
-      return data ? (JSON.parse(data) as T) : null;
-    } catch {
-      return null;
+  async adjustStock(storeId: string, productId: string, adjustmentType: AdjustmentType, quantityChange: number, performedBy: string, reason?: string): Promise<{ success: boolean; item?: InventoryItemEntity; message?: string }> {
+    let item: InventoryItemEntity | null = null;
+
+    if (this.isDbConnected && this.itemRepo) {
+      item = await this.itemRepo.findOne({ where: { storeId, productId } });
+      if (item) {
+        item.quantityOnHand = Number(item.quantityOnHand) + quantityChange;
+        item.quantityAvailable = Number(item.quantityAvailable) + quantityChange;
+        item = await this.itemRepo.save(item);
+      }
+    } else {
+      item = this.inMemoryItems.find((i) => i.storeId === storeId && i.productId === productId) || null;
+      if (item) {
+        item.quantityOnHand = Number(item.quantityOnHand) + quantityChange;
+        item.quantityAvailable = Number(item.quantityAvailable) + quantityChange;
+        item.updatedAt = new Date();
+      }
+    }
+
+    if (!item) {
+      return { success: false, message: `Product '${productId}' not found in inventory for store '${storeId}'` };
+    }
+
+    await this.recordAdjustment(storeId, productId, adjustmentType, quantityChange, item.quantityAvailable, performedBy, reason);
+    await this.cacheStock(storeId, productId, item.quantityAvailable);
+
+    return { success: true, item };
+  }
+
+  private async recordAdjustment(storeId: string, productId: string, type: AdjustmentType, qtyChange: number, newQty: number, performedBy: string, reason?: string) {
+    const entry: InventoryAdjustmentEntity = {
+      id: `ADJ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      storeId,
+      productId,
+      adjustmentType: type,
+      quantityChanged: qtyChange,
+      newQuantityAvailable: newQty,
+      performedBy,
+      reason,
+      createdAt: new Date(),
+    };
+
+    if (this.isDbConnected && this.adjRepo) {
+      try {
+        const entity = this.adjRepo.create(entry);
+        await this.adjRepo.save(entity);
+      } catch {}
+    } else {
+      this.inMemoryAdjustments.unshift(entry);
     }
   }
 
-  private async setCache(key: string, value: any): Promise<void> {
-    if (!this.isRedisConnected || !this.redisClient) return;
-    try {
-      await this.redisClient.set(key, JSON.stringify(value), 'EX', CACHE_TTL_SECONDS);
-    } catch {
-      // Ignore cache write error
-    }
-  }
-
-  private async deleteCache(key: string): Promise<void> {
-    if (!this.isRedisConnected || !this.redisClient) return;
-    try {
-      await this.redisClient.del(key);
-    } catch {
-      // Ignore cache delete error
+  private async cacheStock(storeId: string, productId: string, qty: number) {
+    if (this.isRedisConnected && this.redisClient) {
+      try {
+        await this.redisClient.set(`stock:${storeId}:${productId}`, qty.toString(), 'EX', 86400);
+      } catch {}
     }
   }
 }
