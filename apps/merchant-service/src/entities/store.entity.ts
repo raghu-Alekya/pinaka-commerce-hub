@@ -46,6 +46,9 @@ export class StoreEntity {
   @Column({ type: 'varchar', length: 50, default: 'RETAIL' })
   storeType!: string; // 'RETAIL' | 'GROCERY' | 'RESTAURANT'
 
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  baseUrl?: string;
+
   @Column({ type: 'jsonb' })
   address!: StoreAddress;
 

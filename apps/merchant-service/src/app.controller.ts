@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Param, Body, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
@@ -8,6 +8,104 @@ merchantRepository.onModuleInit();
 
 @Controller('api/v1')
 export class AppController {
+  private toBusinessType(value?: string): BusinessType {
+    return value?.toUpperCase() === 'RESTAURANT' ? BusinessType.RESTAURANT : BusinessType.RETAIL;
+  }
+
+  private toPlanCode(value?: string): PlanCode {
+    switch (value?.toUpperCase()) {
+      case 'STARTER': return PlanCode.STARTER;
+      case 'ENTERPRISE': return PlanCode.ENTERPRISE;
+      default: return PlanCode.PRO; // UI label: Professional
+    }
+  }
+
+  private toBillingCycle(value?: string): 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL' {
+    if (value?.toUpperCase() === 'ANNUAL') return 'ANNUAL';
+    if (value?.toUpperCase() === 'FREE TRIAL') return 'FREE_TRIAL';
+    return 'MONTHLY';
+  }
+
+  private validateWizardPayload(body: any) {
+    const required = ['merchantId', 'businessName', 'legalBusinessName', 'businessType', 'country', 'state', 'firstName', 'lastName', 'email', 'phone', 'plan'];
+    const missing = required.filter((field) => !String(body[field] ?? '').trim());
+    if (!Array.isArray(body.stores) || body.stores.length === 0) missing.push('stores');
+    body.stores?.forEach((store: any, index: number) => {
+      ['name', 'id', 'url', 'address', 'city', 'state', 'zip'].forEach((field) => {
+        if (!String(store?.[field] ?? '').trim()) missing.push(`stores[${index}].${field}`);
+      });
+    });
+    if (missing.length) throw new BadRequestException(`Missing required fields: ${missing.join(', ')}`);
+  }
+
+  private merchantFields(body: any) {
+    return {
+      id: body.merchantId,
+      businessName: body.businessName.trim(),
+      legalBusinessName: body.legalBusinessName.trim(),
+      businessType: this.toBusinessType(body.businessType),
+      retailSubCategory: body.businessType?.toUpperCase() === 'GROCERY' ? RetailSubCategory.GROCERY : body.businessType?.toUpperCase() === 'CONVENIENCE' ? RetailSubCategory.CONVENIENCE : undefined,
+      ownerName: `${body.firstName.trim()} ${body.lastName.trim()}`,
+      firstName: body.firstName.trim(),
+      lastName: body.lastName.trim(),
+      email: body.email.trim().toLowerCase(),
+      phone: body.phone.trim(),
+      alternatePhone: body.alternatePhone?.trim() || undefined,
+      jobTitle: body.jobTitle?.trim() || undefined,
+      billingContact: body.billingContact !== false,
+      taxId: body.taxId?.trim() || undefined,
+      country: body.country.trim(),
+      state: body.state.trim(),
+      city: body.city?.trim() || undefined,
+      postalCode: body.postalCode?.trim() || undefined,
+      businessAddress: body.businessAddress?.trim() || undefined,
+      status: MerchantStatus.ACTIVE,
+      onboardingStep: 'COMPLETED',
+    };
+  }
+
+  private async saveWizardStores(merchantId: string, stores: any[]) {
+    return Promise.all(stores.map((store) => merchantRepository.createStore(merchantId, {
+      id: store.id.trim(),
+      storeName: store.name.trim(),
+      storeCode: store.id.trim(),
+      storeType: store.type?.trim().toUpperCase() || 'RETAIL',
+      address: { street: store.address.trim(), city: store.city.trim(), state: store.state.trim(), zipCode: store.zip.trim(), country: store.country?.trim() || 'USA' },
+      currency: store.currency?.trim().toUpperCase() || 'USD',
+      timezone: store.timezone?.trim() || 'UTC',
+      status: store.status?.trim().toUpperCase() || 'ACTIVE',
+    })));
+  }
+
+  @Post('merchants')
+  async createMerchantFromWizard(@Body() body: any) {
+    this.validateWizardPayload(body);
+    const existing = await merchantRepository.getMerchantById(body.merchantId);
+    if (existing.merchant) throw new ConflictException(`Merchant ID '${body.merchantId}' already exists`);
+
+    const merchant = await merchantRepository.createMerchant(this.merchantFields(body));
+    const stores = await this.saveWizardStores(merchant.id, body.stores);
+    const subscription = await merchantRepository.createOrUpdateSubscription(merchant.id, {
+      planCode: this.toPlanCode(body.plan),
+      billingCycle: this.toBillingCycle(body.billingCycle),
+      trialDays: Number(body.trialPeriod) || 0,
+    });
+    await merchantRepository.recordAuditLog('MERCHANT_ONBOARDING_COMPLETED', merchant.id, undefined, merchant.email, { storeCount: stores.length, plan: subscription.planCode });
+    return { success: true, message: 'Merchant created successfully', merchant, stores, subscription };
+  }
+
+  @Put('merchants/:id')
+  @Patch('merchants/:id')
+  async updateMerchantFromWizard(@Param('id') id: string, @Body() body: any) {
+    this.validateWizardPayload({ ...body, merchantId: id });
+    const merchant = await merchantRepository.updateMerchant(id, this.merchantFields({ ...body, merchantId: id }));
+    if (!merchant) throw new NotFoundException(`Merchant with ID '${id}' not found`);
+    const subscription = await merchantRepository.createOrUpdateSubscription(id, {
+      planCode: this.toPlanCode(body.plan), billingCycle: this.toBillingCycle(body.billingCycle), trialDays: Number(body.trialPeriod) || 0,
+    });
+    return { success: true, message: 'Merchant updated successfully', merchant, subscription };
+  }
+
   @Get('health')
   health() {
     return {

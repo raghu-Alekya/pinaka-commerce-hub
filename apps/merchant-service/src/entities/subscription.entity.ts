@@ -34,7 +34,10 @@ export class SubscriptionEntity {
   entitlements!: string[]; // ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY']
 
   @Column({ type: 'varchar', length: 20, default: 'MONTHLY' })
-  billingCycle!: 'MONTHLY' | 'ANNUAL';
+  billingCycle!: 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL';
+
+  @Column({ type: 'integer', default: 0 })
+  trialDays!: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 99.00 })
   price!: number;

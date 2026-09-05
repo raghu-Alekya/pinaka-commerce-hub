@@ -40,6 +40,10 @@ export class MerchantEntity {
   @Column({ type: 'varchar', length: 255 })
   businessName!: string;
 
+  // Fields captured by the merchant onboarding form.
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  legalBusinessName?: string;
+
   @Column({ type: 'varchar', length: 50, default: BusinessType.RETAIL })
   businessType!: BusinessType;
 
@@ -57,6 +61,36 @@ export class MerchantEntity {
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   taxId?: string; // EIN / GST
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  country?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  state?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  city?: string;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  postalCode?: string;
+
+  @Column({ type: 'text', nullable: true })
+  businessAddress?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  firstName?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  lastName?: string;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  jobTitle?: string;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  alternatePhone?: string;
+
+  @Column({ type: 'boolean', default: true })
+  billingContact!: boolean;
 
   @Column({ type: 'varchar', length: 50, default: KycStatus.PENDING })
   kycStatus!: KycStatus;

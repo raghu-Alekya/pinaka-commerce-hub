@@ -112,6 +112,7 @@ export class MerchantRepository implements OnModuleInit {
         maxStoresAllowed: 3,
         entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
         billingCycle: 'MONTHLY',
+        trialDays: 0,
         price: 99.00,
         status: SubscriptionStatus.ACTIVE,
       });
@@ -169,6 +170,7 @@ export class MerchantRepository implements OnModuleInit {
         maxStoresAllowed: 3,
         entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
         billingCycle: 'MONTHLY',
+        trialDays: 0,
         price: 99.00,
         status: SubscriptionStatus.ACTIVE,
         createdAt: new Date(),
@@ -209,6 +211,17 @@ export class MerchantRepository implements OnModuleInit {
       email: data.email || `owner_${Date.now()}@pinaka.com`,
       phone: data.phone || '',
       taxId: data.taxId || '',
+      legalBusinessName: data.legalBusinessName,
+      country: data.country,
+      state: data.state,
+      city: data.city,
+      postalCode: data.postalCode,
+      businessAddress: data.businessAddress,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      jobTitle: data.jobTitle,
+      alternatePhone: data.alternatePhone,
+      billingContact: data.billingContact ?? true,
       kycStatus: data.kycStatus || KycStatus.PENDING,
       kycDocuments: data.kycDocuments || [],
       status: data.status || MerchantStatus.PENDING,
@@ -234,6 +247,23 @@ export class MerchantRepository implements OnModuleInit {
       return await this.merchantRepo.find({ order: { createdAt: 'DESC' } });
     }
     return this.merchantsStore;
+  }
+
+  async updateMerchant(id: string, data: Partial<MerchantEntity>): Promise<MerchantEntity | null> {
+    if (this.isDbConnected && this.merchantRepo) {
+      const merchant = await this.merchantRepo.findOne({ where: { id } });
+      if (!merchant) return null;
+      Object.assign(merchant, data, { id, updatedAt: new Date() });
+      const saved = await this.merchantRepo.save(merchant);
+      await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, saved.email, { businessName: saved.businessName });
+      return saved;
+    }
+
+    const index = this.merchantsStore.findIndex((merchant) => merchant.id === id);
+    if (index === -1) return null;
+    this.merchantsStore[index] = { ...this.merchantsStore[index], ...data, id, updatedAt: new Date() };
+    await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, this.merchantsStore[index].email, { businessName: this.merchantsStore[index].businessName });
+    return this.merchantsStore[index];
   }
 
   async getMerchantById(id: string): Promise<{ merchant: MerchantEntity | null; stores: StoreEntity[]; subscription: SubscriptionEntity | null }> {
@@ -269,6 +299,7 @@ export class MerchantRepository implements OnModuleInit {
       storeName: data.storeName || 'Store Branch',
       storeCode,
       storeType: data.storeType || 'RETAIL',
+      baseUrl: data.baseUrl,
       address: data.address || { street: '', city: '', state: '', zipCode: '', country: 'USA' },
       currency: data.currency || 'USD',
       timezone: data.timezone || 'America/Chicago',
@@ -294,6 +325,29 @@ export class MerchantRepository implements OnModuleInit {
       await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName, pin: activationPin });
       return store;
     }
+  }
+
+  async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+    if (data.id && this.isDbConnected && this.storeRepo) {
+      const existing = await this.storeRepo.findOne({ where: { id: data.id } });
+      if (existing) {
+        if (existing.merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
+        Object.assign(existing, data, { merchantId, updatedAt: new Date() });
+        const saved = await this.storeRepo.save(existing);
+        await this.recordAuditLog('STORE_UPDATED', merchantId, saved.id, 'merchant', { storeName: saved.storeName });
+        return saved;
+      }
+    }
+    if (data.id && !this.isDbConnected) {
+      const index = this.storesStore.findIndex((store) => store.id === data.id);
+      if (index >= 0) {
+        if (this.storesStore[index].merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
+        this.storesStore[index] = { ...this.storesStore[index], ...data, merchantId, updatedAt: new Date() };
+        await this.recordAuditLog('STORE_UPDATED', merchantId, data.id, 'merchant', { storeName: this.storesStore[index].storeName });
+        return this.storesStore[index];
+      }
+    }
+    return this.createStore(merchantId, data);
   }
 
   async activateTerminalByPin(pin: string): Promise<{ success: boolean; store?: StoreEntity; entitlements?: string[]; message?: string }> {
@@ -358,6 +412,7 @@ export class MerchantRepository implements OnModuleInit {
       entitlements: data.entitlements || defaultEntitlements,
       billingCycle: data.billingCycle || 'MONTHLY',
       price: data.price || price,
+      trialDays: data.trialDays || 0,
       status: data.status || SubscriptionStatus.ACTIVE,
       createdAt: new Date(),
       updatedAt: new Date(),
