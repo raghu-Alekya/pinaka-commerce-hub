@@ -40,7 +40,7 @@ export class MerchantRepository implements OnModuleInit {
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
         database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
         entities: [MerchantEntity, StoreEntity, SubscriptionEntity, OnboardingAuditEntity],
-        synchronize: true,
+        synchronize: false,
       });
 
       await this.dataSource.initialize();
