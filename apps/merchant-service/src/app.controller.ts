@@ -3,10 +3,11 @@ import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
 
+const merchantRepository = new MerchantRepository();
+merchantRepository.onModuleInit();
+
 @Controller('api/v1')
 export class AppController {
-  constructor(private readonly merchantRepository: MerchantRepository) {}
-
   private toBusinessType(value?: string): BusinessType {
     return value?.toUpperCase() === 'RESTAURANT' ? BusinessType.RESTAURANT : BusinessType.RETAIL;
   }
@@ -64,7 +65,7 @@ export class AppController {
   }
 
   private async saveWizardStores(merchantId: string, stores: any[]) {
-    return Promise.all(stores.map((store) => this.merchantRepository.createStore(merchantId, {
+    return Promise.all(stores.map((store) => merchantRepository.createStore(merchantId, {
       id: store.id.trim(),
       storeName: store.name.trim(),
       storeCode: store.id.trim(),
@@ -76,20 +77,20 @@ export class AppController {
     })));
   }
 
-  @Post('merchants/create-merchant')
-  async createMerchantFromWizard(@Body() body: any) {
+  @Post('merchants')
+  async createMerchantFromWizard(@Body() body: any) {``
     this.validateWizardPayload(body);
-    const existing = await this.merchantRepository.getMerchantById(body.merchantId);
+    const existing = await merchantRepository.getMerchantById(body.merchantId);
     if (existing.merchant) throw new ConflictException(`Merchant ID '${body.merchantId}' already exists`);
 
-    const merchant = await this.merchantRepository.createMerchant(this.merchantFields(body));
+    const merchant = await merchantRepository.createMerchant(this.merchantFields(body));
     const stores = await this.saveWizardStores(merchant.id, body.stores);
-    const subscription = await this.merchantRepository.createOrUpdateSubscription(merchant.id, {
+    const subscription = await merchantRepository.createOrUpdateSubscription(merchant.id, {
       planCode: this.toPlanCode(body.plan),
       billingCycle: this.toBillingCycle(body.billingCycle),
       trialDays: Number(body.trialPeriod) || 0,
     });
-    await this.merchantRepository.recordAuditLog('MERCHANT_ONBOARDING_COMPLETED', merchant.id, undefined, merchant.email, { storeCount: stores.length, plan: subscription.planCode });
+    await merchantRepository.recordAuditLog('MERCHANT_ONBOARDING_COMPLETED', merchant.id, undefined, merchant.email, { storeCount: stores.length, plan: subscription.planCode });
     return { success: true, message: 'Merchant created successfully', merchant, stores, subscription };
   }
 
@@ -97,9 +98,9 @@ export class AppController {
   @Patch('merchants/:id')
   async updateMerchantFromWizard(@Param('id') id: string, @Body() body: any) {
     this.validateWizardPayload({ ...body, merchantId: id });
-    const merchant = await this.merchantRepository.updateMerchant(id, this.merchantFields({ ...body, merchantId: id }));
+    const merchant = await merchantRepository.updateMerchant(id, this.merchantFields({ ...body, merchantId: id }));
     if (!merchant) throw new NotFoundException(`Merchant with ID '${id}' not found`);
-    const subscription = await this.merchantRepository.createOrUpdateSubscription(id, {
+    const subscription = await merchantRepository.createOrUpdateSubscription(id, {
       planCode: this.toPlanCode(body.plan), billingCycle: this.toBillingCycle(body.billingCycle), trialDays: Number(body.trialPeriod) || 0,
     });
     return { success: true, message: 'Merchant updated successfully', merchant, subscription };
@@ -111,7 +112,6 @@ export class AppController {
       status: 'ok',
       service: 'merchant-service',
       version: '2.0.0 (PCH Module 1)',
-      database: this.merchantRepository.databaseStatus,
       timestamp: new Date().toISOString(),
     };
   }
@@ -123,7 +123,7 @@ export class AppController {
     if (!body.businessName || !body.email || !body.ownerName) {
       throw new BadRequestException('businessName, email, and ownerName are required');
     }
-    const merchant = await this.merchantRepository.createMerchant({
+    const merchant = await merchantRepository.createMerchant({
       businessName: body.businessName,
       businessType: body.businessType || BusinessType.RETAIL,
       retailSubCategory: body.retailSubCategory,
@@ -140,7 +140,7 @@ export class AppController {
     if (!body.merchantId || !body.storeName) {
       throw new BadRequestException('merchantId and storeName are required');
     }
-    const store = await this.merchantRepository.createStore(body.merchantId, body);
+    const store = await merchantRepository.createStore(body.merchantId, body);
     return { success: true, step: 2, storeId: store.id, activationPin: store.activationPin, store };
   }
 
@@ -149,14 +149,14 @@ export class AppController {
     if (!body.merchantId || !body.planCode) {
       throw new BadRequestException('merchantId and planCode are required');
     }
-    const sub = await this.merchantRepository.createOrUpdateSubscription(body.merchantId, body);
+    const sub = await merchantRepository.createOrUpdateSubscription(body.merchantId, body);
     return { success: true, step: 3, subscriptionId: sub.id, entitlements: sub.entitlements, subscription: sub };
   }
 
   // --- All-in-One Complete Wizard Submission ---
   @Post('onboarding/complete')
   async completeOnboarding(@Body() body: any) {
-    const merchant = await this.merchantRepository.createMerchant({
+    const merchant = await merchantRepository.createMerchant({
       businessName: body.businessName || 'Fresh Mart Organics LLC',
       businessType: body.businessType || BusinessType.RETAIL,
       retailSubCategory: body.retailSubCategory || (body.businessType === BusinessType.RETAIL ? RetailSubCategory.GROCERY : undefined),
@@ -169,7 +169,7 @@ export class AppController {
       onboardingStep: 'COMPLETED',
     });
 
-    const store = await this.merchantRepository.createStore(merchant.id, {
+    const store = await merchantRepository.createStore(merchant.id, {
       storeName: body.storeName || `${merchant.businessName} - Main Store`,
       storeCode: body.storeCode || 'STR-MAIN-01',
       storeType: body.businessType || 'GROCERY',
@@ -177,7 +177,7 @@ export class AppController {
       taxRate: body.taxRate || 8.25,
     });
 
-    const subscription = await this.merchantRepository.createOrUpdateSubscription(merchant.id, {
+    const subscription = await merchantRepository.createOrUpdateSubscription(merchant.id, {
       planCode: body.planCode || PlanCode.PRO,
     });
 
@@ -197,7 +197,7 @@ export class AppController {
     if (!activationPin || activationPin.trim().length !== 6) {
       throw new BadRequestException('A valid 6-digit activation PIN is required');
     }
-    const result = await this.merchantRepository.activateTerminalByPin(activationPin.trim());
+    const result = await merchantRepository.activateTerminalByPin(activationPin.trim());
     if (!result.success) {
       throw new NotFoundException(result.message);
     }
@@ -213,13 +213,13 @@ export class AppController {
   // --- Standard CRUD ---
   @Get('merchants')
   async getAllMerchants() {
-    const list = await this.merchantRepository.getAllMerchants();
+    const list = await merchantRepository.getAllMerchants();
     return { success: true, count: list.length, merchants: list };
   }
 
   @Get('merchants/:id')
   async getMerchantById(@Param('id') id: string) {
-    const result = await this.merchantRepository.getMerchantById(id);
+    const result = await merchantRepository.getMerchantById(id);
     if (!result.merchant) {
       throw new NotFoundException(`Merchant with ID '${id}' not found`);
     }
