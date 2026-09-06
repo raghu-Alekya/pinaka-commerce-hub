@@ -34,7 +34,7 @@ export class AppController {
       ['name', 'id', 'url', 'address', 'city', 'state', 'zip'].forEach((field) => {
         if (!String(store?.[field] ?? '').trim()) missing.push(`stores[${index}].${field}`);
       });
-    });
+    }); 
     if (missing.length) throw new BadRequestException(`Missing required fields: ${missing.join(', ')}`);
   }
 

@@ -14,7 +14,7 @@ export class MerchantRepository implements OnModuleInit {
   private subRepo?: Repository<SubscriptionEntity>;
   private auditRepo?: Repository<OnboardingAuditEntity>;
   private redisClient?: Redis;
-  private isDbConnected = false;
+  private isDbConnected = true;
   private isRedisConnected = false;
   private databaseError?: string;
 
