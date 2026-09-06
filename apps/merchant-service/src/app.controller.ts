@@ -77,8 +77,8 @@ export class AppController {
     })));
   }
 
-  @Post('merchants')
-  async createMerchantFromWizard(@Body() body: any) {``
+  @Post('merchants/create-merchant')
+  async createMerchantFromWizard(@Body() body: any) {
     this.validateWizardPayload(body);
     const existing = await merchantRepository.getMerchantById(body.merchantId);
     if (existing.merchant) throw new ConflictException(`Merchant ID '${body.merchantId}' already exists`);
