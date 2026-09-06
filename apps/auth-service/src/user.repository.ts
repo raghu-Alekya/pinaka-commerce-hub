@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { AccountEntity } from './account.entity';
+import { RefreshTokenEntity } from './refresh-token.entity';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
 
 @Injectable()
@@ -15,6 +16,7 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
   private dataSource?: DataSource;
   private repository?: Repository<UserEntity>;
   private accountRepository?: Repository<AccountEntity>;
+  private refreshTokenRepository?: Repository<RefreshTokenEntity>;
   private readonly inMemoryUsers: UserEntity[] = [];
   private readonly inMemoryAccounts: AccountEntity[] = [];
   private readonly inMemoryPasswords = new Map<string, string>();
@@ -22,6 +24,7 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
     string,
     { hash: string; type: 'INVITE' | 'RESET'; expiresAt: Date }
   >();
+  private readonly inMemoryRefreshTokens = new Map<string, RefreshTokenEntity>();
 
   async onModuleInit(): Promise<void> {
     try {
@@ -32,12 +35,13 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
         database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
-        entities: [UserEntity, AccountEntity],
+        entities: [UserEntity, AccountEntity, RefreshTokenEntity],
         synchronize: true,
       });
       await this.dataSource.initialize();
       this.repository = this.dataSource.getRepository(UserEntity);
       this.accountRepository = this.dataSource.getRepository(AccountEntity);
+      this.refreshTokenRepository = this.dataSource.getRepository(RefreshTokenEntity);
       console.log('🐘 [Auth PostgreSQL] Connected; users table is ready');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -362,6 +366,50 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
     this.inMemoryTokens.delete(id);
     this.inMemoryUsers.splice(index, 1);
     return true;
+  }
+
+  async createRefreshToken(
+    token: Pick<RefreshTokenEntity, 'id' | 'userId' | 'tokenHash' | 'expiresAt'>,
+  ): Promise<void> {
+    if (this.refreshTokenRepository) {
+      await this.refreshTokenRepository.save(this.refreshTokenRepository.create(token));
+      return;
+    }
+    const now = new Date();
+    this.inMemoryRefreshTokens.set(token.id, {
+      ...token,
+      revokedAt: null,
+      replacedById: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  async findActiveRefreshToken(id: string): Promise<RefreshTokenEntity | null> {
+    const token = this.refreshTokenRepository
+      ? await this.refreshTokenRepository.createQueryBuilder('token')
+          .addSelect('token.tokenHash')
+          .where('token.id = :id', { id })
+          .getOne()
+      : this.inMemoryRefreshTokens.get(id) ?? null;
+    if (!token || token.revokedAt || token.expiresAt.getTime() <= Date.now()) return null;
+    return token;
+  }
+
+  async revokeRefreshToken(id: string, replacedById?: string): Promise<void> {
+    if (this.refreshTokenRepository) {
+      await this.refreshTokenRepository.update(id, {
+        revokedAt: new Date(),
+        replacedById: replacedById ?? null,
+      });
+      return;
+    }
+    const token = this.inMemoryRefreshTokens.get(id);
+    if (token) {
+      token.revokedAt = new Date();
+      token.replacedById = replacedById ?? null;
+      token.updatedAt = new Date();
+    }
   }
 
   private async assertEmailAvailable(

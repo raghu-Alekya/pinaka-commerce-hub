@@ -22,6 +22,7 @@ import {
   CreateAccountDto,
   GoogleLoginDto,
   LoginDto,
+  RefreshTokenDto,
   RequestPasswordResetDto,
   SignUpDto,
 } from './auth.dto';
@@ -74,6 +75,18 @@ export class AppController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto) {
     return { success: true, ...(await this.auth.login(dto)) };
+  }
+
+  @Post('api/v1/auth/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(@Body() dto: RefreshTokenDto) {
+    return { success: true, ...(await this.auth.refresh(dto)) };
+  }
+
+  @Post('api/v1/auth/logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logout(@Body() dto: RefreshTokenDto): Promise<void> {
+    await this.auth.logout(dto);
   }
 
   @Post('api/v1/auth/google')

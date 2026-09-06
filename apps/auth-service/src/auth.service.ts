@@ -10,6 +10,7 @@ import {
   createHash,
   createHmac,
   randomBytes,
+  randomUUID,
   scrypt as scryptCallback,
   timingSafeEqual,
 } from 'node:crypto';
@@ -19,6 +20,7 @@ import {
   CreateAccountDto,
   GoogleLoginDto,
   LoginDto,
+  RefreshTokenDto,
   SignUpDto,
 } from './auth.dto';
 import { MailService } from './mail.service';
@@ -28,6 +30,7 @@ import { UserRepository } from './user.repository';
 
 const scrypt = promisify(scryptCallback);
 const TOKEN_LIFETIME_SECONDS = 3600;
+const REFRESH_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 
 @Injectable()
 export class AuthService {
@@ -41,7 +44,7 @@ export class AuthService {
       dto.email,
       await this.hashPassword(dto.password),
     );
-    return { ...this.createSession(user), account };
+    return { ...(await this.createSession(user)), account };
   }
 
   async login(dto: LoginDto) {
@@ -159,6 +162,37 @@ export class AuthService {
     return { account, accountManager };
   }
 
+  async refresh(dto: RefreshTokenDto) {
+    const payload = this.verifyRefreshToken(dto.refreshToken);
+    const tokenId = typeof payload.jti === 'string' ? payload.jti : '';
+    const userId = typeof payload.sub === 'string' ? payload.sub : '';
+    if (!tokenId || !userId || payload.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+    const stored = await this.users.findActiveRefreshToken(tokenId);
+    if (
+      !stored ||
+      stored.userId !== userId ||
+      stored.tokenHash !== this.hashToken(dto.refreshToken)
+    ) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+    const user = await this.users.findById(userId);
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+    const session = await this.createSession(user);
+    await this.users.revokeRefreshToken(tokenId, session.refreshTokenId);
+    const { refreshTokenId: _refreshTokenId, ...result } = session;
+    return result;
+  }
+
+  async logout(dto: RefreshTokenDto): Promise<void> {
+    const payload = this.verifyRefreshToken(dto.refreshToken);
+    const tokenId = typeof payload.jti === 'string' ? payload.jti : '';
+    if (tokenId) await this.users.revokeRefreshToken(tokenId);
+  }
+
   async requireAccountOwner(authorization?: string): Promise<UserEntity> {
     const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Bearer token is required');
@@ -200,21 +234,39 @@ export class AuthService {
     }
   }
 
-  private createSession(user: UserEntity) {
+  private async createSession(user: UserEntity) {
     const now = Math.floor(Date.now() / 1000);
-    const payload = {
+    const accessPayload = {
       sub: user.id,
       accountId: user.accountId ?? null,
       email: user.email,
       role: user.role,
+      type: 'access',
       iat: now,
       exp: now + TOKEN_LIFETIME_SECONDS,
     };
+    const refreshTokenId = randomUUID();
+    const refreshToken = this.signRefreshToken({
+      sub: user.id,
+      jti: refreshTokenId,
+      type: 'refresh',
+      iat: now,
+      exp: now + REFRESH_TOKEN_LIFETIME_SECONDS,
+    });
+    await this.users.createRefreshToken({
+      id: refreshTokenId,
+      userId: user.id,
+      tokenHash: this.hashToken(refreshToken),
+      expiresAt: new Date((now + REFRESH_TOKEN_LIFETIME_SECONDS) * 1000),
+    });
     return {
-      accessToken: this.signToken(payload),
+      accessToken: this.signToken(accessPayload),
+      refreshToken,
+      refreshExpiresIn: REFRESH_TOKEN_LIFETIME_SECONDS,
       tokenType: 'Bearer',
       expiresIn: TOKEN_LIFETIME_SECONDS,
       user: this.toPublicUser(user),
+      refreshTokenId,
     };
   }
 
@@ -240,18 +292,24 @@ export class AuthService {
   }
 
   private signToken(payload: Record<string, unknown>): string {
-    const secret = process.env.AUTH_JWT_SECRET;
-    if (!secret && process.env.NODE_ENV === 'production')
-      throw new InternalServerErrorException(
-        'AUTH_JWT_SECRET is not configured',
-      );
+    return this.signTokenWithSecret(payload, this.jwtSecret());
+  }
+
+  private signRefreshToken(payload: Record<string, unknown>): string {
+    return this.signTokenWithSecret(payload, this.refreshJwtSecret());
+  }
+
+  private signTokenWithSecret(
+    payload: Record<string, unknown>,
+    secret: string,
+  ): string {
     const header = Buffer.from(
       JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
     ).toString('base64url');
     const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const signature = createHmac(
       'sha256',
-      secret || 'pdh-local-development-secret-change-me',
+      secret,
     )
       .update(`${header}.${body}`)
       .digest('base64url');
@@ -259,10 +317,22 @@ export class AuthService {
   }
 
   private verifyToken(token: string): Record<string, unknown> {
+    return this.verifyTokenWithSecret(token, this.jwtSecret(), 'access token');
+  }
+
+  private verifyRefreshToken(token: string): Record<string, unknown> {
+    return this.verifyTokenWithSecret(token, this.refreshJwtSecret(), 'refresh token');
+  }
+
+  private verifyTokenWithSecret(
+    token: string,
+    secret: string,
+    label: string,
+  ): Record<string, unknown> {
     const [header, body, signature] = token.split('.');
     if (!header || !body || !signature)
-      throw new UnauthorizedException('Invalid access token');
-    const expected = createHmac('sha256', this.jwtSecret())
+      throw new UnauthorizedException(`Invalid ${label}`);
+    const expected = createHmac('sha256', secret)
       .update(`${header}.${body}`)
       .digest();
     const supplied = Buffer.from(signature, 'base64url');
@@ -270,7 +340,7 @@ export class AuthService {
       expected.length !== supplied.length ||
       !timingSafeEqual(expected, supplied)
     ) {
-      throw new UnauthorizedException('Invalid access token');
+      throw new UnauthorizedException(`Invalid ${label}`);
     }
     try {
       const payload = JSON.parse(
@@ -280,12 +350,12 @@ export class AuthService {
         typeof payload.exp !== 'number' ||
         payload.exp <= Math.floor(Date.now() / 1000)
       ) {
-        throw new UnauthorizedException('Access token has expired');
+        throw new UnauthorizedException(`${label} has expired`);
       }
       return payload;
     } catch (error: unknown) {
       if (error instanceof UnauthorizedException) throw error;
-      throw new UnauthorizedException('Invalid access token');
+      throw new UnauthorizedException(`Invalid ${label}`);
     }
   }
 
@@ -297,6 +367,16 @@ export class AuthService {
       );
     }
     return secret || 'pdh-local-development-secret-change-me';
+  }
+
+  private refreshJwtSecret(): string {
+    const secret = process.env.AUTH_REFRESH_JWT_SECRET;
+    if (!secret && process.env.NODE_ENV === 'production') {
+      throw new InternalServerErrorException(
+        'AUTH_REFRESH_JWT_SECRET is not configured',
+      );
+    }
+    return secret || 'pdh-local-development-refresh-secret-change-me';
   }
 
   private toPublicUser(user: UserEntity) {
