@@ -29,6 +29,14 @@ export interface StoreChannelConfig {
   enabled: boolean;
 }
 
+/** A credential is encrypted before it is stored in this JSONB value. */
+export interface StoreWebsiteConnectorConfig {
+  provider: 'WORDPRESS';
+  wordpressUrl: string;
+  encryptedJwt: string;
+  updatedAt: string;
+}
+
 @Entity('stores')
 export class StoreEntity {
   @PrimaryColumn({ type: 'varchar', length: 100 })
@@ -75,6 +83,10 @@ export class StoreEntity {
 
   @Column({ type: 'jsonb', default: [] })
   channels!: StoreChannelConfig[];
+
+  // Excluded from ordinary store reads because it contains an encrypted secret.
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  websiteConnector?: StoreWebsiteConnectorConfig | null;
 
   @CreateDateColumn()
   createdAt!: Date;

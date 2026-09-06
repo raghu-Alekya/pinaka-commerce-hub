@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Put, Patch, Param, Body, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Param, Body, Headers, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
@@ -210,6 +211,62 @@ export class AppController {
     };
   }
 
+  /**
+   * Saves the Website Connector tab. The supplied WordPress JWT is encrypted
+   * before PostgreSQL receives it and is never included in this response.
+   */
+  @Put('stores/:storeId/connector')
+  async saveWebsiteConnector(
+    @Param('storeId') storeId: string,
+    @Body() body: { wordpressUrl?: string; wordpressJwt?: string },
+    @Headers('authorization') authorization?: string,
+  ) {
+    this.requireOwner(authorization);
+    const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
+    const wordpressJwt = body.wordpressJwt?.trim();
+    if (!wordpressJwt) throw new BadRequestException('wordpressJwt is required');
+
+    const store = await merchantRepository.saveWebsiteConnector(storeId, {
+      provider: 'WORDPRESS',
+      wordpressUrl,
+      encryptedJwt: this.encryptConnectorSecret(wordpressJwt),
+      updatedAt: new Date().toISOString(),
+    });
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await merchantRepository.recordAuditLog(
+      'STORE_WEBSITE_CONNECTOR_UPDATED',
+      store.merchantId,
+      store.id,
+      'merchant',
+      { provider: 'WORDPRESS', wordpressUrl },
+    );
+    return {
+      success: true,
+      storeId: store.id,
+      connector: { provider: 'WORDPRESS', wordpressUrl, wordpressJwtConfigured: true },
+    };
+  }
+
+  @Get('stores/:storeId/connector')
+  async getWebsiteConnector(
+    @Param('storeId') storeId: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    this.requireOwner(authorization);
+    const connector = await merchantRepository.getWebsiteConnector(storeId);
+    if (!connector) throw new NotFoundException(`Website connector for store '${storeId}' not found`);
+    return {
+      success: true,
+      storeId,
+      connector: {
+        provider: connector.provider,
+        wordpressUrl: connector.wordpressUrl,
+        wordpressJwtConfigured: true,
+        updatedAt: connector.updatedAt,
+      },
+    };
+  }
+
   // --- Standard CRUD ---
   @Get('merchants')
   async getAllMerchants() {
@@ -224,5 +281,56 @@ export class AppController {
       throw new NotFoundException(`Merchant with ID '${id}' not found`);
     }
     return { success: true, ...result };
+  }
+
+  private validateWordPressUrl(value?: string): string {
+    if (!value?.trim()) throw new BadRequestException('wordpressUrl is required');
+    try {
+      const url = new URL(value.trim());
+      if (url.protocol !== 'https:') throw new Error('not https');
+      return url.toString().replace(/\/$/, '');
+    } catch {
+      throw new BadRequestException('wordpressUrl must be a valid HTTPS URL');
+    }
+  }
+
+  private encryptConnectorSecret(value: string): string {
+    const keyValue = process.env.STORE_CONFIG_ENCRYPTION_KEY;
+    if (!keyValue) {
+      throw new InternalServerErrorException('STORE_CONFIG_ENCRYPTION_KEY is not configured');
+    }
+    const key = Buffer.from(keyValue, 'base64');
+    if (key.length !== 32) {
+      throw new InternalServerErrorException('STORE_CONFIG_ENCRYPTION_KEY must be a base64-encoded 32-byte key');
+    }
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    return `v1:${iv.toString('base64url')}:${ciphertext.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}`;
+  }
+
+  private requireOwner(authorization?: string): void {
+    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const secret = process.env.AUTH_JWT_SECRET;
+    if (!token || !secret) throw new UnauthorizedException('Owner bearer token is required');
+    const [header, body, signature] = token.split('.');
+    if (!header || !body || !signature) throw new UnauthorizedException('Invalid access token');
+    const expected = createHmac('sha256', secret).update(`${header}.${body}`).digest();
+    const supplied = Buffer.from(signature, 'base64url');
+    if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    try {
+      const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as {
+        role?: string; type?: string; exp?: number;
+      };
+      if (payload.type !== 'access' || typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) {
+        throw new UnauthorizedException('Access token has expired');
+      }
+      if (payload.role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
+    } catch (error: unknown) {
+      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
+      throw new UnauthorizedException('Invalid access token');
+    }
   }
 }

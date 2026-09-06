@@ -2,7 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from './entities/merchant.entity';
-import { StoreEntity, StoreStatus, OperationalStatus } from './entities/store.entity';
+import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from './entities/store.entity';
 import { SubscriptionEntity, PlanCode, SubscriptionStatus } from './entities/subscription.entity';
 import { OnboardingAuditEntity } from './entities/onboarding-audit.entity';
 
@@ -361,6 +361,36 @@ export class MerchantRepository implements OnModuleInit {
       }
     }
     return this.createStore(merchantId, data);
+  }
+
+  async saveWebsiteConnector(
+    storeId: string,
+    connector: StoreWebsiteConnectorConfig,
+  ): Promise<StoreEntity | null> {
+    if (this.isDbConnected && this.storeRepo) {
+      const store = await this.storeRepo.findOne({ where: { id: storeId } });
+      if (!store) return null;
+      store.websiteConnector = connector;
+      store.updatedAt = new Date();
+      return this.storeRepo.save(store);
+    }
+    const store = this.storesStore.find((candidate) => candidate.id === storeId);
+    if (!store) return null;
+    store.websiteConnector = connector;
+    store.updatedAt = new Date();
+    return store;
+  }
+
+  async getWebsiteConnector(storeId: string): Promise<StoreWebsiteConnectorConfig | null> {
+    if (this.isDbConnected && this.storeRepo) {
+      const store = await this.storeRepo
+        .createQueryBuilder('store')
+        .addSelect('store.websiteConnector')
+        .where('store.id = :storeId', { storeId })
+        .getOne();
+      return store?.websiteConnector ?? null;
+    }
+    return this.storesStore.find((candidate) => candidate.id === storeId)?.websiteConnector ?? null;
   }
 
   async activateTerminalByPin(pin: string): Promise<{ success: boolean; store?: StoreEntity; entitlements?: string[]; message?: string }> {
