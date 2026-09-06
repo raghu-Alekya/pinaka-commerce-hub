@@ -16,6 +16,11 @@ export class MerchantRepository implements OnModuleInit {
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
+  private databaseError?: string;
+
+  get databaseStatus(): string {
+    return this.isDbConnected ? 'connected' : `unavailable: ${this.databaseError || 'unknown error'}`;
+  }
 
   // In-Memory Fallback Stores
   private merchantsStore: MerchantEntity[] = [];
@@ -28,6 +33,7 @@ export class MerchantRepository implements OnModuleInit {
     try {
       this.dataSource = new DataSource({
         type: 'postgres',
+        url: process.env.DATABASE_URL || undefined,
         host: process.env.POSTGRES_HOST || 'localhost',
         port: Number(process.env.POSTGRES_PORT) || 5432,
         username: process.env.POSTGRES_USER || 'pdh_user',
@@ -43,11 +49,16 @@ export class MerchantRepository implements OnModuleInit {
       this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
       this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
       this.isDbConnected = true;
-      console.log('🐘 [PCH Merchant DB] Connected to PostgreSQL Database: pinaka_commerce_hub');
+      console.log('🐘 [PCH Merchant DB] Connected to PostgreSQL database');
       await this.seedDefaultData();
     } catch (err: any) {
-      console.log(`⚠️ [PCH Merchant DB] Offline (${err.message}). Using In-Memory Mode.`);
+      this.databaseError = err.message;
       this.isDbConnected = false;
+      const requireDatabase = process.env.REQUIRE_DATABASE === 'true' || process.env.NODE_ENV === 'production';
+      if (requireDatabase) {
+        throw new Error(`Merchant service cannot start because PostgreSQL is unavailable: ${err.message}`);
+      }
+      console.log(`⚠️ [PCH Merchant DB] Offline (${err.message}). Using In-Memory Mode because REQUIRE_DATABASE is not enabled.`);
       this.seedDefaultInMemory();
     }
 
@@ -81,6 +92,7 @@ export class MerchantRepository implements OnModuleInit {
         email: 'alex@freshmart.com',
         phone: '+1 (555) 234-5678',
         taxId: '12-3456789',
+        billingContact: true,
         kycStatus: KycStatus.VERIFIED,
         status: MerchantStatus.ACTIVE,
         onboardingStep: 'COMPLETED',
@@ -137,6 +149,7 @@ export class MerchantRepository implements OnModuleInit {
         taxId: '12-3456789',
         kycStatus: KycStatus.VERIFIED,
         kycDocuments: [],
+        billingContact: true,
         status: MerchantStatus.ACTIVE,
         onboardingStep: 'COMPLETED',
         createdAt: new Date(),

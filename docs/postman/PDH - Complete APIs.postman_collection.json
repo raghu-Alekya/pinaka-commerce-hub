@@ -517,19 +517,20 @@
               }
             ],
             "url": {
-              "raw": "{{publicBaseUrl}}/api/v1/merchants",
+              "raw": "{{publicBaseUrl}}/api/v1/merchants/create-merchant",
               "host": [
                 "{{publicBaseUrl}}"
               ],
               "path": [
                 "api",
                 "v1",
-                "merchants"
+                "merchants",
+                "create-merchant"
               ]
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"{{merchantId}}\",\n  \"name\": \"Test Restaurant\",\n  \"status\": \"OPEN\",\n  \"autoAccept\": false\n}",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"businessName\": \"Test Restaurant\",\n  \"legalBusinessName\": \"Test Restaurant Private Limited\",\n  \"businessType\": \"Restaurant\",\n  \"country\": \"India\",\n  \"state\": \"Karnataka\",\n  \"city\": \"Bengaluru\",\n  \"postalCode\": \"560001\",\n  \"businessAddress\": \"123 MG Road\",\n  \"firstName\": \"Test\",\n  \"lastName\": \"Owner\",\n  \"email\": \"test.owner@example.com\",\n  \"phone\": \"+919876543210\",\n  \"plan\": \"Professional\",\n  \"billingCycle\": \"Monthly\",\n  \"stores\": [\n    {\n      \"id\": \"STR-{{merchantId}}\",\n      \"name\": \"Test Restaurant Main Store\",\n      \"type\": \"Restaurant\",\n      \"url\": \"https://example.com\",\n      \"address\": \"123 MG Road\",\n      \"city\": \"Bengaluru\",\n      \"state\": \"Karnataka\",\n      \"zip\": \"560001\",\n      \"currency\": \"INR\",\n      \"timezone\": \"Asia/Kolkata\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
