@@ -57,6 +57,9 @@ export class StoreEntity {
   @Column({ type: 'varchar', length: 2048, nullable: true })
   baseUrl?: string;
 
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  phone?: string;
+
   @Column({ type: 'jsonb' })
   address!: StoreAddress;
 

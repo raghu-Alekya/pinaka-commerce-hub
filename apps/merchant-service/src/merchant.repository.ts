@@ -313,6 +313,7 @@ export class MerchantRepository implements OnModuleInit {
       storeCode,
       storeType: data.storeType || 'RETAIL',
       baseUrl: data.baseUrl,
+      phone: data.phone,
       address: data.address || { street: '', city: '', state: '', zipCode: '', country: 'USA' },
       currency: data.currency || 'USD',
       timezone: data.timezone || 'America/Chicago',
@@ -338,6 +339,29 @@ export class MerchantRepository implements OnModuleInit {
       await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName, pin: activationPin });
       return store;
     }
+  }
+
+  async getStoreById(id: string): Promise<StoreEntity | null> {
+    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOne({ where: { id } });
+    const store = this.storesStore.find(s => s.id === id);
+    if (!store) return null;
+    const { websiteConnector, ...details } = store;
+    return details;
+  }
+
+  async updateStore(id: string, data: Partial<StoreEntity>): Promise<StoreEntity | null> {
+    const existing = await this.getStoreById(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data, id, merchantId: existing.merchantId, updatedAt: new Date() };
+    if (this.isDbConnected && this.storeRepo) {
+      await this.storeRepo.update(id, data);
+    } else {
+      const index = this.storesStore.findIndex(s => s.id === id);
+      this.storesStore[index] = { ...this.storesStore[index], ...updated };
+    }
+    await this.cacheStorePin(updated.activationPin, updated);
+    await this.recordAuditLog('STORE_UPDATED', updated.merchantId, id, 'merchant', { storeName: updated.storeName });
+    return updated;
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
