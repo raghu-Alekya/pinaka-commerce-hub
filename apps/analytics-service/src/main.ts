@@ -1,3 +1,4 @@
+import '../../../scripts/load-env';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
@@ -13,7 +14,7 @@ async function bootstrap() {
   });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalInterceptors(new TracingInterceptor());
-  const port = process.env.ANALYTICS_SERVICE_PORT || 3008;
+  const port = process.env.ANALYTICS_SERVICE_PORT || 3006;
   await app.listen(port);
   console.log(`🚀 Analytics Service running on http://localhost:${port}`);
 }

@@ -1,3 +1,4 @@
+import '../../../scripts/load-env';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
@@ -13,7 +14,7 @@ async function bootstrap() {
   });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalInterceptors(new TracingInterceptor());
-  const port = process.env.POS_SERVICE_PORT || 3006;
+  const port = process.env.POS_SERVICE_PORT || 3007;
   await app.listen(port);
   console.log(`🚀 POS Integration Service running on http://localhost:${port}`);
 }
