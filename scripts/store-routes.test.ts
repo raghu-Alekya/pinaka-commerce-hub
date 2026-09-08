@@ -1,0 +1,31 @@
+import 'reflect-metadata';
+import assert from 'node:assert/strict';
+import { NestFactory } from '@nestjs/core';
+import { Module, ValidationPipe } from '@nestjs/common';
+import { AppController } from '../apps/merchant-service/src/app.controller';
+import { MerchantRepository } from '../apps/merchant-service/src/merchant.repository';
+let store: any = {id:'store-01',merchantId:'MER-890595',storeName:'Original',status:'INACTIVE',address:{country:'USA'},currency:'INR'};
+const repo = {getMerchantById:async(id:string)=>({merchant:id==="MER-890595"?{id,country:"India"}:null}),createStore:async(merchantId:string,fields:any)=>({...fields,merchantId}),listStores:async(merchantId?:string)=> !merchantId || merchantId===store.merchantId ? [{...store,activationPin:"secret",channels:[{apiKey:"secret"}]}] : [],getAllMerchants:async()=>[{id:"MER-890595",businessName:"Test Merchant"}],getStoreById:async(id:string)=>id===store.id?store:null,updateStore:async(id:string,data:any)=>(store={...store,...data})};
+@Module({controllers:[AppController],providers:[{provide:MerchantRepository,useValue:repo}]}) class TestModule {}
+async function main(){const app=await NestFactory.create(TestModule,{logger:false});app.useGlobalPipes(new ValidationPipe({transform:true,whitelist:true}));await app.listen(0,'127.0.0.1');try{const url=await app.getUrl();
+const listing=await fetch(url+'/api/v1/stores');assert.equal(listing.status,200);
+const listed=await listing.json();assert.equal(listed.count,1);assert.equal(listed.stores[0].merchantName,'Test Merchant');assert.equal(listed.stores[0].deviceCount,null);assert.ok(!JSON.stringify(listed).includes('secret'));
+assert.equal((await fetch(url+'/api/v1/merchants/unknown/stores')).status,404);
+assert.equal((await fetch(url+'/api/v1/merchants/MER-890595/stores')).status,200);
+const detailPath = '/api/v1/merchants/MER-890595/stores/store-01';
+const detail = await fetch(url + detailPath);
+assert.equal(detail.status, 200);
+assert.equal((await detail.json()).store.storeName, 'Original');
+assert.equal((await fetch(url+'/api/v1/merchants/other/stores/store-01')).status,404);
+assert.equal((await fetch(url+'/api/v1/merchants/MER-890595/stores/missing')).status,404);
+assert.equal((await fetch(url+'/api/v1/merchants/other/stores/store-01', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({merchantId:'other',storeId:'store-01',name:'Wrong owner',address:'hyd',city:'hyd',state:'Telangana',zip:'500045'})})).status,404);
+assert.equal((await fetch(url+'/api/v1/stores/store-01')).status,200);const body={merchantId:'MER-890595',storeId:'store-01',name:'Updated',status:'ACTIVE',address:'hyd',city:'hyderabad',state:'Telangana',zip:'500045'};const send=(data:any)=>fetch(url+'/api/v1/merchants/MER-890595/stores/store-01',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});assert.equal((await send(body)).status,200);const result=await(await fetch(url+'/api/v1/stores/store-01')).json();assert.equal(result.store.status,'ACTIVE');assert.equal(result.store.address.country,'USA');assert.equal((await send({...body,status:'invalid'})).status,400);assert.equal((await send({...body,merchantId:'other'})).status,400);const create=(path:string,data:any)=>fetch(url+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+const newBody={...body,storeId:'new-store',currency:'INR - Indian Rupee',timezone:'Kolkata'};
+const created=await create('/api/v1/merchants/MER-890595/stores',newBody);assert.equal(created.status,201);const saved=await created.json();assert.equal(saved.store.currency,'INR');assert.equal(saved.store.timezone,'Asia/Kolkata');assert.equal(saved.store.address.country,'India');
+assert.equal((await create('/api/v1/stores',newBody)).status,201);
+assert.equal((await create('/api/v1/stores',body)).status,409);
+assert.equal((await create('/api/v1/stores',{...newBody,merchantId:'missing'})).status,404);
+assert.equal((await create('/api/v1/merchants/other/stores',newBody)).status,400);
+assert.equal((await create('/api/v1/stores',{...newBody,name:''})).status,400);
+console.log('PASS: store list, read, update, create, mapping, validation, duplicate ID and merchant checks');}finally{await app.close()}}
+main().catch(e=>{console.error(e);process.exitCode=1});
