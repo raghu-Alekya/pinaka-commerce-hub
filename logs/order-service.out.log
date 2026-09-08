@@ -1,0 +1,15 @@
+[Nest] 1808  - 09/08/2026, 4:33:18 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 1808  - 09/08/2026, 4:33:18 PM     LOG [InstanceLoader] AppModule dependencies initialized +17ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RoutesResolver] AppController {/api/v1/orders}: +1099ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders/health, GET} route +8ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders, POST} route +3ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders, GET} route +4ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders/:id, GET} route +2ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders/:id/status, PATCH} route +2ms
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [RouterExplorer] Mapped {/api/v1/orders/:id/cancel, POST} route +1ms
+🐘 [Order Service DB] Connected to PostgreSQL Database
+🐘 [Order Service DB] Connected to PostgreSQL Database
+⚡ [Order Service Redis] Connected to Redis Container
+[Nest] 1808  - 09/08/2026, 4:33:19 PM     LOG [NestApplication] Nest application successfully started +238ms
+🚀 Order Service running on http://localhost:3002
+⚡ [Order Service Redis] Connected to Redis Container

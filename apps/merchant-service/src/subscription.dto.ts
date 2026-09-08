@@ -2,7 +2,7 @@ import { IsArray, ArrayUnique, IsEnum, IsIn, IsInt, IsISO8601, IsNumber, IsStrin
 import { PlanCode, SubscriptionStatus } from './entities/subscription.entity';
 
 export class SubscriptionFieldsDto {
-  @IsEnum(PlanCode) planCode!: PlanCode;
+  @IsString() @Matches(/^[A-Z][A-Z0-9_]{0,49}$/) planCode!: PlanCode;
   @IsString() @Matches(/\S/) @MaxLength(100) planName!: string;
   @IsInt() @Min(1) @Max(2147483647) maxStoresAllowed!: number;
   @IsArray() @ArrayUnique() @IsString({ each: true }) @MaxLength(100, { each: true }) entitlements!: string[];

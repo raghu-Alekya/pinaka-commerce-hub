@@ -1,0 +1,18 @@
+[Nest] 14308  - 09/08/2026, 4:33:11 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 14308  - 09/08/2026, 4:33:11 PM     LOG [InstanceLoader] AppModule dependencies initialized +13ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RoutesResolver] AppController {/api/v1/connectors}: +772ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/health, GET} route +4ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/connection, GET} route +1ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/webhook, POST} route +1ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/sync, POST} route +1ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/channels, GET} route +1ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/webhook/:channel, POST} route +0ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/orders, GET} route +1ms
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/orders/accept, POST} route +1ms
+🐘 [WooCommerce Connector DB] Connected to PostgreSQL Database
+[PostgreSQL] aggregator_webhooks persistence is ready
+🐘 [WooCommerce Connector DB] Connected to PostgreSQL Database
+[Nest] 14308  - 09/08/2026, 4:33:12 PM     LOG [NestApplication] Nest application successfully started +243ms
+🚀 Delivery Connector Service running on http://localhost:3001
+🐘 [Delivery Connector DB] Connected to PostgreSQL Database
+⚡ [Delivery Connector Redis] Connected to Redis Container

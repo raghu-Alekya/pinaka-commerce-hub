@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from './entities/merchant.entity';
@@ -217,8 +217,27 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+  private allocatedIds = { merchant: 4000, store: 50000 };
+  async allocateId(kind: 'merchant' | 'store'): Promise<string> {
+    const prefix = kind === 'merchant' ? 'MER-' : 'STR-';
+    const floor = kind === 'merchant' ? 4000 : 50000;
+    if (this.isDbConnected && this.dataSource?.isInitialized) {
+      return this.dataSource.transaction(async manager => {
+        await manager.query('SELECT pg_advisory_xact_lock(734921)');
+        await manager.query('CREATE TABLE IF NOT EXISTS public.pch_id_counters (kind text PRIMARY KEY, value bigint NOT NULL)');
+        const table = kind === 'merchant' ? 'merchants' : 'stores';
+        const [row] = await manager.query('INSERT INTO public.pch_id_counters(kind,value) SELECT $1, GREATEST($2::bigint, COALESCE(MAX(substring(id from $3)::bigint),0))+1 FROM public.' + table + ' WHERE id ~ $4 ON CONFLICT(kind) DO UPDATE SET value = GREATEST(pch_id_counters.value, EXCLUDED.value-1)+1 RETURNING value', [kind, floor, '[0-9]+$', '^' + prefix + '[0-9]+$']);
+        return prefix + row.value;
+      });
+    }
+    const records = kind === 'merchant' ? this.merchantsStore : this.storesStore;
+    const highest = records.reduce((max, row) => row.id.startsWith(prefix) && /^\d+$/.test(row.id.slice(prefix.length)) ? Math.max(max, Number(row.id.slice(prefix.length))) : max, floor);
+    this.allocatedIds[kind] = Math.max(this.allocatedIds[kind], highest) + 1;
+    return prefix + this.allocatedIds[kind];
+  }
+
   async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
-    const id = data.id || `MCH-${Math.floor(1000 + Math.random() * 9000)}`;
+    const id = data.id || await this.allocateId('merchant');
     const merchant: MerchantEntity = {
       id,
       businessName: data.businessName || 'New Merchant Business',
@@ -335,7 +354,8 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
-    const store = this.buildStore(merchantId, data);
+    const generatedId = data.id || await this.allocateId('store');
+    const store = this.buildStore(merchantId, { ...data, id: generatedId, storeCode: data.storeCode || generatedId });
     const { id, storeCode, activationPin } = store;
     if (this.isDbConnected && this.storeRepo) {
       const entity = this.storeRepo.create(store);
@@ -363,9 +383,8 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
-<<<<<<< HEAD
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
-    const stores = data.map(item => this.buildStore(merchantId, item));
+    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(merchantId, { ...item, id, storeCode: item.storeCode || id }); }));
     if (new Set(stores.map(s => s.id)).size !== stores.length ||
         new Set(stores.map(s => s.storeCode)).size !== stores.length) {
       throw new ConflictException('Each store must have a unique Store ID.');
@@ -392,29 +411,6 @@ export class MerchantRepository implements OnModuleInit {
       await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName });
     }
     return stores;
-=======
-  async getStoreById(id: string): Promise<StoreEntity | null> {
-    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOne({ where: { id } });
-    const store = this.storesStore.find(s => s.id === id);
-    if (!store) return null;
-    const { websiteConnector, ...details } = store;
-    return details;
-  }
-
-  async updateStore(id: string, data: Partial<StoreEntity>): Promise<StoreEntity | null> {
-    const existing = await this.getStoreById(id);
-    if (!existing) return null;
-    const updated = { ...existing, ...data, id, merchantId: existing.merchantId, updatedAt: new Date() };
-    if (this.isDbConnected && this.storeRepo) {
-      await this.storeRepo.update(id, data);
-    } else {
-      const index = this.storesStore.findIndex(s => s.id === id);
-      this.storesStore[index] = { ...this.storesStore[index], ...updated };
-    }
-    await this.cacheStorePin(updated.activationPin, updated);
-    await this.recordAuditLog('STORE_UPDATED', updated.merchantId, id, 'merchant', { storeName: updated.storeName });
-    return updated;
->>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
@@ -539,31 +535,20 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createOrUpdateSubscription(merchantId: string, data: Partial<SubscriptionEntity>): Promise<SubscriptionEntity> {
-    const planCode = data.planCode || PlanCode.PRO;
-    let defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'];
-    let maxStores = 3;
-    let price = 99.00;
-
-    if (planCode === PlanCode.STARTER) {
-      defaultEntitlements = ['POS', 'BASIC_INVENTORY', 'RECEIPT_PRINTER'];
-      maxStores = 1;
-      price = 49.00;
-    } else if (planCode === PlanCode.ENTERPRISE) {
-      defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY', 'CUSTOM_ERP'];
-      maxStores = 999;
-      price = 199.00;
-    }
-
+    const planCode = data.planCode;
+    const master = planCode ? await this.getSubscriptionPlan(planCode) : null;
+    if (!master || master.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
+    const previous = (await this.listSubscriptions(merchantId))[0];
     const sub: SubscriptionEntity = {
-      id: data.id || `SUB-${Math.floor(9000 + Math.random() * 1000)}`,
+      id: previous?.id || data.id || `SUB-${crypto.randomUUID()}`,
       merchantId,
-      planCode,
-      planName: data.planName || `${planCode} Plan`,
-      maxStoresAllowed: data.maxStoresAllowed || maxStores,
-      entitlements: data.entitlements || defaultEntitlements,
-      billingCycle: data.billingCycle || 'MONTHLY',
-      price: data.price || price,
-      trialDays: data.trialDays || 0,
+      planCode: master.planCode as PlanCode,
+      planName: master.planName,
+      maxStoresAllowed: master.maxStoresAllowed,
+      entitlements: master.entitlements,
+      billingCycle: master.billingCycle,
+      price: Number(master.price),
+      trialDays: master.trialDays,
       status: data.status || SubscriptionStatus.ACTIVE,
       createdAt: new Date(),
       updatedAt: new Date(),

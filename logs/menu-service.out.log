@@ -1,0 +1,15 @@
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [InstanceLoader] AppModule dependencies initialized +13ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RoutesResolver] AppController {/api/v1/menus}: +829ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/health, GET} route +7ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/ready, GET} route +1ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId, GET} route +2ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/items, POST} route +1ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/items/:itemId/86, PATCH} route +1ms
+[Nest] 20488  - 09/08/2026, 4:33:31 PM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/sync, POST} route +1ms
+🐘 [Menu PostgreSQL] Connected to Database: pinaka_delivery_hub
+🐘 [Menu PostgreSQL] Connected to Database: pinaka_delivery_hub
+⚡ [Menu Redis] Connected to Redis Container on port 6379
+[Nest] 20488  - 09/08/2026, 4:33:32 PM     LOG [NestApplication] Nest application successfully started +246ms
+🚀 Menu Service running on http://localhost:3004
+⚡ [Menu Redis] Connected to Redis Container on port 6379

@@ -1,0 +1,7 @@
+[Nest] 11900  - 09/08/2026, 4:34:00 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 11900  - 09/08/2026, 4:34:00 PM     LOG [InstanceLoader] AppModule dependencies initialized +17ms
+[Nest] 11900  - 09/08/2026, 4:34:00 PM     LOG [RoutesResolver] AppController {/}: +7ms
+[Nest] 11900  - 09/08/2026, 4:34:01 PM     LOG [RouterExplorer] Mapped {/health, GET} route +5ms
+[Nest] 11900  - 09/08/2026, 4:34:01 PM     LOG [RouterExplorer] Mapped {/ready, GET} route +1ms
+[Nest] 11900  - 09/08/2026, 4:34:01 PM     LOG [NestApplication] Nest application successfully started +4ms
+🚀 Admin API running on http://localhost:3009

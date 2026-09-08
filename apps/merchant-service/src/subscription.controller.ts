@@ -24,7 +24,7 @@ export class SubscriptionController {
   @Post()
   async create(@Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, expectedType: CreateSubscriptionDto })) body: CreateSubscriptionDto) {
     if (!(await this.repository.getMerchantById(body.merchantId)).merchant) throw new NotFoundException('Merchant not found');
-    const fields = this.fields(body);
+    const fields = await this.masterFields(body);
     this.validateDates(fields);
     const subscription = await this.repository.insertSubscription({ ...fields, id: body.id || `SUB-${randomUUID()}`,
       merchantId: body.merchantId, createdAt: new Date(), updatedAt: new Date() } as SubscriptionEntity);
@@ -57,6 +57,16 @@ export class SubscriptionController {
   async remove(@Param('id') id: string) {
     if (!(await this.repository.deleteSubscription(id))) throw new NotFoundException('Subscription not found');
     return { success: true, message: 'Subscription deleted' };
+  }
+
+  private async masterFields(body: SubscriptionFieldsDto) {
+    const fields = this.fields(body);
+    if (!body.planCode) return fields;
+    const master = await this.repository.getSubscriptionPlan(body.planCode);
+    if (!master || master.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
+    return { ...fields, planCode: master.planCode as SubscriptionEntity['planCode'], planName: master.planName,
+      maxStoresAllowed: master.maxStoresAllowed, entitlements: master.entitlements,
+      billingCycle: master.billingCycle, trialDays: master.trialDays, price: Number(master.price) };
   }
 
   private fields(body: SubscriptionFieldsDto): Partial<SubscriptionEntity> {

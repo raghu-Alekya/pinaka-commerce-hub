@@ -3,11 +3,7 @@ import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:c
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
-<<<<<<< HEAD
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
-=======
-import { StoreEntity, StoreStatus } from './entities/store.entity';
->>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
 
 
 @Controller('api/v1')
@@ -18,11 +14,12 @@ export class AppController {
   }
 
   private toPlanCode(value?: string): PlanCode {
-    switch (value?.toUpperCase()) {
-      case 'STARTER': return PlanCode.STARTER;
-      case 'ENTERPRISE': return PlanCode.ENTERPRISE;
-      default: return PlanCode.PRO; // UI label: Professional
-    }
+    return (value?.trim().toUpperCase() || '') as PlanCode;
+  }
+
+  private async requireMasterPlan(code: string) {
+    const plan = await this.merchantRepository.getSubscriptionPlan(this.toPlanCode(code));
+    if (!plan || plan.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
   }
 
   private toBillingCycle(value?: string): 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL' {
@@ -35,7 +32,7 @@ export class AppController {
     const required = ['merchantId', 'businessName', 'legalBusinessName', 'businessType', 'country', 'state', 'firstName', 'lastName', 'email', 'phone', 'plan'];
     const missing = required.filter((field) => !String(body[field] ?? '').trim());
     if (!Array.isArray(body.stores) || body.stores.length === 0) missing.push('stores');
-    body.stores?.forEach((store: any, index: number) => {
+    (Array.isArray(body.stores) ? body.stores : []).forEach((store: any, index: number) => {
       ['name', 'id', 'url', 'address', 'city', 'state', 'zip'].forEach((field) => {
         if (!String(store?.[field] ?? '').trim()) missing.push(`stores[${index}].${field}`);
       });
@@ -49,7 +46,7 @@ export class AppController {
       businessName: body.businessName.trim(),
       legalBusinessName: body.legalBusinessName.trim(),
       businessType: this.toBusinessType(body.businessType),
-      retailSubCategory: body.businessType?.toUpperCase() === 'GROCERY' ? RetailSubCategory.GROCERY : body.businessType?.toUpperCase() === 'CONVENIENCE' ? RetailSubCategory.CONVENIENCE : undefined,
+      retailSubCategory: body.retailSubCategory?.toUpperCase() || (body.businessType?.toUpperCase() === 'GROCERY' ? RetailSubCategory.GROCERY : body.businessType?.toUpperCase() === 'CONVENIENCE' ? RetailSubCategory.CONVENIENCE : undefined),
       ownerName: `${body.firstName.trim()} ${body.lastName.trim()}`,
       firstName: body.firstName.trim(),
       lastName: body.lastName.trim(),
@@ -69,28 +66,36 @@ export class AppController {
     };
   }
 
-  private async saveWizardStores(merchantId: string, stores: any[]) {
-    return Promise.all(stores.map((store) => this.merchantRepository.createStore(merchantId, {
+  private async saveWizardStores(merchantId: string, stores: any[], country: string, editing = false) {
+    return Promise.all(stores.map(async (store) => {
+      const fields = {
       id: store.id.trim(),
       storeName: store.name.trim(),
       storeCode: store.id.trim(),
+      baseUrl: store.url?.trim(),
       phone: store.phone?.trim() || '',
       storeType: store.type?.trim().toUpperCase() || 'RETAIL',
-      address: { street: store.address.trim(), city: store.city.trim(), state: store.state.trim(), zipCode: store.zip.trim(), country: store.country?.trim() || 'USA' },
+      address: { street: store.address.trim(), city: store.city.trim(), state: store.state.trim(), zipCode: store.zip.trim(), country },
       currency: store.currency?.trim().toUpperCase() || 'USD',
       timezone: store.timezone?.trim() || 'UTC',
       status: store.status?.trim().toUpperCase() || 'ACTIVE',
-    })));
+    };
+      const existing = editing ? await this.merchantRepository.getStoreById(fields.id) : null;
+      return existing
+        ? this.merchantRepository.updateStore(fields.id, fields)
+        : this.merchantRepository.createStore(merchantId, fields);
+    }));
   }
 
   @Post('merchants/create-merchant')
   async createMerchantFromWizard(@Body() body: any) {
     this.validateWizardPayload(body);
+    await this.requireMasterPlan(body.plan);
     const existing = await this.merchantRepository.getMerchantById(body.merchantId);
     if (existing.merchant) throw new ConflictException(`Merchant ID '${body.merchantId}' already exists`);
 
     const merchant = await this.merchantRepository.createMerchant(this.merchantFields(body));
-    const stores = await this.saveWizardStores(merchant.id, body.stores);
+    const stores = await this.saveWizardStores(merchant.id, body.stores, body.country);
     const subscription = await this.merchantRepository.createOrUpdateSubscription(merchant.id, {
       planCode: this.toPlanCode(body.plan),
       billingCycle: this.toBillingCycle(body.billingCycle),
@@ -104,12 +109,28 @@ export class AppController {
   @Patch('merchants/:id')
   async updateMerchantFromWizard(@Param('id') id: string, @Body() body: any) {
     this.validateWizardPayload({ ...body, merchantId: id });
+    await this.requireMasterPlan(body.plan);
+    const current = await this.merchantRepository.getMerchantById(id);
+    if (!current.merchant) throw new NotFoundException('Merchant not found');
+    const ids = body.stores.map((store: any) => store.id.trim());
+    if (new Set(ids).size !== ids.length) throw new ConflictException('Each store must have a unique ID');
+    for (const storeId of ids) {
+      const store = await this.merchantRepository.getStoreById(storeId);
+      if (store && store.merchantId !== id) throw new ConflictException('Store belongs to another merchant');
+    }
     const merchant = await this.merchantRepository.updateMerchant(id, this.merchantFields({ ...body, merchantId: id }));
     if (!merchant) throw new NotFoundException(`Merchant with ID '${id}' not found`);
     const subscription = await this.merchantRepository.createOrUpdateSubscription(id, {
       planCode: this.toPlanCode(body.plan), billingCycle: this.toBillingCycle(body.billingCycle), trialDays: Number(body.trialPeriod) || 0,
     });
-    return { success: true, message: 'Merchant updated successfully', merchant, subscription };
+    const stores = await this.saveWizardStores(id, body.stores, body.country, true);
+    return { success: true, message: 'Merchant updated successfully', merchant, stores, subscription };
+  }
+
+  @Post('ids/:kind')
+  async allocateId(@Param('kind') kind: string) {
+    if (kind !== 'merchant' && kind !== 'store') throw new BadRequestException('Unknown ID type');
+    return { id: await this.merchantRepository.allocateId(kind) };
   }
 
   @Get('health')
@@ -273,7 +294,6 @@ export class AppController {
   }
 
   // --- Standard CRUD ---
-<<<<<<< HEAD
   @Post(['stores', 'merchants/:merchantId/stores'])
   async createStore(
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
@@ -368,73 +388,19 @@ export class AppController {
       address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
         state: body.state.trim(), zipCode: body.zip.trim() },
     });
-=======
-  @Get('stores/:storeId')
-  async getStore(@Param('storeId') storeId: string) {
-    const store = await merchantRepository.getStoreById(storeId);
->>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     return { success: true, store };
   }
 
-<<<<<<< HEAD
-=======
-  private storeFields(body: any, existing?: StoreEntity): Partial<StoreEntity> {
-    const limits: Record<string, number> = { name: 255, storeId: 50, address: 1000, city: 255, state: 255, zip: 50 };
-    for (const [field, limit] of Object.entries(limits)) {
-      if (typeof body[field] !== 'string' || !body[field].trim() || body[field].trim().length > limit) {
-        throw new BadRequestException(`${field} is required and must be at most ${limit} characters`);
-      }
-    }
-    for (const [field, limit] of Object.entries({ type: 50, phone: 50, currency: 100, timezone: 100, status: 50 })) {
-      if (body[field] != null && (typeof body[field] !== 'string' || body[field].length > limit)) {
-        throw new BadRequestException(`Invalid ${field}`);
-      }
-    }
-    const status = (body.status || 'ACTIVE').toUpperCase() as StoreStatus;
-    if (!Object.values(StoreStatus).includes(status)) throw new BadRequestException('Invalid store status');
-    const currency = (body.currency || 'USD').split(' - ')[0].trim().toUpperCase();
-    if (!/^[A-Z]{3}$/.test(currency)) throw new BadRequestException('Currency must be a three-letter code');
-    return {
-      storeName: body.name.trim(), storeType: body.type?.trim().toUpperCase() || 'RETAIL',
-      phone: body.phone?.trim() || '', currency, status, timezone: body.timezone?.trim() || 'UTC',
-      address: { ...existing?.address, street: body.address.trim(), city: body.city.trim(),
-        state: body.state.trim(), zipCode: body.zip.trim(), country: existing?.address?.country || 'USA' },
-    };
-  }
-
-  @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
-  async updateStore(@Param('storeId') storeId: string, @Body() body: any, @Param('merchantId') merchantId?: string) {
-    const existing = await merchantRepository.getStoreById(storeId);
-    if (!existing) throw new NotFoundException(`Store '${storeId}' not found`);
-    if (merchantId && merchantId !== existing.merchantId) {
-      throw new NotFoundException(`Store '${storeId}' not found for this merchant`);
-    }
-    if (body.merchantId !== existing.merchantId || body.storeId !== storeId) {
-      throw new BadRequestException('Merchant and store ID cannot be changed');
-    }
-    const store = await merchantRepository.updateStore(storeId, this.storeFields(body, existing));
-    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    return { success: true, store };
-  }
-
-  @Post(['stores', 'merchants/:merchantId/stores'])
-  async createStore(@Param('merchantId') merchantId: string | undefined, @Body() body: any) {
-    const ownerId = merchantId || body.merchantId;
-    if (!ownerId || !(await merchantRepository.getMerchantById(ownerId)).merchant) {
-      throw new NotFoundException('Merchant not found');
-    }
-    const fields = this.storeFields(body);
-    if (await merchantRepository.getStoreById(body.storeId.trim())) throw new ConflictException('Store ID already exists');
-    const store = await merchantRepository.createStore(ownerId, { ...fields, id: body.storeId.trim(), storeCode: body.storeId.trim() });
-    return { success: true, store };
-  }
-
->>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
   @Get('merchants')
   async getAllMerchants() {
     const list = await this.merchantRepository.getAllMerchants();
-    return { success: true, count: list.length, merchants: list };
+    const [stores, subscriptions] = await Promise.all([this.merchantRepository.listStores(), this.merchantRepository.listSubscriptions()]);
+    const merchants = list.map(merchant => ({ ...merchant,
+      storeCount: stores.filter(store => store.merchantId === merchant.id).length,
+      subscription: subscriptions.find(subscription => subscription.merchantId === merchant.id) || null,
+    }));
+    return { success: true, count: merchants.length, merchants };
   }
 
   @Get('merchants/:id')
