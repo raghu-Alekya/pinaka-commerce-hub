@@ -3,7 +3,11 @@ import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:c
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
+<<<<<<< HEAD
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
+=======
+import { StoreEntity, StoreStatus } from './entities/store.entity';
+>>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
 
 
 @Controller('api/v1')
@@ -70,6 +74,7 @@ export class AppController {
       id: store.id.trim(),
       storeName: store.name.trim(),
       storeCode: store.id.trim(),
+      phone: store.phone?.trim() || '',
       storeType: store.type?.trim().toUpperCase() || 'RETAIL',
       address: { street: store.address.trim(), city: store.city.trim(), state: store.state.trim(), zipCode: store.zip.trim(), country: store.country?.trim() || 'USA' },
       currency: store.currency?.trim().toUpperCase() || 'USD',
@@ -268,6 +273,7 @@ export class AppController {
   }
 
   // --- Standard CRUD ---
+<<<<<<< HEAD
   @Post(['stores', 'merchants/:merchantId/stores'])
   async createStore(
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
@@ -362,10 +368,69 @@ export class AppController {
       address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
         state: body.state.trim(), zipCode: body.zip.trim() },
     });
+=======
+  @Get('stores/:storeId')
+  async getStore(@Param('storeId') storeId: string) {
+    const store = await merchantRepository.getStoreById(storeId);
+>>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     return { success: true, store };
   }
 
+<<<<<<< HEAD
+=======
+  private storeFields(body: any, existing?: StoreEntity): Partial<StoreEntity> {
+    const limits: Record<string, number> = { name: 255, storeId: 50, address: 1000, city: 255, state: 255, zip: 50 };
+    for (const [field, limit] of Object.entries(limits)) {
+      if (typeof body[field] !== 'string' || !body[field].trim() || body[field].trim().length > limit) {
+        throw new BadRequestException(`${field} is required and must be at most ${limit} characters`);
+      }
+    }
+    for (const [field, limit] of Object.entries({ type: 50, phone: 50, currency: 100, timezone: 100, status: 50 })) {
+      if (body[field] != null && (typeof body[field] !== 'string' || body[field].length > limit)) {
+        throw new BadRequestException(`Invalid ${field}`);
+      }
+    }
+    const status = (body.status || 'ACTIVE').toUpperCase() as StoreStatus;
+    if (!Object.values(StoreStatus).includes(status)) throw new BadRequestException('Invalid store status');
+    const currency = (body.currency || 'USD').split(' - ')[0].trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) throw new BadRequestException('Currency must be a three-letter code');
+    return {
+      storeName: body.name.trim(), storeType: body.type?.trim().toUpperCase() || 'RETAIL',
+      phone: body.phone?.trim() || '', currency, status, timezone: body.timezone?.trim() || 'UTC',
+      address: { ...existing?.address, street: body.address.trim(), city: body.city.trim(),
+        state: body.state.trim(), zipCode: body.zip.trim(), country: existing?.address?.country || 'USA' },
+    };
+  }
+
+  @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
+  async updateStore(@Param('storeId') storeId: string, @Body() body: any, @Param('merchantId') merchantId?: string) {
+    const existing = await merchantRepository.getStoreById(storeId);
+    if (!existing) throw new NotFoundException(`Store '${storeId}' not found`);
+    if (merchantId && merchantId !== existing.merchantId) {
+      throw new NotFoundException(`Store '${storeId}' not found for this merchant`);
+    }
+    if (body.merchantId !== existing.merchantId || body.storeId !== storeId) {
+      throw new BadRequestException('Merchant and store ID cannot be changed');
+    }
+    const store = await merchantRepository.updateStore(storeId, this.storeFields(body, existing));
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return { success: true, store };
+  }
+
+  @Post(['stores', 'merchants/:merchantId/stores'])
+  async createStore(@Param('merchantId') merchantId: string | undefined, @Body() body: any) {
+    const ownerId = merchantId || body.merchantId;
+    if (!ownerId || !(await merchantRepository.getMerchantById(ownerId)).merchant) {
+      throw new NotFoundException('Merchant not found');
+    }
+    const fields = this.storeFields(body);
+    if (await merchantRepository.getStoreById(body.storeId.trim())) throw new ConflictException('Store ID already exists');
+    const store = await merchantRepository.createStore(ownerId, { ...fields, id: body.storeId.trim(), storeCode: body.storeId.trim() });
+    return { success: true, store };
+  }
+
+>>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
   @Get('merchants')
   async getAllMerchants() {
     const list = await this.merchantRepository.getAllMerchants();

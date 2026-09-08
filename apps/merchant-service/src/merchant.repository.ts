@@ -363,6 +363,7 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+<<<<<<< HEAD
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
     const stores = data.map(item => this.buildStore(merchantId, item));
     if (new Set(stores.map(s => s.id)).size !== stores.length ||
@@ -391,6 +392,29 @@ export class MerchantRepository implements OnModuleInit {
       await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName });
     }
     return stores;
+=======
+  async getStoreById(id: string): Promise<StoreEntity | null> {
+    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOne({ where: { id } });
+    const store = this.storesStore.find(s => s.id === id);
+    if (!store) return null;
+    const { websiteConnector, ...details } = store;
+    return details;
+  }
+
+  async updateStore(id: string, data: Partial<StoreEntity>): Promise<StoreEntity | null> {
+    const existing = await this.getStoreById(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data, id, merchantId: existing.merchantId, updatedAt: new Date() };
+    if (this.isDbConnected && this.storeRepo) {
+      await this.storeRepo.update(id, data);
+    } else {
+      const index = this.storesStore.findIndex(s => s.id === id);
+      this.storesStore[index] = { ...this.storesStore[index], ...updated };
+    }
+    await this.cacheStorePin(updated.activationPin, updated);
+    await this.recordAuditLog('STORE_UPDATED', updated.merchantId, id, 'merchant', { storeName: updated.storeName });
+    return updated;
+>>>>>>> 3ed0314e7bf901ae6aba82319f882ec67af15b2a
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
