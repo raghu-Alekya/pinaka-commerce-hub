@@ -27,7 +27,7 @@ export class OrderRepository implements OnModuleInit {
         port: Number(process.env.POSTGRES_PORT) || 5432,
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
+        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
         entities: [OrderEntity, OrderItemEntity, OrderStatusHistoryEntity],
         synchronize: true,
       });

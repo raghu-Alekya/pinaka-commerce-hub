@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import { WooCommerceConnectionEntity } from '../entities/woocommerce-connection.entity';
 import { WooCommerceSyncLogEntity } from '../entities/woocommerce-sync-log.entity';
 
