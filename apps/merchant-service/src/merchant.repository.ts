@@ -724,7 +724,7 @@ export class MerchantRepository implements OnModuleInit {
           }
         }
         console.log(`🛒 [MerchantRepo Catalog Ingest] Ingested 10 items for Merchant ${merchantId} (Store ${storeId})`);
-      } catch (err) {
+      } catch (err: any) {
         console.log(`⚠️ [MerchantRepo Catalog Ingest Err] ${err.message}`);
       }
     }
