@@ -141,21 +141,36 @@ export class WooCommerceConnectorService implements OnModuleInit {
         for (const item of sampleProducts) {
           const externalId = `WC-${item.sku}`;
 
-          // 1. Dynamic insert into menu_items using targetMerchant
-          await this.dataSource.query(
-            `INSERT INTO menu_items ("merchantId", "externalItemId", name, description, category, price, "isAvailable", "createdAt", "updatedAt")
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-             ON CONFLICT DO NOTHING`,
-            [targetMerchant, externalId, item.name, `Imported from ${storeUrl || 'WooCommerce'}`, item.category, item.price, true]
+          // 1. Insert into menu_items with explicit UUID
+          const existingMenu = await this.dataSource.query(
+            `SELECT id FROM menu_items WHERE "merchantId" = $1 AND "externalItemId" = $2 LIMIT 1`,
+            [targetMerchant, externalId]
           );
 
-          // 2. Dynamic insert into inventory_items using targetMerchant
-          await this.dataSource.query(
-            `INSERT INTO inventory_items ("merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-             ON CONFLICT DO NOTHING`,
-            [targetMerchant, `ING-${item.sku}`, item.name, item.stock, 10, 'pcs', item.stock <= 10]
+          if (!existingMenu || existingMenu.length === 0) {
+            const menuItemId = crypto.randomUUID();
+            await this.dataSource.query(
+              `INSERT INTO menu_items (id, "merchantId", "externalItemId", name, description, category, price, "isAvailable", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+              [menuItemId, targetMerchant, externalId, item.name, `Imported from ${storeUrl || 'WooCommerce'}`, item.category, item.price, true]
+            );
+          }
+
+          // 2. Insert into inventory_items with explicit UUID
+          const ingredientId = `ING-${item.sku}`;
+          const existingInv = await this.dataSource.query(
+            `SELECT id FROM inventory_items WHERE "merchantId" = $1 AND "ingredientId" = $2 LIMIT 1`,
+            [targetMerchant, ingredientId]
           );
+
+          if (!existingInv || existingInv.length === 0) {
+            const invItemId = crypto.randomUUID();
+            await this.dataSource.query(
+              `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+              [invItemId, targetMerchant, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
+            );
+          }
         }
         console.log(`🛒 [WooCommerce Catalog Ingest] Synced 10 items for Merchant ${targetMerchant} (Store: ${targetStore})`);
       } catch (err: any) {

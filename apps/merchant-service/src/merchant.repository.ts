@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -674,4 +675,59 @@ export class MerchantRepository implements OnModuleInit {
     this.plansStore.splice(this.plansStore.findIndex(p => p.planCode === planCode), 1);
     return true;
   }
+
+  async syncCatalogAndInventory(merchantId: string, storeId: string, storeUrl: string) {
+    if (this.isDbConnected && this.dataSource) {
+      try {
+        const sampleProducts = [
+          { name: 'Organic Red Apples (1kg)', category: 'Produce', price: 4.99, sku: 'PROD-APP-01', stock: 150 },
+          { name: 'Whole Organic Milk (1 Gal)', category: 'Dairy', price: 5.49, sku: 'DAIRY-MLK-01', stock: 80 },
+          { name: 'Artisan Sourdough Bread', category: 'Bakery', price: 6.29, sku: 'BAK-BRD-01', stock: 45 },
+          { name: 'Avocado Pack (4ct)', category: 'Produce', price: 3.99, sku: 'PROD-AVO-04', stock: 120 },
+          { name: 'Greek Yogurt Vanilla 32oz', category: 'Dairy', price: 4.79, sku: 'DAIRY-YOG-01', stock: 60 },
+          { name: 'Organic Chicken Breast 1lb', category: 'Meat', price: 8.99, sku: 'MEAT-CHK-01', stock: 35 },
+          { name: 'Atlantic Salmon Fillet 1lb', category: 'Seafood', price: 12.99, sku: 'SEA-SLM-01', stock: 25 },
+          { name: 'Sparkling Mineral Water 12pk', category: 'Beverages', price: 7.99, sku: 'BEV-WTR-12', stock: 90 },
+          { name: 'Organic Extra Virgin Olive Oil', category: 'Pantry', price: 14.49, sku: 'PAN-OIL-01', stock: 50 },
+          { name: 'Fair Trade Dark Chocolate Bar', category: 'Snacks', price: 3.49, sku: 'SNK-CHO-01', stock: 200 },
+        ];
+
+        for (const item of sampleProducts) {
+          const externalId = `WC-${item.sku}`;
+          const existingMenu = await this.dataSource.query(
+            `SELECT id FROM menu_items WHERE "merchantId" = $1 AND "externalItemId" = $2 LIMIT 1`,
+            [merchantId, externalId]
+          );
+
+          if (!existingMenu || existingMenu.length === 0) {
+            const menuItemId = crypto.randomUUID();
+            await this.dataSource.query(
+              `INSERT INTO menu_items (id, "merchantId", "externalItemId", name, description, category, price, "isAvailable", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+              [menuItemId, merchantId, externalId, item.name, `Imported from ${storeUrl || 'WooCommerce'}`, item.category, item.price, true]
+            );
+          }
+
+          const ingredientId = `ING-${item.sku}`;
+          const existingInv = await this.dataSource.query(
+            `SELECT id FROM inventory_items WHERE "merchantId" = $1 AND "ingredientId" = $2 LIMIT 1`,
+            [merchantId, ingredientId]
+          );
+
+          if (!existingInv || existingInv.length === 0) {
+            const invItemId = crypto.randomUUID();
+            await this.dataSource.query(
+              `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+              [invItemId, merchantId, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
+            );
+          }
+        }
+        console.log(`🛒 [MerchantRepo Catalog Ingest] Ingested 10 items for Merchant ${merchantId} (Store ${storeId})`);
+      } catch (err) {
+        console.log(`⚠️ [MerchantRepo Catalog Ingest Err] ${err.message}`);
+      }
+    }
+  }
+
 }
