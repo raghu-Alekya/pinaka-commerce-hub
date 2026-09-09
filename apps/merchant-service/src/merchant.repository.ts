@@ -472,7 +472,7 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
     merchantId?: string
-  ): Promise<StoreEntity> {
+  ): Promise<StoreEntity | null> {
     const targetMerchant = merchantId || 'MER-976045';
     if (this.isDbConnected && this.storeRepo) {
       let store = await this.storeRepo.findOne({ where: { id: storeId } });
@@ -488,6 +488,11 @@ export class MerchantRepository implements OnModuleInit {
           timezone: 'UTC',
           status: StoreStatus.ACTIVE,
           address: { street: '', city: '', state: '', zipCode: '', country: '' },
+          activationPin: '123456',
+          autoAcceptOrders: true,
+          operationalStatus: OperationalStatus.OPEN,
+          channels: { doordash: false, swiggy: false },
+          taxRate: 0,
           createdAt: new Date(),
           updatedAt: new Date(),
         });
@@ -496,24 +501,8 @@ export class MerchantRepository implements OnModuleInit {
       store.updatedAt = new Date();
       return await this.storeRepo.save(store);
     }
-    let store = this.storesStore.find((candidate) => candidate.id === storeId);
-    if (!store) {
-      store = {
-        id: storeId,
-        storeCode: storeId,
-        merchantId: targetMerchant,
-        storeName: `Store ${storeId}`,
-        storeType: 'RETAIL',
-        phone: '',
-        currency: 'USD',
-        timezone: 'UTC',
-        status: StoreStatus.ACTIVE,
-        address: { street: '', city: '', state: '', zipCode: '', country: '' },
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      this.storesStore.push(store);
-    }
+    const store = this.storesStore.find((candidate) => candidate.id === storeId);
+    if (!store) return null;
     store.websiteConnector = connector;
     store.updatedAt = new Date();
     return store;
@@ -724,7 +713,7 @@ export class MerchantRepository implements OnModuleInit {
       // 1. Fetch Categories API from WooCommerce / WordPress
       let categories: Array<{ id: number; name: string }> = [];
       try {
-        const catRes = await fetch(`${baseUrl}/wp-json/wc/v3/products/categories?page=1&per_page=100&hide_empty=true`, { headers });
+        const catRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/wc/v3/products/categories?page=1&per_page=100&hide_empty=true`, { headers });
         if (catRes.ok) {
           const catData = await catRes.json();
           if (Array.isArray(catData)) {
@@ -742,7 +731,7 @@ export class MerchantRepository implements OnModuleInit {
       // 2. Fetch Products per Category using custom pinaka-pos API
       for (const cat of categories) {
         try {
-          const prodRes = await fetch(`${baseUrl}/wp-json/pinaka-pos/v1/products-by-category/${cat.id}`, { headers });
+          const prodRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/pinaka-pos/v1/products-by-category/${cat.id}`, { headers });
           if (prodRes.ok) {
             const rawData = await prodRes.json();
             const productList = Array.isArray(rawData) ? rawData : (rawData?.products || rawData?.data || []);
@@ -772,7 +761,7 @@ export class MerchantRepository implements OnModuleInit {
       // 3. Fallback to WooCommerce standard products API if custom endpoint was empty
       if (items.length === 0) {
         try {
-          const directRes = await fetch(`${baseUrl}/wp-json/wc/v3/products?per_page=100`, { headers });
+          const directRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/wc/v3/products?per_page=100`, { headers });
           if (directRes.ok) {
             const rawProds = await directRes.json();
             if (Array.isArray(rawProds)) {

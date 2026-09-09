@@ -129,7 +129,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
       // 1. Fetch Categories API from WooCommerce / WordPress
       let categories: Array<{ id: number; name: string }> = [];
       try {
-        const catRes = await fetch(`${baseUrl}/wp-json/wc/v3/products/categories?page=1&per_page=100&hide_empty=true`, { headers });
+        const catRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/wc/v3/products/categories?page=1&per_page=100&hide_empty=true`, { headers });
         if (catRes.ok) {
           const catData = await catRes.json();
           if (Array.isArray(catData)) {
@@ -147,7 +147,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
       // 2. Fetch Products per Category using custom pinaka-pos API
       for (const cat of categories) {
         try {
-          const prodRes = await fetch(`${baseUrl}/wp-json/pinaka-pos/v1/products-by-category/${cat.id}`, { headers });
+          const prodRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/pinaka-pos/v1/products-by-category/${cat.id}`, { headers });
           if (prodRes.ok) {
             const rawData = await prodRes.json();
             const productList = Array.isArray(rawData) ? rawData : (rawData?.products || rawData?.data || []);
@@ -177,7 +177,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
       // 3. Fallback to WooCommerce standard products API if custom endpoint was empty
       if (items.length === 0) {
         try {
-          const directRes = await fetch(`${baseUrl}/wp-json/wc/v3/products?per_page=100`, { headers });
+          const directRes = await (globalThis as any).fetch(`${baseUrl}/wp-json/wc/v3/products?per_page=100`, { headers });
           if (directRes.ok) {
             const rawProds = await directRes.json();
             if (Array.isArray(rawProds)) {
