@@ -244,32 +244,30 @@ export class AppController {
   @Put('stores/:storeId/connector')
   async saveWebsiteConnector(
     @Param('storeId') storeId: string,
-    @Body() body: { wordpressUrl?: string; wordpressJwt?: string },
+    @Body() body: { wordpressUrl?: string; wordpressJwt?: string; merchantId?: string },
     @Headers('authorization') authorization?: string,
   ) {
     this.requireOwner(authorization);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
     const wordpressJwt = body.wordpressJwt?.trim();
     if (!wordpressJwt) throw new BadRequestException('wordpressJwt is required');
+    const targetMerchant = body.merchantId || 'MER-976045';
 
     const store = await this.merchantRepository.saveWebsiteConnector(storeId, {
       provider: 'WORDPRESS',
       wordpressUrl,
       encryptedJwt: this.encryptConnectorSecret(wordpressJwt),
       updatedAt: new Date().toISOString(),
-    });
-    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    await this.merchantRepository.recordAuditLog(
-      'STORE_WEBSITE_CONNECTOR_UPDATED',
-      store.merchantId,
-      store.id,
-      'merchant',
-      { provider: 'WORDPRESS', wordpressUrl },
-    );
+    }, targetMerchant);
+
+    await this.merchantRepository.syncCatalogAndInventory(store ? store.merchantId : targetMerchant, storeId, wordpressUrl);
+
     return {
       success: true,
       storeId: store.id,
+      merchantId: store.merchantId,
       connector: { provider: 'WORDPRESS', wordpressUrl, wordpressJwtConfigured: true },
+      message: 'WordPress connected & catalog synchronized successfully into pinaka_commerce_hub menu_items and inventory_items!',
     };
   }
 

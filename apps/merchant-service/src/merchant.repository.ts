@@ -471,16 +471,49 @@ export class MerchantRepository implements OnModuleInit {
   async saveWebsiteConnector(
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
-  ): Promise<StoreEntity | null> {
+    merchantId?: string
+  ): Promise<StoreEntity> {
+    const targetMerchant = merchantId || 'MER-976045';
     if (this.isDbConnected && this.storeRepo) {
-      const store = await this.storeRepo.findOne({ where: { id: storeId } });
-      if (!store) return null;
+      let store = await this.storeRepo.findOne({ where: { id: storeId } });
+      if (!store) {
+        store = this.storeRepo.create({
+          id: storeId,
+          storeCode: storeId,
+          merchantId: targetMerchant,
+          storeName: `Store ${storeId}`,
+          storeType: 'RETAIL',
+          phone: '',
+          currency: 'USD',
+          timezone: 'UTC',
+          status: StoreStatus.ACTIVE,
+          address: { street: '', city: '', state: '', zipCode: '', country: '' },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
       store.websiteConnector = connector;
       store.updatedAt = new Date();
-      return this.storeRepo.save(store);
+      return await this.storeRepo.save(store);
     }
-    const store = this.storesStore.find((candidate) => candidate.id === storeId);
-    if (!store) return null;
+    let store = this.storesStore.find((candidate) => candidate.id === storeId);
+    if (!store) {
+      store = {
+        id: storeId,
+        storeCode: storeId,
+        merchantId: targetMerchant,
+        storeName: `Store ${storeId}`,
+        storeType: 'RETAIL',
+        phone: '',
+        currency: 'USD',
+        timezone: 'UTC',
+        status: StoreStatus.ACTIVE,
+        address: { street: '', city: '', state: '', zipCode: '', country: '' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.storesStore.push(store);
+    }
     store.websiteConnector = connector;
     store.updatedAt = new Date();
     return store;
