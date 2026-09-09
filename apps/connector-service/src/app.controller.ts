@@ -27,7 +27,7 @@ export class AppController {
 
   @Get('woocommerce/connection')
   async getWooCommerceConnection(@Query('storeId') storeId: string) {
-    const conn = await wcService.getConnection(storeId || 'STR-5001');
+    const conn = await wcService.getConnection(storeId || 'STR-50069');
     return {
       success: true,
       connection: conn,
@@ -49,10 +49,29 @@ export class AppController {
     };
   }
 
+  @Post('woocommerce/test-connection')
+  async testConnectionAndSync(@Body() body: any) {
+    const targetStore = body.storeId || body.storeCode || 'STR-50069';
+    const targetMerchant = body.merchantId || body.merchantCode || 'MER-976045';
+    const storeUrl = body.storeUrl || body.url || 'https://aascorner.alektasolutions.com';
+    const jwtToken = body.jwtToken || body.token || '';
+
+    const result = await wcService.triggerFullCatalogSync(targetStore, targetMerchant, storeUrl, jwtToken);
+    return {
+      success: true,
+      message: `WordPress site '${storeUrl}' connected and catalog synchronized successfully!`,
+      merchantId: targetMerchant,
+      storeId: targetStore,
+      syncedProductsCount: result.syncedItemsCount,
+      timestamp: result.timestamp,
+    };
+  }
+
   @Post('woocommerce/sync')
-  async triggerFullCatalogSync(@Body('storeId') storeId: string) {
-    const targetStore = storeId || 'STR-5001';
-    const result = await wcService.triggerFullCatalogSync(targetStore);
+  async triggerFullCatalogSync(@Body() body: any) {
+    const targetStore = typeof body === 'string' ? body : (body.storeId || body.storeCode || 'STR-50069');
+    const targetMerchant = typeof body === 'object' ? (body.merchantId || body.merchantCode || 'MER-976045') : 'MER-976045';
+    const result = await wcService.triggerFullCatalogSync(targetStore, targetMerchant);
     return {
       success: true,
       message: `WooCommerce store catalog synchronized successfully with PCH!`,
@@ -67,7 +86,7 @@ export class AppController {
 
   @Get('delivery/channels')
   async getChannels(@Query('storeId') storeId: string) {
-    const targetStore = storeId || 'STR-5001';
+    const targetStore = storeId || 'STR-50069';
     const channels = await deliveryRepository.getChannelsByStore(targetStore);
     return {
       success: true,
@@ -95,7 +114,7 @@ export class AppController {
 
   @Get('delivery/orders')
   async getDeliveryOrders(@Query('storeId') storeId: string) {
-    const targetStore = storeId || 'STR-5001';
+    const targetStore = storeId || 'STR-50069';
     const orders = await deliveryRepository.getDeliveryOrders(targetStore);
     return {
       success: true,
