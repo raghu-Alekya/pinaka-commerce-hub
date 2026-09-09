@@ -1,77 +1,65 @@
-# ====================================================================
-#  PINAKA DELIVERY HUB (PDH) — MASTER ONE-CLICK SYSTEM LAUNCHER
-# ====================================================================
-
-Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host " LAUNCHING PINAKA DELIVERY HUB SYSTEM INFRASTRUCTURE " -ForegroundColor Cyan
-Write-Host "========================================================" -ForegroundColor Cyan
-
-$WorkspaceRoot = Split-Path -Parent $PSScriptRoot
-$TsxCommand = Join-Path $WorkspaceRoot "node_modules\.bin\tsx.cmd"
-
-if (-not (Test-Path -LiteralPath $TsxCommand)) {
-    Write-Host "tsx is not installed. Run 'pnpm install --frozen-lockfile' first." -ForegroundColor Red
-    exit 1
+param([switch]$Restart, [switch]$SkipDocker)
+$ErrorActionPreference = 'Stop'
+$serviceRoot = Split-Path -Parent $PSScriptRoot
+$nodeExecutable = (Get-Command node -ErrorAction Stop).Source
+$logRoot = Join-Path $serviceRoot 'logs'
+New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+$services = @(
+    @{Name='gateway';Port=3000}, @{Name='connector-service';Port=3001},
+    @{Name='order-service';Port=3002}, @{Name='merchant-service';Port=3003},
+    @{Name='menu-service';Port=3004}, @{Name='inventory-service';Port=3005},
+    @{Name='analytics-service';Port=3006}, @{Name='pos-integration-service';Port=3007},
+    @{Name='notification-service';Port=3008}, @{Name='admin-api';Port=3009},
+    @{Name='auth-service';Port=3010}
+)
+# Serialize launches so repeated clicks cannot start competing service copies.
+$launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHubLauncher')
+if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
+try {
+    if (-not $SkipDocker) {
+        & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d
+        if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed.' }
+    }
+    foreach ($service in $services) {
+        $entry = Join-Path $serviceRoot "apps/$($service.Name)/src/main.ts"
+        $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq $service.Port)
+        if ($listeners.Count) {
+            $owners = @($listeners.OwningProcess | Select-Object -Unique)
+            foreach ($owner in $owners) {
+                $process = Get-CimInstance Win32_Process -Filter "ProcessId = $owner"
+                $normalized = $process.CommandLine -replace '\\', '/'
+                $absoluteEntry = $entry -replace '\\', '/'
+                # Relative entry points are also used by this project's original launcher.
+                $relativeEntry = "apps/$($service.Name)/src/main.ts"
+                $matchesService = $process.Name -eq 'node.exe' -and ($normalized.Contains($absoluteEntry) -or $normalized -match ('(?:\s|"|\x27)' + [regex]::Escape($relativeEntry) + '(?:\s|"|\x27|$)'))
+                if (-not $matchesService) { throw "Port $($service.Port) belongs to another process (PID $owner). It was not stopped." }
+                if ($Restart) { Stop-Process -Id $owner -ErrorAction Stop }
+            }
+            if (-not $Restart) {
+                Write-Host "$($service.Name): already running on $($service.Port); reused."
+                continue
+            }
+            $releaseDeadline = (Get-Date).AddSeconds(10)
+            while (@(Get-NetTCPConnection -State Listen | Where-Object LocalPort -eq $service.Port).Count) {
+                if ((Get-Date) -gt $releaseDeadline) { throw "Port $($service.Port) did not become free." }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+        $started = Start-Process -FilePath $nodeExecutable -ArgumentList @('--import','tsx',('"' + $entry + '"')) -WorkingDirectory $serviceRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot "$($service.Name).out.log") -RedirectStandardError (Join-Path $logRoot "$($service.Name).err.log")
+        $readyDeadline = (Get-Date).AddSeconds(25)
+        do {
+            Start-Sleep -Milliseconds 300
+            $started.Refresh()
+            if ($started.HasExited) { throw "$($service.Name) exited. See logs/$($service.Name).err.log." }
+            $ready = @(Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -eq $service.Port -and $_.OwningProcess -eq $started.Id }).Count -gt 0
+        } until ($ready -or (Get-Date) -gt $readyDeadline)
+        if (-not $ready) { throw "$($service.Name) did not bind port $($service.Port). Check its logs before retrying." }
+        Write-Host "$($service.Name): ready on $($service.Port) (PID $($started.Id))."
+    }
+    Write-Host 'Backend ready: ports 3000-3010. Docker PostgreSQL: 127.0.0.1:5432.'
+    Write-Host 'React: http://localhost:5173 (start npm run dev in pinaka-commerce-hub-web).'
+    Write-Host 'Re-running this command reuses existing services. Add -Restart to reload backend services.'
+} finally {
+    $launchMutex.ReleaseMutex()
+    $launchMutex.Dispose()
 }
-
-# 1. Start Docker Infrastructure Containers
-Write-Host ""
-Write-Host "[Step 1/3] Starting Docker Infrastructure Containers..." -ForegroundColor Yellow
-docker compose up -d
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Docker Compose failed to start. Ensure Docker Desktop is running." -ForegroundColor Red
-    exit 1
-}
-
-Write-Host "Docker Infrastructure (PostgreSQL, Redis, RabbitMQ, pgAdmin, Redis-Commander) is UP!" -ForegroundColor Green
-
-# 2. Function to launch microservices in new terminal windows
-function Start-Microservice {
-    param (
-        [string]$Name,
-        [string]$Command,
-        [int]$Port
-    )
-    Write-Host "Booting $Name on Port $Port..." -ForegroundColor Yellow
-    Start-Process powershell -WorkingDirectory $WorkspaceRoot -ArgumentList "-NoExit", "-Command", "Write-Host 'Booting $Name (Port $Port)...' -ForegroundColor Cyan; & '$TsxCommand' $Command"
-}
-
-# 3. Launching application services
-Start-Microservice -Name "Gateway UI" -Command "'apps/gateway/src/main.ts'" -Port 3000
-Start-Microservice -Name "Connector Service" -Command "'apps/connector-service/src/main.ts'" -Port 3001
-Start-Microservice -Name "Order Service" -Command "'apps/order-service/src/main.ts'" -Port 3002
-Start-Microservice -Name "Merchant Service" -Command "'apps/merchant-service/src/main.ts'" -Port 3003
-Start-Microservice -Name "Menu Service" -Command "'apps/menu-service/src/main.ts'" -Port 3004
-Start-Microservice -Name "Inventory Service" -Command "'apps/inventory-service/src/main.ts'" -Port 3005
-Start-Microservice -Name "Analytics Service" -Command "'apps/analytics-service/src/main.ts'" -Port 3006
-Start-Microservice -Name "POS Integration Service" -Command "'apps/pos-integration-service/src/main.ts'" -Port 3007
-Start-Microservice -Name "Notification Service" -Command "'apps/notification-service/src/main.ts'" -Port 3008
-Start-Microservice -Name "Admin API" -Command "'apps/admin-api/src/main.ts'" -Port 3009
-Start-Microservice -Name "Auth Service" -Command "'apps/auth-service/src/main.ts'" -Port 3010
-
-# 4. Display Final Status Banner
-Start-Sleep -Seconds 3
-Write-Host ""
-Write-Host "========================================================" -ForegroundColor Green
-Write-Host " PINAKA DELIVERY HUB IS FULLY ONLINE AND READY!" -ForegroundColor Green
-Write-Host "========================================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "REACT LIVE ORDER BOARD:       http://localhost:3000" -ForegroundColor White
-Write-Host "CONNECTOR WEBHOOK SERVICE:   http://localhost:3001" -ForegroundColor White
-Write-Host "ORDER MANAGEMENT SERVICE:    http://localhost:3002" -ForegroundColor White
-Write-Host "MERCHANT STORE SERVICE:      http://localhost:3003" -ForegroundColor White
-Write-Host "MENU AND 86-ITEM SERVICE:    http://localhost:3004" -ForegroundColor White
-Write-Host "INVENTORY AND STOCK SERVICE: http://localhost:3005" -ForegroundColor White
-Write-Host "REVENUE ANALYTICS SERVICE:   http://localhost:3006" -ForegroundColor White
-Write-Host "POS INTEGRATION SERVICE:     http://localhost:3007" -ForegroundColor White
-Write-Host "NOTIFICATION SERVICE:        http://localhost:3008" -ForegroundColor White
-Write-Host "ADMIN API:                   http://localhost:3009" -ForegroundColor White
-Write-Host "AUTH SERVICE:                http://localhost:3010" -ForegroundColor White
-Write-Host ""
-Write-Host "INFRASTRUCTURE MANAGEMENT DASHBOARDS:" -ForegroundColor Yellow
-Write-Host "pgAdmin 4 (PostgreSQL Web UI): http://localhost:5050 (admin@pdh.com / pdh_password)" -ForegroundColor Gray
-Write-Host "Redis Commander (Redis Web UI): http://localhost:8081" -ForegroundColor Gray
-Write-Host "RabbitMQ Management Console:   http://localhost:15672 (guest / guest)" -ForegroundColor Gray
-Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host ""

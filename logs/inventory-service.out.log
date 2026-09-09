@@ -1,0 +1,14 @@
+[Nest] 20912  - 09/08/2026, 4:33:38 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 20912  - 09/08/2026, 4:33:38 PM     LOG [InstanceLoader] AppModule dependencies initialized +31ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RoutesResolver] AppController {/api/v1/inventory}: +1495ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/health, GET} route +8ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory, GET} route +2ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/alerts/low-stock, GET} route +1ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/decrement, POST} route +1ms
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/adjust, POST} route +2ms
+🐘 [Inventory DB] Connected to PostgreSQL Database
+🐘 [Inventory DB] Connected to PostgreSQL Database
+⚡ [Inventory Redis] Connected to Redis for <1ms stock check
+[Nest] 20912  - 09/08/2026, 4:33:39 PM     LOG [NestApplication] Nest application successfully started +227ms
+🚀 Inventory Service running on http://localhost:3005
+⚡ [Inventory Redis] Connected to Redis for <1ms stock check

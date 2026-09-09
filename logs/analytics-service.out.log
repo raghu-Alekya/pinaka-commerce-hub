@@ -1,0 +1,14 @@
+[Nest] 19152  - 09/08/2026, 4:33:45 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 19152  - 09/08/2026, 4:33:45 PM     LOG [InstanceLoader] AppModule dependencies initialized +13ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RoutesResolver] AppController {/api/v1/analytics}: +1081ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/health, GET} route +8ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/dashboard, GET} route +1ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/top-products, GET} route +1ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/channels, GET} route +1ms
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/z-report, GET} route +1ms
+🐘 [Analytics Service DB] Connected to PostgreSQL Database
+🐘 [Analytics Service DB] Connected to PostgreSQL Database
+⚡ [Analytics Service Redis] Connected to Redis Container
+⚡ [Analytics Service Redis] Connected to Redis Container
+[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [NestApplication] Nest application successfully started +235ms
+🚀 Analytics Service running on http://localhost:3006

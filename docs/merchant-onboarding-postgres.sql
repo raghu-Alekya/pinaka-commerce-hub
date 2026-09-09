@@ -1,5 +1,5 @@
 -- PostgreSQL schema for the React merchant onboarding wizard.
--- Run this against the pinaka_commerce_hub database before deploying.
+-- Apply to the configured application database with node scripts/setup-merchant-db.cjs.
 
 CREATE TABLE IF NOT EXISTS merchants (
   id VARCHAR(100) PRIMARY KEY,
@@ -63,3 +63,14 @@ ALTER TABLE merchants ADD COLUMN IF NOT EXISTS "businessAddress" TEXT;
 ALTER TABLE stores ADD COLUMN IF NOT EXISTS "baseUrl" VARCHAR(2048);
 ALTER TABLE stores ADD COLUMN IF NOT EXISTS "phone" VARCHAR(50);
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "trialDays" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stores ADD COLUMN IF NOT EXISTS "websiteConnector" JSONB;
+
+CREATE TABLE IF NOT EXISTS onboarding_audit_logs (
+  id VARCHAR(100) PRIMARY KEY,
+  "merchantId" VARCHAR(100) NOT NULL,
+  "storeId" VARCHAR(100),
+  action VARCHAR(100) NOT NULL,
+  "performedBy" VARCHAR(255) NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

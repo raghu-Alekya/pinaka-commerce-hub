@@ -1,0 +1,589 @@
+{
+  "info": {
+    "name": "Pinaka Commerce Hub - Merchants, Stores and Subscriptions",
+    "description": "24 requests from the API examples. Local merchant service runs on port 3003. Edit collection variables before sending. POST creates records, PUT/PATCH updates them, and DELETE permanently removes them. Do not run the whole collection against existing data: cancellation/deletion requests are included. Merchant onboarding creates an initial subscription automatically; subscriptionMerchantId must identify an existing merchant without a subscription for the subscription POST test. Master plans and merchant subscriptions are separate APIs; current onboarding uses its existing plan defaults. No requests were sent while generating this collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3003/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "merchantId",
+      "value": "MCH-1001",
+      "type": "string"
+    },
+    {
+      "key": "newMerchantId",
+      "value": "MER-TEST-100",
+      "type": "string"
+    },
+    {
+      "key": "initialStoreId",
+      "value": "STR-TEST-100",
+      "type": "string"
+    },
+    {
+      "key": "storeId",
+      "value": "STR-6001",
+      "type": "string"
+    },
+    {
+      "key": "bulkStoreId1",
+      "value": "STR-6002",
+      "type": "string"
+    },
+    {
+      "key": "bulkStoreId2",
+      "value": "STR-6003",
+      "type": "string"
+    },
+    {
+      "key": "planCode",
+      "value": "PRO",
+      "type": "string"
+    },
+    {
+      "key": "subscriptionMerchantId",
+      "value": "MER-279160",
+      "type": "string"
+    },
+    {
+      "key": "newSubscriptionId",
+      "value": "SUB-TEST-100",
+      "type": "string"
+    },
+    {
+      "key": "subscriptionId",
+      "value": "SUB-9121",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Health and Merchants",
+      "item": [
+        {
+          "name": "01 Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/health",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "02 List merchants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "03 Get merchant, stores and subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "04 Create merchant with initial store",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/create-merchant",
+            "description": "Use unique newMerchantId and initialStoreId. Creates merchant, store, and subscription.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{newMerchantId}}\",\n  \"businessName\": \"Test Retail\",\n  \"legalBusinessName\": \"Test Retail Pvt Ltd\",\n  \"businessType\": \"RETAIL\",\n  \"country\": \"India\",\n  \"state\": \"Telangana\",\n  \"city\": \"Hyderabad\",\n  \"postalCode\": \"500081\",\n  \"businessAddress\": \"Hitech City\",\n  \"firstName\": \"Test\",\n  \"lastName\": \"Owner\",\n  \"email\": \"owner@example.com\",\n  \"phone\": \"9876543210\",\n  \"billingContact\": true,\n  \"plan\": \"PRO\",\n  \"billingCycle\": \"Monthly\",\n  \"trialPeriod\": \"14\",\n  \"stores\": [\n    {\n      \"id\": \"{{initialStoreId}}\",\n      \"name\": \"Main Store\",\n      \"type\": \"RETAIL\",\n      \"url\": \"https://example.com\",\n      \"currency\": \"INR\",\n      \"status\": \"ACTIVE\",\n      \"address\": \"Hitech City\",\n      \"timezone\": \"Asia/Kolkata\",\n      \"city\": \"Hyderabad\",\n      \"state\": \"Telangana\",\n      \"zip\": \"500081\",\n      \"country\": \"India\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 - Stores",
+      "item": [
+        {
+          "name": "05 List all stores",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/stores",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "06 List merchant stores",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "07 Get store",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/stores/{{storeId}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "08 Create store",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores",
+            "description": "Alternative route: POST {{baseUrl}}/stores with the same body. Duplicate IDs return 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Hyderabad Store\",\n  \"type\": \"Restaurant\",\n  \"phone\": \"9876543210\",\n  \"currency\": \"INR\",\n  \"status\": \"ACTIVE\",\n  \"address\": \"Hitech City\",\n  \"timezone\": \"Asia/Kolkata\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"zip\": \"500081\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "09 Create multiple stores atomically",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/bulk",
+            "description": "Every store must belong to merchantId. Duplicate IDs reject the entire batch.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stores\": [\n    {\n      \"merchantId\": \"{{merchantId}}\",\n      \"storeId\": \"{{bulkStoreId1}}\",\n      \"name\": \"Warangal Store\",\n      \"type\": \"Restaurant\",\n      \"phone\": \"9876543211\",\n      \"currency\": \"INR\",\n      \"status\": \"ACTIVE\",\n      \"address\": \"Hanamkonda\",\n      \"timezone\": \"Asia/Kolkata\",\n      \"city\": \"Warangal\",\n      \"state\": \"Telangana\",\n      \"zip\": \"506001\"\n    },\n    {\n      \"merchantId\": \"{{merchantId}}\",\n      \"storeId\": \"{{bulkStoreId2}}\",\n      \"name\": \"Secunderabad Store\",\n      \"type\": \"Restaurant\",\n      \"phone\": \"9876543212\",\n      \"currency\": \"INR\",\n      \"status\": \"ACTIVE\",\n      \"address\": \"MG Road\",\n      \"timezone\": \"Asia/Kolkata\",\n      \"city\": \"Secunderabad\",\n      \"state\": \"Telangana\",\n      \"zip\": \"500003\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "10 Update store",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}",
+            "description": "Alternative route: PUT {{baseUrl}}/stores/{{storeId}}. Merchant and Store IDs cannot change.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Hyderabad Main Store\",\n  \"type\": \"RESTAURANT\",\n  \"phone\": \"9876543210\",\n  \"currency\": \"INR\",\n  \"status\": \"INACTIVE\",\n  \"address\": \"Updated address\",\n  \"timezone\": \"Asia/Kolkata\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"zip\": \"500081\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 - Subscription Plan Master",
+      "item": [
+        {
+          "name": "11 Create master plan",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planCode\": \"{{planCode}}\",\n  \"planName\": \"Professional\",\n  \"description\": \"Plan for growing businesses\",\n  \"maxStoresAllowed\": 3,\n  \"entitlements\": [\n    \"POS\",\n    \"BARCODE_SCANNING\",\n    \"LOYALTY\"\n  ],\n  \"billingCycle\": \"MONTHLY\",\n  \"trialDays\": 14,\n  \"price\": 99,\n  \"currency\": \"INR\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "12 List master plans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "13 Get master plan",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans/{{planCode}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "14 Update full master plan",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans/{{planCode}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planName\": \"Professional Plus\",\n  \"description\": \"Plan for growing businesses\",\n  \"maxStoresAllowed\": 5,\n  \"entitlements\": [\n    \"POS\",\n    \"BARCODE_SCANNING\",\n    \"LOYALTY\"\n  ],\n  \"billingCycle\": \"MONTHLY\",\n  \"trialDays\": 14,\n  \"price\": 149,\n  \"currency\": \"INR\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "15 Update selected master fields",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans/{{planCode}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 199,\n  \"maxStoresAllowed\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "16 Deactivate master plan",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans/{{planCode}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"INACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "17 DELETE unused master plan",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscription-plans/{{planCode}}",
+            "description": "Permanently deletes an unused plan. Returns 409 if assigned to a merchant; use INACTIVE instead."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 - Merchant Subscriptions",
+      "item": [
+        {
+          "name": "18 Create merchant subscription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions",
+            "description": "Merchant must exist and have no subscription. For subsequent requests against this new record, set subscriptionId to newSubscriptionId.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{newSubscriptionId}}\",\n  \"merchantId\": \"{{subscriptionMerchantId}}\",\n  \"planCode\": \"PRO\",\n  \"planName\": \"PRO Plan\",\n  \"maxStoresAllowed\": 3,\n  \"entitlements\": [\n    \"POS\",\n    \"BARCODE_SCANNING\",\n    \"LOYALTY\"\n  ],\n  \"billingCycle\": \"MONTHLY\",\n  \"trialDays\": 14,\n  \"price\": 99,\n  \"status\": \"ACTIVE\",\n  \"currentPeriodStart\": \"2026-09-07T00:00:00Z\",\n  \"currentPeriodEnd\": \"2026-10-07T00:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "19 List subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "20 Filter subscriptions by merchant",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions?merchantId={{subscriptionMerchantId}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "21 Get subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions/{{subscriptionId}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "22 Update full subscription",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions/{{subscriptionId}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planCode\": \"PRO\",\n  \"planName\": \"PRO Plan\",\n  \"maxStoresAllowed\": 5,\n  \"entitlements\": [\n    \"POS\",\n    \"BARCODE_SCANNING\",\n    \"LOYALTY\"\n  ],\n  \"billingCycle\": \"MONTHLY\",\n  \"trialDays\": 14,\n  \"price\": 149,\n  \"status\": \"ACTIVE\",\n  \"currentPeriodStart\": \"2026-09-07T00:00:00Z\",\n  \"currentPeriodEnd\": \"2026-10-07T00:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "23 Cancel subscription",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions/{{subscriptionId}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"CANCELLED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "24 DELETE merchant subscription",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/subscriptions/{{subscriptionId}}",
+            "description": "Permanently deletes this merchant subscription."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

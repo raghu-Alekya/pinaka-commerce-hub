@@ -1,10 +1,11 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from './entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from './entities/store.entity';
 import { SubscriptionEntity, PlanCode, SubscriptionStatus } from './entities/subscription.entity';
 import { OnboardingAuditEntity } from './entities/onboarding-audit.entity';
+import { SubscriptionPlanEntity } from './entities/subscription-plan.entity';
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
@@ -12,6 +13,8 @@ export class MerchantRepository implements OnModuleInit {
   private merchantRepo?: Repository<MerchantEntity>;
   private storeRepo?: Repository<StoreEntity>;
   private subRepo?: Repository<SubscriptionEntity>;
+  private planRepo?: Repository<SubscriptionPlanEntity>;
+  private plansStore: SubscriptionPlanEntity[] = [];
   private auditRepo?: Repository<OnboardingAuditEntity>;
   private redisClient?: Redis;
   private isDbConnected = true;
@@ -29,7 +32,7 @@ export class MerchantRepository implements OnModuleInit {
   private auditLogsStore: OnboardingAuditEntity[] = [];
 
   async onModuleInit() {
-    // 1. PostgreSQL Connection to pinaka_commerce_hub DB
+    // 1. PostgreSQL connection using the configured application database.
     try {
       this.dataSource = new DataSource({
         type: 'postgres',
@@ -38,8 +41,8 @@ export class MerchantRepository implements OnModuleInit {
         port: Number(process.env.POSTGRES_PORT) || 5432,
         username: process.env.POSTGRES_USER || 'pdh_user',
         password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [MerchantEntity, StoreEntity, SubscriptionEntity, OnboardingAuditEntity],
+        database: process.env.POSTGRES_DB || 'pinaka_delivery_hub',
+        entities: [MerchantEntity, StoreEntity, SubscriptionEntity, OnboardingAuditEntity, SubscriptionPlanEntity],
         synchronize: false,
       });
 
@@ -47,6 +50,7 @@ export class MerchantRepository implements OnModuleInit {
       this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
       this.storeRepo = this.dataSource.getRepository(StoreEntity);
       this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
+      this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
       this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
       this.isDbConnected = true;
       console.log('🐘 [PCH Merchant DB] Connected to PostgreSQL database');
@@ -213,8 +217,27 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+  private allocatedIds = { merchant: 4000, store: 50000 };
+  async allocateId(kind: 'merchant' | 'store'): Promise<string> {
+    const prefix = kind === 'merchant' ? 'MER-' : 'STR-';
+    const floor = kind === 'merchant' ? 4000 : 50000;
+    if (this.isDbConnected && this.dataSource?.isInitialized) {
+      return this.dataSource.transaction(async manager => {
+        await manager.query('SELECT pg_advisory_xact_lock(734921)');
+        await manager.query('CREATE TABLE IF NOT EXISTS public.pch_id_counters (kind text PRIMARY KEY, value bigint NOT NULL)');
+        const table = kind === 'merchant' ? 'merchants' : 'stores';
+        const [row] = await manager.query('INSERT INTO public.pch_id_counters(kind,value) SELECT $1, GREATEST($2::bigint, COALESCE(MAX(substring(id from $3)::bigint),0))+1 FROM public.' + table + ' WHERE id ~ $4 ON CONFLICT(kind) DO UPDATE SET value = GREATEST(pch_id_counters.value, EXCLUDED.value-1)+1 RETURNING value', [kind, floor, '[0-9]+$', '^' + prefix + '[0-9]+$']);
+        return prefix + row.value;
+      });
+    }
+    const records = kind === 'merchant' ? this.merchantsStore : this.storesStore;
+    const highest = records.reduce((max, row) => row.id.startsWith(prefix) && /^\d+$/.test(row.id.slice(prefix.length)) ? Math.max(max, Number(row.id.slice(prefix.length))) : max, floor);
+    this.allocatedIds[kind] = Math.max(this.allocatedIds[kind], highest) + 1;
+    return prefix + this.allocatedIds[kind];
+  }
+
   async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
-    const id = data.id || `MCH-${Math.floor(1000 + Math.random() * 9000)}`;
+    const id = data.id || await this.allocateId('merchant');
     const merchant: MerchantEntity = {
       id,
       businessName: data.businessName || 'New Merchant Business',
@@ -301,7 +324,7 @@ export class MerchantRepository implements OnModuleInit {
     return { merchant, stores, subscription };
   }
 
-  async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+  private buildStore(merchantId: string, data: Partial<StoreEntity>): StoreEntity {
     const id = data.id || `STR-${Math.floor(5000 + Math.random() * 5000)}`;
     const activationPin = data.activationPin || Math.floor(100000 + Math.random() * 900000).toString();
     const storeCode = data.storeCode || `STR-${Date.now().toString().slice(-4)}`;
@@ -327,13 +350,32 @@ export class MerchantRepository implements OnModuleInit {
       updatedAt: new Date(),
     };
 
+    return store;
+  }
+
+  async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+    const generatedId = data.id || await this.allocateId('store');
+    const store = this.buildStore(merchantId, { ...data, id: generatedId, storeCode: data.storeCode || generatedId });
+    const { id, storeCode, activationPin } = store;
     if (this.isDbConnected && this.storeRepo) {
       const entity = this.storeRepo.create(store);
-      const saved = await this.storeRepo.save(entity);
+      // Insert only: creating an existing ID must never overwrite another store.
+      try {
+        await this.storeRepo.insert(entity);
+      } catch (error: any) {
+        if (error.code === '23505' || error.driverError?.code === '23505') {
+          throw new ConflictException('Store ID or store code already exists. Choose a different Store ID.');
+        }
+        throw error;
+      }
+      const saved = entity;
       await this.cacheStorePin(activationPin, saved);
       await this.recordAuditLog('STORE_CREATED', merchantId, saved.id, 'merchant', { storeName: saved.storeName, pin: activationPin });
       return saved;
     } else {
+      if (this.storesStore.some(s => s.id === id || s.storeCode === storeCode)) {
+        throw new ConflictException('Store ID or store code already exists. Choose a different Store ID.');
+      }
       this.storesStore.unshift(store);
       await this.cacheStorePin(activationPin, store);
       await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName, pin: activationPin });
@@ -341,27 +383,34 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
-  async getStoreById(id: string): Promise<StoreEntity | null> {
-    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOne({ where: { id } });
-    const store = this.storesStore.find(s => s.id === id);
-    if (!store) return null;
-    const { websiteConnector, ...details } = store;
-    return details;
-  }
-
-  async updateStore(id: string, data: Partial<StoreEntity>): Promise<StoreEntity | null> {
-    const existing = await this.getStoreById(id);
-    if (!existing) return null;
-    const updated = { ...existing, ...data, id, merchantId: existing.merchantId, updatedAt: new Date() };
-    if (this.isDbConnected && this.storeRepo) {
-      await this.storeRepo.update(id, data);
-    } else {
-      const index = this.storesStore.findIndex(s => s.id === id);
-      this.storesStore[index] = { ...this.storesStore[index], ...updated };
+  async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
+    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(merchantId, { ...item, id, storeCode: item.storeCode || id }); }));
+    if (new Set(stores.map(s => s.id)).size !== stores.length ||
+        new Set(stores.map(s => s.storeCode)).size !== stores.length) {
+      throw new ConflictException('Each store must have a unique Store ID.');
     }
-    await this.cacheStorePin(updated.activationPin, updated);
-    await this.recordAuditLog('STORE_UPDATED', updated.merchantId, id, 'merchant', { storeName: updated.storeName });
-    return updated;
+    if (this.isDbConnected && this.storeRepo) {
+      try {
+        await this.storeRepo.manager.transaction(async manager => {
+          await manager.insert(StoreEntity, stores);
+        });
+      } catch (error: any) {
+        if (error.code === '23505' || error.driverError?.code === '23505') {
+          throw new ConflictException('A Store ID already exists. No stores were added.');
+        }
+        throw error;
+      }
+    } else {
+      if (stores.some(s => this.storesStore.some(existing => existing.id === s.id || existing.storeCode === s.storeCode))) {
+        throw new ConflictException('A Store ID already exists. No stores were added.');
+      }
+      this.storesStore.unshift(...stores);
+    }
+    for (const store of stores) {
+      await this.cacheStorePin(store.activationPin, store);
+      await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName });
+    }
+    return stores;
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
@@ -385,6 +434,37 @@ export class MerchantRepository implements OnModuleInit {
       }
     }
     return this.createStore(merchantId, data);
+  }
+
+  async getStoreById(id: string): Promise<StoreEntity | null> {
+    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOneBy({ id });
+    const store = this.storesStore.find(s => s.id === id);
+    if (!store) return null;
+    const { websiteConnector, ...publicStore } = store;
+    return publicStore;
+  }
+
+  async listStores(merchantId?: string): Promise<StoreEntity[]> {
+    if (this.isDbConnected && this.storeRepo) {
+      return this.storeRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
+    }
+    return this.storesStore.filter(s => !merchantId || s.merchantId === merchantId);
+  }
+
+  async updateStore(id: string, fields: Partial<StoreEntity>): Promise<StoreEntity | null> {
+    const store = await this.getStoreById(id);
+    if (!store) return null;
+    const updated = { ...store, ...fields, id, merchantId: store.merchantId, updatedAt: new Date() };
+    if (this.isDbConnected && this.storeRepo) {
+      const result = await this.storeRepo.update(id, { ...fields, updatedAt: updated.updatedAt });
+      if (!result.affected) return null;
+    } else {
+      const index = this.storesStore.findIndex(s => s.id === id);
+      this.storesStore[index] = { ...this.storesStore[index], ...updated };
+    }
+    await this.cacheStorePin(updated.activationPin, updated);
+    await this.recordAuditLog('STORE_UPDATED', store.merchantId, id, 'merchant', { storeName: updated.storeName });
+    return updated;
   }
 
   async saveWebsiteConnector(
@@ -455,31 +535,20 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createOrUpdateSubscription(merchantId: string, data: Partial<SubscriptionEntity>): Promise<SubscriptionEntity> {
-    const planCode = data.planCode || PlanCode.PRO;
-    let defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'];
-    let maxStores = 3;
-    let price = 99.00;
-
-    if (planCode === PlanCode.STARTER) {
-      defaultEntitlements = ['POS', 'BASIC_INVENTORY', 'RECEIPT_PRINTER'];
-      maxStores = 1;
-      price = 49.00;
-    } else if (planCode === PlanCode.ENTERPRISE) {
-      defaultEntitlements = ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY', 'CUSTOM_ERP'];
-      maxStores = 999;
-      price = 199.00;
-    }
-
+    const planCode = data.planCode;
+    const master = planCode ? await this.getSubscriptionPlan(planCode) : null;
+    if (!master || master.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
+    const previous = (await this.listSubscriptions(merchantId))[0];
     const sub: SubscriptionEntity = {
-      id: data.id || `SUB-${Math.floor(9000 + Math.random() * 1000)}`,
+      id: previous?.id || data.id || `SUB-${crypto.randomUUID()}`,
       merchantId,
-      planCode,
-      planName: data.planName || `${planCode} Plan`,
-      maxStoresAllowed: data.maxStoresAllowed || maxStores,
-      entitlements: data.entitlements || defaultEntitlements,
-      billingCycle: data.billingCycle || 'MONTHLY',
-      price: data.price || price,
-      trialDays: data.trialDays || 0,
+      planCode: master.planCode as PlanCode,
+      planName: master.planName,
+      maxStoresAllowed: master.maxStoresAllowed,
+      entitlements: master.entitlements,
+      billingCycle: master.billingCycle,
+      price: Number(master.price),
+      trialDays: master.trialDays,
       status: data.status || SubscriptionStatus.ACTIVE,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -501,11 +570,108 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+  async listSubscriptions(merchantId?: string): Promise<SubscriptionEntity[]> {
+    if (this.isDbConnected && this.subRepo) return this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
+    return this.subscriptionsStore.filter(s => !merchantId || s.merchantId === merchantId);
+  }
+
+  async getSubscription(id: string): Promise<SubscriptionEntity | null> {
+    if (this.isDbConnected && this.subRepo) return this.subRepo.findOneBy({ id });
+    return this.subscriptionsStore.find(s => s.id === id) || null;
+  }
+
+  async insertSubscription(subscription: SubscriptionEntity): Promise<SubscriptionEntity> {
+    if (this.isDbConnected && this.subRepo) {
+      try { await this.subRepo.insert(subscription); }
+      catch (error: any) {
+        if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Subscription ID or merchant subscription already exists');
+        throw error;
+      }
+    } else {
+      if (this.subscriptionsStore.some(s => s.id === subscription.id || s.merchantId === subscription.merchantId)) {
+        throw new ConflictException('Subscription ID or merchant subscription already exists');
+      }
+      this.subscriptionsStore.unshift(subscription);
+    }
+    await this.recordAuditLog('SUBSCRIPTION_CREATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: subscription.id });
+    return subscription;
+  }
+
+  async updateSubscription(id: string, fields: Partial<SubscriptionEntity>): Promise<SubscriptionEntity | null> {
+    const existing = await this.getSubscription(id);
+    if (!existing) return null;
+    const subscription = { ...existing, ...fields, id, merchantId: existing.merchantId, createdAt: existing.createdAt, updatedAt: new Date() };
+    if (this.isDbConnected && this.subRepo) {
+      if (!(await this.subRepo.update(id, { ...fields, updatedAt: subscription.updatedAt })).affected) return null;
+    } else {
+      this.subscriptionsStore[this.subscriptionsStore.findIndex(s => s.id === id)] = subscription;
+    }
+    await this.recordAuditLog('SUBSCRIPTION_UPDATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: id });
+    return subscription;
+  }
+
+  async deleteSubscription(id: string): Promise<boolean> {
+    const existing = await this.getSubscription(id);
+    if (!existing) return false;
+    if (this.isDbConnected && this.subRepo) {
+      if (!(await this.subRepo.delete(id)).affected) return false;
+    } else {
+      this.subscriptionsStore.splice(this.subscriptionsStore.findIndex(s => s.id === id), 1);
+    }
+    await this.recordAuditLog('SUBSCRIPTION_DELETED', existing.merchantId, undefined, 'merchant', { subscriptionId: id });
+    return true;
+  }
+
   private async cacheStorePin(pin: string, store: StoreEntity): Promise<void> {
     if (this.isRedisConnected && this.redisClient) {
       try {
         await this.redisClient.set(`pin:${pin}`, JSON.stringify(store), 'EX', 86400 * 30);
       } catch {}
     }
+  }
+
+  async listSubscriptionPlans(): Promise<SubscriptionPlanEntity[]> {
+    if (this.isDbConnected && this.planRepo) return this.planRepo.find({ order: { planCode: 'ASC' } });
+    return [...this.plansStore].sort((a, b) => a.planCode.localeCompare(b.planCode));
+  }
+
+  async getSubscriptionPlan(planCode: string): Promise<SubscriptionPlanEntity | null> {
+    if (this.isDbConnected && this.planRepo) return this.planRepo.findOneBy({ planCode });
+    return this.plansStore.find(p => p.planCode === planCode) || null;
+  }
+
+  async createSubscriptionPlan(plan: SubscriptionPlanEntity): Promise<SubscriptionPlanEntity> {
+    if (this.isDbConnected && this.planRepo) {
+      try { await this.planRepo.insert(plan); }
+      catch (error: any) {
+        if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Plan code already exists');
+        throw error;
+      }
+    } else {
+      if (this.plansStore.some(p => p.planCode === plan.planCode)) throw new ConflictException('Plan code already exists');
+      this.plansStore.push(plan);
+    }
+    return plan;
+  }
+
+  async updateSubscriptionPlan(planCode: string, fields: Partial<SubscriptionPlanEntity>): Promise<SubscriptionPlanEntity | null> {
+    const existing = await this.getSubscriptionPlan(planCode);
+    if (!existing) return null;
+    const plan = { ...existing, ...fields, planCode, createdAt: existing.createdAt, updatedAt: new Date() };
+    if (this.isDbConnected && this.planRepo) {
+      if (!(await this.planRepo.update({ planCode }, { ...fields, updatedAt: plan.updatedAt })).affected) return null;
+    } else this.plansStore[this.plansStore.findIndex(p => p.planCode === planCode)] = plan;
+    return plan;
+  }
+
+  async deleteSubscriptionPlan(planCode: string): Promise<boolean> {
+    if (!(await this.getSubscriptionPlan(planCode))) return false;
+    const inUse = this.isDbConnected && this.subRepo
+      ? await this.subRepo.existsBy({ planCode: planCode as PlanCode })
+      : this.subscriptionsStore.some(s => s.planCode === planCode);
+    if (inUse) throw new ConflictException('Plan is assigned to a merchant. Set its status to INACTIVE instead.');
+    if (this.isDbConnected && this.planRepo) return Boolean((await this.planRepo.delete({ planCode })).affected);
+    this.plansStore.splice(this.plansStore.findIndex(p => p.planCode === planCode), 1);
+    return true;
   }
 }

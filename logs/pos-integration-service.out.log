@@ -1,0 +1,17 @@
+[Nest] 22484  - 09/08/2026, 4:33:52 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 22484  - 09/08/2026, 4:33:52 PM     LOG [InstanceLoader] AppModule dependencies initialized +31ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RoutesResolver] AppController {/api/v1/pos}: +1672ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/health, GET} route +19ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/activate, POST} route +4ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/open, POST} route +3ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/cash-movement, POST} route +2ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/close, POST} route +2ms
+[Nest] 22484  - 09/08/2026, 4:33:53 PM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/active, GET} route +1ms
+🐘 [POS Integration DB] Connected to PostgreSQL Database
+🐘 [POS Integration DB] Connected to PostgreSQL Database
+🐘 [PCH POS Config DB] Connected to PostgreSQL: pinaka_commerce_hub
+⚡ [POS Integration Redis] Connected to Redis Container
+⚡ [POS Integration Redis] Connected to Redis Container
+⚡ [PCH POS Config Redis] Connected for <1ms POS terminal startup caching
+[Nest] 22484  - 09/08/2026, 4:33:54 PM     LOG [NestApplication] Nest application successfully started +581ms
+🚀 POS Integration Service running on http://localhost:3007
