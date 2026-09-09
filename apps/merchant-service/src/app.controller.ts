@@ -258,16 +258,26 @@ export class AppController {
       wordpressUrl,
       encryptedJwt: this.encryptConnectorSecret(wordpressJwt),
       updatedAt: new Date().toISOString(),
-    }, targetMerchant);
+    });
 
-    await this.merchantRepository.syncCatalogAndInventory(store ? store.merchantId : targetMerchant, storeId, wordpressUrl);
+    const activeMerchant = store ? store.merchantId : targetMerchant;
+    await this.merchantRepository.syncCatalogAndInventory(activeMerchant, storeId, wordpressUrl);
+
+    if (store) {
+      await this.merchantRepository.recordAuditLog(
+        'STORE_WEBSITE_CONNECTOR_UPDATED',
+        store.merchantId,
+        store.id,
+        'merchant',
+        { provider: 'WORDPRESS', wordpressUrl },
+      );
+    }
 
     return {
       success: true,
-      storeId: store.id,
-      merchantId: store.merchantId,
+      storeId: store ? store.id : storeId,
+      merchantId: activeMerchant,
       connector: { provider: 'WORDPRESS', wordpressUrl, wordpressJwtConfigured: true },
-      message: 'WordPress connected & catalog synchronized successfully into pinaka_commerce_hub menu_items and inventory_items!',
     };
   }
 

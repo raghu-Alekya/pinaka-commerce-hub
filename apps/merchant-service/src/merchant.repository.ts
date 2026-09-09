@@ -471,32 +471,10 @@ export class MerchantRepository implements OnModuleInit {
   async saveWebsiteConnector(
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
-    merchantId?: string
   ): Promise<StoreEntity | null> {
-    const targetMerchant = merchantId || 'MER-976045';
     if (this.isDbConnected && this.storeRepo) {
-      let store = await this.storeRepo.findOne({ where: { id: storeId } });
-      if (!store) {
-        store = this.storeRepo.create({
-          id: storeId,
-          storeCode: storeId,
-          merchantId: targetMerchant,
-          storeName: `Store ${storeId}`,
-          storeType: 'RETAIL',
-          phone: '',
-          currency: 'USD',
-          timezone: 'UTC',
-          status: StoreStatus.ACTIVE,
-          address: { street: '', city: '', state: '', zipCode: '', country: '' },
-          activationPin: '123456',
-          autoAcceptOrders: true,
-          operationalStatus: OperationalStatus.OPEN,
-          channels: { doordash: false, swiggy: false },
-          taxRate: 0,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const store = await this.storeRepo.findOne({ where: { id: storeId } });
+      if (!store) return null;
       store.websiteConnector = connector;
       store.updatedAt = new Date();
       return await this.storeRepo.save(store);
