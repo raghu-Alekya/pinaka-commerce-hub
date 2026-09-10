@@ -206,6 +206,33 @@ export class WooCommerceConnectorService implements OnModuleInit {
     return items;
   }
 
+  private async ensureDbConnected(): Promise<boolean> {
+    if (this.isDbConnected && this.dataSource?.isInitialized) return true;
+    try {
+      if (!this.dataSource) {
+        this.dataSource = new DataSource({
+          type: 'postgres',
+          host: process.env.POSTGRES_HOST || 'localhost',
+          port: Number(process.env.POSTGRES_PORT) || 5432,
+          username: process.env.POSTGRES_USER || 'pdh_user',
+          password: process.env.POSTGRES_PASSWORD || 'pdh_password',
+          database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
+          entities: [WooCommerceConnectionEntity, WooCommerceSyncLogEntity],
+          synchronize: true,
+        });
+      }
+      if (!this.dataSource.isInitialized) {
+        await this.dataSource.initialize();
+      }
+      this.isDbConnected = true;
+      return true;
+    } catch (err: any) {
+      console.log(`⚠️ [DB Connection Error] ${err.message}`);
+      this.isDbConnected = false;
+      return false;
+    }
+  }
+
   async triggerFullCatalogSync(
     storeId: string,
     merchantId?: string,
@@ -215,20 +242,10 @@ export class WooCommerceConnectorService implements OnModuleInit {
     const targetStore = storeId || 'STR-50069';
     const targetMerchant = merchantId || 'MER-976045';
 
-    if (this.isDbConnected && this.dataSource) {
+    await this.ensureDbConnected();
+    if (this.dataSource && this.dataSource.isInitialized) {
       try {
-        const sampleProducts = [
-          { name: 'Organic Red Apples (1kg)', category: 'Produce', price: 4.99, sku: 'PROD-APP-01', stock: 150 },
-          { name: 'Whole Organic Milk (1 Gal)', category: 'Dairy', price: 5.49, sku: 'DAIRY-MLK-01', stock: 80 },
-          { name: 'Artisan Sourdough Bread', category: 'Bakery', price: 6.29, sku: 'BAK-BRD-01', stock: 45 },
-          { name: 'Avocado Pack (4ct)', category: 'Produce', price: 3.99, sku: 'PROD-AVO-04', stock: 120 },
-          { name: 'Greek Yogurt Vanilla 32oz', category: 'Dairy', price: 4.79, sku: 'DAIRY-YOG-01', stock: 60 },
-          { name: 'Organic Chicken Breast 1lb', category: 'Meat', price: 8.99, sku: 'MEAT-CHK-01', stock: 35 },
-          { name: 'Atlantic Salmon Fillet 1lb', category: 'Seafood', price: 12.99, sku: 'SEA-SLM-01', stock: 25 },
-          { name: 'Sparkling Mineral Water 12pk', category: 'Beverages', price: 7.99, sku: 'BEV-WTR-12', stock: 90 },
-          { name: 'Organic Extra Virgin Olive Oil', category: 'Pantry', price: 14.49, sku: 'PAN-OIL-01', stock: 50 },
-          { name: 'Fair Trade Dark Chocolate Bar', category: 'Snacks', price: 3.49, sku: 'SNK-CHO-01', stock: 200 },
-        ];
+        const sampleProducts = await this.fetchLiveWordPressCatalog(storeUrl, jwtToken);
 
         for (const item of sampleProducts) {
           const externalId = `WC-${item.sku}`;
@@ -259,7 +276,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
             const invItemId = crypto.randomUUID();
             await this.dataSource.query(
               `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
               [invItemId, targetMerchant, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
             );
           }
