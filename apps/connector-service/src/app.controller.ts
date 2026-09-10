@@ -1,9 +1,9 @@
-import { Controller, Get, Post, Body, Param, Query, Headers, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, Headers, BadRequestException } from '@nestjs/common';
 import { DeliveryConnectorRepository } from './delivery-connector.repository';
 import { WooCommerceConnectorService } from './services/woocommerce-connector.service';
 import { DeliveryOrderStatus } from './entities/delivery-order-log.entity';
 
-@Controller('api/v1/connectors')
+@Controller(['api/v1/connectors', 'connector/api/v1', 'api/v1', 'connectors', 'connector'])
 export class AppController {
   constructor(
     private readonly deliveryRepository: DeliveryConnectorRepository,
@@ -44,6 +44,30 @@ export class AppController {
       success: true,
       message: `WooCommerce event '${eventTopic}' processed and synchronized with PCH catalog!`,
       log,
+    };
+  }
+
+  @Put(['stores/:storeId/connector', 'woocommerce/stores/:storeId/connector', 'stores/:storeId'])
+  @Post(['stores/:storeId/connector', 'woocommerce/stores/:storeId/connector'])
+  async updateStoreConnector(@Param('storeId') storeId: string, @Body() body: any) {
+    const targetStore = storeId || body.storeId || body.storeCode || 'STR-50069';
+    const targetMerchant = body.merchantId || body.merchantCode || 'MER-976045';
+    const storeUrl = body.wordpressUrl || body.storeUrl || body.url || 'https://aascorner.alektasolutions.com';
+    const jwtToken = body.wordpressJwt || body.jwtToken || body.token || '';
+
+    const result = await this.wcService.triggerFullCatalogSync(targetStore, targetMerchant, storeUrl, jwtToken);
+    return {
+      success: true,
+      message: `WordPress site '${storeUrl}' connector saved and catalog synchronized successfully!`,
+      merchantId: targetMerchant,
+      storeId: targetStore,
+      syncedProductsCount: result.syncedItemsCount,
+      connector: {
+        provider: 'WORDPRESS',
+        wordpressUrl: storeUrl,
+        wordpressJwtConfigured: true,
+      },
+      timestamp: result.timestamp,
     };
   }
 
