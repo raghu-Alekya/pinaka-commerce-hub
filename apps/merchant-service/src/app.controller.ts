@@ -261,7 +261,7 @@ export class AppController {
     });
 
     const activeMerchant = store ? store.merchantId : targetMerchant;
-    await this.merchantRepository.syncCatalogAndInventory(activeMerchant, storeId, wordpressUrl);
+    await this.merchantRepository.syncCatalogAndInventory(activeMerchant, storeId, wordpressUrl, wordpressJwt);
 
     if (store) {
       await this.merchantRepository.recordAuditLog(

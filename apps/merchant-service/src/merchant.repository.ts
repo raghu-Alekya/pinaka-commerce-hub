@@ -782,7 +782,7 @@ export class MerchantRepository implements OnModuleInit {
     return items;
   }
 
-  async syncCatalogAndInventory(merchantId: string, storeId: string, storeUrl: string) {
+  async syncCatalogAndInventory(merchantId: string, storeId: string, storeUrl: string, jwtToken?: string) {
     if (this.isDbConnected && this.dataSource) {
       try {
         const sampleProducts = [
