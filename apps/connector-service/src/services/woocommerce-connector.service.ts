@@ -262,7 +262,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
             const invItemId = crypto.randomUUID();
             await this.dataSource.query(
               `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
               [invItemId, targetMerchant, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
             );
           }

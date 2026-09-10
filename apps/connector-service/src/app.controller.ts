@@ -3,14 +3,12 @@ import { DeliveryConnectorRepository } from './delivery-connector.repository';
 import { WooCommerceConnectorService } from './services/woocommerce-connector.service';
 import { DeliveryOrderStatus } from './entities/delivery-order-log.entity';
 
-const deliveryRepository = new DeliveryConnectorRepository();
-deliveryRepository.onModuleInit();
-
-const wcService = new WooCommerceConnectorService();
-wcService.onModuleInit();
-
 @Controller('api/v1/connectors')
 export class AppController {
+  constructor(
+    private readonly deliveryRepository: DeliveryConnectorRepository,
+    private readonly wcService: WooCommerceConnectorService,
+  ) {}
   @Get('health')
   health() {
     return {
@@ -27,7 +25,7 @@ export class AppController {
 
   @Get('woocommerce/connection')
   async getWooCommerceConnection(@Query('storeId') storeId: string) {
-    const conn = await wcService.getConnection(storeId || 'STR-50069');
+    const conn = await this.wcService.getConnection(storeId || 'STR-50069');
     return {
       success: true,
       connection: conn,
@@ -41,7 +39,7 @@ export class AppController {
     @Body() body: any
   ) {
     const eventTopic = topic || body.topic || 'product.updated';
-    const log = await wcService.ingestWooCommerceWebhook(eventTopic, body);
+    const log = await this.wcService.ingestWooCommerceWebhook(eventTopic, body);
     return {
       success: true,
       message: `WooCommerce event '${eventTopic}' processed and synchronized with PCH catalog!`,
@@ -56,7 +54,7 @@ export class AppController {
     const storeUrl = body.storeUrl || body.url || 'https://aascorner.alektasolutions.com';
     const jwtToken = body.jwtToken || body.token || '';
 
-    const result = await wcService.triggerFullCatalogSync(targetStore, targetMerchant, storeUrl, jwtToken);
+    const result = await this.wcService.triggerFullCatalogSync(targetStore, targetMerchant, storeUrl, jwtToken);
     return {
       success: true,
       message: `WordPress site '${storeUrl}' connected and catalog synchronized successfully!`,
@@ -71,7 +69,7 @@ export class AppController {
   async triggerFullCatalogSync(@Body() body: any) {
     const targetStore = typeof body === 'string' ? body : (body.storeId || body.storeCode || 'STR-50069');
     const targetMerchant = typeof body === 'object' ? (body.merchantId || body.merchantCode || 'MER-976045') : 'MER-976045';
-    const result = await wcService.triggerFullCatalogSync(targetStore, targetMerchant);
+    const result = await this.wcService.triggerFullCatalogSync(targetStore, targetMerchant);
     return {
       success: true,
       message: `WooCommerce store catalog synchronized successfully with PCH!`,
@@ -87,7 +85,7 @@ export class AppController {
   @Get('delivery/channels')
   async getChannels(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-50069';
-    const channels = await deliveryRepository.getChannelsByStore(targetStore);
+    const channels = await this.deliveryRepository.getChannelsByStore(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -101,7 +99,7 @@ export class AppController {
     if (!channel) {
       throw new BadRequestException('Delivery channel name is required');
     }
-    const order = await deliveryRepository.ingestDeliveryWebhook(channel, body);
+    const order = await this.deliveryRepository.ingestDeliveryWebhook(channel, body);
     return {
       success: true,
       message: `New ${channel.toUpperCase()} delivery order received and broadcast to Sunmi POS!`,
@@ -115,7 +113,7 @@ export class AppController {
   @Get('delivery/orders')
   async getDeliveryOrders(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-50069';
-    const orders = await deliveryRepository.getDeliveryOrders(targetStore);
+    const orders = await this.deliveryRepository.getDeliveryOrders(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -126,7 +124,7 @@ export class AppController {
 
   @Post('delivery/orders/accept')
   async acceptOrder(@Body() body: { orderId: string; prepTimeMinutes?: number }) {
-    const updated = await deliveryRepository.updateOrderStatus(body.orderId, DeliveryOrderStatus.ACCEPTED, body.prepTimeMinutes || 20);
+    const updated = await this.deliveryRepository.updateOrderStatus(body.orderId, DeliveryOrderStatus.ACCEPTED, body.prepTimeMinutes || 20);
     return {
       success: true,
       message: `Delivery Order #${body.orderId} accepted! Prep time set to ${updated?.prepTimeMinutes || 20} mins.`,
