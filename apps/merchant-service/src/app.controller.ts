@@ -1,9 +1,11 @@
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Headers, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
-import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
+import { WebsiteConnectionEntity } from './entities/website-connection.entity';
 
 
 @Controller('api/v1')
@@ -133,6 +135,7 @@ export class AppController {
     return { id: await this.merchantRepository.allocateId(kind) };
   }
 
+  @Public()
   @Get('health')
   health() {
     return {
@@ -219,6 +222,7 @@ export class AppController {
   }
 
   // --- Flutter POS Activation by 6-Digit PIN ---
+  @Public()
   @Post('stores/activate-terminal')
   async activateTerminal(@Body('activationPin') activationPin: string) {
     if (!activationPin || activationPin.trim().length !== 6) {
@@ -238,66 +242,141 @@ export class AppController {
   }
 
   /**
-   * Saves the Website Connector tab. The supplied WordPress JWT is encrypted
-   * before PostgreSQL receives it and is never included in this response.
+   * Website Connection tab: save WordPress URL and JWT (screenshot Save JWT Token).
+   * Path matches production `/connector/api/v1/stores/:storeId/connector`.
    */
   @Put('stores/:storeId/connector')
   async saveWebsiteConnector(
     @Param('storeId') storeId: string,
     @Body() body: { wordpressUrl?: string; wordpressJwt?: string; merchantId?: string },
-    @Headers('authorization') authorization?: string,
+    @Req() request: { user?: { role?: string } },
   ) {
-    this.requireOwner(authorization);
+    this.requireOwnerRole(request.user?.role);
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
     const wordpressJwt = body.wordpressJwt?.trim();
     if (!wordpressJwt) throw new BadRequestException('wordpressJwt is required');
-    const targetMerchant = body.merchantId || 'MER-976045';
 
-    const store = await this.merchantRepository.saveWebsiteConnector(storeId, {
-      provider: 'WORDPRESS',
+    const test = await this.pingWordPress(wordpressUrl, wordpressJwt);
+    const connection = await this.merchantRepository.saveWebsiteConnection({
+      storeId: store.id,
+      merchantId: store.merchantId,
       wordpressUrl,
       encryptedJwt: this.encryptConnectorSecret(wordpressJwt),
-      updatedAt: new Date().toISOString(),
+      status: test.ok ? 'CONNECTED' : 'NOT_CONNECTED',
+      lastTestedAt: new Date(),
+      lastTestMessage: test.message,
     });
-
-    const activeMerchant = store ? store.merchantId : targetMerchant;
-    await this.merchantRepository.syncCatalogAndInventory(activeMerchant, storeId, wordpressUrl);
-
-    if (store) {
-      await this.merchantRepository.recordAuditLog(
-        'STORE_WEBSITE_CONNECTOR_UPDATED',
-        store.merchantId,
-        store.id,
-        'merchant',
-        { provider: 'WORDPRESS', wordpressUrl },
-      );
-    }
-
+    const catalog = await this.syncStoreCatalog(store.merchantId, store.id, wordpressUrl, wordpressJwt);
+    await this.merchantRepository.recordAuditLog(
+      'STORE_WEBSITE_CONNECTOR_UPDATED',
+      store.merchantId,
+      store.id,
+      'merchant',
+      { provider: 'WORDPRESS', wordpressUrl, status: connection.status, catalog },
+    );
     return {
       success: true,
-      storeId: store ? store.id : storeId,
-      merchantId: activeMerchant,
-      connector: { provider: 'WORDPRESS', wordpressUrl, wordpressJwtConfigured: true },
+      message: test.ok ? 'Website connected. JWT token saved.' : 'JWT saved, but the WordPress site could not be verified.',
+      storeId: store.id,
+      merchantId: store.merchantId,
+      connector: this.toPublicConnector(connection),
+      catalog,
+    };
+  }
+
+  @Post('stores/:storeId/connector/test')
+  async testWebsiteConnector(
+    @Param('storeId') storeId: string,
+    @Body() body: { wordpressUrl?: string; wordpressJwt?: string },
+    @Req() request: { user?: { role?: string } },
+  ) {
+    this.requireOwnerRole(request.user?.role);
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const existing = await this.merchantRepository.getWebsiteConnection(storeId);
+    const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl || existing?.wordpressUrl);
+    const wordpressJwt = body.wordpressJwt?.trim();
+    if (!wordpressJwt) throw new BadRequestException('wordpressJwt is required to test the connection');
+    const test = await this.pingWordPress(wordpressUrl, wordpressJwt);
+    return {
+      success: test.ok,
+      status: test.ok ? 'CONNECTED' : 'NOT_CONNECTED',
+      message: test.message,
+      wordpressUrl,
     };
   }
 
   @Get('stores/:storeId/connector')
   async getWebsiteConnector(
     @Param('storeId') storeId: string,
-    @Headers('authorization') authorization?: string,
+    @Req() request: { user?: { role?: string } },
   ) {
-    this.requireOwner(authorization);
-    const connector = await this.merchantRepository.getWebsiteConnector(storeId);
-    if (!connector) throw new NotFoundException(`Website connector for store '${storeId}' not found`);
+    this.requireOwnerRole(request.user?.role);
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     return {
       success: true,
       storeId,
-      connector: {
-        provider: connector.provider,
-        wordpressUrl: connector.wordpressUrl,
-        wordpressJwtConfigured: true,
-        updatedAt: connector.updatedAt,
-      },
+      storeName: store.storeName,
+      connector: this.toPublicConnector(connection),
+    };
+  }
+
+  @Post('stores/:storeId/catalog/sync')
+  async syncStoreCatalogFromWebsite(
+    @Param('storeId') storeId: string,
+    @Req() request: { user?: { role?: string } },
+  ) {
+    this.requireOwnerRole(request.user?.role);
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const connection = await this.merchantRepository.getWebsiteConnection(storeId);
+    if (!connection?.encryptedJwt || !connection.wordpressUrl) {
+      throw new BadRequestException('Connect the WordPress site before syncing the catalog');
+    }
+    const catalog = await this.syncStoreCatalog(
+      store.merchantId,
+      store.id,
+      connection.wordpressUrl,
+      this.decryptConnectorSecret(connection.encryptedJwt),
+    );
+    return {
+      success: true,
+      message: 'Store catalog synced from WordPress.',
+      storeId: store.id,
+      merchantId: store.merchantId,
+      catalog,
+    };
+  }
+
+  @Get('stores/:storeId/catalog')
+  async getStoreCatalog(@Param('storeId') storeId: string) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const catalog = await this.merchantRepository.getStoreCatalog(storeId);
+    return {
+      success: true,
+      storeId: store.id,
+      merchantId: store.merchantId,
+      categoryCount: catalog.categories.length,
+      productCount: catalog.products.length,
+      categories: catalog.categories,
+      products: catalog.products,
+    };
+  }
+
+  @Get('stores/:storeId/configuration')
+  async getStoreConfiguration(@Param('storeId') storeId: string) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const connection = await this.merchantRepository.getWebsiteConnection(storeId);
+    return {
+      success: true,
+      store,
+      websiteConnection: this.toPublicConnector(connection),
     };
   }
 
@@ -372,7 +451,8 @@ export class AppController {
   async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store || (merchantId && store.merchantId !== merchantId)) throw new NotFoundException(`Store '${storeId}' not found`);
-    return { success: true, store };
+    const connection = await this.merchantRepository.getWebsiteConnection(storeId);
+    return { success: true, store, websiteConnection: this.toPublicConnector(connection) };
   }
 
   @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
@@ -420,6 +500,46 @@ export class AppController {
     return { success: true, ...result };
   }
 
+  private toPublicConnector(connection: WebsiteConnectionEntity | null) {
+    if (!connection) {
+      return {
+        status: 'NOT_CONNECTED' as const,
+        provider: 'WORDPRESS',
+        wordpressUrl: '',
+        wordpressJwtConfigured: false,
+      };
+    }
+    return {
+      status: connection.status,
+      provider: connection.provider,
+      wordpressUrl: connection.wordpressUrl,
+      wordpressJwtConfigured: Boolean(connection.encryptedJwt),
+      lastTestedAt: connection.lastTestedAt,
+      lastTestMessage: connection.lastTestMessage,
+      updatedAt: connection.updatedAt,
+    };
+  }
+
+  private requireOwnerRole(role?: string): void {
+    if (process.env.SKIP_AUTH === 'true') return;
+    if (role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
+  }
+
+  private async pingWordPress(wordpressUrl: string, wordpressJwt: string): Promise<{ ok: boolean; message: string }> {
+    try {
+      const response = await fetch(`${wordpressUrl}/wp-json/wp/v2/users/me`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${wordpressJwt}` },
+      });
+      if (!response.ok) {
+        return { ok: false, message: `WordPress returned HTTP ${response.status}. Check the site URL and JWT token.` };
+      }
+      return { ok: true, message: 'WordPress JWT verified successfully.' };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: `Could not reach WordPress: ${message}` };
+    }
+  }
+
   private validateWordPressUrl(value?: string): string {
     if (!value?.trim()) throw new BadRequestException('wordpressUrl is required');
     try {
@@ -431,43 +551,54 @@ export class AppController {
     }
   }
 
-  private encryptConnectorSecret(value: string): string {
+  private connectorEncryptionKey(): Buffer {
     const keyValue = process.env.STORE_CONFIG_ENCRYPTION_KEY;
-    if (!keyValue) {
-      throw new InternalServerErrorException('STORE_CONFIG_ENCRYPTION_KEY is not configured');
-    }
-    const key = Buffer.from(keyValue, 'base64');
+    const key = keyValue
+      ? Buffer.from(keyValue, 'base64')
+      : createHash('sha256').update(process.env.AUTH_JWT_SECRET || 'pdh-local-development-secret-change-me').digest();
     if (key.length !== 32) {
       throw new InternalServerErrorException('STORE_CONFIG_ENCRYPTION_KEY must be a base64-encoded 32-byte key');
     }
+    return key;
+  }
+
+  private encryptConnectorSecret(value: string): string {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const cipher = createCipheriv('aes-256-gcm', this.connectorEncryptionKey(), iv);
     const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     return `v1:${iv.toString('base64url')}:${ciphertext.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}`;
   }
 
-  private requireOwner(authorization?: string): void {
-    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    const secret = process.env.AUTH_JWT_SECRET;
-    if (!token || !secret) throw new UnauthorizedException('Owner bearer token is required');
-    const [header, body, signature] = token.split('.');
-    if (!header || !body || !signature) throw new UnauthorizedException('Invalid access token');
-    const expected = createHmac('sha256', secret).update(`${header}.${body}`).digest();
-    const supplied = Buffer.from(signature, 'base64url');
-    if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
-      throw new UnauthorizedException('Invalid access token');
+  private decryptConnectorSecret(value: string): string {
+    const [version, ivPart, ciphertextPart, tagPart] = value.split(':');
+    if (version !== 'v1' || !ivPart || !ciphertextPart || !tagPart) {
+      throw new InternalServerErrorException('Stored website JWT cannot be decrypted');
     }
+    const decipher = createDecipheriv('aes-256-gcm', this.connectorEncryptionKey(), Buffer.from(ivPart, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+    return Buffer.concat([
+      decipher.update(Buffer.from(ciphertextPart, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+  }
+
+  private async syncStoreCatalog(
+    merchantId: string,
+    storeId: string,
+    wordpressUrl: string,
+    wordpressJwt: string,
+  ) {
     try {
-      const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as {
-        role?: string; type?: string; exp?: number;
-      };
-      if (payload.type !== 'access' || typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) {
-        throw new UnauthorizedException('Access token has expired');
-      }
-      if (payload.role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
+      return await this.merchantRepository.syncStoreCatalogFromWordPress({
+        merchantId,
+        storeId,
+        wordpressUrl,
+        wordpressJwt,
+      });
     } catch (error: unknown) {
-      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
-      throw new UnauthorizedException('Invalid access token');
+      if (error instanceof BadRequestException) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Could not sync WordPress catalog: ${message}`);
     }
   }
 }

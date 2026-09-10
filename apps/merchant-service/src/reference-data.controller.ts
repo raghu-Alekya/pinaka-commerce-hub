@@ -1,8 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
 import { BusinessType, RetailSubCategory, MerchantStatus } from './entities/merchant.entity';
 import { StoreStatus } from './entities/store.entity';
 import { SubscriptionStatus } from './entities/subscription.entity';
 const labels = (values: string[]) => values.map(value => value.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+@Public()
 @Controller('api/v1/reference-data')
 export class ReferenceDataController {
  @Get() get() {

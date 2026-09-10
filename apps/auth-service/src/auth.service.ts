@@ -27,6 +27,7 @@ import { MailService } from './mail.service';
 import { CreateUserDto } from './user.dto';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
 import { UserRepository } from './user.repository';
+import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 
 const scrypt = promisify(scryptCallback);
 const TOKEN_LIFETIME_SECONDS = 3600;
@@ -181,22 +182,39 @@ export class AuthService {
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('Invalid refresh token');
     }
+    await this.users.revokeSessionsForRefreshToken(tokenId);
     const session = await this.createSession(user);
     await this.users.revokeRefreshToken(tokenId, session.refreshTokenId);
     const { refreshTokenId: _refreshTokenId, ...result } = session;
     return result;
   }
 
-  async logout(dto: RefreshTokenDto): Promise<void> {
+  async logout(dto: RefreshTokenDto, authorization?: string): Promise<void> {
+    if (authorization) {
+      try {
+        const access = verifyAccessToken(extractBearerToken(authorization));
+        if (access.jti) await this.users.revokeSession(access.jti);
+      } catch {
+        // Refresh-token logout still proceeds if the access token is expired.
+      }
+    }
     const payload = this.verifyRefreshToken(dto.refreshToken);
     const tokenId = typeof payload.jti === 'string' ? payload.jti : '';
-    if (tokenId) await this.users.revokeRefreshToken(tokenId);
+    if (tokenId) {
+      await this.users.revokeSessionsForRefreshToken(tokenId);
+      await this.users.revokeRefreshToken(tokenId);
+    }
   }
 
   async requireAccountOwner(authorization?: string): Promise<UserEntity> {
-    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    if (!token) throw new UnauthorizedException('Bearer token is required');
-    const payload = this.verifyToken(token);
+    const token = extractBearerToken(authorization);
+    const payload = verifyAccessToken(token);
+    const session = await this.users.findActiveSession(
+      String(payload.jti),
+      this.hashToken(token),
+    );
+    if (!session) throw new UnauthorizedException('Session is not active. Please log in again.');
+    await this.users.touchSession(session.id);
     const user = await this.users.findById(String(payload.sub));
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('Invalid access token');
@@ -205,6 +223,33 @@ export class AuthService {
       throw new ForbiddenException('Only account owners can manage users');
     }
     return user;
+  }
+
+  async currentSession(authorization?: string) {
+    const token = extractBearerToken(authorization);
+    const payload = verifyAccessToken(token);
+    const session = await this.users.findActiveSession(
+      String(payload.jti),
+      this.hashToken(token),
+    );
+    if (!session) throw new UnauthorizedException('Session is not active. Please log in again.');
+    await this.users.touchSession(session.id);
+    const user = await this.users.findById(session.userId);
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    return {
+      session: {
+        id: session.id,
+        userId: session.userId,
+        accountId: session.accountId,
+        email: session.email,
+        role: session.role,
+        expiresAt: session.expiresAt,
+        lastUsedAt: session.lastUsedAt,
+      },
+      user: this.toPublicUser(user),
+    };
   }
 
   private async hashPassword(password: string): Promise<string> {
@@ -236,12 +281,14 @@ export class AuthService {
 
   private async createSession(user: UserEntity) {
     const now = Math.floor(Date.now() / 1000);
+    const sessionId = randomUUID();
     const accessPayload = {
       sub: user.id,
       accountId: user.accountId ?? null,
       email: user.email,
       role: user.role,
       type: 'access',
+      jti: sessionId,
       iat: now,
       exp: now + TOKEN_LIFETIME_SECONDS,
     };
@@ -259,12 +306,32 @@ export class AuthService {
       tokenHash: this.hashToken(refreshToken),
       expiresAt: new Date((now + REFRESH_TOKEN_LIFETIME_SECONDS) * 1000),
     });
+    const accessToken = this.signToken(accessPayload);
+    const expiresAt = new Date((now + TOKEN_LIFETIME_SECONDS) * 1000);
+    await this.users.createSession({
+      id: sessionId,
+      userId: user.id,
+      accountId: user.accountId ?? null,
+      email: user.email,
+      role: user.role,
+      accessTokenHash: this.hashToken(accessToken),
+      refreshTokenId,
+      expiresAt,
+    });
     return {
-      accessToken: this.signToken(accessPayload),
+      accessToken,
       refreshToken,
       refreshExpiresIn: REFRESH_TOKEN_LIFETIME_SECONDS,
       tokenType: 'Bearer',
       expiresIn: TOKEN_LIFETIME_SECONDS,
+      session: {
+        id: sessionId,
+        userId: user.id,
+        accountId: user.accountId ?? null,
+        email: user.email,
+        role: user.role,
+        expiresAt,
+      },
       user: this.toPublicUser(user),
       refreshTokenId,
     };

@@ -1,22 +1,53 @@
-import * as crypto from 'crypto';
+﻿import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
+import { SessionEntity } from '@pinaka-delivery-hub/auth';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from './entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from './entities/store.entity';
 import { SubscriptionEntity, PlanCode, SubscriptionStatus } from './entities/subscription.entity';
 import { OnboardingAuditEntity } from './entities/onboarding-audit.entity';
 import { SubscriptionPlanEntity } from './entities/subscription-plan.entity';
+import { WebsiteConnectionEntity } from './entities/website-connection.entity';
+import { CategoryEntity } from './entities/category.entity';
+import { ProductEntity } from './entities/product.entity';
+
+interface WordPressProductNode {
+  id?: number;
+  name?: string;
+  price?: string | number;
+  image?: string | null;
+  tags?: unknown[];
+  [key: string]: unknown;
+}
+
+interface WordPressCategoryNode {
+  id?: number;
+  name?: string;
+  slug?: string;
+  parent?: number;
+  description?: string;
+  count?: number;
+  image?: string | null;
+  pos_tax_class?: string;
+  pos_tax_percent?: string;
+  products?: WordPressProductNode[];
+  children?: WordPressCategoryNode[];
+}
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
-  private dataSource?: DataSource;
-  private merchantRepo?: Repository<MerchantEntity>;
-  private storeRepo?: Repository<StoreEntity>;
-  private subRepo?: Repository<SubscriptionEntity>;
-  private planRepo?: Repository<SubscriptionPlanEntity>;
-  private plansStore: SubscriptionPlanEntity[] = [];
-  private auditRepo?: Repository<OnboardingAuditEntity>;
+  private dataSource!: DataSource;
+  private merchantRepo!: Repository<MerchantEntity>;
+  private storeRepo!: Repository<StoreEntity>;
+  private subRepo!: Repository<SubscriptionEntity>;
+  private planRepo!: Repository<SubscriptionPlanEntity>;
+  private auditRepo!: Repository<OnboardingAuditEntity>;
+  private websiteConnectionRepo!: Repository<WebsiteConnectionEntity>;
+  private categoryRepo!: Repository<CategoryEntity>;
+  private productRepo!: Repository<ProductEntity>;
+  private sessionRepo!: Repository<SessionEntity>;
   private redisClient?: Redis;
   private isDbConnected = true;
   private isRedisConnected = false;
@@ -26,46 +57,30 @@ export class MerchantRepository implements OnModuleInit {
     return this.isDbConnected ? 'connected' : `unavailable: ${this.databaseError || 'unknown error'}`;
   }
 
-  // In-Memory Fallback Stores
-  private merchantsStore: MerchantEntity[] = [];
-  private storesStore: StoreEntity[] = [];
-  private subscriptionsStore: SubscriptionEntity[] = [];
-  private auditLogsStore: OnboardingAuditEntity[] = [];
-
   async onModuleInit() {
-    // 1. PostgreSQL connection using the configured application database.
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        url: process.env.DATABASE_URL || undefined,
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [MerchantEntity, StoreEntity, SubscriptionEntity, OnboardingAuditEntity, SubscriptionPlanEntity],
-        synchronize: false,
-      });
-
-      await this.dataSource.initialize();
-      this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
-      this.storeRepo = this.dataSource.getRepository(StoreEntity);
-      this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
-      this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
-      this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
-      this.isDbConnected = true;
-      console.log('🐘 [PCH Merchant DB] Connected to PostgreSQL database');
-      await this.seedDefaultData();
-    } catch (err: any) {
-      this.databaseError = err.message;
-      this.isDbConnected = false;
-      const requireDatabase = process.env.REQUIRE_DATABASE === 'true' || process.env.NODE_ENV === 'production';
-      if (requireDatabase) {
-        throw new Error(`Merchant service cannot start because PostgreSQL is unavailable: ${err.message}`);
-      }
-      console.log(`⚠️ [PCH Merchant DB] Offline (${err.message}). Using In-Memory Mode because REQUIRE_DATABASE is not enabled.`);
-      this.seedDefaultInMemory();
-    }
+    this.dataSource = await connectPostgres('PCH Merchant DB', [
+      MerchantEntity,
+      StoreEntity,
+      SubscriptionEntity,
+      OnboardingAuditEntity,
+      SubscriptionPlanEntity,
+      WebsiteConnectionEntity,
+      CategoryEntity,
+      ProductEntity,
+      SessionEntity,
+    ]);
+    this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
+    this.storeRepo = this.dataSource.getRepository(StoreEntity);
+    this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
+    this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
+    this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
+    this.websiteConnectionRepo = this.dataSource.getRepository(WebsiteConnectionEntity);
+    this.categoryRepo = this.dataSource.getRepository(CategoryEntity);
+    this.productRepo = this.dataSource.getRepository(ProductEntity);
+    this.sessionRepo = this.dataSource.getRepository(SessionEntity);
+    this.isDbConnected = true;
+    await this.seedDefaultPlans();
+    await this.seedDefaultData();
 
     // 2. Redis Connection
     try {
@@ -77,11 +92,62 @@ export class MerchantRepository implements OnModuleInit {
       });
       await this.redisClient.connect();
       this.isRedisConnected = true;
-      console.log('⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching');
+      console.log('âš¡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching');
     } catch (err: any) {
-      console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
+      console.log(`âš ï¸ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
+
+  private async seedDefaultPlans() {
+    const existing = await this.planRepo.count();
+    if (existing > 0) return;
+    const now = new Date();
+    await this.planRepo.save([
+      this.planRepo.create({
+        planCode: PlanCode.STARTER,
+        planName: 'Starter',
+        description: 'Single-store starter plan',
+        maxStoresAllowed: 1,
+        entitlements: ['POS'],
+        billingCycle: 'MONTHLY',
+        trialDays: 14,
+        price: 0,
+        currency: 'USD',
+        status: 'ACTIVE',
+        createdAt: now,
+        updatedAt: now,
+      }),
+      this.planRepo.create({
+        planCode: PlanCode.PRO,
+        planName: 'Pro Commerce Plan',
+        description: 'Multi-store commerce plan',
+        maxStoresAllowed: 3,
+        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
+        billingCycle: 'MONTHLY',
+        trialDays: 0,
+        price: 99,
+        currency: 'USD',
+        status: 'ACTIVE',
+        createdAt: now,
+        updatedAt: now,
+      }),
+      this.planRepo.create({
+        planCode: PlanCode.ENTERPRISE,
+        planName: 'Enterprise',
+        description: 'Unlimited stores',
+        maxStoresAllowed: 50,
+        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY', 'ANALYTICS'],
+        billingCycle: 'ANNUAL',
+        trialDays: 0,
+        price: 999,
+        currency: 'USD',
+        status: 'ACTIVE',
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]);
+    console.log('âœ… [PCH Seed] Seeded subscription_plans (STARTER, PRO, ENTERPRISE)');
   }
 
   private async seedDefaultData() {
@@ -137,63 +203,7 @@ export class MerchantRepository implements OnModuleInit {
 
       await this.cacheStorePin(str1.activationPin, str1);
       await this.recordAuditLog('MERCHANT_SEEDED', 'MCH-1001', 'STR-5001', 'system', { seed: true });
-      console.log('✅ [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-5001 (PIN: 849201)');
-    }
-  }
-
-  private seedDefaultInMemory() {
-    if (this.merchantsStore.length === 0) {
-      this.merchantsStore.push({
-        id: 'MCH-1001',
-        businessName: 'Fresh Mart Organics LLC',
-        businessType: BusinessType.RETAIL,
-        retailSubCategory: RetailSubCategory.GROCERY,
-        ownerName: 'Alex Johnson',
-        email: 'alex@freshmart.com',
-        phone: '+1 (555) 234-5678',
-        taxId: '12-3456789',
-        kycStatus: KycStatus.VERIFIED,
-        kycDocuments: [],
-        billingContact: true,
-        status: MerchantStatus.ACTIVE,
-        onboardingStep: 'COMPLETED',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      this.storesStore.push({
-        id: 'STR-5001',
-        merchantId: 'MCH-1001',
-        storeName: 'Fresh Mart - Downtown Branch',
-        storeCode: 'STR-DT-01',
-        storeType: 'GROCERY',
-        address: { street: '123 Main St, Suite 400', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
-        currency: 'USD',
-        timezone: 'America/Chicago',
-        taxRate: 8.25,
-        activationPin: '849201',
-        autoAcceptOrders: true,
-        status: StoreStatus.ACTIVE,
-        operationalStatus: OperationalStatus.OPEN,
-        channels: [{ platform: 'POS', externalStoreId: 'POS-01', apiKey: 'key_pos_1', enabled: true }],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      this.subscriptionsStore.push({
-        id: 'SUB-9001',
-        merchantId: 'MCH-1001',
-        planCode: PlanCode.PRO,
-        planName: 'Pro Commerce Plan',
-        maxStoresAllowed: 3,
-        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
-        billingCycle: 'MONTHLY',
-        trialDays: 0,
-        price: 99.00,
-        status: SubscriptionStatus.ACTIVE,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
+      console.log('âœ… [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-5001 (PIN: 849201)');
     }
   }
 
@@ -207,34 +217,19 @@ export class MerchantRepository implements OnModuleInit {
       details,
       createdAt: new Date(),
     };
-
-    if (this.isDbConnected && this.auditRepo) {
-      try {
-        const entity = this.auditRepo.create(entry);
-        await this.auditRepo.save(entity);
-      } catch {}
-    } else {
-      this.auditLogsStore.unshift(entry);
-    }
+    await this.auditRepo.save(this.auditRepo.create(entry));
   }
 
-  private allocatedIds = { merchant: 4000, store: 50000 };
   async allocateId(kind: 'merchant' | 'store'): Promise<string> {
     const prefix = kind === 'merchant' ? 'MER-' : 'STR-';
     const floor = kind === 'merchant' ? 4000 : 50000;
-    if (this.isDbConnected && this.dataSource?.isInitialized) {
-      return this.dataSource.transaction(async manager => {
-        await manager.query('SELECT pg_advisory_xact_lock(734921)');
-        await manager.query('CREATE TABLE IF NOT EXISTS public.pch_id_counters (kind text PRIMARY KEY, value bigint NOT NULL)');
-        const table = kind === 'merchant' ? 'merchants' : 'stores';
-        const [row] = await manager.query('INSERT INTO public.pch_id_counters(kind,value) SELECT $1, GREATEST($2::bigint, COALESCE(MAX(substring(id from $3)::bigint),0))+1 FROM public.' + table + ' WHERE id ~ $4 ON CONFLICT(kind) DO UPDATE SET value = GREATEST(pch_id_counters.value, EXCLUDED.value-1)+1 RETURNING value', [kind, floor, '[0-9]+$', '^' + prefix + '[0-9]+$']);
-        return prefix + row.value;
-      });
-    }
-    const records = kind === 'merchant' ? this.merchantsStore : this.storesStore;
-    const highest = records.reduce((max, row) => row.id.startsWith(prefix) && /^\d+$/.test(row.id.slice(prefix.length)) ? Math.max(max, Number(row.id.slice(prefix.length))) : max, floor);
-    this.allocatedIds[kind] = Math.max(this.allocatedIds[kind], highest) + 1;
-    return prefix + this.allocatedIds[kind];
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(734921)');
+      await manager.query('CREATE TABLE IF NOT EXISTS public.pch_id_counters (kind text PRIMARY KEY, value bigint NOT NULL)');
+      const table = kind === 'merchant' ? 'merchants' : 'stores';
+      const [row] = await manager.query('INSERT INTO public.pch_id_counters(kind,value) SELECT $1, GREATEST($2::bigint, COALESCE(MAX(substring(id from $3)::bigint),0))+1 FROM public.' + table + ' WHERE id ~ $4 ON CONFLICT(kind) DO UPDATE SET value = GREATEST(pch_id_counters.value, EXCLUDED.value-1)+1 RETURNING value', [kind, floor, '[0-9]+$', '^' + prefix + '[0-9]+$']);
+      return prefix + row.value;
+    });
   }
 
   async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
@@ -266,62 +261,29 @@ export class MerchantRepository implements OnModuleInit {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-    if (this.isDbConnected && this.merchantRepo) {
-      const entity = this.merchantRepo.create(merchant);
-      const saved = await this.merchantRepo.save(entity);
-      await this.recordAuditLog('MERCHANT_CREATED', saved.id, undefined, saved.email, { businessName: saved.businessName });
-      return saved;
-    } else {
-      this.merchantsStore.unshift(merchant);
-      await this.recordAuditLog('MERCHANT_CREATED', merchant.id, undefined, merchant.email, { businessName: merchant.businessName });
-      return merchant;
-    }
+    const saved = await this.merchantRepo.save(this.merchantRepo.create(merchant));
+    await this.recordAuditLog('MERCHANT_CREATED', saved.id, undefined, saved.email, { businessName: saved.businessName });
+    return saved;
   }
 
   async getAllMerchants(): Promise<MerchantEntity[]> {
-    if (this.isDbConnected && this.merchantRepo) {
-      return await this.merchantRepo.find({ order: { createdAt: 'DESC' } });
-    }
-    return this.merchantsStore;
+    return this.merchantRepo.find({ order: { createdAt: 'DESC' } });
   }
 
   async updateMerchant(id: string, data: Partial<MerchantEntity>): Promise<MerchantEntity | null> {
-    if (this.isDbConnected && this.merchantRepo) {
-      const merchant = await this.merchantRepo.findOne({ where: { id } });
-      if (!merchant) return null;
-      Object.assign(merchant, data, { id, updatedAt: new Date() });
-      const saved = await this.merchantRepo.save(merchant);
-      await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, saved.email, { businessName: saved.businessName });
-      return saved;
-    }
-
-    const index = this.merchantsStore.findIndex((merchant) => merchant.id === id);
-    if (index === -1) return null;
-    this.merchantsStore[index] = { ...this.merchantsStore[index], ...data, id, updatedAt: new Date() };
-    await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, this.merchantsStore[index].email, { businessName: this.merchantsStore[index].businessName });
-    return this.merchantsStore[index];
+    const merchant = await this.merchantRepo.findOne({ where: { id } });
+    if (!merchant) return null;
+    Object.assign(merchant, data, { id, updatedAt: new Date() });
+    const saved = await this.merchantRepo.save(merchant);
+    await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, saved.email, { businessName: saved.businessName });
+    return saved;
   }
 
   async getMerchantById(id: string): Promise<{ merchant: MerchantEntity | null; stores: StoreEntity[]; subscription: SubscriptionEntity | null }> {
-    let merchant: MerchantEntity | null = null;
-    let stores: StoreEntity[] = [];
-    let subscription: SubscriptionEntity | null = null;
-
-    if (this.isDbConnected && this.merchantRepo && this.storeRepo && this.subRepo) {
-      merchant = await this.merchantRepo.findOne({ where: { id } });
-      if (merchant) {
-        stores = await this.storeRepo.find({ where: { merchantId: id } });
-        subscription = await this.subRepo.findOne({ where: { merchantId: id } });
-      }
-    } else {
-      merchant = this.merchantsStore.find(m => m.id === id) || null;
-      if (merchant) {
-        stores = this.storesStore.filter(s => s.merchantId === id);
-        subscription = this.subscriptionsStore.find(sub => sub.merchantId === id) || null;
-      }
-    }
-
+    const merchant = await this.merchantRepo.findOne({ where: { id } });
+    if (!merchant) return { merchant: null, stores: [], subscription: null };
+    const stores = await this.storeRepo.find({ where: { merchantId: id } });
+    const subscription = await this.subRepo.findOne({ where: { merchantId: id } });
     return { merchant, stores, subscription };
   }
 
@@ -329,8 +291,7 @@ export class MerchantRepository implements OnModuleInit {
     const id = data.id || `STR-${Math.floor(5000 + Math.random() * 5000)}`;
     const activationPin = data.activationPin || Math.floor(100000 + Math.random() * 900000).toString();
     const storeCode = data.storeCode || `STR-${Date.now().toString().slice(-4)}`;
-
-    const store: StoreEntity = {
+    return {
       id,
       merchantId,
       storeName: data.storeName || 'Store Branch',
@@ -350,38 +311,24 @@ export class MerchantRepository implements OnModuleInit {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-    return store;
   }
 
   async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
     const generatedId = data.id || await this.allocateId('store');
     const store = this.buildStore(merchantId, { ...data, id: generatedId, storeCode: data.storeCode || generatedId });
-    const { id, storeCode, activationPin } = store;
-    if (this.isDbConnected && this.storeRepo) {
-      const entity = this.storeRepo.create(store);
-      // Insert only: creating an existing ID must never overwrite another store.
-      try {
-        await this.storeRepo.insert(entity);
-      } catch (error: any) {
-        if (error.code === '23505' || error.driverError?.code === '23505') {
-          throw new ConflictException('Store ID or store code already exists. Choose a different Store ID.');
-        }
-        throw error;
-      }
-      const saved = entity;
-      await this.cacheStorePin(activationPin, saved);
-      await this.recordAuditLog('STORE_CREATED', merchantId, saved.id, 'merchant', { storeName: saved.storeName, pin: activationPin });
-      return saved;
-    } else {
-      if (this.storesStore.some(s => s.id === id || s.storeCode === storeCode)) {
+    const { activationPin } = store;
+    const entity = this.storeRepo.create(store);
+    try {
+      await this.storeRepo.insert(entity);
+    } catch (error: any) {
+      if (error.code === '23505' || error.driverError?.code === '23505') {
         throw new ConflictException('Store ID or store code already exists. Choose a different Store ID.');
       }
-      this.storesStore.unshift(store);
-      await this.cacheStorePin(activationPin, store);
-      await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName, pin: activationPin });
-      return store;
+      throw error;
     }
+    await this.cacheStorePin(activationPin, entity);
+    await this.recordAuditLog('STORE_CREATED', merchantId, entity.id, 'merchant', { storeName: entity.storeName, pin: activationPin });
+    return entity;
   }
 
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
@@ -390,22 +337,15 @@ export class MerchantRepository implements OnModuleInit {
         new Set(stores.map(s => s.storeCode)).size !== stores.length) {
       throw new ConflictException('Each store must have a unique Store ID.');
     }
-    if (this.isDbConnected && this.storeRepo) {
-      try {
-        await this.storeRepo.manager.transaction(async manager => {
-          await manager.insert(StoreEntity, stores);
-        });
-      } catch (error: any) {
-        if (error.code === '23505' || error.driverError?.code === '23505') {
-          throw new ConflictException('A Store ID already exists. No stores were added.');
-        }
-        throw error;
-      }
-    } else {
-      if (stores.some(s => this.storesStore.some(existing => existing.id === s.id || existing.storeCode === s.storeCode))) {
+    try {
+      await this.storeRepo.manager.transaction(async manager => {
+        await manager.insert(StoreEntity, stores);
+      });
+    } catch (error: any) {
+      if (error.code === '23505' || error.driverError?.code === '23505') {
         throw new ConflictException('A Store ID already exists. No stores were added.');
       }
-      this.storesStore.unshift(...stores);
+      throw error;
     }
     for (const store of stores) {
       await this.cacheStorePin(store.activationPin, store);
@@ -415,7 +355,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
-    if (data.id && this.isDbConnected && this.storeRepo) {
+    if (data.id) {
       const existing = await this.storeRepo.findOne({ where: { id: data.id } });
       if (existing) {
         if (existing.merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
@@ -425,44 +365,22 @@ export class MerchantRepository implements OnModuleInit {
         return saved;
       }
     }
-    if (data.id && !this.isDbConnected) {
-      const index = this.storesStore.findIndex((store) => store.id === data.id);
-      if (index >= 0) {
-        if (this.storesStore[index].merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
-        this.storesStore[index] = { ...this.storesStore[index], ...data, merchantId, updatedAt: new Date() };
-        await this.recordAuditLog('STORE_UPDATED', merchantId, data.id, 'merchant', { storeName: this.storesStore[index].storeName });
-        return this.storesStore[index];
-      }
-    }
     return this.createStore(merchantId, data);
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
-    if (this.isDbConnected && this.storeRepo) return this.storeRepo.findOneBy({ id });
-    const store = this.storesStore.find(s => s.id === id);
-    if (!store) return null;
-    const { websiteConnector, ...publicStore } = store;
-    return publicStore;
+    return this.storeRepo.findOneBy({ id });
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
-    if (this.isDbConnected && this.storeRepo) {
-      return this.storeRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
-    }
-    return this.storesStore.filter(s => !merchantId || s.merchantId === merchantId);
+    return this.storeRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
   }
 
   async updateStore(id: string, fields: Partial<StoreEntity>): Promise<StoreEntity | null> {
     const store = await this.getStoreById(id);
     if (!store) return null;
     const updated = { ...store, ...fields, id, merchantId: store.merchantId, updatedAt: new Date() };
-    if (this.isDbConnected && this.storeRepo) {
-      const result = await this.storeRepo.update(id, { ...fields, updatedAt: updated.updatedAt });
-      if (!result.affected) return null;
-    } else {
-      const index = this.storesStore.findIndex(s => s.id === id);
-      this.storesStore[index] = { ...this.storesStore[index], ...updated };
-    }
+    if (!(await this.storeRepo.update(id, { ...fields, updatedAt: updated.updatedAt })).affected) return null;
     await this.cacheStorePin(updated.activationPin, updated);
     await this.recordAuditLog('STORE_UPDATED', store.merchantId, id, 'merchant', { storeName: updated.storeName });
     return updated;
@@ -472,30 +390,76 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
   ): Promise<StoreEntity | null> {
-    if (this.isDbConnected && this.storeRepo) {
-      const store = await this.storeRepo.findOne({ where: { id: storeId } });
-      if (!store) return null;
-      store.websiteConnector = connector;
-      store.updatedAt = new Date();
-      return await this.storeRepo.save(store);
-    }
-    const store = this.storesStore.find((candidate) => candidate.id === storeId);
+    const store = await this.storeRepo.findOne({ where: { id: storeId } });
     if (!store) return null;
     store.websiteConnector = connector;
     store.updatedAt = new Date();
-    return store;
+    return this.storeRepo.save(store);
   }
 
   async getWebsiteConnector(storeId: string): Promise<StoreWebsiteConnectorConfig | null> {
-    if (this.isDbConnected && this.storeRepo) {
-      const store = await this.storeRepo
-        .createQueryBuilder('store')
-        .addSelect('store.websiteConnector')
-        .where('store.id = :storeId', { storeId })
-        .getOne();
-      return store?.websiteConnector ?? null;
+    const connection = await this.websiteConnectionRepo.findOneBy({ storeId });
+    if (connection) {
+      return {
+        provider: 'WORDPRESS',
+        wordpressUrl: connection.wordpressUrl,
+        encryptedJwt: connection.encryptedJwt,
+        updatedAt: connection.updatedAt.toISOString(),
+      };
     }
-    return this.storesStore.find((candidate) => candidate.id === storeId)?.websiteConnector ?? null;
+    const store = await this.storeRepo
+      .createQueryBuilder('store')
+      .addSelect('store.websiteConnector')
+      .where('store.id = :storeId', { storeId })
+      .getOne();
+    return store?.websiteConnector ?? null;
+  }
+
+  async saveWebsiteConnection(fields: {
+    storeId: string;
+    merchantId: string;
+    wordpressUrl: string;
+    encryptedJwt: string;
+    status: 'CONNECTED' | 'NOT_CONNECTED';
+    lastTestedAt?: Date | null;
+    lastTestMessage?: string | null;
+  }): Promise<WebsiteConnectionEntity> {
+    const existing = await this.websiteConnectionRepo.findOneBy({ storeId: fields.storeId });
+    const entity = existing
+      ? Object.assign(existing, fields, { updatedAt: new Date() })
+      : this.websiteConnectionRepo.create(fields);
+    const saved = await this.websiteConnectionRepo.save(entity);
+    await this.saveWebsiteConnector(fields.storeId, {
+      provider: 'WORDPRESS',
+      wordpressUrl: fields.wordpressUrl,
+      encryptedJwt: fields.encryptedJwt,
+      updatedAt: saved.updatedAt.toISOString(),
+    });
+    return saved;
+  }
+
+  async getWebsiteConnection(storeId: string): Promise<WebsiteConnectionEntity | null> {
+    return this.websiteConnectionRepo.findOneBy({ storeId });
+  }
+
+  async touchSession(sessionId: string, accessToken: string): Promise<SessionEntity | null> {
+    const accessTokenHash = crypto.createHash('sha256').update(accessToken).digest('hex');
+    const session = await this.sessionRepo
+      .createQueryBuilder('session')
+      .addSelect('session.accessTokenHash')
+      .where('session.id = :sessionId', { sessionId })
+      .getOne();
+    if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt.getTime() <= Date.now() ||
+      session.accessTokenHash !== accessTokenHash
+    ) {
+      return null;
+    }
+    session.lastUsedAt = new Date();
+    await this.sessionRepo.update(session.id, { lastUsedAt: session.lastUsedAt });
+    return session;
   }
 
   async activateTerminalByPin(pin: string): Promise<{ success: boolean; store?: StoreEntity; entitlements?: string[]; message?: string }> {
@@ -514,20 +478,13 @@ export class MerchantRepository implements OnModuleInit {
       } catch {}
     }
 
-    let store: StoreEntity | null = null;
-    if (this.isDbConnected && this.storeRepo) {
-      store = await this.storeRepo.findOne({ where: { activationPin: pin } });
-    } else {
-      store = this.storesStore.find(s => s.activationPin === pin) || null;
-    }
-
+    const store = await this.storeRepo.findOne({ where: { activationPin: pin } });
     if (!store) {
       return { success: false, message: 'Invalid 6-digit Activation PIN. Terminal pairing failed.' };
     }
 
     const { subscription } = await this.getMerchantById(store.merchantId);
     await this.cacheStorePin(pin, store);
-
     return {
       success: true,
       store,
@@ -554,45 +511,27 @@ export class MerchantRepository implements OnModuleInit {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-    if (this.isDbConnected && this.subRepo) {
-      let entity = await this.subRepo.findOne({ where: { merchantId } });
-      if (!entity) entity = this.subRepo.create(sub);
-      else Object.assign(entity, sub);
-      const saved = await this.subRepo.save(entity);
-      await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: saved.planCode, entitlements: saved.entitlements });
-      return saved;
-    } else {
-      const idx = this.subscriptionsStore.findIndex(s => s.merchantId === merchantId);
-      if (idx >= 0) this.subscriptionsStore[idx] = sub;
-      else this.subscriptionsStore.unshift(sub);
-      await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: sub.planCode, entitlements: sub.entitlements });
-      return sub;
-    }
+    let entity = await this.subRepo.findOne({ where: { merchantId } });
+    if (!entity) entity = this.subRepo.create(sub);
+    else Object.assign(entity, sub);
+    const saved = await this.subRepo.save(entity);
+    await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: saved.planCode, entitlements: saved.entitlements });
+    return saved;
   }
 
   async listSubscriptions(merchantId?: string): Promise<SubscriptionEntity[]> {
-    if (this.isDbConnected && this.subRepo) return this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
-    return this.subscriptionsStore.filter(s => !merchantId || s.merchantId === merchantId);
+    return this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
   }
 
   async getSubscription(id: string): Promise<SubscriptionEntity | null> {
-    if (this.isDbConnected && this.subRepo) return this.subRepo.findOneBy({ id });
-    return this.subscriptionsStore.find(s => s.id === id) || null;
+    return this.subRepo.findOneBy({ id });
   }
 
   async insertSubscription(subscription: SubscriptionEntity): Promise<SubscriptionEntity> {
-    if (this.isDbConnected && this.subRepo) {
-      try { await this.subRepo.insert(subscription); }
-      catch (error: any) {
-        if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Subscription ID or merchant subscription already exists');
-        throw error;
-      }
-    } else {
-      if (this.subscriptionsStore.some(s => s.id === subscription.id || s.merchantId === subscription.merchantId)) {
-        throw new ConflictException('Subscription ID or merchant subscription already exists');
-      }
-      this.subscriptionsStore.unshift(subscription);
+    try { await this.subRepo.insert(subscription); }
+    catch (error: any) {
+      if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Subscription ID or merchant subscription already exists');
+      throw error;
     }
     await this.recordAuditLog('SUBSCRIPTION_CREATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: subscription.id });
     return subscription;
@@ -602,11 +541,7 @@ export class MerchantRepository implements OnModuleInit {
     const existing = await this.getSubscription(id);
     if (!existing) return null;
     const subscription = { ...existing, ...fields, id, merchantId: existing.merchantId, createdAt: existing.createdAt, updatedAt: new Date() };
-    if (this.isDbConnected && this.subRepo) {
-      if (!(await this.subRepo.update(id, { ...fields, updatedAt: subscription.updatedAt })).affected) return null;
-    } else {
-      this.subscriptionsStore[this.subscriptionsStore.findIndex(s => s.id === id)] = subscription;
-    }
+    if (!(await this.subRepo.update(id, { ...fields, updatedAt: subscription.updatedAt })).affected) return null;
     await this.recordAuditLog('SUBSCRIPTION_UPDATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: id });
     return subscription;
   }
@@ -614,11 +549,7 @@ export class MerchantRepository implements OnModuleInit {
   async deleteSubscription(id: string): Promise<boolean> {
     const existing = await this.getSubscription(id);
     if (!existing) return false;
-    if (this.isDbConnected && this.subRepo) {
-      if (!(await this.subRepo.delete(id)).affected) return false;
-    } else {
-      this.subscriptionsStore.splice(this.subscriptionsStore.findIndex(s => s.id === id), 1);
-    }
+    if (!(await this.subRepo.delete(id)).affected) return false;
     await this.recordAuditLog('SUBSCRIPTION_DELETED', existing.merchantId, undefined, 'merchant', { subscriptionId: id });
     return true;
   }
@@ -632,25 +563,18 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async listSubscriptionPlans(): Promise<SubscriptionPlanEntity[]> {
-    if (this.isDbConnected && this.planRepo) return this.planRepo.find({ order: { planCode: 'ASC' } });
-    return [...this.plansStore].sort((a, b) => a.planCode.localeCompare(b.planCode));
+    return this.planRepo.find({ order: { planCode: 'ASC' } });
   }
 
   async getSubscriptionPlan(planCode: string): Promise<SubscriptionPlanEntity | null> {
-    if (this.isDbConnected && this.planRepo) return this.planRepo.findOneBy({ planCode });
-    return this.plansStore.find(p => p.planCode === planCode) || null;
+    return this.planRepo.findOneBy({ planCode });
   }
 
   async createSubscriptionPlan(plan: SubscriptionPlanEntity): Promise<SubscriptionPlanEntity> {
-    if (this.isDbConnected && this.planRepo) {
-      try { await this.planRepo.insert(plan); }
-      catch (error: any) {
-        if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Plan code already exists');
-        throw error;
-      }
-    } else {
-      if (this.plansStore.some(p => p.planCode === plan.planCode)) throw new ConflictException('Plan code already exists');
-      this.plansStore.push(plan);
+    try { await this.planRepo.insert(plan); }
+    catch (error: any) {
+      if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Plan code already exists');
+      throw error;
     }
     return plan;
   }
@@ -659,21 +583,15 @@ export class MerchantRepository implements OnModuleInit {
     const existing = await this.getSubscriptionPlan(planCode);
     if (!existing) return null;
     const plan = { ...existing, ...fields, planCode, createdAt: existing.createdAt, updatedAt: new Date() };
-    if (this.isDbConnected && this.planRepo) {
-      if (!(await this.planRepo.update({ planCode }, { ...fields, updatedAt: plan.updatedAt })).affected) return null;
-    } else this.plansStore[this.plansStore.findIndex(p => p.planCode === planCode)] = plan;
+    if (!(await this.planRepo.update({ planCode }, { ...fields, updatedAt: plan.updatedAt })).affected) return null;
     return plan;
   }
 
   async deleteSubscriptionPlan(planCode: string): Promise<boolean> {
     if (!(await this.getSubscriptionPlan(planCode))) return false;
-    const inUse = this.isDbConnected && this.subRepo
-      ? await this.subRepo.existsBy({ planCode: planCode as PlanCode })
-      : this.subscriptionsStore.some(s => s.planCode === planCode);
+    const inUse = await this.subRepo.existsBy({ planCode: planCode as PlanCode });
     if (inUse) throw new ConflictException('Plan is assigned to a merchant. Set its status to INACTIVE instead.');
-    if (this.isDbConnected && this.planRepo) return Boolean((await this.planRepo.delete({ planCode })).affected);
-    this.plansStore.splice(this.plansStore.findIndex(p => p.planCode === planCode), 1);
-    return true;
+    return Boolean((await this.planRepo.delete({ planCode })).affected);
   }
 
   async fetchLiveWordPressCatalog(storeUrl?: string, jwtToken?: string): Promise<Array<{ name: string; category: string; price: number; sku: string; stock: number; description?: string }>> {
@@ -699,7 +617,7 @@ export class MerchantRepository implements OnModuleInit {
           }
         }
       } catch (catErr: any) {
-        console.log(`⚠️ WordPress Category fetch error: ${catErr.message}`);
+        console.log(`âš ï¸ WordPress Category fetch error: ${catErr.message}`);
       }
 
       if (categories.length === 0) {
@@ -732,7 +650,7 @@ export class MerchantRepository implements OnModuleInit {
             }
           }
         } catch (e: any) {
-          console.log(`⚠️ Category ${cat.id} product fetch warning: ${e.message}`);
+          console.log(`âš ï¸ Category ${cat.id} product fetch warning: ${e.message}`);
         }
       }
 
@@ -756,11 +674,11 @@ export class MerchantRepository implements OnModuleInit {
             }
           }
         } catch (dirErr: any) {
-          console.log(`⚠️ WooCommerce direct products fetch warning: ${dirErr.message}`);
+          console.log(`âš ï¸ WooCommerce direct products fetch warning: ${dirErr.message}`);
         }
       }
     } catch (err: any) {
-      console.log(`⚠️ WordPress Catalog Ingest Error: ${err.message}`);
+      console.log(`âš ï¸ WordPress Catalog Ingest Error: ${err.message}`);
     }
 
     // If WordPress API returns empty or unreachable, return sample products as fallback
@@ -782,58 +700,125 @@ export class MerchantRepository implements OnModuleInit {
     return items;
   }
 
-  async syncCatalogAndInventory(merchantId: string, storeId: string, storeUrl: string) {
-    if (this.isDbConnected && this.dataSource) {
-      try {
-        const sampleProducts = [
-          { name: 'Organic Red Apples (1kg)', category: 'Produce', price: 4.99, sku: 'PROD-APP-01', stock: 150 },
-          { name: 'Whole Organic Milk (1 Gal)', category: 'Dairy', price: 5.49, sku: 'DAIRY-MLK-01', stock: 80 },
-          { name: 'Artisan Sourdough Bread', category: 'Bakery', price: 6.29, sku: 'BAK-BRD-01', stock: 45 },
-          { name: 'Avocado Pack (4ct)', category: 'Produce', price: 3.99, sku: 'PROD-AVO-04', stock: 120 },
-          { name: 'Greek Yogurt Vanilla 32oz', category: 'Dairy', price: 4.79, sku: 'DAIRY-YOG-01', stock: 60 },
-          { name: 'Organic Chicken Breast 1lb', category: 'Meat', price: 8.99, sku: 'MEAT-CHK-01', stock: 35 },
-          { name: 'Atlantic Salmon Fillet 1lb', category: 'Seafood', price: 12.99, sku: 'SEA-SLM-01', stock: 25 },
-          { name: 'Sparkling Mineral Water 12pk', category: 'Beverages', price: 7.99, sku: 'BEV-WTR-12', stock: 90 },
-          { name: 'Organic Extra Virgin Olive Oil', category: 'Pantry', price: 14.49, sku: 'PAN-OIL-01', stock: 50 },
-          { name: 'Fair Trade Dark Chocolate Bar', category: 'Snacks', price: 3.49, sku: 'SNK-CHO-01', stock: 200 },
-        ];
-
-        for (const item of sampleProducts) {
-          const externalId = `WC-${item.sku}`;
-          const existingMenu = await this.dataSource.query(
-            `SELECT id FROM menu_items WHERE "merchantId" = $1 AND "externalItemId" = $2 LIMIT 1`,
-            [merchantId, externalId]
-          );
-
-          if (!existingMenu || existingMenu.length === 0) {
-            const menuItemId = crypto.randomUUID();
-            await this.dataSource.query(
-              `INSERT INTO menu_items (id, "merchantId", "externalItemId", name, description, category, price, "isAvailable", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-              [menuItemId, merchantId, externalId, item.name, `Imported from ${storeUrl || 'WooCommerce'}`, item.category, item.price, true]
-            );
-          }
-
-          const ingredientId = `ING-${item.sku}`;
-          const existingInv = await this.dataSource.query(
-            `SELECT id FROM inventory_items WHERE "merchantId" = $1 AND "ingredientId" = $2 LIMIT 1`,
-            [merchantId, ingredientId]
-          );
-
-          if (!existingInv || existingInv.length === 0) {
-            const invItemId = crypto.randomUUID();
-            await this.dataSource.query(
-              `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
-              [invItemId, merchantId, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
-            );
-          }
-        }
-        console.log(`🛒 [MerchantRepo Catalog Ingest] Ingested 10 items for Merchant ${merchantId} (Store ${storeId})`);
-      } catch (err: any) {
-        console.log(`⚠️ [MerchantRepo Catalog Ingest Err] ${err.message}`);
+  async syncStoreCatalogFromWordPress(params: {
+    merchantId: string;
+    storeId: string;
+    wordpressUrl: string;
+    wordpressJwt: string;
+  }): Promise<{ categoryCount: number; productCount: number }> {
+    const categories = await this.fetchWordPressCategoryCatalog(params.wordpressUrl, params.wordpressJwt);
+    let productCount = 0;
+    for (const node of categories) {
+      if (!Number.isFinite(Number(node.id))) continue;
+      const savedCategory = await this.upsertStoreCategory(params.merchantId, params.storeId, node);
+      const products = Array.isArray(node.products) ? node.products : [];
+      for (const product of products) {
+        if (!Number.isFinite(Number(product.id))) continue;
+        await this.upsertStoreProduct(params.merchantId, params.storeId, savedCategory, product);
+        productCount += 1;
       }
     }
+    return { categoryCount: categories.length, productCount };
+  }
+
+  async getStoreCatalog(storeId: string): Promise<{ categories: CategoryEntity[]; products: ProductEntity[] }> {
+    const [categories, products] = await Promise.all([
+      this.categoryRepo.find({ where: { storeId }, order: { name: 'ASC' } }),
+      this.productRepo.find({ where: { storeId }, order: { name: 'ASC' } }),
+    ]);
+    return { categories, products };
+  }
+
+  private async fetchWordPressCategoryCatalog(
+    wordpressUrl: string,
+    wordpressJwt: string,
+  ): Promise<WordPressCategoryNode[]> {
+    const baseUrl = wordpressUrl.replace(/\/+$/, '');
+    const response = await fetch(`${baseUrl}/wp-json/pinaka-pos/v1/categories/get-categories-products`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${wordpressJwt}` },
+    });
+    if (!response.ok) {
+      throw new BadRequestException(
+        `WordPress catalog API returned HTTP ${response.status}. Check the site URL and JWT token.`,
+      );
+    }
+    const body = (await response.json()) as { status?: string; category?: WordPressCategoryNode[] };
+    const roots = Array.isArray(body.category) ? body.category : [];
+    if (!roots.length) {
+      throw new BadRequestException('WordPress catalog API returned no categories');
+    }
+    return this.flattenWordPressCategories(roots);
+  }
+
+  private flattenWordPressCategories(nodes: WordPressCategoryNode[]): WordPressCategoryNode[] {
+    const flattened: WordPressCategoryNode[] = [];
+    const walk = (items: WordPressCategoryNode[]) => {
+      for (const item of items) {
+        flattened.push(item);
+        if (Array.isArray(item.children) && item.children.length) walk(item.children);
+      }
+    };
+    walk(nodes);
+    return flattened;
+  }
+
+  private async upsertStoreCategory(
+    merchantId: string,
+    storeId: string,
+    node: WordPressCategoryNode,
+  ): Promise<CategoryEntity> {
+    const wordpressId = Number(node.id);
+    const categoryJson = { ...node };
+    delete categoryJson.products;
+    delete categoryJson.children;
+    const fields = {
+      merchantId,
+      storeId,
+      wordpressId,
+      parentWordpressId: Number(node.parent || 0),
+      name: String(node.name || '').trim() || `Category ${wordpressId}`,
+      slug: String(node.slug || ''),
+      description: String(node.description || ''),
+      productCount: Number(node.count || 0),
+      image: node.image ? String(node.image) : null,
+      posTaxClass: String(node.pos_tax_class || ''),
+      posTaxPercent: String(node.pos_tax_percent || ''),
+      payload: categoryJson as Record<string, unknown>,
+      updatedAt: new Date(),
+    };
+    const existing = await this.categoryRepo.findOneBy({ storeId, wordpressId });
+    return this.categoryRepo.save(existing ? Object.assign(existing, fields) : this.categoryRepo.create(fields));
+  }
+
+  private async upsertStoreProduct(
+    merchantId: string,
+    storeId: string,
+    category: CategoryEntity,
+    product: WordPressProductNode,
+  ): Promise<ProductEntity> {
+    const wordpressId = Number(product.id);
+    const priceRaw = product.price === undefined || product.price === null || String(product.price).trim() === ''
+      ? null
+      : String(Number.parseFloat(String(product.price)));
+    const fields = {
+      merchantId,
+      storeId,
+      categoryId: category.id,
+      wordpressId,
+      wordpressCategoryId: category.wordpressId,
+      name: String(product.name || '').trim() || `Product ${wordpressId}`,
+      price: Number.isFinite(Number(priceRaw)) ? priceRaw : null,
+      image: product.image ? String(product.image) : null,
+      tags: Array.isArray(product.tags) ? product.tags : [],
+      payload: product as Record<string, unknown>,
+      updatedAt: new Date(),
+    };
+    const existing = await this.productRepo.findOneBy({
+      storeId,
+      wordpressId,
+      wordpressCategoryId: category.wordpressId,
+    });
+    return this.productRepo.save(existing ? Object.assign(existing, fields) : this.productRepo.create(fields));
   }
 
 }

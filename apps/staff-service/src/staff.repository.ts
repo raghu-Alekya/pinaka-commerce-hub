@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { StaffEmployeeEntity, StaffRole } from './entities/staff-employee.entity';
 import { StaffAttendanceEntity } from './entities/staff-attendance.entity';
 
@@ -17,29 +18,14 @@ export class StaffRepository implements OnModuleInit {
   private inMemoryAtts: StaffAttendanceEntity[] = [];
 
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [StaffEmployeeEntity, StaffAttendanceEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
-      this.empRepo = this.dataSource.getRepository(StaffEmployeeEntity);
-      this.attRepo = this.dataSource.getRepository(StaffAttendanceEntity);
-      this.isDbConnected = true;
-      console.log('🐘 [Staff Service DB] Connected to PostgreSQL Database');
-      await this.seedDefaultStaff();
-    } catch (err: any) {
-      console.log(`⚠️ [Staff Service DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
-    }
+    this.dataSource = await connectPostgres('Staff Service DB', [
+      StaffEmployeeEntity,
+      StaffAttendanceEntity,
+    ]);
+    this.empRepo = this.dataSource.getRepository(StaffEmployeeEntity);
+    this.attRepo = this.dataSource.getRepository(StaffAttendanceEntity);
+    this.isDbConnected = true;
+    await this.seedDefaultStaff();
 
     try {
       this.redisClient = new Redis({
@@ -137,7 +123,7 @@ export class StaffRepository implements OnModuleInit {
 
   async clockIn(merchantId: string, storeId: string, employeeId: string): Promise<StaffAttendanceEntity> {
     let empName = 'Employee';
-    const emp = this.inMemoryEmps.find((e) => e.id === employeeId);
+    const emp = await this.empRepo?.findOne({ where: { id: employeeId } });
     if (emp) empName = emp.fullName;
 
     const att: StaffAttendanceEntity = {

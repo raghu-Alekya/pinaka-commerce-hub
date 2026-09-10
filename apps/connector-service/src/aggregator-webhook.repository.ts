@@ -5,6 +5,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import {
   AggregatorWebhookEntity,
   AggregatorWebhookStatus,
@@ -20,28 +21,12 @@ export class AggregatorWebhookRepository
   private repository?: Repository<AggregatorWebhookEntity>;
 
   async onModuleInit(): Promise<void> {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [AggregatorWebhookEntity],
-        synchronize: process.env.TYPEORM_SYNCHRONIZE !== 'false',
-      });
-
-      await this.dataSource.initialize();
-      await this.ensureTableExists();
-      this.repository = this.dataSource.getRepository(AggregatorWebhookEntity);
-      console.log('[PostgreSQL] aggregator_webhooks persistence is ready');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        `[PostgreSQL] aggregator_webhooks persistence is unavailable: ${message}`,
-      );
-    }
+    this.dataSource = await connectPostgres('Aggregator webhooks', [
+      AggregatorWebhookEntity,
+    ]);
+    await this.ensureTableExists();
+    this.repository = this.dataSource.getRepository(AggregatorWebhookEntity);
+    console.log('[PostgreSQL] aggregator_webhooks persistence is ready');
   }
 
   async onModuleDestroy(): Promise<void> {

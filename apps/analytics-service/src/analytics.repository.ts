@@ -1,12 +1,13 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { AnalyticsSnapshotEntity } from './entities/analytics-snapshot.entity';
 
 @Injectable()
 export class AnalyticsRepository implements OnModuleInit {
-  private dataSource?: DataSource;
-  private snapRepo?: Repository<AnalyticsSnapshotEntity>;
+  private dataSource!: DataSource;
+  private snapRepo!: Repository<AnalyticsSnapshotEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   public isRedisConnected = false;
@@ -39,27 +40,10 @@ export class AnalyticsRepository implements OnModuleInit {
   };
 
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [AnalyticsSnapshotEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
-      this.snapRepo = this.dataSource.getRepository(AnalyticsSnapshotEntity);
-      this.isDbConnected = true;
-      console.log('🐘 [Analytics Service DB] Connected to PostgreSQL Database');
-      await this.seedSnapshot();
-    } catch (err: any) {
-      console.log(`⚠️ [Analytics Service DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-    }
+    this.dataSource = await connectPostgres('Analytics Service DB', [AnalyticsSnapshotEntity]);
+    this.snapRepo = this.dataSource.getRepository(AnalyticsSnapshotEntity);
+    this.isDbConnected = true;
+    await this.seedSnapshot();
 
     try {
       this.redisClient = new Redis({
@@ -89,11 +73,11 @@ export class AnalyticsRepository implements OnModuleInit {
   }
 
   async getDashboardKpis(storeId: string): Promise<AnalyticsSnapshotEntity> {
-    if (this.isDbConnected && this.snapRepo) {
-      const snap = await this.snapRepo.findOne({ where: { storeId } });
-      if (snap) return snap;
-    }
-    return this.inMemorySnapshot;
+    const snap =
+      (await this.snapRepo.findOne({ where: { storeId } })) ||
+      (await this.snapRepo.findOne({ where: { id: this.inMemorySnapshot.id } }));
+    if (!snap) throw new Error(`No analytics snapshot found for store '${storeId}'`);
+    return snap;
   }
 
   async getTopProducts(storeId: string): Promise<any[]> {

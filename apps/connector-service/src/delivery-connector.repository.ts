@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { DeliveryChannelEntity, DeliveryChannel } from './entities/delivery-channel.entity';
 import { DeliveryOrderLogEntity, DeliveryOrderStatus } from './entities/delivery-order-log.entity';
 
@@ -17,29 +18,14 @@ export class DeliveryConnectorRepository implements OnModuleInit {
   private inMemoryOrders: DeliveryOrderLogEntity[] = [];
 
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [DeliveryChannelEntity, DeliveryOrderLogEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
+      this.dataSource = await connectPostgres('Delivery Connector DB', [
+        DeliveryChannelEntity,
+        DeliveryOrderLogEntity,
+      ]);
       this.channelRepo = this.dataSource.getRepository(DeliveryChannelEntity);
       this.orderLogRepo = this.dataSource.getRepository(DeliveryOrderLogEntity);
       this.isDbConnected = true;
-      console.log('🐘 [Delivery Connector DB] Connected to PostgreSQL Database');
       await this.seedDefaultChannels();
-    } catch (err: any) {
-      console.log(`⚠️ [Delivery Connector DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
-    }
 
     try {
       this.redisClient = new Redis({

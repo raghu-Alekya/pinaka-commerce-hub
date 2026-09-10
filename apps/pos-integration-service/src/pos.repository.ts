@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
 
@@ -17,27 +18,13 @@ export class PosRepository implements OnModuleInit {
   private inMemoryMovements: CashMovementEntity[] = [];
 
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [PosShiftEntity, CashMovementEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
-      this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
-      this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
-      this.isDbConnected = true;
-      console.log('🐘 [POS Integration DB] Connected to PostgreSQL Database');
-    } catch (err: any) {
-      console.log(`⚠️ [POS Integration DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-    }
+    this.dataSource = await connectPostgres('POS Integration DB', [
+      PosShiftEntity,
+      CashMovementEntity,
+    ]);
+    this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
+    this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
+    this.isDbConnected = true;
 
     try {
       this.redisClient = new Redis({

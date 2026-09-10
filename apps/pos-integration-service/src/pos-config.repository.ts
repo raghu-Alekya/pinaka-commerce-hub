@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import {
   PosConfigEntity,
   FastkeyItem,
@@ -22,28 +23,10 @@ export class PosConfigRepository implements OnModuleInit {
 
   async onModuleInit() {
     // 1. PostgreSQL Connection
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [PosConfigEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
+      this.dataSource = await connectPostgres('PCH POS Config DB', [PosConfigEntity]);
       this.configRepo = this.dataSource.getRepository(PosConfigEntity);
       this.isDbConnected = true;
-      console.log('🐘 [PCH POS Config DB] Connected to PostgreSQL: pinaka_commerce_hub');
       await this.seedDefaultConfig('STR-5001', 'MCH-1001', 'RETAIL');
-    } catch (err: any) {
-      console.log(`⚠️ [PCH POS Config DB] Offline (${err.message}). Using In-Memory Mode.`);
-      this.isDbConnected = false;
-      this.seedDefaultInMemory('STR-5001', 'MCH-1001', 'RETAIL');
-    }
 
     // 2. Redis Connection
     try {

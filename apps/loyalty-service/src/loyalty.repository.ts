@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { CustomerEntity, LoyaltyTier } from './entities/customer.entity';
 import { PromotionEntity, DiscountType } from './entities/promotion.entity';
 import { LoyaltyTransactionEntity, PointTransactionType } from './entities/loyalty-transaction.entity';
@@ -21,30 +22,16 @@ export class LoyaltyRepository implements OnModuleInit {
 
   public checkRedisStatus(): boolean { return this.isRedisConnected; }
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [CustomerEntity, PromotionEntity, LoyaltyTransactionEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
-      this.custRepo = this.dataSource.getRepository(CustomerEntity);
-      this.promoRepo = this.dataSource.getRepository(PromotionEntity);
-      this.txnRepo = this.dataSource.getRepository(LoyaltyTransactionEntity);
-      this.isDbConnected = true;
-      console.log('🐘 [Loyalty Service DB] Connected to PostgreSQL Database');
-      await this.seedDefaultData();
-    } catch (err: any) {
-      console.log(`⚠️ [Loyalty Service DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
-    }
+    this.dataSource = await connectPostgres('Loyalty Service DB', [
+      CustomerEntity,
+      PromotionEntity,
+      LoyaltyTransactionEntity,
+    ]);
+    this.custRepo = this.dataSource.getRepository(CustomerEntity);
+    this.promoRepo = this.dataSource.getRepository(PromotionEntity);
+    this.txnRepo = this.dataSource.getRepository(LoyaltyTransactionEntity);
+    this.isDbConnected = true;
+    await this.seedDefaultData();
 
     try {
       this.redisClient = new Redis({

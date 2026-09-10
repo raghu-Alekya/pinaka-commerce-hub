@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Pinaka PostgreSQL",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "pinaka_delivery_hub",
+      "Username": "pdh_user",
+      "SSLMode": "prefer",
+      "PassFile": "/pgpass"
+    }
+  }
+}

@@ -1,5 +1,5 @@
-import '../../../scripts/load-env';
 import 'reflect-metadata';
+import '../../../scripts/load-env';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { TracingInterceptor } from '@pinaka-delivery-hub/observability';

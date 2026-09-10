@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import * as crypto from 'crypto';
+import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { WooCommerceConnectionEntity } from '../entities/woocommerce-connection.entity';
 import { WooCommerceSyncLogEntity } from '../entities/woocommerce-sync-log.entity';
 
@@ -15,29 +16,14 @@ export class WooCommerceConnectorService implements OnModuleInit {
   private inMemoryLogs: WooCommerceSyncLogEntity[] = [];
 
   async onModuleInit() {
-    try {
-      this.dataSource = new DataSource({
-        type: 'postgres',
-        host: process.env.POSTGRES_HOST || 'localhost',
-        port: Number(process.env.POSTGRES_PORT) || 5432,
-        username: process.env.POSTGRES_USER || 'pdh_user',
-        password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-        database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
-        entities: [WooCommerceConnectionEntity, WooCommerceSyncLogEntity],
-        synchronize: true,
-      });
-
-      await this.dataSource.initialize();
+      this.dataSource = await connectPostgres('WooCommerce Connector DB', [
+        WooCommerceConnectionEntity,
+        WooCommerceSyncLogEntity,
+      ]);
       this.connRepo = this.dataSource.getRepository(WooCommerceConnectionEntity);
       this.logRepo = this.dataSource.getRepository(WooCommerceSyncLogEntity);
       this.isDbConnected = true;
-      console.log('🐘 [WooCommerce Connector DB] Connected to PostgreSQL Database: pinaka_commerce_hub');
       await this.seedDefaultConnection();
-    } catch (err: any) {
-      console.log(`⚠️ [WooCommerce Connector DB] Offline (${err.message}). Using In-Memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
-    }
   }
 
   private async seedDefaultConnection() {

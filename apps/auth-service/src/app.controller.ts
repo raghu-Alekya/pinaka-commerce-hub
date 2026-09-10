@@ -85,8 +85,16 @@ export class AppController {
 
   @Post('api/v1/auth/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@Body() dto: RefreshTokenDto): Promise<void> {
-    await this.auth.logout(dto);
+  async logout(
+    @Body() dto: RefreshTokenDto,
+    @Headers('authorization') authorization?: string,
+  ): Promise<void> {
+    await this.auth.logout(dto, authorization);
+  }
+
+  @Get('api/v1/auth/me')
+  async currentSession(@Headers('authorization') authorization?: string) {
+    return { success: true, ...(await this.auth.currentSession(authorization)) };
   }
 
   @Post('api/v1/auth/google')
