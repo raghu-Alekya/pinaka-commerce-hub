@@ -220,6 +220,33 @@ export class WooCommerceConnectorService implements OnModuleInit {
     return items;
   }
 
+  private async ensureDbConnected(): Promise<boolean> {
+    if (this.isDbConnected && this.dataSource?.isInitialized) return true;
+    try {
+      if (!this.dataSource) {
+        this.dataSource = new DataSource({
+          type: 'postgres',
+          host: process.env.POSTGRES_HOST || 'localhost',
+          port: Number(process.env.POSTGRES_PORT) || 5432,
+          username: process.env.POSTGRES_USER || 'pdh_user',
+          password: process.env.POSTGRES_PASSWORD || 'pdh_password',
+          database: process.env.POSTGRES_DB || 'pinaka_commerce_hub',
+          entities: [WooCommerceConnectionEntity, WooCommerceSyncLogEntity],
+          synchronize: true,
+        });
+      }
+      if (!this.dataSource.isInitialized) {
+        await this.dataSource.initialize();
+      }
+      this.isDbConnected = true;
+      return true;
+    } catch (err: any) {
+      console.log(`⚠️ [DB Connection Error] ${err.message}`);
+      this.isDbConnected = false;
+      return false;
+    }
+  }
+
   async triggerFullCatalogSync(
     storeId: string,
     merchantId?: string,
@@ -229,7 +256,8 @@ export class WooCommerceConnectorService implements OnModuleInit {
     const targetStore = storeId || 'STR-50069';
     const targetMerchant = merchantId || 'MER-976045';
 
-    if (this.isDbConnected && this.dataSource) {
+    await this.ensureDbConnected();
+    if (this.dataSource && this.dataSource.isInitialized) {
       try {
         const sampleProducts = await this.fetchLiveWordPressCatalog(storeUrl, jwtToken);
 
