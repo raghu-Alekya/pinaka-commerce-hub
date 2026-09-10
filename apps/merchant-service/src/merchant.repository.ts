@@ -785,18 +785,7 @@ export class MerchantRepository implements OnModuleInit {
   async syncCatalogAndInventory(merchantId: string, storeId: string, storeUrl: string, jwtToken?: string) {
     if (this.isDbConnected && this.dataSource) {
       try {
-        const sampleProducts = [
-          { name: 'Organic Red Apples (1kg)', category: 'Produce', price: 4.99, sku: 'PROD-APP-01', stock: 150 },
-          { name: 'Whole Organic Milk (1 Gal)', category: 'Dairy', price: 5.49, sku: 'DAIRY-MLK-01', stock: 80 },
-          { name: 'Artisan Sourdough Bread', category: 'Bakery', price: 6.29, sku: 'BAK-BRD-01', stock: 45 },
-          { name: 'Avocado Pack (4ct)', category: 'Produce', price: 3.99, sku: 'PROD-AVO-04', stock: 120 },
-          { name: 'Greek Yogurt Vanilla 32oz', category: 'Dairy', price: 4.79, sku: 'DAIRY-YOG-01', stock: 60 },
-          { name: 'Organic Chicken Breast 1lb', category: 'Meat', price: 8.99, sku: 'MEAT-CHK-01', stock: 35 },
-          { name: 'Atlantic Salmon Fillet 1lb', category: 'Seafood', price: 12.99, sku: 'SEA-SLM-01', stock: 25 },
-          { name: 'Sparkling Mineral Water 12pk', category: 'Beverages', price: 7.99, sku: 'BEV-WTR-12', stock: 90 },
-          { name: 'Organic Extra Virgin Olive Oil', category: 'Pantry', price: 14.49, sku: 'PAN-OIL-01', stock: 50 },
-          { name: 'Fair Trade Dark Chocolate Bar', category: 'Snacks', price: 3.49, sku: 'SNK-CHO-01', stock: 200 },
-        ];
+        const sampleProducts = await this.fetchLiveWordPressCatalog(storeUrl, jwtToken);
 
         for (const item of sampleProducts) {
           const externalId = `WC-${item.sku}`;
