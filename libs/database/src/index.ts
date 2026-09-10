@@ -33,7 +33,8 @@ export function postgresConnectionOptions(
 
 function describeTarget(options: DataSourceOptions): string {
   if ('url' in options && options.url) return options.url.replace(/:[^:@/]+@/, ':****@');
-  return `${options.host}:${options.port}/${options.database}`;
+  const opts = options as any;
+  return `${opts.host || "localhost"}:${opts.port || 5432}/${opts.database || "pinaka_commerce_hub"}`;
 }
 
 export async function connectPostgres(

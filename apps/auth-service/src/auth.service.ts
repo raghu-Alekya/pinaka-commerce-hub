@@ -383,7 +383,7 @@ export class AuthService {
     return `${header}.${body}.${signature}`;
   }
 
-  private verifyToken(token: string): Record<string, unknown> {
+  verifyToken(token: string): Record<string, unknown> {
     return this.verifyTokenWithSecret(token, this.jwtSecret(), 'access token');
   }
 

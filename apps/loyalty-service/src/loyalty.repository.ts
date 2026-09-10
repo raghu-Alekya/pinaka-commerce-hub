@@ -86,7 +86,7 @@ export class LoyaltyRepository implements OnModuleInit {
     }
   }
 
-  private seedInMemory() {
+  seedInMemory() {
     if (this.inMemoryCusts.length === 0) {
       this.inMemoryCusts.push({
         id: 'CUST-5001',

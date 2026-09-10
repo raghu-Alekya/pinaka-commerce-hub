@@ -9,7 +9,7 @@ export class AnalyticsRepository implements OnModuleInit {
   private dataSource!: DataSource;
   private snapRepo!: Repository<AnalyticsSnapshotEntity>;
   private redisClient?: Redis;
-  private isDbConnected = false;
+  isDbConnected = false;
   public isRedisConnected = false;
 
   private inMemorySnapshot: AnalyticsSnapshotEntity = {

@@ -81,7 +81,7 @@ export class StaffRepository implements OnModuleInit {
     }
   }
 
-  private seedInMemory() {
+  seedInMemory() {
     if (this.inMemoryEmps.length === 0) {
       this.inMemoryEmps.push(
         {

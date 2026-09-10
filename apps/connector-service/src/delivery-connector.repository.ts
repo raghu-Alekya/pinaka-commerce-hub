@@ -81,7 +81,7 @@ export class DeliveryConnectorRepository implements OnModuleInit {
     }
   }
 
-  private seedInMemory() {
+  seedInMemory() {
     if (this.inMemoryChannels.length === 0) {
       this.inMemoryChannels.push(
         {

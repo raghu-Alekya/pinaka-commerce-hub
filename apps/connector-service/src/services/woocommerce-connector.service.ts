@@ -48,7 +48,7 @@ export class WooCommerceConnectorService implements OnModuleInit {
     }
   }
 
-  private seedInMemory() {
+  seedInMemory() {
     if (this.inMemoryConns.length === 0) {
       this.inMemoryConns.push({
         id: 'WC-CONN-1001',
@@ -233,64 +233,152 @@ export class WooCommerceConnectorService implements OnModuleInit {
     }
   }
 
+    private async ensureProductTables(): Promise<void> {
+    if (!this.dataSource || !this.dataSource.isInitialized) return;
+    try {
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS categories (
+          id UUID PRIMARY KEY,
+          "merchantId" VARCHAR(100) NOT NULL,
+          "storeId" VARCHAR(100) NOT NULL,
+          "wordpressId" INT NOT NULL,
+          "parentWordpressId" INT DEFAULT 0,
+          name VARCHAR(255) NOT NULL,
+          slug VARCHAR(255) DEFAULT '',
+          description TEXT DEFAULT '',
+          "productCount" INT DEFAULT 0,
+          image VARCHAR(2048),
+          "posTaxClass" VARCHAR(100) DEFAULT '',
+          "posTaxPercent" VARCHAR(20) DEFAULT '',
+          payload JSONB,
+          "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+          "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS products (
+          id UUID PRIMARY KEY,
+          "merchantId" VARCHAR(100) NOT NULL,
+          "storeId" VARCHAR(100) NOT NULL,
+          "categoryId" UUID,
+          "wordpressId" INT NOT NULL,
+          "wordpressCategoryId" INT,
+          name VARCHAR(255) NOT NULL,
+          price DECIMAL(12,2),
+          image VARCHAR(2048),
+          tags JSONB DEFAULT '[]'::jsonb,
+          payload JSONB,
+          "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+          "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS product (
+          id UUID PRIMARY KEY,
+          "merchantId" VARCHAR(100),
+          "storeId" VARCHAR(100),
+          "categoryId" UUID,
+          "wordpressId" INT,
+          "wordpressCategoryId" INT,
+          name VARCHAR(255),
+          price DECIMAL(12,2),
+          image VARCHAR(2048),
+          tags JSONB DEFAULT '[]'::jsonb,
+          payload JSONB,
+          "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+          "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+    } catch (e: any) {
+      console.log('⚠️ [Product Table Init] ' + e.message);
+    }
+  }
+
   async triggerFullCatalogSync(
     storeId: string,
     merchantId?: string,
     storeUrl?: string,
     jwtToken?: string
   ): Promise<{ success: boolean; syncedItemsCount: number; timestamp: string }> {
-    const targetStore = storeId || 'STR-50069';
-    const targetMerchant = merchantId || 'MER-976045';
+    const targetStore = storeId;
+    const targetMerchant = merchantId || '';
 
     await this.ensureDbConnected();
+    await this.ensureProductTables();
+
+    let syncedCount = 0;
+
     if (this.dataSource && this.dataSource.isInitialized) {
       try {
-        const sampleProducts = await this.fetchLiveWordPressCatalog(storeUrl, jwtToken);
+        const liveProducts = await this.fetchLiveWordPressCatalog(storeUrl, jwtToken);
 
-        for (const item of sampleProducts) {
-          const externalId = `WC-${item.sku}`;
+        for (const item of liveProducts) {
+          const catWpId = 44;
+          const prodWpId = parseInt(item.sku.replace(/\D/g, '') || String(Math.floor(Math.random() * 100000)), 10) || 1001;
 
-          // 1. Insert into menu_items with explicit UUID
-          const existingMenu = await this.dataSource.query(
-            `SELECT id FROM menu_items WHERE "merchantId" = $1 AND "externalItemId" = $2 LIMIT 1`,
-            [targetMerchant, externalId]
+          // 1. Upsert into categories table
+          let categoryId = crypto.randomUUID();
+          const existingCat = await this.dataSource.query(
+            `SELECT id FROM categories WHERE "storeId" = $1 AND "wordpressId" = $2 LIMIT 1`,
+            [targetStore, catWpId]
           );
 
-          if (!existingMenu || existingMenu.length === 0) {
-            const menuItemId = crypto.randomUUID();
+          if (existingCat && existingCat.length > 0) {
+            categoryId = existingCat[0].id;
+          } else {
             await this.dataSource.query(
-              `INSERT INTO menu_items (id, "merchantId", "externalItemId", name, description, category, price, "isAvailable", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-              [menuItemId, targetMerchant, externalId, item.name, `Imported from ${storeUrl || 'WooCommerce'}`, item.category, item.price, true]
+              `INSERT INTO categories (id, "merchantId", "storeId", "wordpressId", name, slug, description, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+              [categoryId, targetMerchant, targetStore, catWpId, item.category, item.category.toLowerCase().replace(/\s+/g, '-'), `Imported from ${storeUrl || 'WooCommerce'}`]
             );
           }
 
-          // 2. Insert into inventory_items with explicit UUID
-          const ingredientId = `ING-${item.sku}`;
-          const existingInv = await this.dataSource.query(
-            `SELECT id FROM inventory_items WHERE "merchantId" = $1 AND "ingredientId" = $2 LIMIT 1`,
-            [targetMerchant, ingredientId]
+          // 2. Upsert into products table
+          const existingProd = await this.dataSource.query(
+            `SELECT id FROM products WHERE "storeId" = $1 AND "wordpressId" = $2 LIMIT 1`,
+            [targetStore, prodWpId]
           );
 
-          if (!existingInv || existingInv.length === 0) {
-            const invItemId = crypto.randomUUID();
+          const prodUuid = (existingProd && existingProd.length > 0) ? existingProd[0].id : crypto.randomUUID();
+          if (existingProd && existingProd.length > 0) {
             await this.dataSource.query(
-              `INSERT INTO inventory_items (id, "merchantId", "ingredientId", name, "currentStock", "reorderThreshold", unit, "isLowStock", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-              [invItemId, targetMerchant, ingredientId, item.name, item.stock, 10, 'pcs', item.stock <= 10]
+              `UPDATE products 
+               SET "merchantId" = $1, "categoryId" = $2, "wordpressCategoryId" = $3, name = $4, price = $5, payload = $6, "updatedAt" = NOW()
+               WHERE id = $7`,
+              [targetMerchant, categoryId, catWpId, item.name, item.price, JSON.stringify(item), prodUuid]
+            );
+          } else {
+            await this.dataSource.query(
+              `INSERT INTO products (id, "merchantId", "storeId", "categoryId", "wordpressId", "wordpressCategoryId", name, price, payload, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+              [prodUuid, targetMerchant, targetStore, categoryId, prodWpId, catWpId, item.name, item.price, JSON.stringify(item)]
             );
           }
+
+          // 3. Upsert into product table
+          try {
+            await this.dataSource.query(
+              `INSERT INTO product (id, "merchantId", "storeId", "categoryId", "wordpressId", "wordpressCategoryId", name, price, payload, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+               ON CONFLICT (id) DO UPDATE SET "merchantId" = EXCLUDED."merchantId", name = EXCLUDED.name, price = EXCLUDED.price, "updatedAt" = NOW()`,
+              [prodUuid, targetMerchant, targetStore, categoryId, prodWpId, catWpId, item.name, item.price, JSON.stringify(item)]
+            );
+          } catch {}
+
+          syncedCount++;
         }
-        console.log(`🛒 [WooCommerce Catalog Ingest] Synced 10 items for Merchant ${targetMerchant} (Store: ${targetStore})`);
+        console.log(`🛒 [WooCommerce Catalog Ingest] Synced ${syncedCount} items into products table for Merchant ${targetMerchant} (Store: ${targetStore})`);
       } catch (err: any) {
         console.log(`⚠️ [Catalog Ingest Exception] ${err.message}`);
       }
     }
 
-    await this.ingestWooCommerceWebhook('TEST_CONNECTION_SYNC', { merchantId: targetMerchant, storeId: targetStore, count: 10 });
+    await this.ingestWooCommerceWebhook('TEST_CONNECTION_SYNC', { merchantId: targetMerchant, storeId: targetStore, count: syncedCount });
     return {
       success: true,
-      syncedItemsCount: 10,
+      syncedItemsCount: syncedCount,
       timestamp: new Date().toISOString(),
     };
   }
