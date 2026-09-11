@@ -1,3 +1,18 @@
+
+import { FeatureEntity, FeatureStatus } from './entities/feature.entity';
+import { PermissionEntity, PermissionStatus } from './entities/permission.entity';
+import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from './entities/role-template.entity';
+import { PlanEntity, PlanStatus, PlanBillingModel, PlanBillingCycle } from './entities/plan.entity';
+import { RoleEntity, RoleStatus } from './entities/role.entity';
+import { EmployeeEntity, EmployeeStatus } from './entities/employee.entity';
+import { CreateFeatureDto, UpdateFeatureDto } from './feature.dto';
+import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
+import { CreateRoleTemplateDto, UpdateRoleTemplateDto } from './role-template.dto';
+import { CreatePlanDto, UpdatePlanDto } from './plan.dto';
+import { CreateRoleDto, UpdateRoleDto } from './role.dto';
+import { CreateEmployeeDto, UpdateEmployeeDto } from './employee.dto';
+import { StoreTypeEntity, StoreTypeStatus } from './entities/store-type.entity';
+import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 ﻿import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
@@ -41,6 +56,13 @@ export class MerchantRepository implements OnModuleInit {
   private dataSource!: DataSource;
   private merchantRepo!: Repository<MerchantEntity>;
   private storeRepo!: Repository<StoreEntity>;
+  private storeTypeRepo!: Repository<StoreTypeEntity>;
+  private featureRepo!: Repository<FeatureEntity>;
+  private permissionRepo!: Repository<PermissionEntity>;
+  private roleTemplateRepo!: Repository<RoleTemplateEntity>;
+  private planMasterRepo!: Repository<PlanEntity>;
+  private roleRepo!: Repository<RoleEntity>;
+  private employeeRepo!: Repository<EmployeeEntity>;
   private subRepo!: Repository<SubscriptionEntity>;
   private planRepo!: Repository<SubscriptionPlanEntity>;
   private auditRepo!: Repository<OnboardingAuditEntity>;
@@ -71,6 +93,15 @@ export class MerchantRepository implements OnModuleInit {
     ]);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
+      this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
+      this.featureRepo = this.dataSource.getRepository(FeatureEntity);
+      this.permissionRepo = this.dataSource.getRepository(PermissionEntity);
+      this.roleTemplateRepo = this.dataSource.getRepository(RoleTemplateEntity);
+      this.planMasterRepo = this.dataSource.getRepository(PlanEntity);
+      this.roleRepo = this.dataSource.getRepository(RoleEntity);
+      this.employeeRepo = this.dataSource.getRepository(EmployeeEntity);
+      await this.seedAllMasterData();
+      await this.seedDefaultStoreTypes();
     this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
     this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
     this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
@@ -79,7 +110,7 @@ export class MerchantRepository implements OnModuleInit {
     this.productRepo = this.dataSource.getRepository(ProductEntity);
     this.sessionRepo = this.dataSource.getRepository(SessionEntity);
     this.isDbConnected = true;
-    await this.seedDefaultPlans();
+    await this.seedDefaultCommercialPlans();
     await this.seedDefaultData();
 
     // 2. Redis Connection
@@ -819,6 +850,465 @@ export class MerchantRepository implements OnModuleInit {
       wordpressCategoryId: category.wordpressId,
     });
     return this.productRepo.save(existing ? Object.assign(existing, fields) : this.productRepo.create(fields));
+  }
+
+
+  // --- Master Reference Data: store_types CRUD Methods ---
+
+  private async seedDefaultStoreTypes(): Promise<void> {
+    if (!this.storeTypeRepo) return;
+    try {
+      const count = await this.storeTypeRepo.count();
+      if (count === 0) {
+        const defaults = [
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000001', storeTypeCode: 'RETAIL', name: 'General Retail', description: 'Specialty retail, apparel, electronics and merchandise stores', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000002', storeTypeCode: 'GROCERY', name: 'Grocery & Supermarket', description: 'Supermarkets, organic food markets, and grocery chains', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000003', storeTypeCode: 'RESTAURANT', name: 'Restaurant & Cafe', description: 'Full service dining, quick-service (QSR), bakeries, and cafes', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000004', storeTypeCode: 'LIQUOR', name: 'Liquor & Beverages', description: 'Wine, beer, spirits, and beverage specialty shops', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000005', storeTypeCode: 'CONVENIENCE', name: 'Convenience Store', description: 'Corner markets, mini-marts, and 24/7 convenience retailers', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000006', storeTypeCode: 'FUEL', name: 'Gas Station & Forecourt', description: 'Fuel stations with integrated retail convenience shops', status: StoreTypeStatus.ACTIVE },
+          { id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000007', storeTypeCode: 'KIOSK', name: 'Kiosk & Pop-Up', description: 'Self-service kiosks, food trucks, and seasonal pop-ups', status: StoreTypeStatus.ACTIVE },
+        ];
+        for (const item of defaults) {
+          const entity = this.storeTypeRepo.create(item);
+          await this.storeTypeRepo.save(entity);
+        }
+        console.log('🏪 [Master Data] Seeded 7 default store vertical types into store_types');
+      }
+    } catch (err: any) {
+      console.warn('⚠️ [StoreType Seed Warning] ' + err.message);
+    }
+  }
+
+  async listStoreTypes(status?: string): Promise<StoreTypeEntity[]> {
+    if (!this.storeTypeRepo) return [];
+    if (status) {
+      return this.storeTypeRepo.find({ where: { status: status.toUpperCase() as StoreTypeStatus }, order: { name: 'ASC' } });
+    }
+    return this.storeTypeRepo.find({ order: { name: 'ASC' } });
+  }
+
+  async getStoreTypeByIdOrCode(idOrCode: string): Promise<StoreTypeEntity | null> {
+    if (!this.storeTypeRepo || !idOrCode) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await this.storeTypeRepo.findOneBy({ id: idOrCode.trim() });
+      if (byId) return byId;
+    }
+    return this.storeTypeRepo.findOneBy({ storeTypeCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async createStoreType(dto: CreateStoreTypeDto): Promise<StoreTypeEntity> {
+    const entity = this.storeTypeRepo.create({
+      storeTypeCode: dto.storeTypeCode.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      status: dto.status || StoreTypeStatus.ACTIVE,
+    });
+    return this.storeTypeRepo.save(entity);
+  }
+
+  async updateStoreType(idOrCode: string, dto: UpdateStoreTypeDto): Promise<StoreTypeEntity | null> {
+    const existing = await this.getStoreTypeByIdOrCode(idOrCode);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.storeTypeRepo.save(existing);
+  }
+
+  async deleteStoreType(idOrCode: string): Promise<boolean> {
+    const existing = await this.getStoreTypeByIdOrCode(idOrCode);
+    if (!existing) return false;
+    existing.status = StoreTypeStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.storeTypeRepo.save(existing);
+    return true;
+  }
+
+
+  // --- Master & Tenant Tables Methods ---
+
+  private async seedAllMasterData(): Promise<void> {
+    await this.seedDefaultFeatures();
+    await this.seedDefaultRoleTemplates();
+    await this.seedDefaultPlans();
+  }
+
+  private async seedDefaultFeatures(): Promise<void> {
+    if (!this.featureRepo || !this.permissionRepo) return;
+    try {
+      if ((await this.featureRepo.count()) === 0) {
+        const defaults = [
+          { id: 'f1111111-0000-0000-0000-000000000001', featureKey: 'ORDER_MANAGEMENT', name: 'Order Management', description: 'Manage in-store POS and online delivery orders', category: 'OPERATIONS', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000002', featureKey: 'REFUNDS', name: 'Refunds & Returns', description: 'Process full and partial order refunds', category: 'FINANCIAL', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000003', featureKey: 'KDS', name: 'Kitchen Display System', description: 'Live kitchen prep tickets and bump bar tracking', category: 'KITCHEN', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000004', featureKey: 'LOYALTY', name: 'Loyalty & Rewards', description: 'Earn and redeem loyalty points at checkout', category: 'MARKETING', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000005', featureKey: 'SAFE_DROP', name: 'Safe Drop & Cash Management', description: 'Mid-shift safe drops and drawer reconciliations', category: 'FINANCIAL', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000006', featureKey: 'INVENTORY', name: 'Live Stock Tracking', description: 'Real-time multi-location inventory deduction', category: 'INVENTORY', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+        ];
+        for (const item of defaults) {
+          await this.featureRepo.save(this.featureRepo.create(item));
+        }
+
+        const permDefaults = [
+          { id: 'p1111111-0000-0000-0000-000000000001', featureId: 'f1111111-0000-0000-0000-000000000001', permissionKey: 'ORDERS_CREATE', name: 'Create Orders', description: 'Create new POS cart and ring items', status: PermissionStatus.ACTIVE },
+          { id: 'p1111111-0000-0000-0000-000000000002', featureId: 'f1111111-0000-0000-0000-000000000002', permissionKey: 'REFUNDS_PROCESS', name: 'Process Refunds', description: 'Issue cash or card refunds', status: PermissionStatus.ACTIVE },
+          { id: 'p1111111-0000-0000-0000-000000000003', featureId: 'f1111111-0000-0000-0000-000000000003', permissionKey: 'KDS_VIEW', name: 'View KDS', description: 'View kitchen queue and bump tickets', status: PermissionStatus.ACTIVE },
+          { id: 'p1111111-0000-0000-0000-000000000004', featureId: 'f1111111-0000-0000-0000-000000000004', permissionKey: 'LOYALTY_APPLY', name: 'Apply Loyalty Points', description: 'Look up customers and apply points', status: PermissionStatus.ACTIVE },
+          { id: 'p1111111-0000-0000-0000-000000000005', featureId: 'f1111111-0000-0000-0000-000000000005', permissionKey: 'CASH_SAFE_DROP', name: 'Perform Safe Drop', description: 'Transfer cash from drawer to safe', status: PermissionStatus.ACTIVE },
+        ];
+        for (const perm of permDefaults) {
+          await this.permissionRepo.save(this.permissionRepo.create(perm));
+        }
+      }
+    } catch {}
+  }
+
+  private async seedDefaultRoleTemplates(): Promise<void> {
+    if (!this.roleTemplateRepo) return;
+    try {
+      if ((await this.roleTemplateRepo.count()) === 0) {
+        const defaults = [
+          { id: 'r1111111-0000-0000-0000-000000000001', roleCode: 'CASHIER', name: 'POS Cashier', description: 'Point of sale order ringing, payments, and receipt printing', scopeType: RoleScopeType.STORE, status: RoleTemplateStatus.ACTIVE },
+          { id: 'r1111111-0000-0000-0000-000000000002', roleCode: 'STORE_MANAGER', name: 'Store Manager', description: 'Full store operational control, shift closing, safe drops, and refunds', scopeType: RoleScopeType.STORE, status: RoleTemplateStatus.ACTIVE },
+          { id: 'r1111111-0000-0000-0000-000000000003', roleCode: 'KITCHEN_STAFF', name: 'Kitchen Staff', description: 'Kitchen display system viewer and ticket status manager', scopeType: RoleScopeType.STORE, status: RoleTemplateStatus.ACTIVE },
+          { id: 'r1111111-0000-0000-0000-000000000004', roleCode: 'MERCHANT_ADMIN', name: 'Merchant Administrator', description: 'Enterprise tenant owner with full access across all merchant stores', scopeType: RoleScopeType.MERCHANT, status: RoleTemplateStatus.ACTIVE },
+        ];
+        for (const item of defaults) {
+          await this.roleTemplateRepo.save(this.roleTemplateRepo.create(item));
+        }
+      }
+    } catch {}
+  }
+
+  private async seedDefaultCommercialPlans(): Promise<void> {
+    if (!this.planMasterRepo) return;
+    try {
+      if ((await this.planMasterRepo.count()) === 0) {
+        const defaults = [
+          { id: 'b1111111-0000-0000-0000-000000000001', planCode: 'STARTER', name: 'Starter Plan', description: 'Essential cloud POS for single-location small retailers', billingModel: PlanBillingModel.FLAT, basePrice: 29.00, currency: 'USD', billingCycle: PlanBillingCycle.MONTHLY, status: PlanStatus.ACTIVE },
+          { id: 'b1111111-0000-0000-0000-000000000002', planCode: 'PRO', name: 'Professional Plan', description: 'Advanced multi-terminal POS with KDS and delivery aggregator sync', billingModel: PlanBillingModel.PER_STORE, basePrice: 79.00, currency: 'USD', billingCycle: PlanBillingCycle.MONTHLY, status: PlanStatus.ACTIVE },
+          { id: 'b1111111-0000-0000-0000-000000000003', planCode: 'ENTERPRISE', name: 'Enterprise Suite', description: 'Unlimited stores, custom roles, API integrations, and 24/7 SLA', billingModel: PlanBillingModel.CUSTOM, basePrice: 199.00, currency: 'USD', billingCycle: PlanBillingCycle.MONTHLY, status: PlanStatus.ACTIVE },
+        ];
+        for (const item of defaults) {
+          await this.planMasterRepo.save(this.planMasterRepo.create(item));
+        }
+      }
+    } catch {}
+  }
+
+  // --- Features CRUD ---
+  async listFeatures(status?: string, category?: string): Promise<FeatureEntity[]> {
+    if (!this.featureRepo) return [];
+    const where: any = {};
+    if (status) where.status = status.toUpperCase();
+    if (category) where.category = category.toUpperCase();
+    return this.featureRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  async getFeatureByIdOrKey(idOrKey: string): Promise<FeatureEntity | null> {
+    if (!this.featureRepo || !idOrKey) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrKey.trim());
+    if (isUuid) {
+      const byId = await this.featureRepo.findOneBy({ id: idOrKey.trim() });
+      if (byId) return byId;
+    }
+    return this.featureRepo.findOneBy({ featureKey: idOrKey.trim().toUpperCase() });
+  }
+
+  async createFeature(dto: CreateFeatureDto): Promise<FeatureEntity> {
+    const entity = this.featureRepo.create({
+      featureKey: dto.featureKey.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      category: dto.category.trim().toUpperCase(),
+      featureType: dto.featureType || 'TEXT',
+      status: dto.status || FeatureStatus.ACTIVE,
+    });
+    return this.featureRepo.save(entity);
+  }
+
+  async updateFeature(idOrKey: string, dto: UpdateFeatureDto): Promise<FeatureEntity | null> {
+    const existing = await this.getFeatureByIdOrKey(idOrKey);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.category !== undefined) existing.category = dto.category.trim().toUpperCase();
+    if (dto.featureType !== undefined) existing.featureType = dto.featureType;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.featureRepo.save(existing);
+  }
+
+  async deleteFeature(idOrKey: string): Promise<boolean> {
+    const existing = await this.getFeatureByIdOrKey(idOrKey);
+    if (!existing) return false;
+    existing.status = FeatureStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.featureRepo.save(existing);
+    return true;
+  }
+
+  // --- Permissions CRUD ---
+  async listPermissions(featureId?: string, status?: string): Promise<PermissionEntity[]> {
+    if (!this.permissionRepo) return [];
+    const where: any = {};
+    if (featureId) where.featureId = featureId;
+    if (status) where.status = status.toUpperCase();
+    return this.permissionRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  async getPermissionByIdOrKey(idOrKey: string): Promise<PermissionEntity | null> {
+    if (!this.permissionRepo || !idOrKey) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrKey.trim());
+    if (isUuid) {
+      const byId = await this.permissionRepo.findOneBy({ id: idOrKey.trim() });
+      if (byId) return byId;
+    }
+    return this.permissionRepo.findOneBy({ permissionKey: idOrKey.trim().toUpperCase() });
+  }
+
+  async createPermission(dto: CreatePermissionDto): Promise<PermissionEntity> {
+    const entity = this.permissionRepo.create({
+      featureId: dto.featureId,
+      permissionKey: dto.permissionKey.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      status: dto.status || PermissionStatus.ACTIVE,
+    });
+    return this.permissionRepo.save(entity);
+  }
+
+  async updatePermission(idOrKey: string, dto: UpdatePermissionDto): Promise<PermissionEntity | null> {
+    const existing = await this.getPermissionByIdOrKey(idOrKey);
+    if (!existing) return null;
+    if (dto.featureId !== undefined) existing.featureId = dto.featureId;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.permissionRepo.save(existing);
+  }
+
+  async deletePermission(idOrKey: string): Promise<boolean> {
+    const existing = await this.getPermissionByIdOrKey(idOrKey);
+    if (!existing) return false;
+    existing.status = PermissionStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.permissionRepo.save(existing);
+    return true;
+  }
+
+  // --- Role Templates CRUD ---
+  async listRoleTemplates(scopeType?: string, status?: string): Promise<RoleTemplateEntity[]> {
+    if (!this.roleTemplateRepo) return [];
+    const where: any = {};
+    if (scopeType) where.scopeType = scopeType.toUpperCase();
+    if (status) where.status = status.toUpperCase();
+    return this.roleTemplateRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  async getRoleTemplateByIdOrCode(idOrCode: string): Promise<RoleTemplateEntity | null> {
+    if (!this.roleTemplateRepo || !idOrCode) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await this.roleTemplateRepo.findOneBy({ id: idOrCode.trim() });
+      if (byId) return byId;
+    }
+    return this.roleTemplateRepo.findOneBy({ roleCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async createRoleTemplate(dto: CreateRoleTemplateDto): Promise<RoleTemplateEntity> {
+    const entity = this.roleTemplateRepo.create({
+      roleCode: dto.roleCode.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      scopeType: dto.scopeType || RoleScopeType.STORE,
+      status: dto.status || RoleTemplateStatus.ACTIVE,
+    });
+    return this.roleTemplateRepo.save(entity);
+  }
+
+  async updateRoleTemplate(idOrCode: string, dto: UpdateRoleTemplateDto): Promise<RoleTemplateEntity | null> {
+    const existing = await this.getRoleTemplateByIdOrCode(idOrCode);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.scopeType !== undefined) existing.scopeType = dto.scopeType;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.roleTemplateRepo.save(existing);
+  }
+
+  async deleteRoleTemplate(idOrCode: string): Promise<boolean> {
+    const existing = await this.getRoleTemplateByIdOrCode(idOrCode);
+    if (!existing) return false;
+    existing.status = RoleTemplateStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.roleTemplateRepo.save(existing);
+    return true;
+  }
+
+  // --- Commercial Plans CRUD ---
+  async listPlans(status?: string): Promise<PlanEntity[]> {
+    if (!this.planMasterRepo) return [];
+    const where: any = {};
+    if (status) where.status = status.toUpperCase();
+    return this.planMasterRepo.find({ where, order: { basePrice: 'ASC' } });
+  }
+
+  async getPlanByIdOrCode(idOrCode: string): Promise<PlanEntity | null> {
+    if (!this.planMasterRepo || !idOrCode) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await this.planMasterRepo.findOneBy({ id: idOrCode.trim() });
+      if (byId) return byId;
+    }
+    return this.planMasterRepo.findOneBy({ planCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async createPlan(dto: CreatePlanDto): Promise<PlanEntity> {
+    const entity = this.planMasterRepo.create({
+      planCode: dto.planCode.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      billingModel: dto.billingModel,
+      basePrice: dto.basePrice,
+      currency: dto.currency.trim().toUpperCase(),
+      billingCycle: dto.billingCycle,
+      status: dto.status || PlanStatus.ACTIVE,
+    });
+    return this.planMasterRepo.save(entity);
+  }
+
+  async updatePlan(idOrCode: string, dto: UpdatePlanDto): Promise<PlanEntity | null> {
+    const existing = await this.getPlanByIdOrCode(idOrCode);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.billingModel !== undefined) existing.billingModel = dto.billingModel;
+    if (dto.basePrice !== undefined) existing.basePrice = dto.basePrice;
+    if (dto.currency !== undefined) existing.currency = dto.currency.trim().toUpperCase();
+    if (dto.billingCycle !== undefined) existing.billingCycle = dto.billingCycle;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.planMasterRepo.save(existing);
+  }
+
+  async deletePlan(idOrCode: string): Promise<boolean> {
+    const existing = await this.getPlanByIdOrCode(idOrCode);
+    if (!existing) return false;
+    existing.status = PlanStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.planMasterRepo.save(existing);
+    return true;
+  }
+
+  // --- Roles (Tenant-specific) CRUD ---
+  async listRoles(merchantId: string, status?: string): Promise<RoleEntity[]> {
+    if (!this.roleRepo) return [];
+    const where: any = { merchantId };
+    if (status) where.status = status.toUpperCase();
+    return this.roleRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  async getRoleByIdOrCode(merchantId: string, idOrCode: string): Promise<RoleEntity | null> {
+    if (!this.roleRepo || !idOrCode) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await this.roleRepo.findOneBy({ merchantId, id: idOrCode.trim() });
+      if (byId) return byId;
+    }
+    return this.roleRepo.findOneBy({ merchantId, roleCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+    const entity = this.roleRepo.create({
+      merchantId: dto.merchantId,
+      sourceRoleTemplateId: dto.sourceRoleTemplateId || null,
+      roleCode: dto.roleCode.trim().toUpperCase(),
+      name: dto.name.trim(),
+      description: dto.description?.trim() || '',
+      scopeType: dto.scopeType || RoleScopeType.STORE,
+      isCustom: dto.isCustom !== false,
+      status: dto.status || RoleStatus.ACTIVE,
+    });
+    return this.roleRepo.save(entity);
+  }
+
+  async updateRole(merchantId: string, idOrCode: string, dto: UpdateRoleDto): Promise<RoleEntity | null> {
+    const existing = await this.getRoleByIdOrCode(merchantId, idOrCode);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.scopeType !== undefined) existing.scopeType = dto.scopeType;
+    if (dto.isCustom !== undefined) existing.isCustom = dto.isCustom;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.roleRepo.save(existing);
+  }
+
+  async deleteRole(merchantId: string, idOrCode: string): Promise<boolean> {
+    const existing = await this.getRoleByIdOrCode(merchantId, idOrCode);
+    if (!existing) return false;
+    existing.status = RoleStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.roleRepo.save(existing);
+    return true;
+  }
+
+  // --- Employees (Tenant-specific) CRUD ---
+  async listEmployees(merchantId: string, status?: string): Promise<EmployeeEntity[]> {
+    if (!this.employeeRepo) return [];
+    const where: any = { merchantId };
+    if (status) where.status = status.toUpperCase();
+    return this.employeeRepo.find({ where, order: { firstName: 'ASC' } });
+  }
+
+  async getEmployeeByIdOrCode(merchantId: string, idOrCode: string): Promise<EmployeeEntity | null> {
+    if (!this.employeeRepo || !idOrCode) return null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await this.employeeRepo.findOneBy({ merchantId, id: idOrCode.trim() });
+      if (byId) return byId;
+    }
+    return this.employeeRepo.findOneBy({ merchantId, employeeCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async createEmployee(dto: CreateEmployeeDto): Promise<EmployeeEntity> {
+    const entity = this.employeeRepo.create({
+      merchantId: dto.merchantId,
+      employeeCode: dto.employeeCode.trim().toUpperCase(),
+      firstName: dto.firstName.trim(),
+      lastName: dto.lastName?.trim() || '',
+      email: dto.email?.trim().toLowerCase() || null,
+      phone: dto.phone?.trim() || null,
+      status: dto.status || EmployeeStatus.ACTIVE,
+    });
+    return this.employeeRepo.save(entity);
+  }
+
+  async updateEmployee(merchantId: string, idOrCode: string, dto: UpdateEmployeeDto): Promise<EmployeeEntity | null> {
+    const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
+    if (!existing) return null;
+    if (dto.firstName !== undefined) existing.firstName = dto.firstName.trim();
+    if (dto.lastName !== undefined) existing.lastName = dto.lastName.trim();
+    if (dto.email !== undefined) existing.email = dto.email?.trim().toLowerCase() || null;
+    if (dto.phone !== undefined) existing.phone = dto.phone?.trim() || null;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.employeeRepo.save(existing);
+  }
+
+  async deleteEmployee(merchantId: string, idOrCode: string): Promise<boolean> {
+    const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
+    if (!existing) return false;
+    existing.status = EmployeeStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.employeeRepo.save(existing);
+    return true;
   }
 
 }
