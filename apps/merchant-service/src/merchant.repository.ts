@@ -143,6 +143,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   private async seedDefaultPlans() {
+    if (!this.planRepo) return;
     const existing = await this.planRepo.count();
     if (existing > 0) return;
     const now = new Date();
@@ -194,6 +195,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   private async seedDefaultData() {
+    if (!this.merchantRepo || !this.storeRepo) return;
     if (!this.merchantRepo || !this.storeRepo || !this.subRepo) return;
     const existing = await this.merchantRepo.findOne({ where: { id: 'MCH-1001' } });
     if (!existing) {
@@ -945,7 +947,7 @@ export class MerchantRepository implements OnModuleInit {
   private async seedAllMasterData(): Promise<void> {
     await this.seedDefaultFeatures();
     await this.seedDefaultRoleTemplates();
-    await this.seedDefaultPlans();
+    await this.seedDefaultCommercialPlans();
   }
 
   private async seedDefaultFeatures(): Promise<void> {
@@ -996,6 +998,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   private async seedDefaultCommercialPlans(): Promise<void> {
+    if (!this.planMasterRepo) return;
     if (!this.planMasterRepo) return;
     try {
       if ((await this.planMasterRepo.count()) === 0) {
