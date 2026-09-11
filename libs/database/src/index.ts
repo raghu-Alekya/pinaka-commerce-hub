@@ -24,7 +24,7 @@ export function postgresConnectionOptions(
   return {
     ...shared,
     host: process.env.POSTGRES_HOST || 'localhost',
-    port: Number(process.env.POSTGRES_PORT) || 5433,
+    port: Number(process.env.POSTGRES_PORT) || 5432,
     username: process.env.POSTGRES_USER || 'pdh_user',
     password: process.env.POSTGRES_PASSWORD || 'pdh_password',
     database: process.env.POSTGRES_DB || DEFAULT_POSTGRES_DB,
