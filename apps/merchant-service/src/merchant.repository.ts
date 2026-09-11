@@ -1,5 +1,5 @@
-﻿import * as crypto from 'crypto';
-import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
+import * as crypto from 'crypto';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
@@ -38,6 +38,48 @@ interface WordPressCategoryNode {
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
+  async masterData(table: 'store_types' | 'features' | 'role_templates' | 'plans', operation: 'list' | 'get' | 'create' | 'update' | 'delete', id?: string, fields: Record<string, unknown> = {}): Promise<any> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
+    const columns: Record<string, string> = {
+      name: 'name', description: 'description', status: 'status',
+      ...({
+        store_types: { storeTypeCode: 'store_type_code' },
+        features: { featureKey: 'feature_key', category: 'category', featureType: 'feature_type' },
+        role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
+        plans: { planCode: 'plan_code', billingModel: 'billing_model', basePrice: 'base_price', currency: 'currency', billingCycle: 'billing_cycle' },
+      }[table]),
+    };
+    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${column} AS "${key}"`), 'created_at AS "createdAt"', 'updated_at AS "updatedAt"'].join(', ');
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (entries.some(([key]) => !columns[key])) throw new BadRequestException('Unknown master data field');
+    if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
+    let sql: string;
+    let values: unknown[] = [];
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY name, id`;
+    else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
+    else if (operation === 'create') {
+      values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
+      sql = `INSERT INTO public.${table} (id, ${entries.map(([key]) => columns[key]).join(', ')}) VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')}) RETURNING ${projection}`;
+    } else if (operation === 'update') {
+      values = [id, ...entries.map(([, value]) => value)];
+      sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${columns[key]} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+    } else { sql = `DELETE FROM public.${table} WHERE id = $1 RETURNING ${projection}`; values = [id]; }
+    try {
+      const result = await this.dataSource.query(sql, values);
+      // TypeORM returns [rows, affectedCount] for UPDATE and DELETE.
+      const rows = operation === 'update' || operation === 'delete' ? result[0] : result;
+      if (operation === 'list') return rows;
+      if (!rows.length) throw new NotFoundException(`${({ store_types: 'Store type', features: 'Feature', role_templates: 'Role template', plans: 'Plan' })[table]} not found`);
+      return rows[0];
+    } catch (error: any) {
+      const code = error.driverError?.code || error.code;
+      if (code === '23505') throw new ConflictException('Master record code or key already exists');
+      if (code === '23503') throw new ConflictException('Record is in use. Set status to INACTIVE instead.');
+      if (code === '42P01' || code === '42703') throw new ServiceUnavailableException('Master data schema is not installed');
+      throw error;
+    }
+  }
+
   private dataSource!: DataSource;
   private merchantRepo!: Repository<MerchantEntity>;
   private storeRepo!: Repository<StoreEntity>;

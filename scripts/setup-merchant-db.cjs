@@ -21,7 +21,7 @@ async function main() {
   try {
     await db.initialize();
     await db.transaction(async manager => {
-      for (const file of ['merchant-onboarding-postgres.sql', 'subscription-plan-master.sql']) {
+      for (const file of ['merchant-onboarding-postgres.sql', 'subscription-plan-master.sql', 'devices.sql']) {
         await manager.query(readFileSync(resolve(root, 'docs', file), 'utf8'));
       }
     });

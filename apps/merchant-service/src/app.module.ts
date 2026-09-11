@@ -5,6 +5,8 @@ import { MerchantRepository } from './merchant.repository';
 import { SubscriptionController } from './subscription.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
+import { DeviceController } from './device.controller';
+import { StoreTypeController, FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
 
 @Module({
@@ -14,6 +16,11 @@ import { SessionAuthGuard } from './session-auth.guard';
     SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,
+    DeviceController,
+    StoreTypeController,
+    FeatureController,
+    RoleTemplateController,
+    PlanController,
   ],
   providers: [
     MerchantRepository,
@@ -22,3 +29,4 @@ import { SessionAuthGuard } from './session-auth.guard';
   ],
 })
 export class AppModule {}
+

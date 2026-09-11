@@ -1,0 +1,4 @@
+(node:24712) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+❌ [HTTP FAILED] [CorrelationID: corr_1ffb55d2-185f-4449-8e94-f7e96ecbf253] POST /api/v1/role-templates - Status: 409 (16ms)
+❌ [HTTP FAILED] [CorrelationID: corr_4dfb70b2-1dfc-4d94-a599-9a9c4d89f34b] POST /api/v1/plans - Status: 409 (10ms)
