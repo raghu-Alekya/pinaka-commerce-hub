@@ -79,10 +79,17 @@ export class MerchantRepository implements OnModuleInit {
     return this.isDbConnected ? 'connected' : `unavailable: ${this.databaseError || 'unknown error'}`;
   }
 
-  async onModuleInit() {
+    async onModuleInit() {
     this.dataSource = await connectPostgres('PCH Merchant DB', [
       MerchantEntity,
       StoreEntity,
+      StoreTypeEntity,
+      FeatureEntity,
+      PermissionEntity,
+      RoleTemplateEntity,
+      PlanEntity,
+      RoleEntity,
+      EmployeeEntity,
       SubscriptionEntity,
       OnboardingAuditEntity,
       SubscriptionPlanEntity,
@@ -91,17 +98,17 @@ export class MerchantRepository implements OnModuleInit {
       ProductEntity,
       SessionEntity,
     ]);
+
+    // 1. Initialize all repositories first
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
-      this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
-      this.featureRepo = this.dataSource.getRepository(FeatureEntity);
-      this.permissionRepo = this.dataSource.getRepository(PermissionEntity);
-      this.roleTemplateRepo = this.dataSource.getRepository(RoleTemplateEntity);
-      this.planMasterRepo = this.dataSource.getRepository(PlanEntity);
-      this.roleRepo = this.dataSource.getRepository(RoleEntity);
-      this.employeeRepo = this.dataSource.getRepository(EmployeeEntity);
-      await this.seedAllMasterData();
-      await this.seedDefaultStoreTypes();
+    this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
+    this.featureRepo = this.dataSource.getRepository(FeatureEntity);
+    this.permissionRepo = this.dataSource.getRepository(PermissionEntity);
+    this.roleTemplateRepo = this.dataSource.getRepository(RoleTemplateEntity);
+    this.planMasterRepo = this.dataSource.getRepository(PlanEntity);
+    this.roleRepo = this.dataSource.getRepository(RoleEntity);
+    this.employeeRepo = this.dataSource.getRepository(EmployeeEntity);
     this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
     this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
     this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
@@ -110,10 +117,15 @@ export class MerchantRepository implements OnModuleInit {
     this.productRepo = this.dataSource.getRepository(ProductEntity);
     this.sessionRepo = this.dataSource.getRepository(SessionEntity);
     this.isDbConnected = true;
+
+    // 2. Safely seed master reference data once all repos are initialized
+    await this.seedAllMasterData();
+    await this.seedDefaultStoreTypes();
     await this.seedDefaultCommercialPlans();
+    await this.seedDefaultPlans();
     await this.seedDefaultData();
 
-    // 2. Redis Connection
+    // 3. Redis Connection
     try {
       this.redisClient = new Redis({
         host: process.env.REDIS_HOST || 'localhost',
@@ -123,9 +135,9 @@ export class MerchantRepository implements OnModuleInit {
       });
       await this.redisClient.connect();
       this.isRedisConnected = true;
-      console.log('âš¡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching');
+      console.log('⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching');
     } catch (err: any) {
-      console.log(`âš ï¸ [PCH Merchant Redis] Offline (${err.message}).`);
+      console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
   }
