@@ -17,7 +17,7 @@ function createController(config: Relationship) {
   @Controller(config.path)
   @UseGuards(RelationshipOwnerGuard)
   class RelationshipController {
-    constructor(@Inject(RelationshipsRepository) private readonly repository: RelationshipsRepository) {}
+    constructor(@Inject(RelationshipsRepository) public readonly repository: RelationshipsRepository) {}
     @Get()
     list(@Param() params: Record<string,string>) { return this.repository.execute(config, 'list', params); }
     @Get(':relatedId')

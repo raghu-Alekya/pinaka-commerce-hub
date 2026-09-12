@@ -22,7 +22,7 @@ async function main() {
     const id = randomUUID();
     await repository.createDevice({ id, storeId: store.id, merchantId: store.merchantId,
       serialNumber: `TEST-${id}`, details: { deviceName: 'Rollback test', status: 'Active', image: 'excluded' }, createdAt: new Date() });
-    const device = (await repository.listDevices()).find(item => item.id === id);
+    const device = (await repository.listDevices()).find((item: DeviceEntity) => item.id === id);
     assert.equal(device?.details.deviceName, 'Rollback test');
     assert.equal(device?.details.image, undefined);
     await assert.rejects(() => repository.createDevice({ id: randomUUID(), storeId: store.id,

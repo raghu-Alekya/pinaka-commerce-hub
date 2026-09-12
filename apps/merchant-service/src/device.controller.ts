@@ -2,6 +2,9 @@ import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, 
 import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from './merchant.repository';
 import { CreateDeviceDto } from './device.dto';
+import { MerchantEntity } from './entities/merchant.entity';
+import { StoreEntity } from './entities/store.entity';
+import { DeviceEntity } from './entities/device.entity';
 
 @Controller('api/v1/devices')
 export class DeviceController {
@@ -40,10 +43,10 @@ export class DeviceController {
     const [devices, merchants, stores] = await Promise.all([
       this.repository.listDevices(), this.repository.getAllMerchants(), this.repository.listStores(),
     ]);
-    const merchantNames = new Map(merchants.map(item => [item.id, item.businessName]));
-    const storeNames = new Map(stores.map(item => [item.id, item.storeName]));
-    return { count: devices.length, devices: devices.map(device => {
-      const { image, ...details } = device.details;
+    const merchantNames = new Map(merchants.map((item: MerchantEntity) => [item.id, item.businessName]));
+    const storeNames = new Map(stores.map((item: StoreEntity) => [item.id, item.storeName]));
+    return { count: devices.length, devices: devices.map((device: DeviceEntity) => {
+      const { image, ...details } = (device.details as Record<string, any>) || {};
       return { ...details, id: device.id, merchantId: device.merchantId, storeId: device.storeId,
         serialNumber: device.serialNumber, createdAt: device.createdAt,
         merchantName: merchantNames.get(device.merchantId) || device.merchantId,

@@ -27,6 +27,7 @@ import { SubscriptionPlanEntity } from './entities/subscription-plan.entity';
 import { WebsiteConnectionEntity } from './entities/website-connection.entity';
 import { CategoryEntity } from './entities/category.entity';
 import { ProductEntity } from './entities/product.entity';
+import { DeviceEntity } from './entities/device.entity';
 
 interface WordPressProductNode {
   id?: number;
@@ -112,6 +113,7 @@ export class MerchantRepository implements OnModuleInit {
   private categoryRepo!: Repository<CategoryEntity>;
   private productRepo!: Repository<ProductEntity>;
   private sessionRepo!: Repository<SessionEntity>;
+  public deviceRepo!: Repository<DeviceEntity>;
   private redisClient?: Redis;
   private isDbConnected = true;
   private isRedisConnected = false;
@@ -138,6 +140,7 @@ export class MerchantRepository implements OnModuleInit {
       WebsiteConnectionEntity,
       CategoryEntity,
       ProductEntity,
+      DeviceEntity,
       SessionEntity,
     ]);
 
@@ -158,6 +161,7 @@ export class MerchantRepository implements OnModuleInit {
     this.categoryRepo = this.dataSource.getRepository(CategoryEntity);
     this.productRepo = this.dataSource.getRepository(ProductEntity);
     this.sessionRepo = this.dataSource.getRepository(SessionEntity);
+    this.deviceRepo = this.dataSource.getRepository(DeviceEntity);
     this.isDbConnected = true;
 
     // 2. Safely seed master reference data once all repos are initialized
@@ -457,6 +461,46 @@ export class MerchantRepository implements OnModuleInit {
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
     return this.storeRepo.findOneBy({ id });
+  }
+
+  
+  async createDevice(data: {
+    id: string;
+    merchantId: string;
+    storeId: string;
+    serialNumber: string;
+    details: Record<string, unknown>;
+    createdAt?: Date;
+  }): Promise<DeviceEntity> {
+    if (!this.deviceRepo) {
+      throw new ServiceUnavailableException('Database not connected');
+    }
+    const cleanDetails = { ...data.details };
+    delete cleanDetails.image;
+
+    const entity = this.deviceRepo.create({
+      id: data.id,
+      merchantId: data.merchantId,
+      storeId: data.storeId,
+      serialNumber: data.serialNumber,
+      details: cleanDetails,
+      createdAt: data.createdAt || new Date(),
+    });
+
+    try {
+      return await this.deviceRepo.save(entity);
+    } catch (error: any) {
+      const code = error.driverError?.code || error.code;
+      if (code === '23505') {
+        throw new ConflictException('Device serial number already exists');
+      }
+      throw error;
+    }
+  }
+
+  async listDevices(): Promise<DeviceEntity[]> {
+    if (!this.deviceRepo) return [];
+    return this.deviceRepo.find({ order: { createdAt: 'DESC' } });
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
