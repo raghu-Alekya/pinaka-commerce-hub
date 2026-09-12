@@ -1,167 +1,756 @@
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [InstanceLoader] AppModule dependencies initialized +20ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RoutesResolver] AppController {/api/v1}: +11ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/create-merchant, POST} route +7ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, PUT} route +2ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/ids/:kind, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step1-business, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step2-store, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step3-plan, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/complete, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/activate-terminal, POST} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, POST} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/bulk, POST} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, GET} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, GET} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, PUT} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants, GET} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RoutesResolver] SubscriptionController {/api/v1/subscriptions}: +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, POST} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PUT} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PATCH} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, DELETE} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RoutesResolver] SubscriptionPlanController {/api/v1/subscription-plans}: +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, GET} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, POST} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PUT} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PATCH} route +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, DELETE} route +1ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RoutesResolver] ReferenceDataController {/api/v1/reference-data}: +0ms
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [RouterExplorer] Mapped {/api/v1/reference-data, GET} route +1ms
-🐘 [PCH Merchant DB] Connected to PostgreSQL database
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [InstanceLoader] AppModule dependencies initialized +25ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] StoreTypeFeaturesController {/api/v1/store-types/:storeTypeId/features}: +12ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, GET} route +4ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, POST} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, DELETE} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] StoreTypeRoleTemplatesController {/api/v1/store-types/:storeTypeId/role-templates}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] PlanEntitlementsController {/api/v1/plans/:planId/entitlements}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, POST} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] SubscriptionStoresController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] SubscriptionEntitlementsController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] StoreEntitlementsController {/api/v1/merchants/:merchantId/stores/:storeId/entitlements}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] AppController {/api/v1}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/create-merchant, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, PUT} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/ids/:kind, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step1-business, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step2-store, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step3-plan, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/complete, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/activate-terminal, POST} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector/test, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog/sync, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/configuration, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores, POST} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/bulk, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] PermissionController {/api/v1/permissions}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/permissions, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/permissions, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, PUT} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] RoleController {/api/v1/merchants/:merchantId/roles}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] EmployeeController {/api/v1/merchants/:merchantId/employees}: +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] SubscriptionController {/api/v1/subscriptions}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] SubscriptionPlanController {/api/v1/subscription-plans}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] ReferenceDataController {/api/v1/reference-data}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/reference-data, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] DeviceController {/api/v1/devices}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/devices, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/devices, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] StoreTypeController {/api/v1/store-types}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] StoreTypeController {/api/v1/store_types}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] FeatureController {/api/v1/features}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role-templates}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PUT} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role_templates}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PUT} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PATCH} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, DELETE} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RoutesResolver] PlanController {/api/v1/plans}: +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans, GET} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, GET} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans, POST} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PUT} route +1ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PATCH} route +0ms
+[Nest] 22660  - 09/12/2026, 11:40:59 AM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, DELETE} route +0ms
+🐘 [PCH Merchant DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 ⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching
-[Nest] 8224  - 09/08/2026, 4:33:26 PM     LOG [NestApplication] Nest application successfully started +203ms
+[Nest] 22660  - 09/12/2026, 11:41:00 AM     LOG [NestApplication] Nest application successfully started +218ms
 🚀 Merchant Service running on http://localhost:3003
-📡 [HTTP INCOMING] [CorrelationID: corr_c5f71080-9f3f-4ea7-bef8-453c88242a74] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_b4bc37a2-c46c-4f24-841d-777393b6dd1e] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_b4bc37a2-c46c-4f24-841d-777393b6dd1e] GET /api/v1/reference-data - Status: 200 (7ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_d4f33e61-4346-4841-a861-c872466b3f50] GET /api/v1/subscription-plans
-📡 [HTTP INCOMING] [CorrelationID: corr_813de9a6-c7d0-46d3-8816-9191c55a3100] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_813de9a6-c7d0-46d3-8816-9191c55a3100] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_d4f33e61-4346-4841-a861-c872466b3f50] GET /api/v1/subscription-plans - Status: 200 (45ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_9aaad4d8-5ed6-4fbc-b078-af16fd16cc8f] GET /api/v1/subscription-plans
-✅ [HTTP COMPLETED] [CorrelationID: corr_c5f71080-9f3f-4ea7-bef8-453c88242a74] GET /api/v1/merchants - Status: 200 (83ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_922ed8a5-8be7-4717-9676-d0a6cf458767] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_922ed8a5-8be7-4717-9676-d0a6cf458767] GET /api/v1/merchants - Status: 200 (14ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_9aaad4d8-5ed6-4fbc-b078-af16fd16cc8f] GET /api/v1/subscription-plans - Status: 200 (32ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_c2ff4729-ec63-4840-8b09-389181879e02] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_c2ff4729-ec63-4840-8b09-389181879e02] GET /api/v1/merchants - Status: 200 (17ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_8ae995bd-1056-4be7-ae05-eb050cc49986] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_8ae995bd-1056-4be7-ae05-eb050cc49986] GET /api/v1/merchants - Status: 200 (10ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_7cf72d0c-b352-4954-bf75-b3f4ae5e59fb] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_9c6e82c8-33cc-45d0-b9e4-8654413f5ba3] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_9c6e82c8-33cc-45d0-b9e4-8654413f5ba3] GET /api/v1/reference-data - Status: 200 (2ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_7edd027a-c9ce-4b2a-8f04-8100654d8f06] GET /api/v1/subscription-plans
-📡 [HTTP INCOMING] [CorrelationID: corr_5b4b4975-0cd0-4558-bf74-37d1327a933b] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_7edd027a-c9ce-4b2a-8f04-8100654d8f06] GET /api/v1/subscription-plans - Status: 200 (8ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_7cf72d0c-b352-4954-bf75-b3f4ae5e59fb] GET /api/v1/merchants - Status: 200 (20ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_df306f1c-02af-4a4b-85cf-259554c3c751] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_df306f1c-02af-4a4b-85cf-259554c3c751] GET /api/v1/reference-data - Status: 200 (2ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_539e08d1-a6d5-4ab7-96a7-ad36ef34406d] GET /api/v1/subscription-plans
-✅ [HTTP COMPLETED] [CorrelationID: corr_539e08d1-a6d5-4ab7-96a7-ad36ef34406d] GET /api/v1/subscription-plans - Status: 200 (6ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_5b4b4975-0cd0-4558-bf74-37d1327a933b] GET /api/v1/merchants/MCH-1001 - Status: 200 (45ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_b3b60173-66a2-4294-bb44-d024633b6a63] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_b3b60173-66a2-4294-bb44-d024633b6a63] GET /api/v1/merchants/MCH-1001 - Status: 200 (10ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_88f8c1d3-da40-4265-957c-7aa8431ea1e6] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_973bc229-b775-4d90-b988-34ffd24872db] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_973bc229-b775-4d90-b988-34ffd24872db] GET /api/v1/reference-data - Status: 200 (1ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_bada1323-16b7-4047-9ce9-5908771593e8] GET /api/v1/stores
-📡 [HTTP INCOMING] [CorrelationID: corr_3f33d3e1-e6e5-4018-9f45-fde40985f8f2] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_3f33d3e1-e6e5-4018-9f45-fde40985f8f2] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_bada1323-16b7-4047-9ce9-5908771593e8] GET /api/v1/stores - Status: 200 (32ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_3f1a521b-9e93-4ca6-b951-4ca8a22ccfc4] GET /api/v1/stores
-✅ [HTTP COMPLETED] [CorrelationID: corr_3f1a521b-9e93-4ca6-b951-4ca8a22ccfc4] GET /api/v1/stores - Status: 200 (4ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_88f8c1d3-da40-4265-957c-7aa8431ea1e6] GET /api/v1/merchants - Status: 200 (60ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_2abd1555-2f09-403b-ad4c-fc1b19c74d1a] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_2abd1555-2f09-403b-ad4c-fc1b19c74d1a] GET /api/v1/merchants - Status: 200 (7ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_3ed18ea6-9650-4300-9684-397a875aeb8e] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_3ed18ea6-9650-4300-9684-397a875aeb8e] GET /api/v1/merchants - Status: 200 (6ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_b7f360b1-7f5d-42da-a161-ada2d3bf2304] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_d0ada89c-724c-4c1f-819e-3d5f46db2412] GET /api/v1/stores/store-0222
-📡 [HTTP INCOMING] [CorrelationID: corr_ce3b3343-e69b-46a2-833a-a3d346aa51ca] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_ce3b3343-e69b-46a2-833a-a3d346aa51ca] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_d0ada89c-724c-4c1f-819e-3d5f46db2412] GET /api/v1/stores/store-0222 - Status: 200 (6ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_5ef72df7-cc8b-4315-931b-1fd78b66fe31] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_5ef72df7-cc8b-4315-931b-1fd78b66fe31] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_b7f360b1-7f5d-42da-a161-ada2d3bf2304] GET /api/v1/merchants - Status: 200 (13ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_327ae7ec-e598-445a-aaf6-9b682288cac1] GET /api/v1/stores/store-0222
-📡 [HTTP INCOMING] [CorrelationID: corr_ccc6635a-1aa8-46eb-8bee-1b4e243c470b] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_327ae7ec-e598-445a-aaf6-9b682288cac1] GET /api/v1/stores/store-0222 - Status: 200 (8ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_ccc6635a-1aa8-46eb-8bee-1b4e243c470b] GET /api/v1/merchants - Status: 200 (8ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_4a0650b2-4e19-4d3f-ba9f-d83bebfb5408] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_4a0650b2-4e19-4d3f-ba9f-d83bebfb5408] GET /api/v1/merchants - Status: 200 (5ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_b3809386-7960-4752-bfcb-dc56938687ca] POST /api/v1/ids/merchant
-📡 [HTTP INCOMING] [CorrelationID: corr_e91d0349-990b-4a9d-bf05-93257732d162] POST /api/v1/ids/merchant
-📡 [HTTP INCOMING] [CorrelationID: corr_e45c19ea-2772-4a49-a7a6-e2ca37100512] POST /api/v1/ids/merchant
-📡 [HTTP INCOMING] [CorrelationID: corr_c759edc6-0757-49f5-b267-324e6fdb7296] POST /api/v1/ids/merchant
-✅ [HTTP COMPLETED] [CorrelationID: corr_e45c19ea-2772-4a49-a7a6-e2ca37100512] POST /api/v1/ids/merchant - Status: 201 (74ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_b3809386-7960-4752-bfcb-dc56938687ca] POST /api/v1/ids/merchant - Status: 201 (99ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_e91d0349-990b-4a9d-bf05-93257732d162] POST /api/v1/ids/merchant - Status: 201 (103ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_c759edc6-0757-49f5-b267-324e6fdb7296] POST /api/v1/ids/merchant - Status: 201 (109ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_cd419a08-73cc-49fa-b5b7-2a4b25d805f1] POST /api/v1/ids/store
-📡 [HTTP INCOMING] [CorrelationID: corr_9f794b56-420f-4fbf-91fe-8a32964502e8] POST /api/v1/ids/store
-📡 [HTTP INCOMING] [CorrelationID: corr_f8ad5c04-8749-4d10-9eaf-10493e6f4f1b] POST /api/v1/ids/store
-📡 [HTTP INCOMING] [CorrelationID: corr_95160326-87bd-4fa7-a696-8d478d6d862a] POST /api/v1/ids/store
-✅ [HTTP COMPLETED] [CorrelationID: corr_9f794b56-420f-4fbf-91fe-8a32964502e8] POST /api/v1/ids/store - Status: 201 (12ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_cd419a08-73cc-49fa-b5b7-2a4b25d805f1] POST /api/v1/ids/store - Status: 201 (23ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_f8ad5c04-8749-4d10-9eaf-10493e6f4f1b] POST /api/v1/ids/store - Status: 201 (29ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_92dce7aa-ce6a-4bf8-802b-d861e1e2eb44] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_6e8e2d98-7184-4287-95d4-b1beea213493] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_6e8e2d98-7184-4287-95d4-b1beea213493] GET /api/v1/reference-data - Status: 200 (1ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_49b0b37a-3290-4c76-ba7b-666cc83bbca6] GET /api/v1/subscription-plans
-✅ [HTTP COMPLETED] [CorrelationID: corr_95160326-87bd-4fa7-a696-8d478d6d862a] POST /api/v1/ids/store - Status: 201 (39ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_25c62e37-85a8-4526-bff2-63d64c0bf2f1] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_25c62e37-85a8-4526-bff2-63d64c0bf2f1] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_92dce7aa-ce6a-4bf8-802b-d861e1e2eb44] GET /api/v1/merchants - Status: 200 (13ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_49b0b37a-3290-4c76-ba7b-666cc83bbca6] GET /api/v1/subscription-plans - Status: 200 (9ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_d6f920a3-30ae-4775-9987-b388c9abd9a6] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_e0ab7313-0ca2-47f5-85d1-7b32f151383a] GET /api/v1/subscription-plans
-✅ [HTTP COMPLETED] [CorrelationID: corr_d6f920a3-30ae-4775-9987-b388c9abd9a6] GET /api/v1/merchants - Status: 200 (6ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_e0ab7313-0ca2-47f5-85d1-7b32f151383a] GET /api/v1/subscription-plans - Status: 200 (6ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_99adf23e-e0a7-4ab6-b13c-450a5057f294] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_99adf23e-e0a7-4ab6-b13c-450a5057f294] GET /api/v1/merchants - Status: 200 (8ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_78acb215-ebbd-460c-acb9-02911d8a49af] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_bde659a1-0719-48da-87f5-72ac9ba59c79] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_bde659a1-0719-48da-87f5-72ac9ba59c79] GET /api/v1/reference-data - Status: 200 (0ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_9708ebd6-99f4-41ff-9e29-20998058e511] GET /api/v1/subscription-plans
-📡 [HTTP INCOMING] [CorrelationID: corr_c36f404d-802a-4abf-ad0c-332910fb413a] GET /api/v1/reference-data
-✅ [HTTP COMPLETED] [CorrelationID: corr_c36f404d-802a-4abf-ad0c-332910fb413a] GET /api/v1/reference-data - Status: 200 (1ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_9708ebd6-99f4-41ff-9e29-20998058e511] GET /api/v1/subscription-plans - Status: 200 (19ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_a7130165-28f4-4e72-8b1e-639eb5380291] GET /api/v1/subscription-plans
-✅ [HTTP COMPLETED] [CorrelationID: corr_78acb215-ebbd-460c-acb9-02911d8a49af] GET /api/v1/merchants - Status: 200 (28ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_0819fa2a-f42f-48be-8f7f-3f47351cac8d] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_0819fa2a-f42f-48be-8f7f-3f47351cac8d] GET /api/v1/merchants - Status: 200 (7ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_a7130165-28f4-4e72-8b1e-639eb5380291] GET /api/v1/subscription-plans - Status: 200 (19ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_2173797a-65c7-4deb-a2fc-cb8682ef7c1e] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_2173797a-65c7-4deb-a2fc-cb8682ef7c1e] GET /api/v1/merchants - Status: 200 (9ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_8117374c-a9d5-474d-a80c-c51f44f09bf9] GET /api/v1/merchants
-✅ [HTTP COMPLETED] [CorrelationID: corr_8117374c-a9d5-474d-a80c-c51f44f09bf9] GET /api/v1/merchants - Status: 200 (5ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_50f11451-6c47-4117-8701-15fa1d3a6829] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_c8d4c3af-87f5-4afe-8474-d186a603bf3a] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_50f11451-6c47-4117-8701-15fa1d3a6829] GET /api/v1/merchants - Status: 200 (6ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_c8d4c3af-87f5-4afe-8474-d186a603bf3a] GET /api/v1/merchants/MCH-1001 - Status: 200 (11ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_2d52f1ea-2a80-4ab1-ae44-71888069fd74] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_2d52f1ea-2a80-4ab1-ae44-71888069fd74] GET /api/v1/merchants/MCH-1001 - Status: 200 (9ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_4ba0a90f-93dc-43d8-984d-8735e23415c0] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_3ef56b72-f56a-41ea-9e39-6cbdf00d0fac] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_4ba0a90f-93dc-43d8-984d-8735e23415c0] GET /api/v1/merchants - Status: 200 (22ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_3ef56b72-f56a-41ea-9e39-6cbdf00d0fac] GET /api/v1/merchants/MCH-1001 - Status: 200 (46ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_f99f743e-130b-46e5-bb91-399d57188854] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_f99f743e-130b-46e5-bb91-399d57188854] GET /api/v1/merchants/MCH-1001 - Status: 200 (26ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_df608501-b340-42a7-a0b4-d4dfa0593a41] GET /api/v1/merchants
-📡 [HTTP INCOMING] [CorrelationID: corr_980081f3-ca16-493b-8811-e252e6e98fa1] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_df608501-b340-42a7-a0b4-d4dfa0593a41] GET /api/v1/merchants - Status: 200 (9ms)
-✅ [HTTP COMPLETED] [CorrelationID: corr_980081f3-ca16-493b-8811-e252e6e98fa1] GET /api/v1/merchants/MCH-1001 - Status: 200 (10ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_430b436c-daad-4dc0-ab1a-88d2008f9821] GET /api/v1/merchants/MCH-1001
-✅ [HTTP COMPLETED] [CorrelationID: corr_430b436c-daad-4dc0-ab1a-88d2008f9821] GET /api/v1/merchants/MCH-1001 - Status: 200 (7ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_70bdf277-3b61-43dc-b13f-4bb620166287] GET /api/v1/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_70bdf277-3b61-43dc-b13f-4bb620166287] GET /api/v1/health - Status: 200 (1ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_9d684522-ea45-4d3f-a052-b97e2e23235d] GET /api/v1/reference-data
+✅ [HTTP COMPLETED] [CorrelationID: corr_9d684522-ea45-4d3f-a052-b97e2e23235d] GET /api/v1/reference-data - Status: 200 (20ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_eaae3991-333d-4a35-ab25-362eae565c48] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features
+📡 [HTTP INCOMING] [CorrelationID: corr_ce865d2d-0483-4d4d-939e-d694e2fdf87c] GET /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features
+📡 [HTTP INCOMING] [CorrelationID: corr_1bd2f3b4-f18b-4720-b7da-d2aefafe68d5] POST /api/v1/store-types
+📡 [HTTP INCOMING] [CorrelationID: corr_0b89e9a5-4a7e-4670-8302-204a1deb050a] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features
+📡 [HTTP INCOMING] [CorrelationID: corr_b55d3b14-bf2b-44b8-bba6-dcb8ecb5e40d] POST /api/v1/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_b55d3b14-bf2b-44b8-bba6-dcb8ecb5e40d] POST /api/v1/features - Status: 201 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_19ab7073-09d2-438a-89e3-44db368a1d99] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_19ab7073-09d2-438a-89e3-44db368a1d99] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features - Status: 201 (23ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_df3c416e-f2d5-415d-ad6a-68dabf859f38] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_df3c416e-f2d5-415d-ad6a-68dabf859f38] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features - Status: 200 (28ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_cc56d32c-ca49-472e-ad8d-bbfed8f07477] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features/36ace9a5-6767-4cd8-a1d7-4ceae2c68350
+✅ [HTTP COMPLETED] [CorrelationID: corr_cc56d32c-ca49-472e-ad8d-bbfed8f07477] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features/36ace9a5-6767-4cd8-a1d7-4ceae2c68350 - Status: 200 (37ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_9a523c8a-4876-4a48-9b26-5959b3a83712] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/role-templates
+📡 [HTTP INCOMING] [CorrelationID: corr_bc583146-3b51-4ff2-8c88-a1c2539cf70b] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/role-templates
+📡 [HTTP INCOMING] [CorrelationID: corr_ed11f406-1b73-4bf5-aed5-a8c8a04cd7a1] POST /api/v1/store-types
+📡 [HTTP INCOMING] [CorrelationID: corr_dd04884f-3f74-4e42-868a-4df138fc6c51] GET /api/v1/store-types/4b41c149-6cd6-431d-99fa-390269e3f780
+📡 [HTTP INCOMING] [CorrelationID: corr_dc7b6f8e-5094-49ea-acdf-21af94883d1c] GET /api/v1/store-types
+✅ [HTTP COMPLETED] [CorrelationID: corr_dc7b6f8e-5094-49ea-acdf-21af94883d1c] GET /api/v1/store-types - Status: 200 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a7d96b4b-cd8f-4c97-aea7-84fed5bb55f7] PUT /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/status
+📡 [HTTP INCOMING] [CorrelationID: corr_2f3d6ded-90c5-44c7-84e1-c63553b23753] POST /api/v1/features
+📡 [HTTP INCOMING] [CorrelationID: corr_e1ca7328-1fb1-4480-9f15-abb1987bb579] GET /api/v1/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_e1ca7328-1fb1-4480-9f15-abb1987bb579] GET /api/v1/features - Status: 200 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_b8873f92-dc80-492b-849c-d7b546e34e27] POST /api/v1/features
+📡 [HTTP INCOMING] [CorrelationID: corr_a2001a12-cee8-40f5-be17-4b9877c0df59] POST /api/v1/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_a2001a12-cee8-40f5-be17-4b9877c0df59] POST /api/v1/role-templates - Status: 201 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_c5541506-d814-4665-80b3-eb61f5515a23] GET /api/v1/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_c5541506-d814-4665-80b3-eb61f5515a23] GET /api/v1/features - Status: 200 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_d2d81bce-2314-47ed-8f27-05d7ba6f6c68] POST /api/v1/role-templates
+📡 [HTTP INCOMING] [CorrelationID: corr_4f7642d5-15f7-4556-854d-7001fffd8306] GET /api/v1/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_4f7642d5-15f7-4556-854d-7001fffd8306] GET /api/v1/role-templates - Status: 200 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_d0e7aa4a-9b2c-46db-87d4-046e28fff606] GET /api/v1/plans
+✅ [HTTP COMPLETED] [CorrelationID: corr_d0e7aa4a-9b2c-46db-87d4-046e28fff606] GET /api/v1/plans - Status: 200 (7ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_2e479144-585e-4093-a3ef-332e76d93c3f] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features
+📡 [HTTP INCOMING] [CorrelationID: corr_e0f8b700-beb3-4ca8-998f-1df34c608d11] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_e0f8b700-beb3-4ca8-998f-1df34c608d11] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/features - Status: 201 (24ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_cad60cf2-3bfe-44d3-be8c-5392bae61c1b] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_cad60cf2-3bfe-44d3-be8c-5392bae61c1b] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/features - Status: 200 (31ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a3a31d0d-718b-4fd2-81a0-160b029192b1] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_a3a31d0d-718b-4fd2-81a0-160b029192b1] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/role-templates - Status: 201 (23ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_2bf2285e-3617-40bd-953b-a8959fcfc229] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_2bf2285e-3617-40bd-953b-a8959fcfc229] GET /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000005/role-templates - Status: 200 (27ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_78920ba7-37a7-4415-815b-434901da8dd1] POST /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements
+📡 [HTTP INCOMING] [CorrelationID: corr_b3aaa485-bf76-4851-b2b8-81787c510acc] GET /api/v1/plans
+✅ [HTTP COMPLETED] [CorrelationID: corr_b3aaa485-bf76-4851-b2b8-81787c510acc] GET /api/v1/plans - Status: 200 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_f805a01d-097c-4d96-9eb0-8a72ec6b30c2] GET /api/v1/plans
+✅ [HTTP COMPLETED] [CorrelationID: corr_f805a01d-097c-4d96-9eb0-8a72ec6b30c2] GET /api/v1/plans - Status: 200 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_58de6ab2-987d-497f-922a-c427363b4c83] POST /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements
+📡 [HTTP INCOMING] [CorrelationID: corr_beb5f87b-b397-44e1-9d60-d50c9ace14c1] GET /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [InstanceLoader] AppModule dependencies initialized +23ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] StoreTypeFeaturesController {/api/v1/store-types/:storeTypeId/features}: +6ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, GET} route +3ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PATCH} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] StoreTypeRoleTemplatesController {/api/v1/store-types/:storeTypeId/role-templates}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PUT} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, DELETE} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] PlanEntitlementsController {/api/v1/plans/:planId/entitlements}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] SubscriptionStoresController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] SubscriptionEntitlementsController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, DELETE} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] StoreEntitlementsController {/api/v1/merchants/:merchantId/stores/:storeId/entitlements}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] AppController {/api/v1}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/create-merchant, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/ids/:kind, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step1-business, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step2-store, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step3-plan, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/complete, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/activate-terminal, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector/test, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog/sync, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/configuration, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/bulk, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] PermissionController {/api/v1/permissions}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] RoleController {/api/v1/merchants/:merchantId/roles}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, DELETE} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] EmployeeController {/api/v1/merchants/:merchantId/employees}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, PUT} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] SubscriptionController {/api/v1/subscriptions}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PATCH} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] SubscriptionPlanController {/api/v1/subscription-plans}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] ReferenceDataController {/api/v1/reference-data}: +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/reference-data, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] DeviceController {/api/v1/devices}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store-types}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PUT} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store_types}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PATCH} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] FeatureController {/api/v1/features}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features, POST} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role-templates}: +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role_templates}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PATCH} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, DELETE} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RoutesResolver] PlanController {/api/v1/plans}: +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, GET} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, GET} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, POST} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PUT} route +0ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PATCH} route +1ms
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, DELETE} route +0ms
+🐘 [PCH Merchant DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching
+[Nest] 1888  - 09/12/2026, 1:49:27 PM     LOG [NestApplication] Nest application successfully started +248ms
+🚀 Merchant Service running on http://localhost:3003
+📡 [HTTP INCOMING] [CorrelationID: corr_be3f3113-52cb-457e-9204-7bb1f51a0a1f] GET /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_be3f3113-52cb-457e-9204-7bb1f51a0a1f] GET /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements - Status: 200 (25ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_01adfab5-6d86-4752-aff5-06adc2f89ade] POST /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_01adfab5-6d86-4752-aff5-06adc2f89ade] POST /api/v1/plans/b1111111-0000-0000-0000-000000000003/entitlements - Status: 201 (31ms)
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [InstanceLoader] AppModule dependencies initialized +19ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] StoreTypeFeaturesController {/api/v1/store-types/:storeTypeId/features}: +8ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, GET} route +9ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, DELETE} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] StoreTypeRoleTemplatesController {/api/v1/store-types/:storeTypeId/role-templates}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PATCH} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] PlanEntitlementsController {/api/v1/plans/:planId/entitlements}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] SubscriptionStoresController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores}: +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, DELETE} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] SubscriptionEntitlementsController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] StoreEntitlementsController {/api/v1/merchants/:merchantId/stores/:storeId/entitlements}: +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, DELETE} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] AppController {/api/v1}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/create-merchant, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/ids/:kind, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step1-business, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step2-store, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step3-plan, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/complete, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/activate-terminal, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector/test, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog/sync, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/configuration, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/bulk, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] PermissionController {/api/v1/permissions}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] RoleController {/api/v1/merchants/:merchantId/roles}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] EmployeeController {/api/v1/merchants/:merchantId/employees}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] SubscriptionController {/api/v1/subscriptions}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] SubscriptionPlanController {/api/v1/subscription-plans}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] ReferenceDataController {/api/v1/reference-data}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/reference-data, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] DeviceController {/api/v1/devices}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store-types}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PATCH} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PATCH} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store_types}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, DELETE} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] FeatureController {/api/v1/features}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PUT} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role-templates}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role_templates}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, GET} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, POST} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, DELETE} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RoutesResolver] PlanController {/api/v1/plans}: +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, GET} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, POST} route +1ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PUT} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PATCH} route +0ms
+[Nest] 16076  - 09/12/2026, 2:13:54 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, DELETE} route +0ms
+🐘 [PCH Merchant DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching
+[Nest] 16076  - 09/12/2026, 2:13:55 PM     LOG [NestApplication] Nest application successfully started +202ms
+🚀 Merchant Service running on http://localhost:3003
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [InstanceLoader] AppModule dependencies initialized +16ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] StoreTypeFeaturesController {/api/v1/store-types/:storeTypeId/features}: +7ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, GET} route +4ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PUT} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/features/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] StoreTypeRoleTemplatesController {/api/v1/store-types/:storeTypeId/role-templates}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PUT} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:storeTypeId/role-templates/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] PlanEntitlementsController {/api/v1/plans/:planId/entitlements}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:planId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] SubscriptionStoresController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/stores/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] SubscriptionEntitlementsController {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, PATCH} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/subscriptions/:subscriptionId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] StoreEntitlementsController {/api/v1/merchants/:merchantId/stores/:storeId/entitlements}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId/entitlements/:relatedId, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] AppController {/api/v1}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/create-merchant, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/ids/:kind, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step1-business, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step2-store, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/step3-plan, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/onboarding/complete, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/activate-terminal, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector/test, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog/sync, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/catalog, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/configuration, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/bulk, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/stores/:storeId, PUT} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:id, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] PermissionController {/api/v1/permissions}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/permissions/:idOrKey, DELETE} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] RoleController {/api/v1/merchants/:merchantId/roles}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/roles/:idOrCode, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] EmployeeController {/api/v1/merchants/:merchantId/employees}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/merchants/:merchantId/employees/:idOrCode, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] SubscriptionController {/api/v1/subscriptions}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscriptions/:id, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] SubscriptionPlanController {/api/v1/subscription-plans}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PUT} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/subscription-plans/:planCode, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] ReferenceDataController {/api/v1/reference-data}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/reference-data, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] DeviceController {/api/v1/devices}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/devices, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store-types}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id/status, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store-types/:id, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] StoreTypeController {/api/v1/store_types}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id/status, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/store_types/:id, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] FeatureController {/api/v1/features}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id/status, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/features/:id, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role-templates}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role-templates/:id, DELETE} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] RoleTemplateController {/api/v1/role_templates}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, GET} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates, POST} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/role_templates/:id, DELETE} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RoutesResolver] PlanController {/api/v1/plans}: +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, GET} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans, POST} route +1ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PUT} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, PATCH} route +0ms
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [RouterExplorer] Mapped {/api/v1/plans/:id, DELETE} route +0ms
+🐘 [PCH Merchant DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+⚡ [PCH Merchant Redis] Connected to Redis for <1ms PIN & Entitlement caching
+[Nest] 9168  - 09/12/2026, 2:19:46 PM     LOG [NestApplication] Nest application successfully started +169ms
+🚀 Merchant Service running on http://localhost:3003
+📡 [HTTP INCOMING] [CorrelationID: corr_bb93f5a6-303d-4d7f-9ee4-1b8586cfedcb] GET /api/v1/subscriptions/SUB-9001
+✅ [HTTP COMPLETED] [CorrelationID: corr_bb93f5a6-303d-4d7f-9ee4-1b8586cfedcb] GET /api/v1/subscriptions/SUB-9001 - Status: 200 (9ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a795833d-e12c-486e-a3a3-fea39491f7c2] GET /api/v1/merchants/MCH-1001/subscriptions/SUB-9001/stores
+✅ [HTTP COMPLETED] [CorrelationID: corr_a795833d-e12c-486e-a3a3-fea39491f7c2] GET /api/v1/merchants/MCH-1001/subscriptions/SUB-9001/stores - Status: 200 (39ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a63b58ef-0892-458a-adfe-c3c4f71bca5f] GET /api/v1/plans
+✅ [HTTP COMPLETED] [CorrelationID: corr_a63b58ef-0892-458a-adfe-c3c4f71bca5f] GET /api/v1/plans - Status: 200 (7ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_7362a81f-f1db-420e-8c7b-b373d7ebc377] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features
+📡 [HTTP INCOMING] [CorrelationID: corr_bb5691de-76bd-44f0-8ecb-405edec601a4] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/role-templates
+📡 [HTTP INCOMING] [CorrelationID: corr_d4d31316-5517-4a34-b419-7a202abaf4b0] POST /api/v1/store-types
+📡 [HTTP INCOMING] [CorrelationID: corr_4d860bfa-1124-4399-8db0-e5a27077084b] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features
+📡 [HTTP INCOMING] [CorrelationID: corr_82c52831-99c5-4dab-9ccd-ab3d90d4aea2] POST /api/v1/store-types
+📡 [HTTP INCOMING] [CorrelationID: corr_257984a0-1112-4176-9bc2-e8fb60f11de3] POST /api/v1/store-types
+✅ [HTTP COMPLETED] [CorrelationID: corr_257984a0-1112-4176-9bc2-e8fb60f11de3] POST /api/v1/store-types - Status: 201 (4ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_6732d33c-ea82-47d5-b8ea-995c257c7f4d] GET /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4
+✅ [HTTP COMPLETED] [CorrelationID: corr_6732d33c-ea82-47d5-b8ea-995c257c7f4d] GET /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4 - Status: 200 (4ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_308c614c-491b-4ad1-b5ea-0227a1046542] GET /api/v1/store-types
+✅ [HTTP COMPLETED] [CorrelationID: corr_308c614c-491b-4ad1-b5ea-0227a1046542] GET /api/v1/store-types - Status: 200 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_64a30093-41fe-418d-b589-9163f43d5d43] POST /api/v1/features
+📡 [HTTP INCOMING] [CorrelationID: corr_5d2bf243-acbb-47ce-be45-989c6f7c29da] POST /api/v1/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_5d2bf243-acbb-47ce-be45-989c6f7c29da] POST /api/v1/features - Status: 201 (3ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_4f1d2223-00cb-49d9-8974-030d43640573] GET /api/v1/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_4f1d2223-00cb-49d9-8974-030d43640573] GET /api/v1/features - Status: 200 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_09a5132e-e0ce-415c-a8b3-1c6fb2ee0a4a] POST /api/v1/role-templates
+📡 [HTTP INCOMING] [CorrelationID: corr_3e3da852-08be-4ec3-8ac6-3063fc527b8e] POST /api/v1/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_3e3da852-08be-4ec3-8ac6-3063fc527b8e] POST /api/v1/role-templates - Status: 201 (6ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_0f30cbb9-c5a7-4b70-956f-fdac3fa3e511] POST /api/v1/plans
+✅ [HTTP COMPLETED] [CorrelationID: corr_0f30cbb9-c5a7-4b70-956f-fdac3fa3e511] POST /api/v1/plans - Status: 201 (5ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_d4e61992-cbf0-4ff1-8f99-d6b03400fdd4] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_d4e61992-cbf0-4ff1-8f99-d6b03400fdd4] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/features - Status: 201 (27ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_b01ab883-134d-477e-a114-36054254c612] GET /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/features
+✅ [HTTP COMPLETED] [CorrelationID: corr_b01ab883-134d-477e-a114-36054254c612] GET /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/features - Status: 200 (12ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_8a9143ab-9141-4902-9fc6-99a1506cb0eb] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/role-templates
+✅ [HTTP COMPLETED] [CorrelationID: corr_8a9143ab-9141-4902-9fc6-99a1506cb0eb] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/role-templates - Status: 201 (30ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_3d8138b2-2bad-4fe9-bdf0-45088fa52206] POST /api/v1/subscriptions
+✅ [HTTP COMPLETED] [CorrelationID: corr_3d8138b2-2bad-4fe9-bdf0-45088fa52206] POST /api/v1/subscriptions - Status: 201 (194ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_33115476-87a5-4aa8-8c24-abce3704229c] POST /api/v1/subscriptions
+✅ [HTTP COMPLETED] [CorrelationID: corr_33115476-87a5-4aa8-8c24-abce3704229c] POST /api/v1/subscriptions - Status: 201 (43ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_d0577964-0495-413a-a78e-83fc1c46b54d] GET /api/v1/subscriptions
+✅ [HTTP COMPLETED] [CorrelationID: corr_d0577964-0495-413a-a78e-83fc1c46b54d] GET /api/v1/subscriptions - Status: 200 (9ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_648c2877-21ae-4e27-a02e-47b28d412b33] GET /api/v1/subscriptions?merchantId=MCH-1001
+✅ [HTTP COMPLETED] [CorrelationID: corr_648c2877-21ae-4e27-a02e-47b28d412b33] GET /api/v1/subscriptions?merchantId=MCH-1001 - Status: 200 (9ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a765cf25-98d5-4c9f-a4e6-e21d3b6b1535] POST /api/v1/plans/d7d7141d-9fdf-4814-a4d4-b1131a338a63/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_a765cf25-98d5-4c9f-a4e6-e21d3b6b1535] POST /api/v1/plans/d7d7141d-9fdf-4814-a4d4-b1131a338a63/entitlements - Status: 201 (23ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_02d11eca-2cf1-4a3f-98c9-ec4799f1fd5d] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/stores
+📡 [HTTP INCOMING] [CorrelationID: corr_fad5f5cd-2d4d-4749-a2f1-514308710fa4] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/stores
+✅ [HTTP COMPLETED] [CorrelationID: corr_fad5f5cd-2d4d-4749-a2f1-514308710fa4] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/stores - Status: 201 (27ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_3ad84d2f-11c6-4609-9f3a-447b584117e6] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/stores
+📡 [HTTP INCOMING] [CorrelationID: corr_df49bb9c-15c4-4a82-a507-7112d933da8c] POST /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_df49bb9c-15c4-4a82-a507-7112d933da8c] POST /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements - Status: 201 (24ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_91b51e12-e5d2-4759-a0c3-8534662d26e9] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_91b51e12-e5d2-4759-a0c3-8534662d26e9] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/entitlements - Status: 201 (25ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_14586753-60d3-4620-95d8-003dea72c4dc] POST /api/v1/merchants/MCH-1001/subscriptions/SUB-ccbce43f-d973-4d32-8062-061438669ea1/entitlements
+📡 [HTTP INCOMING] [CorrelationID: corr_4c4bcbe3-6589-4051-87d8-1151a2649cce] POST /api/v1/plans/d7d7141d-9fdf-4814-a4d4-b1131a338a63/entitlements
+📡 [HTTP INCOMING] [CorrelationID: corr_4fd9dfec-9b15-4eca-a9a7-dd94c294ce3f] POST /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements
+📡 [HTTP INCOMING] [CorrelationID: corr_3e7fd8d9-e561-426a-84db-ebc3bb866128] GET /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements
+✅ [HTTP COMPLETED] [CorrelationID: corr_3e7fd8d9-e561-426a-84db-ebc3bb866128] GET /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements - Status: 200 (13ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_504eedd7-bb53-42c5-b838-f71ae86b6668] GET /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements/03a38a06-4f1d-4afb-9951-6f72aac2807b
+✅ [HTTP COMPLETED] [CorrelationID: corr_504eedd7-bb53-42c5-b838-f71ae86b6668] GET /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements/03a38a06-4f1d-4afb-9951-6f72aac2807b - Status: 200 (29ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_7b6ea8ce-6c3d-4414-b130-e47a4ab84b77] PUT /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements/03a38a06-4f1d-4afb-9951-6f72aac2807b
+✅ [HTTP COMPLETED] [CorrelationID: corr_7b6ea8ce-6c3d-4414-b130-e47a4ab84b77] PUT /api/v1/merchants/MCH-1001/stores/STR-5001/entitlements/03a38a06-4f1d-4afb-9951-6f72aac2807b - Status: 200 (34ms)

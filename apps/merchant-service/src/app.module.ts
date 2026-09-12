@@ -1,33 +1,43 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { StoreTypeController } from './store-type.controller';
-import { FeatureController } from './feature.controller';
+import { APP_GUARD } from '@nestjs/core';
 import { PermissionController } from './permission.controller';
-import { RoleTemplateController } from './role-template.controller';
-import { PlanController } from './plan.controller';
 import { RoleController } from './role.controller';
 import { EmployeeController } from './employee.controller';
+import { AppController } from './app.controller';
+import { MerchantRepository } from './merchant.repository';
 import { SubscriptionController } from './subscription.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
-import { MerchantRepository } from './merchant.repository';
+import { DeviceController } from './device.controller';
+import { StoreTypeController, FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
+import { SessionAuthGuard } from './session-auth.guard';
+import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard } from './relationships.controller';
+import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
   imports: [],
   controllers: [
+    ...RELATIONSHIP_CONTROLLERS,
     AppController,
-    StoreTypeController,
-    FeatureController,
     PermissionController,
-    RoleTemplateController,
-    PlanController,
     RoleController,
     EmployeeController,
     SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,
+    DeviceController,
+    StoreTypeController,
+    FeatureController,
+    RoleTemplateController,
+    PlanController,
   ],
-  providers: [MerchantRepository],
   exports: [MerchantRepository],
+  providers: [
+    RelationshipsRepository,
+    RelationshipOwnerGuard,
+    MerchantRepository,
+    SessionAuthGuard,
+    { provide: APP_GUARD, useExisting: SessionAuthGuard },
+  ],
 })
 export class AppModule {}
