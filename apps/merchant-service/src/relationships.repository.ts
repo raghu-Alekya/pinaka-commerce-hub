@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { postgresConnectionOptions } from '@pinaka-delivery-hub/database';
-import { isISO8601, isUUID } from 'class-validator';
+import { isISO8601 } from 'class-validator';
 import { Relationship } from './relationships.config';
 
 export type RelationshipOperation = 'list' | 'get' | 'create' | 'replace' | 'patch' | 'delete';
@@ -16,7 +16,10 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() { if (this.db?.isInitialized) await this.db.destroy(); }
 
   private id(value: unknown, label: string, uuid = false): string {
-    if (typeof value !== 'string' || !value.trim() || value.length > 100 || (uuid && !isUUID(value))) {
+    // PostgreSQL accepts canonical UUIDs without RFC version/variant bits. Existing
+    // master seeds (for example b1111111-0000-0000-0000-000000000003) use that format.
+    const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (typeof value !== 'string' || !value.trim() || value.length > 100 || (uuid && !canonicalUuid.test(value))) {
       throw new BadRequestException(`${label} must be ${uuid ? 'a UUID' : 'a non-empty ID of at most 100 characters'}`);
     }
     return value;

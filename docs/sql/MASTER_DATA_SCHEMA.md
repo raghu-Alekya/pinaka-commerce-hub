@@ -41,8 +41,8 @@ The additive migration deliberately preserves the existing parent records and co
 The existing application still differs from the canonical document in several ways:
 
 - `stores.store_type_id` currently holds a store-type **code** rather than the UUID `store_types.id` reference used by the document.
-- `subscriptions` currently uses `"planCode"` and inline JSON entitlements rather than the canonical `plan_id` relationship. Those values are not automatically translated into grants in the new tables.
-- The current subscription entity makes `"merchantId"` unique and updates an existing subscription. Supporting the document's full subscription history requires an application and data migration together.
+- Migration 05 now adds the subscription `plan_id` relationship and contract fields while retaining legacy snapshot columns. See `../subscription-contract-api.md`.
+- Migration 05 removes merchant-only subscription uniqueness. The entity and APIs now support history and use `merchant_id`; the legacy onboarding helper creates a new contract when only closed contracts remain.
 - Current feature values include `FLAG`/`TEXT`; the canonical schema uses the document's `BOOLEAN`/`LIMIT`/`CONFIG` vocabulary.
 
 These parent-model changes require a separate backfill and matching application changes before adopting the complete UUID schema for existing data. Use the additive file for the missing mappings. Do not run the complete schema over the existing application database. Keep TypeORM automatic synchronization disabled when managing the database with reviewed SQL migrations, so it does not undo manually managed parent constraints.

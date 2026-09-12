@@ -105,9 +105,9 @@ Content-Type: application/json
 - Delete: `{ "success": true, "message": "Relationship removed" }`.
 - Status: 201 on create, 200 on successful reads/updates/deletes, 400 for invalid input, 401 for invalid/missing sessions, 403 for non-owner users, 404 for missing or out-of-scope parents/children/mappings, 409 for duplicate or conflicting references, 503 for a missing relationship schema.
 
-The APIs require `docs/sql/03_master_data_relationships.sql` and the current application parent schema (`subscriptions."merchantId"`, `stores.merchant_id`, text subscription/store IDs). No additional migration is needed for the configured local database. They do not automatically migrate a server database with a different schema.
+The APIs require `docs/sql/03_master_data_relationships.sql` and the current application parent schema (`subscriptions.merchant_id`, `stores.merchant_id`, text subscription/store IDs). Migration 05 aligns the subscription parent schema and has been applied locally. They do not automatically migrate a server database with a different schema.
 
-The existing `/api/v1/subscriptions` and `/api/v1/subscription-plans` behavior remains intact. `plans` is the commercial master used by the new plan-entitlement API; existing subscriptions still store `planCode` and inline entitlement JSON. These new APIs persist relational configuration; they do not replace that old contract, infer a new `plan_id`, enforce purchased store counts, or implement effective-feature/access evaluation. Those changes would require modifying existing behavior and are intentionally separate from this additive request.
+Subscriptions now reference `plans.id` through `plan_id`; see [Subscription contracts](subscription-contract-api.md). The legacy subscription-plan catalog remains available, but new contracts resolve their commercial plan from `plans`. Relationship APIs persist configuration and do not implement effective-feature/access evaluation.
 
 ## Verification
 

@@ -370,7 +370,7 @@ export class MerchantRepository implements OnModuleInit {
     const merchant = await this.merchantRepo.findOne({ where: { id } });
     if (!merchant) return { merchant: null, stores: [], subscription: null };
     const stores = await this.storeRepo.find({ where: { merchantId: id } });
-    const subscription = await this.subRepo.findOne({ where: { merchantId: id } });
+    const subscription = (await this.listSubscriptions(id))[0] || null;
     return { merchant, stores, subscription };
   }
 
@@ -580,34 +580,28 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createOrUpdateSubscription(merchantId: string, data: Partial<SubscriptionEntity>): Promise<SubscriptionEntity> {
-    const planCode = data.planCode;
-    const master = planCode ? await this.getSubscriptionPlan(planCode) : null;
-    if (!master || master.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
-    const previous = (await this.listSubscriptions(merchantId))[0];
+    const previous = (await this.listSubscriptions(merchantId)).find(row =>
+      [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL, SubscriptionStatus.PAST_DUE].includes(row.status));
+    const fields = await this.prepareSubscriptionContract(data, previous);
     const sub: SubscriptionEntity = {
+      ...previous,
+      ...fields,
       id: previous?.id || data.id || `SUB-${crypto.randomUUID()}`,
       merchantId,
-      planCode: master.planCode as PlanCode,
-      planName: master.planName,
-      maxStoresAllowed: master.maxStoresAllowed,
-      entitlements: master.entitlements,
-      billingCycle: master.billingCycle,
-      price: Number(master.price),
-      trialDays: master.trialDays,
-      status: data.status || SubscriptionStatus.ACTIVE,
-      createdAt: new Date(),
+      createdAt: previous?.createdAt || new Date(),
       updatedAt: new Date(),
-    };
-    let entity = await this.subRepo.findOne({ where: { merchantId } });
-    if (!entity) entity = this.subRepo.create(sub);
-    else Object.assign(entity, sub);
-    const saved = await this.subRepo.save(entity);
+    } as SubscriptionEntity;
+    sub.subscriptionCode ||= sub.id;
+    const saved = previous ? await this.updateSubscription(previous.id, fields) : await this.insertSubscription(sub);
+    if (!saved) throw new NotFoundException('Subscription not found');
     await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: saved.planCode, entitlements: saved.entitlements });
     return saved;
   }
 
   async listSubscriptions(merchantId?: string): Promise<SubscriptionEntity[]> {
-    return this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC' } });
+    const rows = await this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC', id: 'DESC' } });
+    const current = (row: SubscriptionEntity) => [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL, SubscriptionStatus.PAST_DUE].includes(row.status);
+    return rows.sort((a,b) => Number(current(b))-Number(current(a)));
   }
 
   async getSubscription(id: string): Promise<SubscriptionEntity | null> {
@@ -617,28 +611,88 @@ export class MerchantRepository implements OnModuleInit {
   async insertSubscription(subscription: SubscriptionEntity): Promise<SubscriptionEntity> {
     try { await this.subRepo.insert(subscription); }
     catch (error: any) {
-      if (error.code === '23505' || error.driverError?.code === '23505') throw new ConflictException('Subscription ID or merchant subscription already exists');
+      this.subscriptionWriteError(error);
       throw error;
     }
     await this.recordAuditLog('SUBSCRIPTION_CREATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: subscription.id });
-    return subscription;
+    return (await this.getSubscription(subscription.id))!;
   }
 
   async updateSubscription(id: string, fields: Partial<SubscriptionEntity>): Promise<SubscriptionEntity | null> {
     const existing = await this.getSubscription(id);
     if (!existing) return null;
     const subscription = { ...existing, ...fields, id, merchantId: existing.merchantId, createdAt: existing.createdAt, updatedAt: new Date() };
-    if (!(await this.subRepo.update(id, { ...fields, updatedAt: subscription.updatedAt })).affected) return null;
+    try {
+      if (!(await this.subRepo.update(id, { ...fields, updatedAt: subscription.updatedAt })).affected) return null;
+    } catch (error) { this.subscriptionWriteError(error); throw error; }
     await this.recordAuditLog('SUBSCRIPTION_UPDATED', subscription.merchantId, undefined, 'merchant', { subscriptionId: id });
-    return subscription;
+    return (await this.getSubscription(id))!;
   }
 
   async deleteSubscription(id: string): Promise<boolean> {
     const existing = await this.getSubscription(id);
     if (!existing) return false;
-    if (!(await this.subRepo.delete(id)).affected) return false;
+    try { if (!(await this.subRepo.delete(id)).affected) return false; }
+    catch (error) { this.subscriptionWriteError(error); throw error; }
     await this.recordAuditLog('SUBSCRIPTION_DELETED', existing.merchantId, undefined, 'merchant', { subscriptionId: id });
     return true;
+  }
+
+  private subscriptionWriteError(error: any): void {
+    const code = error.driverError?.code || error.code;
+    if (code === '23505') throw new ConflictException('Subscription ID or subscription code already exists');
+    if (code === '23503') throw new ConflictException('Subscription references an invalid parent or is in use; cancel it to preserve history');
+    if (code === '23514') throw new BadRequestException('Invalid subscription dates, price or licensed counts');
+  }
+
+  async prepareSubscriptionContract(input: Record<string, any>, existing?: SubscriptionEntity): Promise<Partial<SubscriptionEntity>> {
+    const fields: Record<string, any> = existing ? { ...existing } : {
+      status: SubscriptionStatus.ACTIVE, startDate:null, renewalDate:null, trialEndDate:null,
+      licensedStoreCount:null, licensedDeviceCount:null, trialDays:0, cancelledAt:null,
+      currentPeriodStart:null, currentPeriodEnd:null,
+    };
+    for (const key of ['subscriptionCode','billingCycle','status','price','currency','startDate','renewalDate','trialEndDate','licensedStoreCount','licensedDeviceCount','trialDays']) {
+      if (input[key] !== undefined) fields[key] = input[key];
+    }
+    const selected = input.planId || input.planCode || existing?.planId || existing?.planCode;
+    if (!selected) throw new BadRequestException('Select an active commercial plan');
+    const changingPlan = !existing || input.planId !== undefined || input.planCode !== undefined;
+    if (changingPlan) {
+      const plan = await this.getPlanByIdOrCode(selected);
+      if (!plan || plan.status !== 'ACTIVE') throw new BadRequestException('Select an active commercial plan from plans');
+      if (input.planId && input.planCode && input.planCode !== plan.planCode) throw new BadRequestException('planId and planCode refer to different plans');
+      fields.planId=plan.id; fields.planCode=plan.planCode; fields.planName=plan.name;
+      fields.billingCycle=input.billingCycle ?? plan.billingCycle;
+      fields.price=input.price ?? Number(plan.basePrice); fields.currency=input.currency ?? plan.currency;
+      const entitlements = await this.dataSource.query('SELECT f.feature_key, e.enabled, e.limit_value FROM public.plan_entitlements e JOIN public.features f ON f.id=e.feature_id WHERE e.plan_id=$1',[plan.id]);
+      fields.entitlements=entitlements.filter((row: any)=>row.enabled).map((row: any)=>row.feature_key);
+      for (const [key,feature] of [['licensedStoreCount','MAX_STORES'],['licensedDeviceCount','MAX_DEVICES']]) {
+        if (input[key] === undefined) {
+          const value=entitlements.find((row:any)=>row.feature_key===feature && row.enabled)?.limit_value;
+          fields[key]=value != null && /^\d+$/.test(value) && Number(value)<=2147483647 ? Number(value) : null;
+        }
+      }
+    }
+    if (input.maxStoresAllowed !== undefined) {
+      if (input.licensedStoreCount !== undefined && input.licensedStoreCount !== input.maxStoresAllowed) throw new BadRequestException('Conflicting store count fields');
+      fields.licensedStoreCount=input.maxStoresAllowed;
+    }
+    for (const [alias,canonical] of [['currentPeriodStart','startDate'],['currentPeriodEnd','renewalDate']]) {
+      if (input[alias] !== undefined) {
+        const date=new Date(input[alias]);
+        if (!Number.isFinite(date.getTime())) throw new BadRequestException(`Invalid ${alias}`);
+        const day=date.toISOString().slice(0,10);
+        if (input[canonical] !== undefined && input[canonical] !== day) throw new BadRequestException(`Conflicting ${alias} and ${canonical}`);
+        fields[canonical]=day; fields[alias]=date;
+      } else if (input[canonical] !== undefined) fields[alias]=input[canonical]===null ? null : new Date(input[canonical]+'T00:00:00Z');
+    }
+    if (fields.startDate && fields.renewalDate && fields.renewalDate<=fields.startDate) throw new BadRequestException('renewalDate must be after startDate');
+    if (fields.startDate && fields.trialEndDate && fields.trialEndDate<fields.startDate) throw new BadRequestException('trialEndDate cannot precede startDate');
+    fields.maxStoresAllowed=fields.licensedStoreCount ?? 0;
+    if (fields.status===SubscriptionStatus.CANCELLED) fields.cancelledAt=existing?.cancelledAt || new Date();
+    else if (existing?.status===SubscriptionStatus.CANCELLED) fields.cancelledAt=null;
+    for (const key of ['id','merchantId','createdAt','updatedAt']) delete fields[key];
+    return fields;
   }
 
   private async cacheStorePin(pin: string, store: StoreEntity): Promise<void> {

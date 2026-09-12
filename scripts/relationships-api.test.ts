@@ -36,7 +36,11 @@ async function main() {
   try {
     const suffix = randomUUID();
     const ids = { merchantId: `M-TEST-${suffix}`, otherMerchant: `M-OTHER-${suffix}`, storeId: `S-TEST-${suffix}`, otherStore: `S-OTHER-${suffix}`,
-      subscriptionId: `SUB-TEST-${suffix}`, otherSubscription: `SUB-OTHER-${suffix}`, storeTypeId: randomUUID(), planId: randomUUID(), featureId: randomUUID(), roleTemplateId: randomUUID() };
+      subscriptionId: `SUB-TEST-${suffix}`, otherSubscription: `SUB-OTHER-${suffix}`, storeTypeId: randomUUID() as string, planId: randomUUID() as string, featureId: randomUUID() as string, roleTemplateId: randomUUID() as string };
+    // Match the non-RFC version/variant format used by existing PostgreSQL seeds.
+    for (const key of ['storeTypeId', 'planId', 'featureId', 'roleTemplateId'] as const) {
+      ids[key] = ids[key].slice(0, 9) + '0000-0000-0000-' + ids[key].slice(24);
+    }
     for (const merchant of [ids.merchantId, ids.otherMerchant]) {
       await runner.query('INSERT INTO merchants (id,"businessName","ownerName",email,phone) VALUES ($1,\'API test\',\'Owner\',$2,\'123\')', [merchant,`${merchant}@example.invalid`]);
     }
@@ -46,7 +50,7 @@ async function main() {
     await runner.query("INSERT INTO plans (id,plan_code,name,billing_model,base_price,currency,billing_cycle) VALUES ($1,$2,'API plan','FLAT',10,'USD','MONTHLY')", [ids.planId,`P-${suffix}`]);
     for (const [store,merchant,subscription] of [[ids.storeId,ids.merchantId,ids.subscriptionId],[ids.otherStore,ids.otherMerchant,ids.otherSubscription]]) {
       await runner.query("INSERT INTO stores (id,merchant_id,name,store_code,store_type_id,address,\"activationPin\") VALUES ($1,$2,'API store',$1,'RETAIL','{}','123456')", [store,merchant]);
-      await runner.query("INSERT INTO subscriptions (id,\"merchantId\",\"planName\",entitlements) VALUES ($1,$2,'API plan','[]')", [subscription,merchant]);
+      await runner.query("INSERT INTO subscriptions (id,merchant_id,plan_id,\"planName\",entitlements) VALUES ($1,$2,$3,'API plan','[]')", [subscription,merchant,ids.planId]);
     }
     await app.listen(0, '127.0.0.1');
     const base = await app.getUrl();
