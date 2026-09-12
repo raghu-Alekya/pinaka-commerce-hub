@@ -40,7 +40,7 @@ services:
     container_name: pdh-postgres
     command: [ "postgres", "-c", "max_connections=300", "-c", "idle_in_transaction_session_timeout=30000" ]
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: pdh_user
       POSTGRES_PASSWORD: pdh_password
@@ -48,7 +48,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U pdh_user -d pinaka_delivery_hub" ]
+      test: [ "CMD-SHELL", "pg_isready -U pdh_user -d pinaka_commerce_hub" ]
       interval: 5s
       timeout: 5s
       retries: 12

@@ -1,17 +1,20 @@
-[32m[Nest] 17844  - [39m09/10/2026, 8:04:58 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:04:58 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +23ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/pos}:[39m[38;5;3m +1836ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/health, GET} route[39m[38;5;3m +9ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/activate, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/shifts/open, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/shifts/cash-movement, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/shifts/close, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/pos/shifts/active, GET} route[39m[38;5;3m +1ms[39m
-🐘 [PCH POS Config DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [POS Integration DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [POS Integration DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
+[Nest] 17052  - 09/12/2026, 11:29:16 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 17052  - 09/12/2026, 11:29:16 AM     LOG [InstanceLoader] AppModule dependencies initialized +15ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RoutesResolver] AppController {/api/v1/pos}: +868ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/health, GET} route +7ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/activate, POST} route +2ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/open, POST} route +1ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/cash-movement, POST} route +1ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/close, POST} route +1ms
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [RouterExplorer] Mapped {/api/v1/pos/shifts/active, GET} route +1ms
+🐘 [PCH POS Config DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+🐘 [POS Integration DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 ⚡ [POS Integration Redis] Connected to Redis Container
-⚡ [POS Integration Redis] Connected to Redis Container
+✅ [POS Seed] Created default POS config for Store STR-5001
 ⚡ [PCH POS Config Redis] Connected for <1ms POS terminal startup caching
-[32m[Nest] 17844  - [39m09/10/2026, 8:05:00 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +322ms[39m
+[Nest] 17052  - 09/12/2026, 11:29:17 AM     LOG [NestApplication] Nest application successfully started +206ms
 🚀 POS Integration Service running on http://localhost:3007
+📡 [HTTP INCOMING] [CorrelationID: corr_f18386f6-0275-4573-803c-d5a9b902f5ee] GET /api/v1/pos/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_f18386f6-0275-4573-803c-d5a9b902f5ee] GET /api/v1/pos/health - Status: 200 (4ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_654ca2a9-3299-400a-90a9-16146007cb4c] GET /api/v1/pos/shifts/active
+✅ [HTTP COMPLETED] [CorrelationID: corr_654ca2a9-3299-400a-90a9-16146007cb4c] GET /api/v1/pos/shifts/active - Status: 200 (26ms)

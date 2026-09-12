@@ -1,12 +1,12 @@
-import { Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Inject, Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
 import { MovementType } from './entities/cash-movement.entity';
 
-const posRepository = new PosRepository();
-posRepository.onModuleInit();
 
 @Controller('api/v1/pos')
 export class AppController {
+  constructor(@Inject(PosRepository) private readonly posRepository: PosRepository) {}
+
   @Get('health')
   health() {
     return {
@@ -45,7 +45,7 @@ export class AppController {
     if (!body.merchantId || !body.storeId || !body.cashierName) {
       throw new BadRequestException('merchantId, storeId, and cashierName are required');
     }
-    const shift = await posRepository.openShift(body.merchantId, body.storeId, body.terminalId || 'SUNMI-D3-01', body.cashierName, body.openingCash || 200.00);
+    const shift = await this.posRepository.openShift(body.merchantId, body.storeId, body.terminalId || 'SUNMI-D3-01', body.cashierName, body.openingCash || 200.00);
     return {
       success: true,
       message: 'Cashier shift opened successfully!',
@@ -60,7 +60,7 @@ export class AppController {
     if (!body.shiftId || !body.storeId || !body.amount) {
       throw new BadRequestException('shiftId, storeId, and amount are required');
     }
-    const movement = await posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
+    const movement = await this.posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
     return {
       success: true,
       message: `Cash movement '${movement.movementType}' recorded successfully!`,
@@ -74,7 +74,7 @@ export class AppController {
     if (!body.shiftId || body.closingCashActual === undefined) {
       throw new BadRequestException('shiftId and closingCashActual are required');
     }
-    const result = await posRepository.closeShift(body.shiftId, Number(body.closingCashActual));
+    const result = await this.posRepository.closeShift(body.shiftId, Number(body.closingCashActual));
     if (!result.success) {
       throw new NotFoundException(result.message);
     }
@@ -88,7 +88,7 @@ export class AppController {
 
   @Get('shifts/active')
   async getActiveShift(@Query('storeId') storeId: string) {
-    const shift = await posRepository.getActiveShift(storeId || 'STR-5001');
+    const shift = await this.posRepository.getActiveShift(storeId || 'STR-5001');
     return {
       success: true,
       storeId: storeId || 'STR-5001',

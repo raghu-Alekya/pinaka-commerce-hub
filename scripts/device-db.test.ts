@@ -10,7 +10,7 @@ async function main() {
   const db = new DataSource({ type: 'postgres', url: process.env.DATABASE_URL || undefined,
     host: process.env.POSTGRES_HOST || 'localhost', port: Number(process.env.POSTGRES_PORT) || 5432,
     username: process.env.POSTGRES_USER || 'pdh_user', password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-    database: process.env.POSTGRES_DB || 'pinaka_delivery_hub', entities: [DeviceEntity], synchronize: false });
+    database: process.env.POSTGRES_DB || 'pinaka_commerce_hub', entities: [DeviceEntity], synchronize: false });
   await db.initialize();
   const runner = db.createQueryRunner();
   await runner.startTransaction();

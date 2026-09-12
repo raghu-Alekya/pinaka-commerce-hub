@@ -1,4 +1,8 @@
-(node:24712) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
-(Use `node --trace-deprecation ...` to show where the warning was created)
-❌ [HTTP FAILED] [CorrelationID: corr_1ffb55d2-185f-4449-8e94-f7e96ecbf253] POST /api/v1/role-templates - Status: 409 (16ms)
-❌ [HTTP FAILED] [CorrelationID: corr_4dfb70b2-1dfc-4d94-a599-9a9c4d89f34b] POST /api/v1/plans - Status: 409 (10ms)
+❌ [HTTP FAILED] [CorrelationID: corr_eaae3991-333d-4a35-ab25-362eae565c48] POST /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features - Status: 404 (17ms)
+❌ [HTTP FAILED] [CorrelationID: corr_ce865d2d-0483-4d4d-939e-d694e2fdf87c] GET /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features - Status: 404 (5ms)
+❌ [HTTP FAILED] [CorrelationID: corr_1bd2f3b4-f18b-4720-b7da-d2aefafe68d5] POST /api/v1/store-types - Status: 409 (13ms)
+❌ [HTTP FAILED] [CorrelationID: corr_0b89e9a5-4a7e-4670-8302-204a1deb050a] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/features - Status: 404 (23ms)
+❌ [HTTP FAILED] [CorrelationID: corr_9a523c8a-4876-4a48-9b26-5959b3a83712] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/role-templates - Status: 400 (0ms)
+❌ [HTTP FAILED] [CorrelationID: corr_bc583146-3b51-4ff2-8c88-a1c2539cf70b] POST /api/v1/store-types/a1b2c3d4-e5f6-4a1b-8c2d-000000000001/role-templates - Status: 400 (0ms)
+❌ [HTTP FAILED] [CorrelationID: corr_ed11f406-1b73-4bf5-aed5-a8c8a04cd7a1] POST /api/v1/store-types - Status: 409 (8ms)
+❌ [HTTP FAILED] [CorrelationID: corr_dd04884f-3f74-4e42-868a-4df138fc6c51] GET /api/v1/store-types/4b41c149-6cd6-431d-99fa-390269e3f780 - Status: 404 (4ms)

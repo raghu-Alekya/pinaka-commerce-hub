@@ -1,14 +1,16 @@
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:51 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:51 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +19ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/analytics}:[39m[38;5;3m +886ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/health, GET} route[39m[38;5;3m +6ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/dashboard, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/top-products, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/channels, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/z-report, GET} route[39m[38;5;3m +1ms[39m
-🐘 [Analytics Service DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [Analytics Service DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
+[Nest] 14632  - 09/12/2026, 11:29:10 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 14632  - 09/12/2026, 11:29:10 AM     LOG [InstanceLoader] AppModule dependencies initialized +21ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RoutesResolver] AppController {/api/v1/analytics}: +984ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/health, GET} route +8ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/dashboard, GET} route +2ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/top-products, GET} route +1ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/channels, GET} route +1ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/z-report, GET} route +2ms
+🐘 [Analytics Service DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 ⚡ [Analytics Service Redis] Connected to Redis Container
-[32m[Nest] 7528  - [39m09/10/2026, 8:04:52 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +221ms[39m
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [NestApplication] Nest application successfully started +327ms
 🚀 Analytics Service running on http://localhost:3006
-⚡ [Analytics Service Redis] Connected to Redis Container
+📡 [HTTP INCOMING] [CorrelationID: corr_0c2c3a8d-83f0-4b8a-a868-a840476c8534] GET /api/v1/analytics/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_0c2c3a8d-83f0-4b8a-a868-a840476c8534] GET /api/v1/analytics/health - Status: 200 (2ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a368503e-70ea-48ed-8204-422ef5f96d7e] GET /api/v1/analytics/dashboard
+✅ [HTTP COMPLETED] [CorrelationID: corr_a368503e-70ea-48ed-8204-422ef5f96d7e] GET /api/v1/analytics/dashboard - Status: 200 (27ms)

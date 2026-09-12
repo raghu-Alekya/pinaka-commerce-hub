@@ -1,15 +1,17 @@
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:39 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:39 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +20ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/menus}:[39m[38;5;3m +1016ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/health, GET} route[39m[38;5;3m +7ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/ready, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items/:itemId/86, PATCH} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/sync, POST} route[39m[38;5;3m +0ms[39m
-🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
+[Nest] 16532  - 09/12/2026, 11:28:57 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 16532  - 09/12/2026, 11:28:57 AM     LOG [InstanceLoader] AppModule dependencies initialized +12ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RoutesResolver] AppController {/api/v1/menus}: +603ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/health, GET} route +5ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/ready, GET} route +0ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId, GET} route +2ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/items, POST} route +1ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/items/:itemId/86, PATCH} route +1ms
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [RouterExplorer] Mapped {/api/v1/menus/:merchantId/sync, POST} route +1ms
+🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 âš¡ [Menu Redis] Connected to Redis Container on port 6379
-âš¡ [Menu Redis] Connected to Redis Container on port 6379
-[32m[Nest] 20612  - [39m09/10/2026, 8:04:40 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +274ms[39m
+[Nest] 16532  - 09/12/2026, 11:28:58 AM     LOG [NestApplication] Nest application successfully started +99ms
 🚀 Menu Service running on http://localhost:3004
+âš¡ [Menu Redis] Connected to Redis Container on port 6379
+📡 [HTTP INCOMING] [CorrelationID: corr_2a888786-d6c9-4ed0-a26f-7194efb47e1e] GET /api/v1/menus/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_2a888786-d6c9-4ed0-a26f-7194efb47e1e] GET /api/v1/menus/health - Status: 200 (3ms)

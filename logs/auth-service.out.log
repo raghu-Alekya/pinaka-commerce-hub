@@ -1,28 +1,28 @@
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:12 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +32ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/}:[39m[38;5;3m +1041ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/health, GET} route[39m[38;5;3m +11ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/ready, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/dev/mailbox, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/dev/mailbox, DELETE} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/signup, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/login, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/refresh, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/logout, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/me, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/google, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/password/reset-request, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/password/reset, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/auth/invitations/accept, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/accept-invitation, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/reset-password, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/pos/account, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/users, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/users/:id, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/users, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/users/:id, PATCH} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:13 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/users/:id, DELETE} route[39m[38;5;3m +1ms[39m
-🐘 [Auth PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
+[Nest] 11108  - 09/12/2026, 11:29:25 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 11108  - 09/12/2026, 11:29:25 AM     LOG [InstanceLoader] AppModule dependencies initialized +12ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RoutesResolver] AppController {/}: +643ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/health, GET} route +4ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/ready, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, DELETE} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/signup, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/login, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/refresh, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/logout, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/me, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/google, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset-request, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/invitations/accept, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/accept-invitation, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/reset-password, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/pos/account, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, PATCH} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, DELETE} route +0ms
+🐘 [Auth PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 🐘 [Auth PostgreSQL] users, accounts, sessions, and refresh_tokens tables are ready
-[32m[Nest] 13940  - [39m09/10/2026, 8:05:14 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +342ms[39m
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [NestApplication] Nest application successfully started +111ms
 🚀 Auth Service running on http://localhost:3010

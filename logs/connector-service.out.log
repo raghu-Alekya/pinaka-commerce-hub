@@ -1,74 +1,77 @@
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:20 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:20 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +17ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/connectors}:[39m[38;5;3m +857ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/health, GET} route[39m[38;5;3m +5ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/woocommerce/connection, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/woocommerce/webhook, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/stores/:storeId/connector, PUT} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/woocommerce/stores/:storeId/connector, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/stores/:storeId, PUT} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/woocommerce/test-connection, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/woocommerce/sync, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/delivery/channels, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/delivery/webhook/:channel, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/delivery/orders, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/connectors/delivery/orders/accept, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/connector/api/v1}:[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/health, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/woocommerce/connection, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/woocommerce/webhook, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/stores/:storeId/connector, PUT} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/woocommerce/stores/:storeId/connector, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/stores/:storeId, PUT} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/woocommerce/test-connection, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/woocommerce/sync, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/delivery/channels, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/delivery/webhook/:channel, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/delivery/orders, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/api/v1/delivery/orders/accept, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1}:[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/health, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/woocommerce/connection, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/woocommerce/webhook, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/stores/:storeId/connector, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/woocommerce/stores/:storeId/connector, PUT} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/stores/:storeId, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/woocommerce/test-connection, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/woocommerce/sync, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/delivery/channels, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/delivery/webhook/:channel, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/delivery/orders, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/delivery/orders/accept, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/connectors}:[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/health, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/woocommerce/connection, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/woocommerce/webhook, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/stores/:storeId/connector, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/woocommerce/stores/:storeId/connector, PUT} route[39m[38;5;3m +15ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/stores/:storeId, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/woocommerce/test-connection, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/woocommerce/sync, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/delivery/channels, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/delivery/webhook/:channel, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/delivery/orders, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connectors/delivery/orders/accept, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/connector}:[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/health, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/woocommerce/connection, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/woocommerce/webhook, POST} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/stores/:storeId/connector, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/woocommerce/stores/:storeId/connector, PUT} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/stores/:storeId, PUT} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/woocommerce/test-connection, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/woocommerce/sync, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/delivery/channels, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/delivery/webhook/:channel, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/delivery/orders, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:21 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/connector/delivery/orders/accept, POST} route[39m[38;5;3m +1ms[39m
-🐘 [WooCommerce Connector DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [Aggregator webhooks] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
-🐘 [Delivery Connector DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_delivery_hub
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [InstanceLoader] AppModule dependencies initialized +26ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RoutesResolver] AppController {/api/v1/connectors}: +624ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/health, GET} route +4ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/connection, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/webhook, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/stores/:storeId/connector, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/stores/:storeId/connector, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/stores/:storeId, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/test-connection, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/woocommerce/sync, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/channels, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/webhook/:channel, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/orders, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/connectors/delivery/orders/accept, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RoutesResolver] AppController {/connector/api/v1}: +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/health, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/woocommerce/connection, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/woocommerce/webhook, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/woocommerce/stores/:storeId/connector, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/stores/:storeId, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/woocommerce/test-connection, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/woocommerce/sync, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/delivery/channels, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/delivery/webhook/:channel, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/delivery/orders, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/api/v1/delivery/orders/accept, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RoutesResolver] AppController {/api/v1}: +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/health, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/woocommerce/connection, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/woocommerce/webhook, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/woocommerce/stores/:storeId/connector, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/stores/:storeId, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/woocommerce/test-connection, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/woocommerce/sync, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/delivery/channels, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/delivery/webhook/:channel, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/delivery/orders, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/api/v1/delivery/orders/accept, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RoutesResolver] AppController {/connectors}: +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/health, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/woocommerce/connection, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/woocommerce/webhook, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/woocommerce/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/stores/:storeId, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/woocommerce/test-connection, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/woocommerce/sync, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/delivery/channels, GET} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/delivery/webhook/:channel, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/delivery/orders, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connectors/delivery/orders/accept, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RoutesResolver] AppController {/connector}: +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/health, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/woocommerce/connection, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/woocommerce/webhook, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/woocommerce/stores/:storeId/connector, PUT} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/stores/:storeId, PUT} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/woocommerce/test-connection, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/woocommerce/sync, POST} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/delivery/channels, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/delivery/webhook/:channel, POST} route +1ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/delivery/orders, GET} route +0ms
+[Nest] 17484  - 09/12/2026, 11:28:41 AM     LOG [RouterExplorer] Mapped {/connector/delivery/orders/accept, POST} route +0ms
+🐘 [WooCommerce Connector DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+🛒 [WooCommerce Engine] Initialized and connected to PostgreSQL
+🐘 [Delivery Connector DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+🐘 [Aggregator webhooks] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 [PostgreSQL] aggregator_webhooks persistence is ready
 ⚡ [Delivery Connector Redis] Connected to Redis Container
-[32m[Nest] 23456  - [39m09/10/2026, 8:04:22 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +1135ms[39m
+[Nest] 17484  - 09/12/2026, 11:28:42 AM     LOG [NestApplication] Nest application successfully started +140ms
 🚀 Delivery Connector Service running on http://localhost:3001
+📡 [HTTP INCOMING] [CorrelationID: corr_c22cf0a2-9df3-468f-96da-7d54ebdea2dc] GET /api/v1/connectors/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_c22cf0a2-9df3-468f-96da-7d54ebdea2dc] GET /api/v1/connectors/health - Status: 200 (5ms)

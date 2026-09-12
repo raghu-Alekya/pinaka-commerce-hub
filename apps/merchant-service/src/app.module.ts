@@ -11,10 +11,13 @@ import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
 import { StoreTypeController, FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
+import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard } from './relationships.controller';
+import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
   imports: [],
   controllers: [
+    ...RELATIONSHIP_CONTROLLERS,
     AppController,
     PermissionController,
     RoleController,
@@ -30,10 +33,11 @@ import { SessionAuthGuard } from './session-auth.guard';
   ],
   exports: [MerchantRepository],
   providers: [
+    RelationshipsRepository,
+    RelationshipOwnerGuard,
     MerchantRepository,
     SessionAuthGuard,
     { provide: APP_GUARD, useExisting: SessionAuthGuard },
   ],
 })
 export class AppModule {}
-

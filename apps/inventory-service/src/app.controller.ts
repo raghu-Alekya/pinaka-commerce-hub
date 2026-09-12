@@ -1,12 +1,12 @@
-import { Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Inject, Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InventoryRepository } from './inventory.repository';
 import { AdjustmentType } from './entities/inventory-adjustment.entity';
 
-const inventoryRepository = new InventoryRepository();
-inventoryRepository.onModuleInit();
 
 @Controller('api/v1/inventory')
 export class AppController {
+  constructor(@Inject(InventoryRepository) private readonly inventoryRepository: InventoryRepository) {}
+
   @Get('health')
   health() {
     return {
@@ -20,7 +20,7 @@ export class AppController {
   @Get()
   async getInventory(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const items = await inventoryRepository.getInventoryByStore(targetStore);
+    const items = await this.inventoryRepository.getInventoryByStore(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -32,7 +32,7 @@ export class AppController {
   @Get('alerts/low-stock')
   async getLowStockAlerts(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const alerts = await inventoryRepository.getLowStockAlerts(targetStore);
+    const alerts = await this.inventoryRepository.getLowStockAlerts(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -46,7 +46,7 @@ export class AppController {
     if (!body.storeId || !body.productId || !body.quantity) {
       throw new BadRequestException('storeId, productId, and quantity are required');
     }
-    const result = await inventoryRepository.decrementStock(body.storeId, body.productId, Number(body.quantity), body.performedBy || 'POS Terminal', body.reason);
+    const result = await this.inventoryRepository.decrementStock(body.storeId, body.productId, Number(body.quantity), body.performedBy || 'POS Terminal', body.reason);
     if (!result.success) {
       throw new NotFoundException(result.message);
     }
@@ -62,7 +62,7 @@ export class AppController {
     if (!body.storeId || !body.productId || !body.quantityChange) {
       throw new BadRequestException('storeId, productId, and quantityChange are required');
     }
-    const result = await inventoryRepository.adjustStock(body.storeId, body.productId, body.adjustmentType || AdjustmentType.REPLENISHMENT, Number(body.quantityChange), body.performedBy || 'Manager', body.reason);
+    const result = await this.inventoryRepository.adjustStock(body.storeId, body.productId, body.adjustmentType || AdjustmentType.REPLENISHMENT, Number(body.quantityChange), body.performedBy || 'Manager', body.reason);
     if (!result.success) {
       throw new NotFoundException(result.message);
     }
