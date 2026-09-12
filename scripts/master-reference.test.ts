@@ -9,7 +9,7 @@ async function main() {
  assert.equal(first.price,0); assert.equal(first.planName,'Custom master'); assert.equal(first.maxStoresAllowed,7); assert.equal(first.billingCycle,'ANNUAL');
  const second=await repo.createOrUpdateSubscription('M1',{planCode:'CUSTOM' as any});assert.equal(second.id,first.id);
  await assert.rejects(repo.createOrUpdateSubscription('M2',{planCode:'MISSING' as any}),/active subscription master/);
- const reference=new ReferenceDataController().get();assert.ok(reference.currencies.includes('INR'));assert.ok(reference.storeStatuses.includes('Active'));assert.ok(reference.timezones.length>100);
+ const reference=await new ReferenceDataController(repo).get();assert.ok(reference.currencies.includes('INR'));assert.ok(reference.storeStatuses.includes('Active'));assert.ok(reference.timezones.length>100);
  console.log('PASS: master values override submitted defaults, zero price, custom code, stable subscription ID, missing-plan rejection and reference data');
 }
 main().catch(e=>{console.error(e);process.exitCode=1});

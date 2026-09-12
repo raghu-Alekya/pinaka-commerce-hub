@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { PermissionController } from './permission.controller';
+import { RoleController } from './role.controller';
+import { EmployeeController } from './employee.controller';
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
 import { SubscriptionController } from './subscription.controller';
@@ -13,6 +16,9 @@ import { SessionAuthGuard } from './session-auth.guard';
   imports: [],
   controllers: [
     AppController,
+    PermissionController,
+    RoleController,
+    EmployeeController,
     SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,
@@ -22,6 +28,7 @@ import { SessionAuthGuard } from './session-auth.guard';
     RoleTemplateController,
     PlanController,
   ],
+  exports: [MerchantRepository],
   providers: [
     MerchantRepository,
     SessionAuthGuard,
