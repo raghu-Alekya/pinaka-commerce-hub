@@ -1,10 +1,12 @@
-[Nest] 11576  - 09/08/2026, 4:33:06 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 11576  - 09/08/2026, 4:33:06 PM     LOG [InstanceLoader] AppModule dependencies initialized +16ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RoutesResolver] AppController {/api/v1/gateway}: +727ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/health, GET} route +4ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/ready, GET} route +1ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders, GET} route +0ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/stream, GET} route +1ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/:id/status, PATCH} route +2ms
-[Nest] 11576  - 09/08/2026, 4:33:07 PM     LOG [NestApplication] Nest application successfully started +2ms
+[Nest] 13360  - 09/12/2026, 11:28:35 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 13360  - 09/12/2026, 11:28:35 AM     LOG [InstanceLoader] AppModule dependencies initialized +11ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RoutesResolver] AppController {/api/v1/gateway}: +935ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RouterExplorer] Mapped {/api/v1/gateway/health, GET} route +5ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RouterExplorer] Mapped {/api/v1/gateway/ready, GET} route +1ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders, GET} route +1ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/stream, GET} route +1ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/:id/status, PATCH} route +2ms
+[Nest] 13360  - 09/12/2026, 11:28:36 AM     LOG [NestApplication] Nest application successfully started +2ms
 🚀 Gateway Service running on http://localhost:3000
+📡 [HTTP INCOMING] [CorrelationID: corr_b7c86e19-9974-4305-a241-167564a05d73] GET /api/v1/gateway/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_b7c86e19-9974-4305-a241-167564a05d73] GET /api/v1/gateway/health - Status: 200 (3ms)

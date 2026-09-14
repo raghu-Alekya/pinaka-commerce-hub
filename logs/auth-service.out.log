@@ -1,26 +1,28 @@
-[Nest] 11648  - 09/08/2026, 4:34:05 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 11648  - 09/08/2026, 4:34:05 PM     LOG [InstanceLoader] AppModule dependencies initialized +9ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RoutesResolver] AppController {/}: +919ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/health, GET} route +12ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/ready, GET} route +2ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, GET} route +3ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, DELETE} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/signup, POST} route +3ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/login, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/refresh, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/logout, POST} route +2ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/google, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset-request, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/auth/invitations/accept, POST} route +2ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/accept-invitation, GET} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/reset-password, GET} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/pos/account, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/users, GET} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, GET} route +2ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/users, POST} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, PATCH} route +1ms
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, DELETE} route +1ms
-🐘 [Auth PostgreSQL] Connected; users table is ready
-[Nest] 11648  - 09/08/2026, 4:34:06 PM     LOG [NestApplication] Nest application successfully started +427ms
+[Nest] 11108  - 09/12/2026, 11:29:25 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 11108  - 09/12/2026, 11:29:25 AM     LOG [InstanceLoader] AppModule dependencies initialized +12ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RoutesResolver] AppController {/}: +643ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/health, GET} route +4ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/ready, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/dev/mailbox, DELETE} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/signup, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/login, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/refresh, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/logout, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/me, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/google, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset-request, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/password/reset, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/auth/invitations/accept, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/accept-invitation, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/reset-password, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/pos/account, POST} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users, GET} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, GET} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users, POST} route +1ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, PATCH} route +0ms
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [RouterExplorer] Mapped {/api/v1/users/:id, DELETE} route +0ms
+🐘 [Auth PostgreSQL] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+🐘 [Auth PostgreSQL] users, accounts, sessions, and refresh_tokens tables are ready
+[Nest] 11108  - 09/12/2026, 11:29:26 AM     LOG [NestApplication] Nest application successfully started +111ms
 🚀 Auth Service running on http://localhost:3010

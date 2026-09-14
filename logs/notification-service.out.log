@@ -1,7 +1,7 @@
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [InstanceLoader] AppModule dependencies initialized +8ms
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [RoutesResolver] AppController {/}: +5ms
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [RouterExplorer] Mapped {/health, GET} route +5ms
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [RouterExplorer] Mapped {/ready, GET} route +1ms
-[Nest] 10076  - 09/08/2026, 4:33:57 PM     LOG [NestApplication] Nest application successfully started +2ms
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [InstanceLoader] AppModule dependencies initialized +15ms
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [RoutesResolver] AppController {/}: +7ms
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [RouterExplorer] Mapped {/health, GET} route +3ms
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [RouterExplorer] Mapped {/ready, GET} route +1ms
+[Nest] 26352  - 09/12/2026, 11:29:19 AM     LOG [NestApplication] Nest application successfully started +5ms
 🚀 Notification Service running on http://localhost:3008

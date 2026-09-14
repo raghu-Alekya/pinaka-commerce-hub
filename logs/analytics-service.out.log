@@ -1,14 +1,16 @@
-[Nest] 19152  - 09/08/2026, 4:33:45 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 19152  - 09/08/2026, 4:33:45 PM     LOG [InstanceLoader] AppModule dependencies initialized +13ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RoutesResolver] AppController {/api/v1/analytics}: +1081ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/health, GET} route +8ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/dashboard, GET} route +1ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/top-products, GET} route +1ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/channels, GET} route +1ms
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [RouterExplorer] Mapped {/api/v1/analytics/z-report, GET} route +1ms
-🐘 [Analytics Service DB] Connected to PostgreSQL Database
-🐘 [Analytics Service DB] Connected to PostgreSQL Database
+[Nest] 14632  - 09/12/2026, 11:29:10 AM     LOG [NestFactory] Starting Nest application...
+[Nest] 14632  - 09/12/2026, 11:29:10 AM     LOG [InstanceLoader] AppModule dependencies initialized +21ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RoutesResolver] AppController {/api/v1/analytics}: +984ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/health, GET} route +8ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/dashboard, GET} route +2ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/top-products, GET} route +1ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/channels, GET} route +1ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [RouterExplorer] Mapped {/api/v1/analytics/z-report, GET} route +2ms
+🐘 [Analytics Service DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
 ⚡ [Analytics Service Redis] Connected to Redis Container
-⚡ [Analytics Service Redis] Connected to Redis Container
-[Nest] 19152  - 09/08/2026, 4:33:46 PM     LOG [NestApplication] Nest application successfully started +235ms
+[Nest] 14632  - 09/12/2026, 11:29:11 AM     LOG [NestApplication] Nest application successfully started +327ms
 🚀 Analytics Service running on http://localhost:3006
+📡 [HTTP INCOMING] [CorrelationID: corr_0c2c3a8d-83f0-4b8a-a868-a840476c8534] GET /api/v1/analytics/health
+✅ [HTTP COMPLETED] [CorrelationID: corr_0c2c3a8d-83f0-4b8a-a868-a840476c8534] GET /api/v1/analytics/health - Status: 200 (2ms)
+📡 [HTTP INCOMING] [CorrelationID: corr_a368503e-70ea-48ed-8204-422ef5f96d7e] GET /api/v1/analytics/dashboard
+✅ [HTTP COMPLETED] [CorrelationID: corr_a368503e-70ea-48ed-8204-422ef5f96d7e] GET /api/v1/analytics/dashboard - Status: 200 (27ms)

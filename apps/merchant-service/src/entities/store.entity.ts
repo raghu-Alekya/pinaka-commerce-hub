@@ -29,7 +29,6 @@ export interface StoreChannelConfig {
   enabled: boolean;
 }
 
-/** A credential is encrypted before it is stored in this JSONB value. */
 export interface StoreWebsiteConnectorConfig {
   provider: 'WORDPRESS';
   wordpressUrl: string;
@@ -40,19 +39,31 @@ export interface StoreWebsiteConnectorConfig {
 @Entity('stores')
 export class StoreEntity {
   @PrimaryColumn({ type: 'varchar', length: 100 })
-  id!: string; // e.g. "STR-5001"
+  id!: string; // e.g. "STR-5001" or "STR-50069"
 
-  @Column({ type: 'varchar', length: 100 })
-  merchantId!: string; // Foreign Key to merchants.id
+  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
+  merchantId!: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ name: 'store_type_id', type: 'varchar', length: 50, default: 'RETAIL' })
+  storeType!: string; // e.g. 'RETAIL' | 'GROCERY' | 'RESTAURANT'
+
+  @Column({ name: 'store_code', type: 'varchar', length: 50, unique: true })
+  storeCode!: string; // e.g. "ST-001"
+
+  @Column({ name: 'name', type: 'varchar', length: 255 })
   storeName!: string;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
-  storeCode!: string; // e.g. "STR-DT-01"
+  @Column({ type: 'varchar', length: 100, default: 'UTC' })
+  timezone!: string;
 
-  @Column({ type: 'varchar', length: 50, default: 'RETAIL' })
-  storeType!: string; // 'RETAIL' | 'GROCERY' | 'RESTAURANT'
+  @Column({ type: 'varchar', length: 10, default: 'USD' })
+  currency!: string;
+
+  @Column({ type: 'jsonb', default: {} })
+  address!: StoreAddress;
+
+  @Column({ name: 'woocommerce_store_id', type: 'varchar', length: 100, nullable: true })
+  woocommerceStoreId?: string;
 
   @Column({ type: 'varchar', length: 2048, nullable: true })
   baseUrl?: string;
@@ -60,20 +71,11 @@ export class StoreEntity {
   @Column({ type: 'varchar', length: 50, nullable: true })
   phone?: string;
 
-  @Column({ type: 'jsonb' })
-  address!: StoreAddress;
-
-  @Column({ type: 'varchar', length: 10, default: 'USD' })
-  currency!: string;
-
-  @Column({ type: 'varchar', length: 100, default: 'America/Chicago' })
-  timezone!: string;
-
   @Column({ type: 'decimal', precision: 5, scale: 2, default: 8.25 })
   taxRate!: number;
 
-  @Column({ type: 'varchar', length: 10 })
-  activationPin!: string; // 6-digit PIN used by Flutter POS terminal to pair with store
+  @Column({ type: 'varchar', length: 10, default: '123456' })
+  activationPin!: string;
 
   @Column({ type: 'boolean', default: true })
   autoAcceptOrders!: boolean;
@@ -87,13 +89,12 @@ export class StoreEntity {
   @Column({ type: 'jsonb', default: [] })
   channels!: StoreChannelConfig[];
 
-  // Excluded from ordinary store reads because it contains an encrypted secret.
   @Column({ type: 'jsonb', nullable: true, select: false })
   websiteConnector?: StoreWebsiteConnectorConfig | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt!: Date;
 }

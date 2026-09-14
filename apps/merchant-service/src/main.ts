@@ -1,12 +1,14 @@
 import 'reflect-metadata';
 import '../../../scripts/load-env';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { TracingInterceptor } from '@pinaka-delivery-hub/observability';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
+  app.useBodyParser('json', { limit: '3mb' });
   app.enableCors({
     origin: (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173').split(',').map(origin => origin.trim()),
     credentials: true,

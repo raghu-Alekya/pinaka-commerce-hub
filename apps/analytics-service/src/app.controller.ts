@@ -1,11 +1,11 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Inject, Controller, Get, Query } from '@nestjs/common';
 import { AnalyticsRepository } from './analytics.repository';
 
-const analyticsRepository = new AnalyticsRepository();
-analyticsRepository.onModuleInit();
 
 @Controller('api/v1/analytics')
 export class AppController {
+  constructor(@Inject(AnalyticsRepository) private readonly analyticsRepository: AnalyticsRepository) {}
+
   @Get('health')
   health() {
     return {
@@ -20,7 +20,7 @@ export class AppController {
   @Get('dashboard')
   async getDashboardKpis(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const kpis = await analyticsRepository.getDashboardKpis(targetStore);
+    const kpis = await this.analyticsRepository.getDashboardKpis(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -41,7 +41,7 @@ export class AppController {
   @Get('top-products')
   async getTopProducts(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const products = await analyticsRepository.getTopProducts(targetStore);
+    const products = await this.analyticsRepository.getTopProducts(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -54,7 +54,7 @@ export class AppController {
   @Get('channels')
   async getChannelBreakdown(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const channels = await analyticsRepository.getChannelBreakdown(targetStore);
+    const channels = await this.analyticsRepository.getChannelBreakdown(targetStore);
     return {
       success: true,
       storeId: targetStore,
@@ -66,7 +66,7 @@ export class AppController {
   @Get('z-report')
   async getZReportSummary(@Query('storeId') storeId: string) {
     const targetStore = storeId || 'STR-5001';
-    const kpis = await analyticsRepository.getDashboardKpis(targetStore);
+    const kpis = await this.analyticsRepository.getDashboardKpis(targetStore);
     return {
       success: true,
       reportType: 'DAILY_Z_REPORT',
