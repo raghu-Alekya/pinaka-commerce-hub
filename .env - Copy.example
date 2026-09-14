@@ -10,9 +10,8 @@ NOTIFICATION_SERVICE_PORT=3008
 ADMIN_API_PORT=3009
 AUTH_SERVICE_PORT=3010
 MAIL_MODE=mock
+# Use a long random value in production (for example, 32+ random bytes).
 AUTH_JWT_SECRET=replace-with-a-long-random-secret
-# Optional. If omitted, merchant-service derives a 32-byte key from AUTH_JWT_SECRET.
-STORE_CONFIG_ENCRYPTION_KEY=
 AUTH_WEB_URL=http://localhost:3010
 ORDEROUT_POS_API_KEY=s11pfICCvVLnNsQujYu60TuAo6OLqyhF
 GOOGLE_CLIENT_ID=
@@ -24,22 +23,31 @@ SMTP_PASSWORD=
 MAIL_FROM=OrderOut <no-reply@example.com>
 MAIL_REPLY_TO=
 RESEND_API_KEY=
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5433
-POSTGRES_USER=pdh_user
-POSTGRES_PASSWORD=pdh_password
-POSTGRES_DB=pinaka_delivery_hub
-DATABASE_URL=postgresql://pdh_user:pdh_password@localhost:5433/pinaka_delivery_hub
-REDIS_HOST=localhost
-REDIS_PORT=6379
+DATABASE_URL=postgresql://pdh:pdh@localhost:5432/pdh
 REDIS_URL=redis://localhost:6379
 MESSAGE_BROKER_TYPE=kafka
 KAFKA_BROKERS=localhost:9092
 RABBITMQ_URL=amqp://guest:guest@localhost:5672
 LOG_LEVEL=debug
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# Connector platform API configuration (replace CONNECTOR with DOORDASH, SWIGGY,
+# GRUBHUB, UBER_EATS, or ZOMATO).
+# DOORDASH_API_BASE_URL=https://api.doordash.example
+# DOORDASH_API_TOKEN=
+# DOORDASH_API_KEY=
+# HMAC secret used to authenticate incoming webhooks. Define one for every
+# enabled connector: DOORDASH, SWIGGY, GRUBHUB, UBER_EATS, and ZOMATO.
+# DOORDASH_WEBHOOK_SECRET=
+# SWIGGY_WEBHOOK_SECRET=
+# GRUBHUB_WEBHOOK_SECRET=
+# UBER_EATS_WEBHOOK_SECRET=
+# ZOMATO_WEBHOOK_SECRET=
+
+# Pinaka Restaurant POS order forwarding
 POS_ORDERS_URL=https://merchantrestaurant.alektasolutions.com/wp-json/pinaka-restaurant-pos/v1/orders
 POS_RESTAURANT_ID=1
 POS_CAPTAIN_ID=1
 POS_DEFAULT_PRODUCT_ID=1652
+# Supply either POS_API_TOKEN or POS_AUTHORIZATION, never commit a real token.
 POS_API_TOKEN=
+# POS_AUTHORIZATION=Bearer your-jwt-here

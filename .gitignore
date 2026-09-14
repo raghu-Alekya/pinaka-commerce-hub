@@ -1,15 +1,22 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# for more about ignoring files.
 
-# compiled output
-dist
-tmp
-out-tsc
+# ==========================================
+# Compiled output
+# ==========================================
+dist/
+tmp/
+out-tsc/
 
-# dependencies
-node_modules
+# ==========================================
+# Dependencies
+# ==========================================
+node_modules/
 
+# ==========================================
 # IDEs and editors
-/.idea
+# ==========================================
+.idea/
 .project
 .classpath
 .c9/
@@ -17,38 +24,72 @@ node_modules
 .settings/
 *.sublime-workspace
 
-# IDE - VSCode
+# ==========================================
+# VS Code
+# ==========================================
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# misc
-/.sass-cache
-/connect.lock
-/coverage
-/libpeerconnection.log
+# ==========================================
+# Misc
+# ==========================================
+.sass-cache/
+connect.lock
+coverage/
+libpeerconnection.log
 npm-debug.log
 yarn-error.log
 testem.log
-/typings
+typings/
 
-# System Files
-.DS_Store
-Thumbs.db
+# ==========================================
+# Nx
+# ==========================================
+.nx/cache/
+.nx/workspace-data/
+.nx/migrate-runs/
 
-.nx/cache
-.nx/workspace-data
-.nx/migrate-runs
-.claude/worktrees
+# ==========================================
+# Claude
+# ==========================================
+.claude/worktrees/
 .claude/settings.local.json
 
+# ==========================================
 # Environment variables
-.env.local
+# ==========================================
 .env
+.env.*
+!.env.example
 
+# ==========================================
 # Generated artifacts
+# ==========================================
 graph.json
 
+# ==========================================
+# Logs - IGNORE ALL LOG FILES
+# ==========================================
+logs/
+*.log
+*.out.log
 
+# ==========================================
+# GitHub / AI instructions
+# ==========================================
+.github/instructions/codacy.instructions.md
+
+# ==========================================
+# Logs
+# ==========================================
+logs/
+*.log
+*.out.log
+
+# ==========================================
+# Local scripts
+# ==========================================
+scripts/

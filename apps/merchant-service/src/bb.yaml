@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Redis Cache & Pub/Sub
+  redis:
+    image: redis:7-alpine
+    container_name: pdh-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Redis Commander Web GUI Dashboard
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: pdh-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    depends_on:
+      - redis
+
+  # RabbitMQ Event Broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: pdh-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # PostgreSQL Primary Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: pdh-postgres
+    command: [ "postgres", "-c", "max_connections=300", "-c", "idle_in_transaction_session_timeout=30000" ]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: pdh_user
+      POSTGRES_PASSWORD: pdh_password
+      POSTGRES_DB: pinaka_commerce_hub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # pgAdmin Web Database Management Dashboard
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pdh-pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@pdh.com
+      PGADMIN_DEFAULT_PASSWORD: pdh_password
+    depends_on:
+      - postgres
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  postgres_data:
