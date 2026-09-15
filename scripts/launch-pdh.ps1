@@ -40,7 +40,12 @@ try {
             Start-Sleep -Seconds 1
         }
         if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
-        & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -c "SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')\gexec" | Out-Null
+        $ensureDatabaseSql = @'
+SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')
+\gexec
+'@
+        $ensureDatabaseSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -v ON_ERROR_STOP=1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL database initialization failed.' }
         Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
     }
     foreach ($service in $services) {
@@ -86,7 +91,7 @@ try {
         }
         Write-Host "$($service.Name): ready on $($service.Port) (PID $($started.Id))."
     }
-    Write-Host 'Backend ready: ports 3000-3010. Docker PostgreSQL uses POSTGRES_PORT from .env (default 5433).'
+    Write-Host 'Backend ready: ports 3000-3010. Docker PostgreSQL is published on port 5432.'
     Write-Host 'React: http://localhost:5173 (start npm run dev in pinaka-commerce-hub-web).'
     Write-Host 'Re-running this command reuses existing services. Add -Restart to reload backend services.'
 } finally {

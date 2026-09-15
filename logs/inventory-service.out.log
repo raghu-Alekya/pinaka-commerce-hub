@@ -1,16 +1,12 @@
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [NestFactory] Starting Nest application...
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [InstanceLoader] AppModule dependencies initialized +11ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RoutesResolver] AppController {/api/v1/inventory}: +572ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RouterExplorer] Mapped {/api/v1/inventory/health, GET} route +6ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RouterExplorer] Mapped {/api/v1/inventory, GET} route +1ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RouterExplorer] Mapped {/api/v1/inventory/alerts/low-stock, GET} route +1ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RouterExplorer] Mapped {/api/v1/inventory/decrement, POST} route +1ms
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [RouterExplorer] Mapped {/api/v1/inventory/adjust, POST} route +1ms
-🐘 [Inventory DB] Connected to PostgreSQL 127.0.0.1:5433/pinaka_commerce_hub
+[Nest] 28328  - 09/15/2026, 12:06:53 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 28328  - 09/15/2026, 12:06:53 PM     LOG [InstanceLoader] AppModule dependencies initialized +15ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RoutesResolver] AppController {/api/v1/inventory}: +860ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/health, GET} route +5ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory, GET} route +2ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/alerts/low-stock, GET} route +1ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/decrement, POST} route +0ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/adjust, POST} route +1ms
+🐘 [Inventory DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 âš¡ [Inventory Redis] Connected to Redis for <1ms stock check
-[Nest] 8084  - 09/12/2026, 11:29:03 AM     LOG [NestApplication] Nest application successfully started +150ms
+[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [NestApplication] Nest application successfully started +270ms
 🚀 Inventory Service running on http://localhost:3005
-📡 [HTTP INCOMING] [CorrelationID: corr_e72014b0-d6d1-4193-a99e-2d3d48404621] GET /api/v1/inventory/health
-✅ [HTTP COMPLETED] [CorrelationID: corr_e72014b0-d6d1-4193-a99e-2d3d48404621] GET /api/v1/inventory/health - Status: 200 (3ms)
-📡 [HTTP INCOMING] [CorrelationID: corr_57a7cc6a-634a-4be8-a1dd-096a276ae506] GET /api/v1/inventory
-✅ [HTTP COMPLETED] [CorrelationID: corr_57a7cc6a-634a-4be8-a1dd-096a276ae506] GET /api/v1/inventory - Status: 200 (27ms)

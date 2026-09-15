@@ -93,3 +93,8 @@ logs/
 # Local scripts
 # ==========================================
 scripts/
+
+# Keep the section 5 regression test available with the API implementation.
+!scripts/
+scripts/*
+!scripts/employee-access-api.test.ts

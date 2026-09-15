@@ -1,4 +1,4 @@
-﻿import { DataSource, type DataSourceOptions } from 'typeorm';
+import { DataSource, type DataSourceOptions } from 'typeorm';
 
 export const DEFAULT_POSTGRES_DB = 'pinaka_commerce_hub';
 
@@ -67,27 +67,6 @@ const LEGACY_COLUMN_RENAMES: Array<{ table: string; from: string; to: string }> 
   { table: 'features', from: 'feature_type', to: 'featureType' },
   { table: 'features', from: 'created_at', to: 'createdAt' },
   { table: 'features', from: 'updated_at', to: 'updatedAt' },
-  { table: 'permissions', from: 'feature_id', to: 'featureId' },
-  { table: 'permissions', from: 'permission_key', to: 'permissionKey' },
-  { table: 'permissions', from: 'created_at', to: 'createdAt' },
-  { table: 'permissions', from: 'updated_at', to: 'updatedAt' },
-  { table: 'role_templates', from: 'role_code', to: 'roleCode' },
-  { table: 'role_templates', from: 'scope_type', to: 'scopeType' },
-  { table: 'role_templates', from: 'created_at', to: 'createdAt' },
-  { table: 'role_templates', from: 'updated_at', to: 'updatedAt' },
-  { table: 'roles', from: 'merchant_id', to: 'merchantId' },
-  { table: 'roles', from: 'source_role_template_id', to: 'sourceRoleTemplateId' },
-  { table: 'roles', from: 'role_code', to: 'roleCode' },
-  { table: 'roles', from: 'scope_type', to: 'scopeType' },
-  { table: 'roles', from: 'is_custom', to: 'isCustom' },
-  { table: 'roles', from: 'created_at', to: 'createdAt' },
-  { table: 'roles', from: 'updated_at', to: 'updatedAt' },
-  { table: 'employees', from: 'merchant_id', to: 'merchantId' },
-  { table: 'employees', from: 'employee_code', to: 'employeeCode' },
-  { table: 'employees', from: 'first_name', to: 'firstName' },
-  { table: 'employees', from: 'last_name', to: 'lastName' },
-  { table: 'employees', from: 'created_at', to: 'createdAt' },
-  { table: 'employees', from: 'updated_at', to: 'updatedAt' },
   { table: 'store_types', from: 'store_type_code', to: 'storeTypeCode' },
   { table: 'store_types', from: 'created_at', to: 'createdAt' },
   { table: 'store_types', from: 'updated_at', to: 'updatedAt' },
@@ -114,6 +93,9 @@ async function tableExists(dataSource: DataSource, table: string): Promise<boole
 /** Rename leftover snake_case columns to camelCase before TypeORM synchronize. */
 async function alignLegacyCamelCaseColumns(dataSource: DataSource): Promise<void> {
   for (const { table, from, to } of LEGACY_COLUMN_RENAMES) {
+    // A connector/order connection must never migrate merchant-owned tables.
+    const entity = dataSource.entityMetadatas.find(metadata => metadata.tableName === table);
+    if (!entity?.columns.some(column => column.databaseName === to)) continue;
     if (!(await tableExists(dataSource, table))) continue;
     const hasFrom = await columnExists(dataSource, table, from);
     const hasTo = await columnExists(dataSource, table, to);
@@ -130,6 +112,7 @@ async function alignLegacyCamelCaseColumns(dataSource: DataSource): Promise<void
 }
 
 async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<void> {
+  if (!dataSource.entityMetadatas.some(metadata => metadata.tableName === 'subscriptions')) return;
   if (!(await tableExists(dataSource, 'subscriptions'))) return;
   if (await columnExists(dataSource, 'subscriptions', 'subscriptionCode')) {
     await dataSource.query(
@@ -148,8 +131,9 @@ function isRetryablePostgresError(error: unknown): boolean {
 export async function connectPostgres(
   serviceName: string,
   entities: DataSourceOptions['entities'],
+  settings: { synchronize?: boolean } = {},
 ): Promise<DataSource> {
-  const options = postgresConnectionOptions(entities);
+  const options = { ...postgresConnectionOptions(entities), ...settings };
   const attempts = Number(process.env.POSTGRES_CONNECT_ATTEMPTS) || 20;
   const delayMs = Number(process.env.POSTGRES_CONNECT_RETRY_MS) || 500;
   let lastError: unknown;
@@ -158,10 +142,23 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      await alignLegacyCamelCaseColumns(dataSource);
-      await backfillOptionalUniqueColumns(dataSource);
       if (options.synchronize) {
-        await dataSource.synchronize();
+        // Repositories initialize concurrently, including across service processes.
+        // Keep a dedicated connection so the session lock covers every schema query.
+        const schemaLock = dataSource.createQueryRunner();
+        await schemaLock.connect();
+        try {
+          await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
+          try {
+            await alignLegacyCamelCaseColumns(dataSource);
+            await backfillOptionalUniqueColumns(dataSource);
+            await dataSource.synchronize();
+          } finally {
+            await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
+          }
+        } finally {
+          await schemaLock.release();
+        }
       }
       console.log(`🐘 [${serviceName}] Connected to PostgreSQL ${describeTarget(options)}`);
       return dataSource;
@@ -178,7 +175,7 @@ export async function connectPostgres(
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(
-    `${serviceName} requires Docker PostgreSQL (local or VPS). Run "docker compose up -d" and open pgAdmin at http://localhost:5050. ${message}`,
+    `${serviceName} failed to initialize PostgreSQL at ${describeTarget(options)}: ${message}`,
   );
 }
 

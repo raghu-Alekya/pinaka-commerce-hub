@@ -1,17 +1,18 @@
 import { IsIn } from 'class-validator';
-import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import { MerchantRepository } from './merchant.repository';
 import { FeatureDto, StoreTypeDto, RoleTemplateDto, PlanDto } from './master-data.dto';
+import { MasterFormValidationPipe } from './master-form.pipe';
 
 const defined = (body: object) => Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 
 const validate = (expectedType: typeof StoreTypeDto | typeof FeatureDto | typeof RoleTemplateDto | typeof PlanDto, patch = false) =>
-  new ValidationPipe({ expectedType, transform: true, whitelist: true, forbidNonWhitelisted: true, skipUndefinedProperties: patch });
+  new MasterFormValidationPipe({ expectedType, transform: true, whitelist: true, forbidNonWhitelisted: true, skipUndefinedProperties: patch });
 class StatusDto {
   @IsIn(['ACTIVE', 'INACTIVE'])
   status!: 'ACTIVE' | 'INACTIVE';
 }
-const statusValidation = new ValidationPipe({
+const statusValidation = new MasterFormValidationPipe({
   expectedType: StatusDto,
   transform: true,
   whitelist: true,

@@ -14,11 +14,12 @@ Object.assign(repository, {
   getAllMerchants: async () => [{ id: 'merchant', businessName: 'Real merchant' }],
   listStores: async () => [{ id: 'store', storeName: 'Real store' }],
   deviceRepo: {
+    create: (device: any) => device,
     save: async (device: any) => {
       if (saved.some(item => item.serialNumber === device.serialNumber)) throw { code: '23505' };
       saved.push(device); return device;
     },
-    query: async () => saved,
+    find: async () => saved,
   },
 });
 @Module({ controllers: [DeviceController], providers: [{ provide: MerchantRepository, useValue: repository }] })
@@ -53,7 +54,7 @@ async function main() {
     assert.equal(listing.devices[0].storeName, 'Real store');
     assert.equal(listing.devices[0].connectionStatus, 'Offline');
     assert.equal(listing.devices[1].connectionStatus, 'Inactive');
-    Object.assign(repository, { isDbConnected: false });
+    Object.assign(repository, { deviceRepo: undefined });
     assert.equal((await fetch(url)).status, 503);
     assert.equal((await post({ ...body, serialNumber: 'sn-3' })).status, 503);
     console.log('PASS: device creation/listing, validation, assignment, duplicates, status and unavailable storage');

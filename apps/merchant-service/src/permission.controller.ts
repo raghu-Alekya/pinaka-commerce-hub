@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, ConflictException, Inject } from '@nestjs/common';
-import { Public } from '@pinaka-delivery-hub/auth';
+import { WorkforceValidationPipe } from './workforce-validation.pipe';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, ConflictException, Inject, Patch, UseGuards } from '@nestjs/common';
+import { RelationshipOwnerGuard } from './relationships.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
 
-@Public()
+@UseGuards(RelationshipOwnerGuard)
 @Controller('api/v1/permissions')
 export class PermissionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
@@ -22,7 +23,7 @@ export class PermissionController {
   }
 
   @Post()
-  async create(@Body() body: CreatePermissionDto) {
+  async create(@Body(new WorkforceValidationPipe({ expectedType: CreatePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreatePermissionDto) {
     const existing = await this.repository.getPermissionByIdOrKey(body.permissionKey);
     if (existing) throw new ConflictException(`Permission key '${body.permissionKey}' already exists`);
     const permission = await this.repository.createPermission(body);
@@ -30,11 +31,14 @@ export class PermissionController {
   }
 
   @Put(':idOrKey')
-  async update(@Param('idOrKey') idOrKey: string, @Body() body: UpdatePermissionDto) {
+  async update(@Param('idOrKey') idOrKey: string, @Body(new WorkforceValidationPipe({ expectedType: UpdatePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdatePermissionDto) {
     const updated = await this.repository.updatePermission(idOrKey, body);
     if (!updated) throw new NotFoundException(`Permission '${idOrKey}' not found`);
     return { success: true, message: 'Permission updated successfully', permission: updated };
   }
+
+  @Patch(':idOrKey')
+  patch(@Param('idOrKey') idOrKey: string, @Body(new WorkforceValidationPipe({ expectedType: UpdatePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdatePermissionDto) { return this.update(idOrKey, body); }
 
   @Delete(':idOrKey')
   async delete(@Param('idOrKey') idOrKey: string) {

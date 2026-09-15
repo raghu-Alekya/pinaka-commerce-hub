@@ -3,6 +3,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { PermissionController } from './permission.controller';
 import { RoleController } from './role.controller';
 import { EmployeeController } from './employee.controller';
+import { EmployeeAccessController } from './employee-access.controller';
+import { EmployeeAccessRepository } from './employee-access.repository';
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
 import { SubscriptionController } from './subscription.controller';
@@ -23,6 +25,7 @@ import { RelationshipsRepository } from './relationships.repository';
     PermissionController,
     RoleController,
     EmployeeController,
+    EmployeeAccessController,
     SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,
@@ -35,6 +38,7 @@ import { RelationshipsRepository } from './relationships.repository';
   exports: [MerchantRepository],
   providers: [
     RelationshipsRepository,
+    EmployeeAccessRepository,
     RelationshipOwnerGuard,
     MerchantRepository,
     SessionAuthGuard,

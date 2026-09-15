@@ -31,6 +31,7 @@ export class UpdatePermissionDto {
   featureId?: string;
 
   @IsString()
+  @IsNotEmpty()
   @IsOptional()
   @MaxLength(150)
   name?: string;

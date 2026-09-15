@@ -31,7 +31,14 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private fields(config: Relationship, body: unknown, operation: RelationshipOperation): Record<string, unknown> {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
-    const values = body as Record<string, unknown>;
+    const values = { ...body } as Record<string, unknown>;
+    if (config.name === 'StoreTypeFeatures' && 'order' in values) {
+      if ('displayOrder' in values && values.displayOrder !== values.order) {
+        throw new BadRequestException('Supply either order or displayOrder, not conflicting values');
+      }
+      values.displayOrder = values.order;
+      delete values.order;
+    }
     const allowed = [...Object.keys(config.fields), ...(operation === 'create' ? [config.childKey] : [])];
     if (Object.keys(values).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown or immutable field');
     if (operation === 'patch' && !Object.keys(values).length) throw new BadRequestException('Provide at least one field to update');
@@ -69,9 +76,9 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private projection(config: Relationship) {
     return ['id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
-      ...(config.tenantColumn ? [`${quoteIdent('merchantId')} AS ${quoteIdent('merchantId')}`] : []),
+      ...(config.tenantColumn ? [`${quoteIdent(config.tenantField || 'merchantId')} AS ${quoteIdent('merchantId')}`] : []),
       ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
-      `${quoteIdent('createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent('updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
+      `${quoteIdent(config.createdColumn || 'createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent(config.updatedColumn || 'updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
   }
 
   async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
@@ -84,13 +91,51 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     try {
       return await this.db.transaction(async manager => this.perform(manager, config, operation, parent, merchant, child, fields));
     } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  async createBulk(config: Relationship, params: Record<string, string>, body: unknown) {
+    const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
+    const items = (body as { items?: unknown }).items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
+      throw new BadRequestException('items must contain between 1 and 100 mappings');
+    }
+    const seen = new Set<string>();
+    const prepared = items.map(item => {
+      const fields = this.fields(config, item, 'create');
+      const child = this.id(item[config.childKey], config.childKey, config.childUuid);
+      const normalized = config.childUuid ? child.toLowerCase() : child;
+      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+      seen.add(normalized);
+      return { child, fields };
+    });
+    try {
+      return await this.db.transaction(async manager => {
+        const created = [];
+        for (const item of prepared) {
+          const result = await this.perform(manager, config, 'create', parent, undefined, item.child, item.fields);
+          created.push(result.item);
+        }
+        return { success: true, count: created.length, items: created };
+      });
+    } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  private rethrow(error: any): never {
       const code = error.driverError?.code || error.code;
+      if ((error.driverError?.constraint || error.constraint) === 'pch_employee_one_primary_store') {
+        throw new ConflictException('Employee already has a primary store. Clear isPrimary on the old assignment first.');
+      }
       if (code === '23505') throw new ConflictException('This relationship already exists');
       if (code === '23503') throw new ConflictException('Invalid parent relationship or record is in use');
       if (['23514', '22007', '22008', '22001', '22P02'].includes(code)) throw new BadRequestException('Invalid relationship values');
       if (['42P01', '42703'].includes(code)) throw new ServiceUnavailableException('Relationship schema is not installed; apply migration 03');
       throw error;
-    }
   }
 
   private async perform(manager: EntityManager, config: Relationship, operation: RelationshipOperation,
@@ -99,15 +144,21 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
     const projection = this.projection(config);
     if (operation === 'list') {
-      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent('createdAt')}, id`, [parent]);
+      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`, [parent]);
       return { success: true, count: items.length, items };
     }
     if (operation === 'create') {
-      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${config.tenantColumn ? ` AND ${quoteIdent('merchantId')} = $2` : ''} FOR SHARE`, config.tenantColumn ? [child, merchant] : [child]);
+      let childOwner = config.childOwnerColumn || 'merchantId';
+      if (config.name === 'EmployeeStores') {
+        const columns = await manager.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='stores' AND column_name IN ('merchant_id','merchantId')");
+        if (columns.length !== 1) throw new ServiceUnavailableException('Store ownership column is missing or ambiguous');
+        childOwner = columns[0].column_name;
+      }
+      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${config.tenantColumn ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, config.tenantColumn ? [child, merchant] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
       this.dates(fields);
       const entries = Object.entries(fields);
-      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? ['merchantId'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
+      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
       const values = [parent, child, ...(config.tenantColumn ? [merchant] : []), ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       return { success: true, item };
@@ -123,7 +174,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     this.dates({ ...existing, ...fields });
     const entries = Object.entries(fields);
     const assignments = entries.map(([key], i) => `${quoteIdent(config.fields[key].column)} = $${i+3}`);
-    if (config.timestamps) assignments.push(`${quoteIdent('updatedAt')} = clock_timestamp()`);
+    if (config.timestamps) assignments.push(`${quoteIdent(config.updatedColumn || 'updatedAt')} = clock_timestamp()`);
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
     const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value)]);
     return { success: true, item: rows[0] };

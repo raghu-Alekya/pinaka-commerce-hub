@@ -11,13 +11,13 @@ export class RoleEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
   merchantId!: string;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ name: 'source_role_template_id', type: 'uuid', nullable: true })
   sourceRoleTemplateId?: string | null;
 
-  @Column({ type: 'varchar', length: 50 })
+  @Column({ name: 'role_code', type: 'varchar', length: 50 })
   roleCode!: string;
 
   @Column({ type: 'varchar', length: 100 })
@@ -26,18 +26,18 @@ export class RoleEntity {
   @Column({ type: 'text', default: '' })
   description!: string;
 
-  @Column({ type: 'varchar', length: 20, default: RoleScopeType.STORE })
+  @Column({ name: 'scope_type', type: 'varchar', length: 20, default: RoleScopeType.STORE })
   scopeType!: RoleScopeType;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ name: 'is_custom', type: 'boolean', default: true })
   isCustom!: boolean;
 
   @Column({ type: 'varchar', length: 20, default: RoleStatus.ACTIVE })
   status!: RoleStatus;
 
-  @CreateDateColumn({ type: 'timestamptz' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 }

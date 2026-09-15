@@ -1,6 +1,7 @@
 ﻿import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
+import { ensureEmployeeAccessSchema } from './employee-access.schema';
 import { FeatureEntity, FeatureStatus } from './entities/feature.entity';
 import { PermissionEntity, PermissionStatus } from './entities/permission.entity';
 import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from './entities/role-template.entity';
@@ -61,12 +62,14 @@ export class MerchantRepository implements OnModuleInit {
       ...({
         store_types: { storeTypeCode: 'storeTypeCode' },
         features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
-        role_templates: { roleCode: 'roleCode', scopeType: 'scopeType' },
+        role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
         plans: { planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle' },
       }[table]),
     };
     const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
-    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${quote(column)} AS ${quote(key)}`), `${quote('createdAt')} AS ${quote('createdAt')}`, `${quote('updatedAt')} AS ${quote('updatedAt')}`].join(', ');
+    const createdColumn = table === 'role_templates' ? 'created_at' : 'createdAt';
+    const updatedColumn = table === 'role_templates' ? 'updated_at' : 'updatedAt';
+    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${quote(column)} AS ${quote(key)}`), `${quote(createdColumn)} AS ${quote('createdAt')}`, `${quote(updatedColumn)} AS ${quote('updatedAt')}`].join(', ');
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (entries.some(([key]) => !columns[key])) throw new BadRequestException('Unknown master data field');
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
@@ -79,7 +82,7 @@ export class MerchantRepository implements OnModuleInit {
       sql = `INSERT INTO public.${table} (id, ${entries.map(([key]) => quote(columns[key])).join(', ')}) VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
-      sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${quote(columns[key])} = $${index + 2}`).join(', ')}, ${quote('updatedAt')} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+      sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${quote(columns[key])} = $${index + 2}`).join(', ')}, ${quote(updatedColumn)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
     } else { sql = `DELETE FROM public.${table} WHERE id = $1 RETURNING ${projection}`; values = [id]; }
     try {
       const result = await this.dataSource.query(sql, values);
@@ -143,9 +146,12 @@ export class MerchantRepository implements OnModuleInit {
       ProductEntity,
       DeviceEntity,
       SessionEntity,
-    ]);
+    ], { synchronize: false });
 
     // 1. Initialize all repositories first
+    // Repository-managed foreign keys depend on indexes unknown to TypeORM.
+    // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
+    await ensureEmployeeAccessSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -500,7 +506,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async listDevices(): Promise<DeviceEntity[]> {
-    if (!this.deviceRepo) return [];
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
     return this.deviceRepo.find({ order: { createdAt: 'DESC' } });
   }
 
@@ -1237,7 +1243,22 @@ export class MerchantRepository implements OnModuleInit {
       description: dto.description?.trim() || '',
       status: dto.status || PermissionStatus.ACTIVE,
     });
-    return this.permissionRepo.save(entity);
+    return this.savePermission(entity);
+  }
+
+  private async savePermission(entity: PermissionEntity): Promise<PermissionEntity> {
+    try {
+      return await this.permissionRepo.save(entity);
+    } catch (error) {
+      const databaseError = (error as { driverError?: { code?: string; constraint?: string } }).driverError;
+      if (databaseError?.code === '23503' && databaseError.constraint === 'permissions_feature_fk') {
+        throw new BadRequestException(`Feature '${entity.featureId}' does not exist. Use an existing featureId.`);
+      }
+      if (databaseError?.code === '23505') {
+        throw new ConflictException(`Permission key '${entity.permissionKey}' already exists`);
+      }
+      throw error;
+    }
   }
 
   async updatePermission(idOrKey: string, dto: UpdatePermissionDto): Promise<PermissionEntity | null> {
@@ -1248,7 +1269,7 @@ export class MerchantRepository implements OnModuleInit {
     if (dto.description !== undefined) existing.description = dto.description.trim();
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();
-    return this.permissionRepo.save(existing);
+    return this.savePermission(existing);
   }
 
   async deletePermission(idOrKey: string): Promise<boolean> {
@@ -1384,6 +1405,10 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+    if (!(await this.merchantRepo.existsBy({ id: dto.merchantId }))) throw new NotFoundException('Merchant not found');
+    if (dto.sourceRoleTemplateId && !(await this.roleTemplateRepo.existsBy({ id: dto.sourceRoleTemplateId }))) {
+      throw new BadRequestException('Source role template does not exist');
+    }
     const entity = this.roleRepo.create({
       merchantId: dto.merchantId,
       sourceRoleTemplateId: dto.sourceRoleTemplateId || null,
@@ -1394,7 +1419,20 @@ export class MerchantRepository implements OnModuleInit {
       isCustom: dto.isCustom !== false,
       status: dto.status || RoleStatus.ACTIVE,
     });
-    return this.roleRepo.save(entity);
+    return this.dataSource.transaction(async manager => {
+      try {
+        const role = await manager.getRepository(RoleEntity).save(entity);
+        if (role.sourceRoleTemplateId) {
+          await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed)
+            SELECT $1,permission_id,default_allowed FROM public.role_template_permissions WHERE role_template_id=$2`,
+          [role.id, role.sourceRoleTemplateId]);
+        }
+        return role;
+      } catch (error: any) {
+        if (error.driverError?.code === '23505') throw new ConflictException('Role code already exists for this merchant');
+        throw error;
+      }
+    });
   }
 
   async updateRole(merchantId: string, idOrCode: string, dto: UpdateRoleDto): Promise<RoleEntity | null> {
@@ -1437,6 +1475,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createEmployee(dto: CreateEmployeeDto): Promise<EmployeeEntity> {
+    if (!(await this.merchantRepo.existsBy({ id: dto.merchantId }))) throw new NotFoundException('Merchant not found');
     const entity = this.employeeRepo.create({
       merchantId: dto.merchantId,
       employeeCode: dto.employeeCode.trim().toUpperCase(),
@@ -1446,7 +1485,12 @@ export class MerchantRepository implements OnModuleInit {
       phone: dto.phone?.trim() || null,
       status: dto.status || EmployeeStatus.ACTIVE,
     });
-    return this.employeeRepo.save(entity);
+    try {
+      return await this.employeeRepo.save(entity);
+    } catch (error: any) {
+      if (error.driverError?.code === '23505') throw new ConflictException('Employee code already exists');
+      throw error;
+    }
   }
 
   async updateEmployee(merchantId: string, idOrCode: string, dto: UpdateEmployeeDto): Promise<EmployeeEntity | null> {
