@@ -10,7 +10,7 @@ export class StoreTypeEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'store_type_code', type: 'varchar', length: 50, unique: true })
+  @Column({ type: 'varchar', length: 50, unique: true })
   storeTypeCode!: string;
 
   @Column({ type: 'varchar', length: 100 })
@@ -22,9 +22,9 @@ export class StoreTypeEntity {
   @Column({ type: 'varchar', length: 20, default: StoreTypeStatus.ACTIVE })
   status!: StoreTypeStatus;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt!: Date;
 }

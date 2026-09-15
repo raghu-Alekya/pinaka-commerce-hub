@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+﻿import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
 import { FeatureEntity, FeatureStatus } from './entities/feature.entity';
@@ -59,26 +59,27 @@ export class MerchantRepository implements OnModuleInit {
     const columns: Record<string, string> = {
       name: 'name', description: 'description', status: 'status',
       ...({
-        store_types: { storeTypeCode: 'store_type_code' },
-        features: { featureKey: 'feature_key', category: 'category', featureType: 'feature_type' },
-        role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
-        plans: { planCode: 'plan_code', billingModel: 'billing_model', basePrice: 'base_price', currency: 'currency', billingCycle: 'billing_cycle' },
+        store_types: { storeTypeCode: 'storeTypeCode' },
+        features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
+        role_templates: { roleCode: 'roleCode', scopeType: 'scopeType' },
+        plans: { planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle' },
       }[table]),
     };
-    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${column} AS "${key}"`), 'created_at AS "createdAt"', 'updated_at AS "updatedAt"'].join(', ');
+    const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${quote(column)} AS ${quote(key)}`), `${quote('createdAt')} AS ${quote('createdAt')}`, `${quote('updatedAt')} AS ${quote('updatedAt')}`].join(', ');
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (entries.some(([key]) => !columns[key])) throw new BadRequestException('Unknown master data field');
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY name, id`;
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
     else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
     else if (operation === 'create') {
       values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
-      sql = `INSERT INTO public.${table} (id, ${entries.map(([key]) => columns[key]).join(', ')}) VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')}) RETURNING ${projection}`;
+      sql = `INSERT INTO public.${table} (id, ${entries.map(([key]) => quote(columns[key])).join(', ')}) VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
-      sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${columns[key]} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+      sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${quote(columns[key])} = $${index + 2}`).join(', ')}, ${quote('updatedAt')} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
     } else { sql = `DELETE FROM public.${table} WHERE id = $1 RETURNING ${projection}`; values = [id]; }
     try {
       const result = await this.dataSource.query(sql, values);
@@ -1053,6 +1054,9 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createStoreType(dto: CreateStoreTypeDto): Promise<StoreTypeEntity> {
+    if (!this.storeTypeRepo) {
+      throw new ServiceUnavailableException('Store types require PostgreSQL');
+    }
     const entity = this.storeTypeRepo.create({
       storeTypeCode: dto.storeTypeCode.trim().toUpperCase(),
       name: dto.name.trim(),

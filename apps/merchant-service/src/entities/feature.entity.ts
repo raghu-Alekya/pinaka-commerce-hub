@@ -10,7 +10,7 @@ export class FeatureEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'feature_key', type: 'varchar', length: 100, unique: true })
+  @Column({ type: 'varchar', length: 100, unique: true })
   featureKey!: string;
 
   @Column({ type: 'varchar', length: 150 })
@@ -22,15 +22,15 @@ export class FeatureEntity {
   @Column({ type: 'varchar', length: 100 })
   category!: string;
 
-  @Column({ name: 'feature_type', type: 'varchar', length: 20, default: 'TEXT' })
+  @Column({ type: 'varchar', length: 20, default: 'TEXT' })
   featureType!: string;
 
   @Column({ type: 'varchar', length: 20, default: FeatureStatus.ACTIVE })
   status!: FeatureStatus;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt!: Date;
 }

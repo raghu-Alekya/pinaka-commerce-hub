@@ -41,16 +41,16 @@ export class StoreEntity {
   @PrimaryColumn({ type: 'varchar', length: 100 })
   id!: string; // e.g. "STR-5001" or "STR-50069"
 
-  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100 })
   merchantId!: string;
 
-  @Column({ name: 'store_type_id', type: 'varchar', length: 50, default: 'RETAIL' })
+  @Column({ type: 'varchar', length: 50, default: 'RETAIL' })
   storeType!: string; // e.g. 'RETAIL' | 'GROCERY' | 'RESTAURANT'
 
-  @Column({ name: 'store_code', type: 'varchar', length: 50, unique: true })
+  @Column({ type: 'varchar', length: 50, unique: true })
   storeCode!: string; // e.g. "ST-001"
 
-  @Column({ name: 'name', type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255 })
   storeName!: string;
 
   @Column({ type: 'varchar', length: 100, default: 'UTC' })
@@ -62,7 +62,7 @@ export class StoreEntity {
   @Column({ type: 'jsonb', default: {} })
   address!: StoreAddress;
 
-  @Column({ name: 'woocommerce_store_id', type: 'varchar', length: 100, nullable: true })
+  @Column({ type: 'varchar', length: 100, nullable: true })
   woocommerceStoreId?: string;
 
   @Column({ type: 'varchar', length: 2048, nullable: true })
@@ -92,9 +92,9 @@ export class StoreEntity {
   @Column({ type: 'jsonb', nullable: true, select: false })
   websiteConnector?: StoreWebsiteConnectorConfig | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn()
   createdAt!: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn()
   updatedAt!: Date;
 }

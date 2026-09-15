@@ -21,34 +21,34 @@ export class SubscriptionEntity {
   @PrimaryColumn({ type: 'varchar', length: 100 })
   id!: string; // e.g. "SUB-9001"
 
-  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100 })
   merchantId!: string;
 
-  @Column({ name: 'subscription_code', type: 'varchar', length: 100, unique: true })
-  subscriptionCode?: string;
+  @Column({ type: 'varchar', length: 100, unique: true, nullable: true })
+  subscriptionCode?: string | null;
 
-  @Column({ name: 'plan_id', type: 'uuid' })
-  planId?: string;
+  @Column({ type: 'uuid', nullable: true })
+  planId?: string | null;
 
-  @Column({ name: 'start_date', type: 'date', nullable: true })
+  @Column({ type: 'date', nullable: true })
   startDate?: string | null;
 
-  @Column({ name: 'renewal_date', type: 'date', nullable: true })
+  @Column({ type: 'date', nullable: true })
   renewalDate?: string | null;
 
-  @Column({ name: 'trial_end_date', type: 'date', nullable: true })
+  @Column({ type: 'date', nullable: true })
   trialEndDate?: string | null;
 
-  @Column({ name: 'licensed_store_count', type: 'integer', nullable: true })
+  @Column({ type: 'integer', nullable: true })
   licensedStoreCount?: number | null;
 
-  @Column({ name: 'licensed_device_count', type: 'integer', nullable: true })
+  @Column({ type: 'integer', nullable: true })
   licensedDeviceCount?: number | null;
 
-  @Column({ type: 'varchar', length: 10 })
-  currency?: string;
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  currency?: string | null;
 
-  @Column({ name: 'cancelled_at', type: 'timestamptz', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   cancelledAt?: Date | null;
 
   @Column({ type: 'varchar', length: 50, default: PlanCode.PRO })
@@ -63,7 +63,7 @@ export class SubscriptionEntity {
   @Column({ type: 'jsonb' })
   entitlements!: string[]; // ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY']
 
-  @Column({ name: 'billing_cycle', type: 'varchar', length: 20, default: 'MONTHLY' })
+  @Column({ type: 'varchar', length: 20, default: 'MONTHLY' })
   billingCycle!: 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL';
 
   @Column({ type: 'integer', default: 0 })
@@ -82,9 +82,9 @@ export class SubscriptionEntity {
   @Column({ type: 'timestamptz', nullable: true })
   currentPeriodEnd?: Date;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn()
   createdAt!: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn()
   updatedAt!: Date;
 }

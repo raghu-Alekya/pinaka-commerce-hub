@@ -6,6 +6,10 @@ import { Relationship } from './relationships.config';
 
 export type RelationshipOperation = 'list' | 'get' | 'create' | 'replace' | 'patch' | 'delete';
 
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
 @Injectable()
 export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   private db!: DataSource;
@@ -64,10 +68,10 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private projection(config: Relationship) {
-    return ['id', `${config.parentColumn} AS "${config.parentParam}"`, `${config.childColumn} AS "${config.childKey}"`,
-      ...(config.tenantColumn ? ['merchant_id AS "merchantId"'] : []),
-      ...Object.entries(config.fields).map(([key, field]) => `${field.column} AS "${key}"`),
-      'created_at AS "createdAt"', ...(config.timestamps ? ['updated_at AS "updatedAt"'] : [])].join(', ');
+    return ['id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
+      ...(config.tenantColumn ? [`${quoteIdent('merchantId')} AS ${quoteIdent('merchantId')}`] : []),
+      ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
+      `${quoteIdent('createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent('updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
   }
 
   async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
@@ -91,24 +95,24 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private async perform(manager: EntityManager, config: Relationship, operation: RelationshipOperation,
     parent: string, merchant: string | undefined, child: string | undefined, fields: Record<string, unknown>) {
-    const owners = await manager.query(`SELECT id FROM public.${config.parentTable} WHERE id = $1${config.ownerColumn ? ` AND "${config.ownerColumn}" = $2` : ''} FOR SHARE`, config.ownerColumn ? [parent, merchant] : [parent]);
+    const owners = await manager.query(`SELECT id FROM public.${config.parentTable} WHERE id = $1${config.ownerColumn ? ` AND ${quoteIdent(config.ownerColumn)} = $2` : ''} FOR SHARE`, config.ownerColumn ? [parent, merchant] : [parent]);
     if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
     const projection = this.projection(config);
     if (operation === 'list') {
-      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${config.parentColumn} = $1 ORDER BY created_at, id`, [parent]);
+      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent('createdAt')}, id`, [parent]);
       return { success: true, count: items.length, items };
     }
     if (operation === 'create') {
-      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${config.tenantColumn ? ' AND merchant_id = $2' : ''} FOR SHARE`, config.tenantColumn ? [child, merchant] : [child]);
+      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${config.tenantColumn ? ` AND ${quoteIdent('merchantId')} = $2` : ''} FOR SHARE`, config.tenantColumn ? [child, merchant] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
       this.dates(fields);
       const entries = Object.entries(fields);
-      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? ['merchant_id'] : []), ...entries.map(([key]) => config.fields[key].column)];
+      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? ['merchantId'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
       const values = [parent, child, ...(config.tenantColumn ? [merchant] : []), ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       return { success: true, item };
     }
-    const where = `${config.parentColumn} = $1 AND ${config.childColumn} = $2`;
+    const where = `${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`;
     const [existing] = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${where} FOR UPDATE`, [parent, child]);
     if (!existing) throw new NotFoundException('Relationship not found');
     if (operation === 'get') return { success: true, item: existing };
@@ -118,8 +122,8 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     }
     this.dates({ ...existing, ...fields });
     const entries = Object.entries(fields);
-    const assignments = entries.map(([key], i) => `${config.fields[key].column} = $${i+3}`);
-    if (config.timestamps) assignments.push('updated_at = clock_timestamp()');
+    const assignments = entries.map(([key], i) => `${quoteIdent(config.fields[key].column)} = $${i+3}`);
+    if (config.timestamps) assignments.push(`${quoteIdent('updatedAt')} = clock_timestamp()`);
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
     const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value)]);
     return { success: true, item: rows[0] };

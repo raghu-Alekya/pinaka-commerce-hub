@@ -17,42 +17,6 @@ const statusValidation = new ValidationPipe({
   whitelist: true,
   forbidNonWhitelisted: true,
 });
-@Controller(['api/v1/store-types', 'api/v1/store_types'])
-export class StoreTypeController {
-  constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
-  @Get() async list() { const storeTypes = await this.repository.masterData('store_types', 'list'); return { success: true, count: storeTypes.length, storeTypes }; }
-  @Get(':id') async get(@Param('id', new ParseUUIDPipe()) id: string) { return { success: true, storeType: await this.repository.masterData('store_types', 'get', id) }; }
-  @Post() async create(@Body(validate(StoreTypeDto)) body: StoreTypeDto) { return { success: true, storeType: await this.repository.masterData('store_types', 'create', undefined, { description: '', status: 'ACTIVE', ...defined(body) }) }; }
-  @Put(':id') async replace(@Param('id', new ParseUUIDPipe()) id: string, @Body(validate(StoreTypeDto)) body: StoreTypeDto) { return { success: true, storeType: await this.repository.masterData('store_types', 'update', id, { description: '', status: 'ACTIVE', ...defined(body) }) }; }
-  @Patch(':id') async patch(@Param('id', new ParseUUIDPipe()) id: string, @Body(validate(StoreTypeDto, true)) body: StoreTypeDto) { return { success: true, storeType: await this.repository.masterData('store_types', 'update', id, { ...defined(body) }) }; }
-  @Put(':id/status')
-  async replaceStatus(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(statusValidation) body: StatusDto,
-  ) { return this.updateStatus(id, body); }
-
-  @Patch(':id/status')
-  async updateStatus(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(statusValidation) body: StatusDto,
-  ) {
-    const storeType = await this.repository.masterData(
-      'store_types',
-      'update',
-      id,
-      {
-        status: body.status,
-      },
-    );
-
-    return {
-      success: true,
-      message: `Store type status updated to ${body.status}`,
-      storeType,
-    };
-  }
-  @Delete(':id') async remove(@Param('id', new ParseUUIDPipe()) id: string) { await this.repository.masterData('store_types', 'delete', id); return { success: true, message: 'Store type deleted' }; }
-}
 
 @Controller('api/v1/features')
 export class FeatureController {
