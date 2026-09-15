@@ -14,10 +14,10 @@ export class InventoryAdjustmentEntity {
   @PrimaryColumn({ type: 'varchar', length: 100 })
   id!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100, default: 'UNKNOWN' })
   storeId!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100, default: '' })
   productId!: string;
 
   @Column({ type: 'varchar', length: 50, default: AdjustmentType.POS_SALE })

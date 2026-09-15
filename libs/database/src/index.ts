@@ -91,6 +91,12 @@ const LEGACY_COLUMN_RENAMES: Array<{ table: string; from: string; to: string }> 
   { table: 'store_types', from: 'store_type_code', to: 'storeTypeCode' },
   { table: 'store_types', from: 'created_at', to: 'createdAt' },
   { table: 'store_types', from: 'updated_at', to: 'updatedAt' },
+  { table: 'inventory_items', from: 'store_id', to: 'storeId' },
+  { table: 'inventory_items', from: 'product_id', to: 'productId' },
+  { table: 'inventory_items', from: 'product_name', to: 'productName' },
+  { table: 'inventory_items', from: 'merchant_id', to: 'merchantId' },
+  { table: 'inventory_adjustments', from: 'store_id', to: 'storeId' },
+  { table: 'inventory_adjustments', from: 'product_id', to: 'productId' },
 ];
 
 async function columnExists(dataSource: DataSource, table: string, column: string): Promise<boolean> {
@@ -129,11 +135,86 @@ async function alignLegacyCamelCaseColumns(dataSource: DataSource): Promise<void
   }
 }
 
+async function addVarcharColumnIfMissing(
+  dataSource: DataSource,
+  table: string,
+  column: string,
+  length = 100,
+): Promise<void> {
+  if (!(await columnExists(dataSource, table, column))) {
+    await dataSource.query(
+      `ALTER TABLE public."${table}" ADD COLUMN "${column}" varchar(${length})`,
+    );
+  }
+}
+
+async function addDecimalColumnIfMissing(
+  dataSource: DataSource,
+  table: string,
+  column: string,
+): Promise<void> {
+  if (!(await columnExists(dataSource, table, column))) {
+    await dataSource.query(
+      `ALTER TABLE public."${table}" ADD COLUMN "${column}" decimal(10,2) DEFAULT 0`,
+    );
+  }
+  await dataSource.query(
+    `UPDATE public."${table}" SET "${column}" = 0 WHERE "${column}" IS NULL`,
+  );
+}
+
 async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<void> {
-  if (!(await tableExists(dataSource, 'subscriptions'))) return;
-  if (await columnExists(dataSource, 'subscriptions', 'subscriptionCode')) {
+  if (
+    (await tableExists(dataSource, 'subscriptions')) &&
+    (await columnExists(dataSource, 'subscriptions', 'subscriptionCode'))
+  ) {
     await dataSource.query(
       `UPDATE public.subscriptions SET "subscriptionCode" = id WHERE "subscriptionCode" IS NULL`,
+    );
+  }
+
+  if (await tableExists(dataSource, 'inventory_items')) {
+    await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'storeId');
+    await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productId');
+    await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productName', 255);
+    const storeFallback = (await columnExists(dataSource, 'inventory_items', 'merchantId'))
+      ? `COALESCE(NULLIF("storeId", ''), "merchantId", 'UNKNOWN')`
+      : `COALESCE(NULLIF("storeId", ''), 'UNKNOWN')`;
+    await dataSource.query(
+      `UPDATE public.inventory_items SET "storeId" = ${storeFallback} WHERE "storeId" IS NULL OR "storeId" = ''`,
+    );
+    const productFallback = (await columnExists(dataSource, 'inventory_items', 'ingredientId'))
+      ? `COALESCE(NULLIF("productId", ''), "ingredientId", id)`
+      : `COALESCE(NULLIF("productId", ''), id)`;
+    await dataSource.query(
+      `UPDATE public.inventory_items SET "productId" = ${productFallback} WHERE "productId" IS NULL OR "productId" = ''`,
+    );
+    const nameFallback = (await columnExists(dataSource, 'inventory_items', 'name'))
+      ? `COALESCE(NULLIF("productName", ''), name, 'Item')`
+      : `COALESCE(NULLIF("productName", ''), 'Item')`;
+    await dataSource.query(
+      `UPDATE public.inventory_items SET "productName" = ${nameFallback} WHERE "productName" IS NULL OR "productName" = ''`,
+    );
+    for (const column of [
+      'quantityOnHand',
+      'quantityReserved',
+      'quantityAvailable',
+      'reorderPoint',
+      'unitCost',
+      'unitPrice',
+    ]) {
+      await addDecimalColumnIfMissing(dataSource, 'inventory_items', column);
+    }
+  }
+
+  if (await tableExists(dataSource, 'inventory_adjustments')) {
+    await addVarcharColumnIfMissing(dataSource, 'inventory_adjustments', 'storeId');
+    await addVarcharColumnIfMissing(dataSource, 'inventory_adjustments', 'productId');
+    await dataSource.query(
+      `UPDATE public.inventory_adjustments SET "storeId" = COALESCE(NULLIF("storeId", ''), 'UNKNOWN') WHERE "storeId" IS NULL OR "storeId" = ''`,
+    );
+    await dataSource.query(
+      `UPDATE public.inventory_adjustments SET "productId" = COALESCE(NULLIF("productId", ''), id) WHERE "productId" IS NULL OR "productId" = ''`,
     );
   }
 }
