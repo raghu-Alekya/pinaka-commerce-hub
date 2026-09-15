@@ -6,11 +6,11 @@ import { DataSource } from 'typeorm';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MerchantRepository } from '../apps/merchant-service/src/merchant.repository';
-import { StoreTypeController, FeatureController, RoleTemplateController, PlanController } from '../apps/merchant-service/src/master-data.controller';
+import { FeatureController, RoleTemplateController, PlanController } from '../apps/merchant-service/src/master-data.controller';
 
 const repository = new MerchantRepository();
 Object.assign(repository, { onModuleInit: async () => {} });
-@Module({ controllers: [StoreTypeController, FeatureController, RoleTemplateController, PlanController], providers: [{ provide: MerchantRepository, useValue: repository }] })
+@Module({ controllers: [ FeatureController, RoleTemplateController, PlanController], providers: [{ provide: MerchantRepository, useValue: repository }] })
 class TestModule {}
 async function main() {
   const db = new DataSource({ type: 'postgres', url: process.env.DATABASE_URL || undefined,
