@@ -33,6 +33,15 @@ try {
     if (-not $SkipDocker) {
         & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d
         if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed.' }
+        $pgReady = $false
+        for ($attempt = 1; $attempt -le 30; $attempt++) {
+            & docker compose --project-directory $serviceRoot exec -T postgres pg_isready -U pdh_user | Out-Null
+            if ($LASTEXITCODE -eq 0) { $pgReady = $true; break }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
+        & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -c "SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')\gexec" | Out-Null
+        Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
     }
     foreach ($service in $services) {
         $entry = Join-Path $serviceRoot "apps/$($service.Name)/src/main.ts"
