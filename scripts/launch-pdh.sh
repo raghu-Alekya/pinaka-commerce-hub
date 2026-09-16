@@ -3,24 +3,28 @@
 # Usage:
 #   bash ./scripts/launch-pdh.sh
 #   bash ./scripts/launch-pdh.sh --restart
-#   bash ./scripts/launch-pdh.sh --skip-docker
+#   bash ./scripts/launch-pdh.sh --restart --skip-docker
+#   bash ./scripts/launch-pdh.sh --force --restart   # clear stuck lock / kill stuck launcher
 set -euo pipefail
 
 RESTART=0
 SKIP_DOCKER=0
+FORCE=0
 STARTUP_TIMEOUT_SECONDS=120
+LOCK_FILE="/tmp/pinaka-commerce-hub-launcher.lock"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --restart|-Restart) RESTART=1; shift ;;
     --skip-docker|-SkipDocker) SKIP_DOCKER=1; shift ;;
+    --force|-Force) FORCE=1; shift ;;
     --timeout)
       STARTUP_TIMEOUT_SECONDS="${2:?missing timeout}"
       shift 2
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--restart] [--skip-docker] [--timeout SECONDS]" >&2
+      echo "Usage: $0 [--restart] [--skip-docker] [--force] [--timeout SECONDS]" >&2
       exit 1
       ;;
   esac
@@ -36,10 +40,33 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-LOCK_FILE="/tmp/pinaka-commerce-hub-launcher.lock"
+lock_holders() {
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -v "$LOCK_FILE" 2>&1 || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof "$LOCK_FILE" 2>/dev/null || true
+  else
+    pgrep -af 'launch-pdh\.sh' || true
+  fi
+}
+
+if [[ "$FORCE" -eq 1 ]]; then
+  # Kill any stuck launcher (not the Nest services themselves).
+  while read -r pid; do
+    [[ -z "$pid" || "$pid" == "$$" ]] && continue
+    kill "$pid" 2>/dev/null || true
+  done < <(pgrep -f 'scripts/launch-pdh\.sh' || true)
+  sleep 1
+  rm -f "$LOCK_FILE"
+fi
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-  echo "The service launcher is already running." >&2
+  echo "The service launcher is already running (lock: $LOCK_FILE)." >&2
+  echo "Holder(s):" >&2
+  lock_holders >&2
+  echo "If nothing useful is running, clear it with:" >&2
+  echo "  bash ./scripts/launch-pdh.sh --force --restart" >&2
   exit 1
 fi
 
