@@ -100,15 +100,4 @@ export class StoreTypeController {
     if (!deleted) throw new NotFoundException(`Store type '${idOrCode}' not found`);
     return { success: true, message: 'Store type deactivated in PostgreSQL', status: StoreTypeStatus.INACTIVE };
   }
-
-  @Post('dummy')
-  async dummyCreateOrUpdate(@Body() body: any) {
-    return {
-      success: true,
-      message: 'Dummy create/update method executed successfully',
-      method: 'POST',
-      receivedData: body,
-      timestamp: new Date().toISOString(),
-    };
-  }
 }
