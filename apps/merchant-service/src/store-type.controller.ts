@@ -17,14 +17,16 @@ import {
 import { MerchantRepository } from './merchant.repository';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 import { StoreTypeStatus } from './entities/store-type.entity';
+import { MasterFormValidationPipe } from './master-form.pipe';
+import { filterMasterList } from './master-list';
 
-const bodyValidation = new ValidationPipe({
+const bodyValidation = new MasterFormValidationPipe({
   transform: true,
   whitelist: true,
   forbidNonWhitelisted: true,
   expectedType: CreateStoreTypeDto,
 });
-const patchValidation = new ValidationPipe({
+const patchValidation = new MasterFormValidationPipe({
   transform: true,
   whitelist: true,
   forbidNonWhitelisted: true,
@@ -37,8 +39,8 @@ export class StoreTypeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   @Get()
-  async listStoreTypes(@Query('status') status?: string) {
-    const storeTypes = await this.repository.listStoreTypes(status);
+  async listStoreTypes(@Query() query: Record<string, string>) {
+    const storeTypes = filterMasterList(await this.repository.listStoreTypes(), query);
     return { success: true, count: storeTypes.length, storeTypes };
   }
 
@@ -62,6 +64,7 @@ export class StoreTypeController {
   @Put(':idOrCode')
   async replaceStoreType(@Param('idOrCode') idOrCode: string, @Body(bodyValidation) body: CreateStoreTypeDto) {
     const updated = await this.repository.updateStoreType(idOrCode, {
+      storeTypeCode: body.storeTypeCode,
       name: body.name,
       description: body.description,
       status: body.status,

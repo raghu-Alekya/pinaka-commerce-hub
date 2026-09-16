@@ -37,6 +37,7 @@ export class PlanDto extends MasterFieldsDto {
   @IsIn(['FLAT', 'PER_STORE', 'PER_DEVICE', 'CUSTOM']) billingModel!: string;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(9999999999.99) basePrice!: number;
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
-  @IsString() @Matches(/^[A-Z]{3}$/) currency!: string;
-  @IsIn(['MONTHLY', 'ANNUAL']) billingCycle!: string;
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString() @Matches(/^[A-Z]{3}$/) currency?: string;
+  @IsIn(['MONTHLY', 'QUARTERLY', 'ANNUAL']) billingCycle!: string;
 }

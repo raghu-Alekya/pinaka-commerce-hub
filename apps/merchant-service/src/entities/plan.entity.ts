@@ -14,6 +14,7 @@ export enum PlanBillingModel {
 
 export enum PlanBillingCycle {
   MONTHLY = 'MONTHLY',
+  QUARTERLY = 'QUARTERLY',
   ANNUAL = 'ANNUAL',
 }
 

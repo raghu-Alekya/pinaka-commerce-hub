@@ -1075,6 +1075,12 @@ export class MerchantRepository implements OnModuleInit {
   async updateStoreType(idOrCode: string, dto: UpdateStoreTypeDto): Promise<StoreTypeEntity | null> {
     const existing = await this.getStoreTypeByIdOrCode(idOrCode);
     if (!existing) return null;
+    if (dto.storeTypeCode !== undefined) {
+      const code = dto.storeTypeCode.trim().toUpperCase();
+      const duplicate = await this.getStoreTypeByIdOrCode(code);
+      if (duplicate && duplicate.id !== existing.id) throw new ConflictException(`Store type code '${code}' already exists`);
+      existing.storeTypeCode = code;
+    }
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
     if (dto.status !== undefined) existing.status = dto.status;

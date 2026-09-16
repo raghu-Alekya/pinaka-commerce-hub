@@ -2,6 +2,8 @@ import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/c
 
 const aliases: Record<string, Record<string, string>> = {
   StoreTypeDto: { code: 'storeTypeCode' },
+  CreateStoreTypeDto: { code: 'storeTypeCode' },
+  UpdateStoreTypeDto: { code: 'storeTypeCode' },
   FeatureDto: { type: 'featureType' },
   RoleTemplateDto: { key: 'roleCode', scope: 'scopeType' },
   PlanDto: { code: 'planCode', price: 'basePrice', cycle: 'billingCycle' },
@@ -11,6 +13,10 @@ const aliases: Record<string, Record<string, string>> = {
 export function normalizeMasterForm(body: unknown, dto: string): unknown {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
   const values = { ...body } as Record<string, unknown>;
+  // The Features screen uses Name as its unique feature key.
+  if (dto === 'FeatureDto' && 'type' in values && !('featureKey' in values) && 'name' in values) {
+    values.featureKey = values.name;
+  }
   for (const [alias, canonical] of Object.entries(aliases[dto] || {})) {
     if (!(alias in values)) continue;
     if (canonical in values && values[canonical] !== values[alias]) {

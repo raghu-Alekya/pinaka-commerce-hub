@@ -1,10 +1,10 @@
-[Nest] 26948  - 09/15/2026, 12:06:23 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 26948  - 09/15/2026, 12:06:23 PM     LOG [InstanceLoader] AppModule dependencies initialized +12ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RoutesResolver] AppController {/api/v1/gateway}: +664ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/health, GET} route +21ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/ready, GET} route +1ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders, GET} route +1ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/stream, GET} route +0ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [RouterExplorer] Mapped {/api/v1/gateway/orders/:id/status, PATCH} route +2ms
-[Nest] 26948  - 09/15/2026, 12:06:24 PM     LOG [NestApplication] Nest application successfully started +2ms
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:33 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:33 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +63ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/gateway}:[39m[38;5;3m +18783ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/gateway/health, GET} route[39m[38;5;3m +9ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/gateway/ready, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/gateway/orders, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/gateway/orders/stream, GET} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/gateway/orders/:id/status, PATCH} route[39m[38;5;3m +2ms[39m
+[32m[Nest] 21900  - [39m09/15/2026, 9:00:52 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +5ms[39m
 🚀 Gateway Service running on http://localhost:3000

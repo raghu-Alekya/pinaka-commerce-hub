@@ -1,12 +1,12 @@
-[Nest] 28328  - 09/15/2026, 12:06:53 PM     LOG [NestFactory] Starting Nest application...
-[Nest] 28328  - 09/15/2026, 12:06:53 PM     LOG [InstanceLoader] AppModule dependencies initialized +15ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RoutesResolver] AppController {/api/v1/inventory}: +860ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/health, GET} route +5ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory, GET} route +2ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/alerts/low-stock, GET} route +1ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/decrement, POST} route +0ms
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [RouterExplorer] Mapped {/api/v1/inventory/adjust, POST} route +1ms
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:37 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:37 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +10ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/inventory}:[39m[38;5;3m +983ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/health, GET} route[39m[38;5;3m +7ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory, GET} route[39m[38;5;3m +2ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/alerts/low-stock, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/decrement, POST} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/adjust, POST} route[39m[38;5;3m +1ms[39m
 🐘 [Inventory DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 âš¡ [Inventory Redis] Connected to Redis for <1ms stock check
-[Nest] 28328  - 09/15/2026, 12:06:54 PM     LOG [NestApplication] Nest application successfully started +270ms
+[32m[Nest] 27036  - [39m09/15/2026, 9:01:38 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +344ms[39m
 🚀 Inventory Service running on http://localhost:3005
