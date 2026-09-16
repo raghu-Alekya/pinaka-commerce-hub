@@ -90,6 +90,8 @@ logs/
 *.out.log
 
 # ==========================================
-# Local scripts
+# Local scripts (keep launchers tracked for VPS)
 # ==========================================
-scripts/
+scripts/*
+!scripts/launch-pdh.sh
+!scripts/launch-pdh.ps1
