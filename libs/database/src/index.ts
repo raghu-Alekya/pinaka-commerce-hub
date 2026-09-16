@@ -168,8 +168,9 @@ async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<vo
     (await tableExists(dataSource, 'subscriptions')) &&
     (await columnExists(dataSource, 'subscriptions', 'subscriptionCode'))
   ) {
+    // id may be uuid while subscriptionCode is varchar/text — cast to avoid type errors.
     await dataSource.query(
-      `UPDATE public.subscriptions SET "subscriptionCode" = id WHERE "subscriptionCode" IS NULL`,
+      `UPDATE public.subscriptions SET "subscriptionCode" = id::text WHERE "subscriptionCode" IS NULL`,
     );
   }
 
@@ -177,23 +178,24 @@ async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<vo
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'storeId');
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productId');
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productName', 255);
+    // Cast every COALESCE arm to text — Postgres rejects COALESCE(text, uuid).
     const storeFallback = (await columnExists(dataSource, 'inventory_items', 'merchantId'))
-      ? `COALESCE(NULLIF("storeId", ''), "merchantId", 'UNKNOWN')`
-      : `COALESCE(NULLIF("storeId", ''), 'UNKNOWN')`;
+      ? `COALESCE(NULLIF("storeId"::text, ''), "merchantId"::text, 'UNKNOWN')`
+      : `COALESCE(NULLIF("storeId"::text, ''), 'UNKNOWN')`;
     await dataSource.query(
-      `UPDATE public.inventory_items SET "storeId" = ${storeFallback} WHERE "storeId" IS NULL OR "storeId" = ''`,
+      `UPDATE public.inventory_items SET "storeId" = ${storeFallback} WHERE "storeId" IS NULL OR "storeId"::text = ''`,
     );
     const productFallback = (await columnExists(dataSource, 'inventory_items', 'ingredientId'))
-      ? `COALESCE(NULLIF("productId", ''), "ingredientId", id)`
-      : `COALESCE(NULLIF("productId", ''), id)`;
+      ? `COALESCE(NULLIF("productId"::text, ''), "ingredientId"::text, id::text)`
+      : `COALESCE(NULLIF("productId"::text, ''), id::text)`;
     await dataSource.query(
-      `UPDATE public.inventory_items SET "productId" = ${productFallback} WHERE "productId" IS NULL OR "productId" = ''`,
+      `UPDATE public.inventory_items SET "productId" = ${productFallback} WHERE "productId" IS NULL OR "productId"::text = ''`,
     );
     const nameFallback = (await columnExists(dataSource, 'inventory_items', 'name'))
-      ? `COALESCE(NULLIF("productName", ''), name, 'Item')`
-      : `COALESCE(NULLIF("productName", ''), 'Item')`;
+      ? `COALESCE(NULLIF("productName"::text, ''), name::text, 'Item')`
+      : `COALESCE(NULLIF("productName"::text, ''), 'Item')`;
     await dataSource.query(
-      `UPDATE public.inventory_items SET "productName" = ${nameFallback} WHERE "productName" IS NULL OR "productName" = ''`,
+      `UPDATE public.inventory_items SET "productName" = ${nameFallback} WHERE "productName" IS NULL OR "productName"::text = ''`,
     );
     for (const column of [
       'quantityOnHand',
@@ -211,10 +213,10 @@ async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<vo
     await addVarcharColumnIfMissing(dataSource, 'inventory_adjustments', 'storeId');
     await addVarcharColumnIfMissing(dataSource, 'inventory_adjustments', 'productId');
     await dataSource.query(
-      `UPDATE public.inventory_adjustments SET "storeId" = COALESCE(NULLIF("storeId", ''), 'UNKNOWN') WHERE "storeId" IS NULL OR "storeId" = ''`,
+      `UPDATE public.inventory_adjustments SET "storeId" = COALESCE(NULLIF("storeId"::text, ''), 'UNKNOWN') WHERE "storeId" IS NULL OR "storeId"::text = ''`,
     );
     await dataSource.query(
-      `UPDATE public.inventory_adjustments SET "productId" = COALESCE(NULLIF("productId", ''), id) WHERE "productId" IS NULL OR "productId" = ''`,
+      `UPDATE public.inventory_adjustments SET "productId" = COALESCE(NULLIF("productId"::text, ''), id::text) WHERE "productId" IS NULL OR "productId"::text = ''`,
     );
   }
 }
