@@ -101,7 +101,7 @@ export class StoreTypeController {
     return { success: true, message: 'Store type deactivated in PostgreSQL', status: StoreTypeStatus.INACTIVE };
   }
 
-  @Post('dummy')
+  @Post('dummy-test')
   async dummyCreateOrUpdate(@Body() body: any) {
     return {
       success: true,
