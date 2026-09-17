@@ -161,7 +161,7 @@ async function main() {
     await reason('ALLOWED');
     await db.query('UPDATE plan_entitlements SET enabled=false'); await reason('FEATURE_NOT_ENTITLED');
     await db.query("INSERT INTO store_entitlements(store_id,feature_id,enabled) VALUES ('S1',$1,true)", [feature]);
-    await reason('FEATURE_NOT_ENTITLED'); // A store override cannot grant an unpurchased feature.
+    await reason('ALLOWED'); // Explicit store add-on override can grant a feature not in the base plan.
     await db.query("INSERT INTO subscription_entitlements(subscription_id,feature_id,enabled) VALUES ('SUB1',$1,true)", [feature]);
     await reason('ALLOWED');
     await db.query('UPDATE store_entitlements SET enabled=false'); await reason('STORE_FEATURE_DISABLED');

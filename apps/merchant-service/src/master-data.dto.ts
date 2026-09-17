@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
-import { IsNumber, Min, Max, IsIn, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
-
+import { IsNumber, IsInt, IsArray, IsISO8601, Min, Max, IsIn, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
+ 
 export class MasterFieldsDto {
   @ValidateIf((_, value) => value !== undefined) @IsString() description?: string;
   @ValidateIf((_, value) => value !== undefined) @IsIn(['ACTIVE', 'INACTIVE']) status?: string;
@@ -20,8 +20,8 @@ export class FeatureDto extends MasterFieldsDto {
   @IsString() @Matches(/\S/) @MaxLength(100) category!: string;
   @ValidateIf((_, value) => value !== undefined) @IsIn(['BOOLEAN', 'LIMIT', 'CONFIG', 'TEXT']) featureType?: string;
 }
-
-
+ 
+ 
 export class RoleTemplateDto extends MasterFieldsDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Matches(/\S/) @MaxLength(100) name!: string;
@@ -40,4 +40,14 @@ export class PlanDto extends MasterFieldsDto {
   @ValidateIf((_, value) => value !== undefined)
   @IsString() @Matches(/^[A-Z]{3}$/) currency?: string;
   @IsIn(['MONTHLY', 'QUARTERLY', 'ANNUAL']) billingCycle!: string;
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @IsString() @MaxLength(50) storeType?: string | null;
+  @ValidateIf((_, value) => value !== undefined) @IsInt() @Min(0) includedStores?: number;
+  @ValidateIf((_, value) => value !== undefined) @IsInt() @Min(0) includedTerminals?: number;
+  @ValidateIf((_, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) additionalTerminalPrice?: number;
+  @ValidateIf((_, value) => value !== undefined) @IsInt() @Min(0) includedEmployees?: number;
+  @ValidateIf((_, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) additionalEmployeePrice?: number;
+  @ValidateIf((_, value) => value !== undefined) @IsInt() @Min(0) trialPeriod?: number;
+  @ValidateIf((_, value) => value !== undefined && value !== null) @IsISO8601() effectiveFrom?: string | null;
+  @ValidateIf((_, value) => value !== undefined) @IsArray() @IsString({ each: true }) includedFeatures?: string[];
 }

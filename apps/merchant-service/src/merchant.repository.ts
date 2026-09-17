@@ -5,6 +5,7 @@ import { storeSetup } from './store-setup';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
 import { ensureEmployeeAccessSchema } from './employee-access.schema';
+import { ensurePlanSchema } from './plan.schema';
 import { FeatureEntity, FeatureStatus } from './entities/feature.entity';
 import { PermissionEntity, PermissionStatus } from './entities/permission.entity';
 import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from './entities/role-template.entity';
@@ -69,7 +70,13 @@ export class MerchantRepository implements OnModuleInit {
         store_types: { storeTypeCode: 'storeTypeCode' },
         features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
         role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
-        plans: { planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle' },
+        plans: {
+          planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle',
+          storeType: 'store_type', includedStores: 'included_stores', includedTerminals: 'included_terminals',
+          additionalTerminalPrice: 'additional_terminal_price', includedEmployees: 'included_employees',
+          additionalEmployeePrice: 'additional_employee_price', trialPeriod: 'trial_period',
+          effectiveFrom: 'effective_from', includedFeatures: 'included_features',
+        },
       }[table]),
     };
     const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
@@ -163,11 +170,40 @@ export class MerchantRepository implements OnModuleInit {
       TendorEntity,
     ], { synchronize: false });
 
+    // A brand-new local database has no base tables yet. Bootstrap it once before
+    // installing the additive schemas below. Existing databases deliberately skip
+    // global synchronization because it can remove repository-owned indexes.
+    const [{ core_schema_missing: coreSchemaMissing }] = await this.dataSource.query(`
+      SELECT to_regclass('public.merchants') IS NULL
+         AND to_regclass('public.stores') IS NULL
+         AND to_regclass('public.features') IS NULL AS core_schema_missing
+    `);
+    if (coreSchemaMissing) {
+      const schemaLock = this.dataSource.createQueryRunner();
+      await schemaLock.connect();
+      try {
+        await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
+        try {
+          const [{ core_schema_missing: stillMissing }] = await schemaLock.query(`
+            SELECT to_regclass('public.merchants') IS NULL
+               AND to_regclass('public.stores') IS NULL
+               AND to_regclass('public.features') IS NULL AS core_schema_missing
+          `);
+          if (stillMissing) await this.dataSource.synchronize();
+        } finally {
+          await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
+        }
+      } finally {
+        await schemaLock.release();
+      }
+    }
+
     // 1. Initialize all repositories first
     // Repository-managed foreign keys depend on indexes unknown to TypeORM.
     // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
     await ensureEmployeeAccessSchema(this.dataSource);
     await ensureOnboardingSchema(this.dataSource);
+    await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
@@ -1462,6 +1498,15 @@ export class MerchantRepository implements OnModuleInit {
       basePrice: dto.basePrice,
       currency: dto.currency.trim().toUpperCase(),
       billingCycle: dto.billingCycle,
+      storeType: dto.storeType?.trim().toUpperCase() || null,
+      includedStores: dto.includedStores ?? 0,
+      includedTerminals: dto.includedTerminals ?? 0,
+      additionalTerminalPrice: dto.additionalTerminalPrice ?? 0,
+      includedEmployees: dto.includedEmployees ?? 0,
+      additionalEmployeePrice: dto.additionalEmployeePrice ?? 0,
+      trialPeriod: dto.trialPeriod ?? 0,
+      effectiveFrom: dto.effectiveFrom ? new Date(dto.effectiveFrom) : null,
+      includedFeatures: dto.includedFeatures ?? [],
       status: dto.status || PlanStatus.ACTIVE,
     });
     return this.planMasterRepo.save(entity);
@@ -1476,6 +1521,15 @@ export class MerchantRepository implements OnModuleInit {
     if (dto.basePrice !== undefined) existing.basePrice = dto.basePrice;
     if (dto.currency !== undefined) existing.currency = dto.currency.trim().toUpperCase();
     if (dto.billingCycle !== undefined) existing.billingCycle = dto.billingCycle;
+    if (dto.storeType !== undefined) existing.storeType = dto.storeType?.trim().toUpperCase() || null;
+    if (dto.includedStores !== undefined) existing.includedStores = dto.includedStores;
+    if (dto.includedTerminals !== undefined) existing.includedTerminals = dto.includedTerminals;
+    if (dto.additionalTerminalPrice !== undefined) existing.additionalTerminalPrice = dto.additionalTerminalPrice;
+    if (dto.includedEmployees !== undefined) existing.includedEmployees = dto.includedEmployees;
+    if (dto.additionalEmployeePrice !== undefined) existing.additionalEmployeePrice = dto.additionalEmployeePrice;
+    if (dto.trialPeriod !== undefined) existing.trialPeriod = dto.trialPeriod;
+    if (dto.effectiveFrom !== undefined) existing.effectiveFrom = dto.effectiveFrom ? new Date(dto.effectiveFrom) : null;
+    if (dto.includedFeatures !== undefined) existing.includedFeatures = dto.includedFeatures;
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();
     return this.planMasterRepo.save(existing);
