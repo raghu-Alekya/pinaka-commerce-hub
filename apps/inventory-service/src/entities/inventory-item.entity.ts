@@ -8,13 +8,13 @@ export class InventoryItemEntity {
   @Column({ type: 'varchar', length: 100 })
   merchantId!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100, default: 'UNKNOWN' })
   storeId!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100, default: '' })
   productId!: string; // SKU / Barcode / PLU
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   productName!: string;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0.00 })

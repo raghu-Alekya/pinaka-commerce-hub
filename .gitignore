@@ -90,11 +90,9 @@ logs/
 *.out.log
 
 # ==========================================
-# Local scripts
+# Local scripts (keep launchers tracked for VPS)
 # ==========================================
-scripts/
-
-# Keep the section 5 regression test available with the API implementation.
-!scripts/
 scripts/*
+!scripts/launch-pdh.sh
+!scripts/launch-pdh.ps1
 !scripts/employee-access-api.test.ts

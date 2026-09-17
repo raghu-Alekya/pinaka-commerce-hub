@@ -4,7 +4,9 @@
   "license": "MIT",
   "scripts": {
     "start:all": "bash ./scripts/launch-pdh.sh",
+    "restart:all": "bash ./scripts/launch-pdh.sh --restart",
     "start:all:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/launch-pdh.ps1",
+    "restart:all:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/launch-pdh.ps1 -Restart",
     "start:gateway": "nx serve gateway",
     "start:orders": "nx serve order-service",
     "start:connectors": "nx serve connector-service",
