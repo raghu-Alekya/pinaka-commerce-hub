@@ -1,3 +1,8 @@
+import { OnboardingController } from './onboarding.controller';
+import { VendorController } from './vendor.controller';
+import { TendorController } from './tendor.controller';
+import { VendorRepository } from './vendor.repository';
+import { TendorRepository } from './tendor.repository';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { PermissionController } from './permission.controller';
@@ -31,6 +36,9 @@ import { RelationshipsRepository } from './relationships.repository';
     ReferenceDataController,
     DeviceController,
     StoreTypeController,
+    OnboardingController,
+    VendorController,
+    TendorController,
     FeatureController,
     RoleTemplateController,
     PlanController,
@@ -41,6 +49,8 @@ import { RelationshipsRepository } from './relationships.repository';
     EmployeeAccessRepository,
     RelationshipOwnerGuard,
     MerchantRepository,
+    VendorRepository,
+    TendorRepository,
     SessionAuthGuard,
     { provide: APP_GUARD, useExisting: SessionAuthGuard },
   ],

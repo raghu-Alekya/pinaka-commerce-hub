@@ -1,12 +1,12 @@
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:43 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:44 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +18ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/analytics}:[39m[38;5;3m +1234ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/health, GET} route[39m[38;5;3m +6ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/dashboard, GET} route[39m[38;5;3m +3ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/top-products, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/channels, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/z-report, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:35 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:35 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +10ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/analytics}:[39m[38;5;3m +722ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/health, GET} route[39m[38;5;3m +5ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/dashboard, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/top-products, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/channels, GET} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/analytics/z-report, GET} route[39m[38;5;3m +1ms[39m
 🐘 [Analytics Service DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 ⚡ [Analytics Service Redis] Connected to Redis Container
-[32m[Nest] 16532  - [39m09/15/2026, 9:01:45 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +573ms[39m
+[32m[Nest] 22664  - [39m09/17/2026, 12:25:36 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +328ms[39m
 🚀 Analytics Service running on http://localhost:3006

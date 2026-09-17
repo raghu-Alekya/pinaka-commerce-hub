@@ -12,7 +12,6 @@ import {
   Post,
   Put,
   Query,
-  ValidationPipe,
 } from '@nestjs/common';
 import { MerchantRepository } from './merchant.repository';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';

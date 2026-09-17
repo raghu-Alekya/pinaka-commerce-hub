@@ -1,15 +1,15 @@
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:31 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:31 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +9ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/menus}:[39m[38;5;3m +1020ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/health, GET} route[39m[38;5;3m +10ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/ready, GET} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId, GET} route[39m[38;5;3m +4ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items, POST} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items/:itemId/86, PATCH} route[39m[38;5;3m +2ms[39m
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:32 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/sync, POST} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:26 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:26 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +9ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/menus}:[39m[38;5;3m +585ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/health, GET} route[39m[38;5;3m +4ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/ready, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items, POST} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/items/:itemId/86, PATCH} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/menus/:merchantId/sync, POST} route[39m[38;5;3m +0ms[39m
 🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 âš¡ [Menu Redis] Connected to Redis Container on port 6379
-[32m[Nest] 3604  - [39m09/15/2026, 9:01:33 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +371ms[39m
+🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
+âš¡ [Menu Redis] Connected to Redis Container on port 6379
+[32m[Nest] 29064  - [39m09/17/2026, 12:25:27 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +480ms[39m
 🚀 Menu Service running on http://localhost:3004
-🐘 [Menu PostgreSQL] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
-âš¡ [Menu Redis] Connected to Redis Container on port 6379

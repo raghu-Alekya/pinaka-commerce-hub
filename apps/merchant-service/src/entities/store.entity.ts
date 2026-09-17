@@ -92,6 +92,9 @@ export class StoreEntity {
   @Column({ type: 'jsonb', nullable: true, select: false })
   websiteConnector?: StoreWebsiteConnectorConfig | null;
 
+  @Column({ type: 'jsonb', default: {} })
+  onboardingSetup!: Record<string, any>;
+
   @CreateDateColumn()
   createdAt!: Date;
 

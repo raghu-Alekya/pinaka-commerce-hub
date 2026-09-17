@@ -1,3 +1,6 @@
+import { ensureOnboardingSchema } from './onboarding.schema';
+import { MerchantOnboardingDto } from './onboarding.dto';
+import { storeSetup } from './store-setup';
 ﻿import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
@@ -29,6 +32,9 @@ import { WebsiteConnectionEntity } from './entities/website-connection.entity';
 import { CategoryEntity } from './entities/category.entity';
 import { ProductEntity } from './entities/product.entity';
 import { DeviceEntity } from './entities/device.entity';
+import { VendorEntity } from './entities/vendor.entity';
+import { TendorEntity } from './entities/tendor.entity';
+import { ensureVendorTendorSchema } from './vendor-tendor.schema';
 
 interface WordPressProductNode {
   id?: number;
@@ -127,6 +133,13 @@ export class MerchantRepository implements OnModuleInit {
     return this.isDbConnected ? 'connected' : `unavailable: ${this.databaseError || 'unknown error'}`;
   }
 
+  requireDataSource(): DataSource {
+    if (!this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    return this.dataSource;
+  }
+
     async onModuleInit() {
     this.dataSource = await connectPostgres('PCH Merchant DB', [
       MerchantEntity,
@@ -146,12 +159,16 @@ export class MerchantRepository implements OnModuleInit {
       ProductEntity,
       DeviceEntity,
       SessionEntity,
+      VendorEntity,
+      TendorEntity,
     ], { synchronize: false });
 
     // 1. Initialize all repositories first
     // Repository-managed foreign keys depend on indexes unknown to TypeORM.
     // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
     await ensureEmployeeAccessSchema(this.dataSource);
+    await ensureOnboardingSchema(this.dataSource);
+    await ensureVendorTendorSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -330,6 +347,86 @@ export class MerchantRepository implements OnModuleInit {
     });
   }
 
+  async saveOnboarding(body: MerchantOnboardingDto, editing: boolean) {
+    if (!this.dataSource?.isInitialized) throw new ServiceUnavailableException('Onboarding requires PostgreSQL');
+    const id = body.merchant.code;
+    const incoming = body.stores || [];
+    if (incoming.some(store => store.merchantId !== id)) throw new BadRequestException('All stores must belong to this merchant');
+    if (new Set(incoming.map(store => store.storeId)).size !== incoming.length) throw new BadRequestException('Store IDs must be unique');
+    const m = body.merchant;
+    let result;
+    try {
+      result = await this.dataSource.transaction(async manager => {
+        const merchants = manager.getRepository(MerchantEntity);
+        const stores = manager.getRepository(StoreEntity);
+        const subscriptions = manager.getRepository(SubscriptionEntity);
+        const existing = await merchants.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } });
+        if (editing && !existing) throw new NotFoundException('Merchant not found');
+        if (!editing && existing) throw new ConflictException('Merchant code already exists');
+        const merchant = merchants.create({ ...existing, id, businessName: m.display,
+          legalBusinessName: m.business, ownerName: m.name, email: m.email.toLowerCase(), phone: m.phone,
+          country: m.country, city: m.city, state: m.state, postalCode: m.postal, businessAddress: m.address,
+          status: existing?.status || MerchantStatus.PENDING,
+          onboardingStep: incoming.length ? 'COMPLETED' : existing?.onboardingStep || 'STEP2_STORE',
+        });
+        // Save everything in one transaction: no partial merchant when a store or plan fails.
+        await merchants.save(merchant);
+        let subscription = await subscriptions.findOne({ where: { merchantId: id }, order: { createdAt: 'DESC' } });
+        if (body.subscription) {
+          const fields = await this.prepareSubscriptionContract({ ...body.subscription,
+            status: subscription?.status || SubscriptionStatus.PENDING,
+          }, subscription || undefined);
+          if (fields.licensedStoreCount == null || fields.licensedDeviceCount == null) {
+            throw new BadRequestException('The plan must define store/device limits, or supply the agreed license counts');
+          }
+          const start = body.subscription.startDate;
+          const renewal = new Date(start + 'T00:00:00Z');
+          const day = renewal.getUTCDate();
+          renewal.setUTCDate(1);
+          renewal.setUTCMonth(renewal.getUTCMonth() + (body.subscription.billingCycle === 'ANNUAL' ? 12 : 1));
+          const last = new Date(Date.UTC(renewal.getUTCFullYear(), renewal.getUTCMonth() + 1, 0)).getUTCDate();
+          renewal.setUTCDate(Math.min(day, last));
+          const subId = subscription?.id || `SUB-${crypto.randomUUID()}`;
+          subscription = await subscriptions.save(subscriptions.create({ ...subscription, ...fields,
+            id: subId, subscriptionCode: subscription?.subscriptionCode || subId, merchantId: id,
+            renewalDate: renewal.toISOString().slice(0,10), currentPeriodEnd: renewal,
+          }));
+        }
+        if (!subscription) throw new BadRequestException('Create a merchant subscription before adding stores');
+        for (const item of incoming) {
+          const current = await stores.findOneBy({ id: item.storeId });
+          if (current && current.merchantId !== id) throw new ConflictException(`Store '${item.storeId}' belongs to another merchant`);
+          const type = await this.getStoreTypeByIdOrCode(item.type || '');
+          if (!type || type.status !== 'ACTIVE') throw new BadRequestException('Select an active store type master code');
+          const fields = { id: item.storeId, storeCode: item.storeId, storeName: item.name.trim(),
+            storeType: type.storeTypeCode, phone: item.phone, baseUrl: item.url, currency: item.currency || subscription.currency || 'USD',
+            timezone: item.timezone || 'UTC', status: current?.status || StoreStatus.PENDING,
+            address: { street: item.address.trim(), city: item.city.trim(), state: item.state.trim(), zipCode: item.zip.trim(), country: item.country || m.country },
+            onboardingSetup: storeSetup(item, current?.onboardingSetup),
+          };
+          await stores.save(current ? { ...current, ...fields } : this.buildStore(id, fields));
+        }
+        const savedStores = await stores.find({ where: { merchantId: id } });
+        const licensed = savedStores.filter(store => store.onboardingSetup?.licensed === true);
+        const devices = savedStores.flatMap(store => (store.onboardingSetup?.devices || []) as Array<Record<string, unknown>>);
+        if (licensed.length > (subscription.licensedStoreCount ?? subscription.maxStoresAllowed)) throw new BadRequestException('Store license limit exceeded');
+        if (devices.length > (subscription.licensedDeviceCount ?? 0)) throw new BadRequestException('Device license limit exceeded');
+        const serials = devices.map(d => String(d.serial).trim().toLowerCase());
+        if (new Set(serials).size !== serials.length) throw new BadRequestException('Device identifiers must be unique across stores');
+        await manager.getRepository(OnboardingAuditEntity).save({ id: `AUD-${crypto.randomUUID()}`, merchantId: id,
+          action: editing ? 'ONBOARDING_UPDATED' : 'ONBOARDING_CREATED', performedBy: 'merchant',
+          details: { storeCount: savedStores.length, subscriptionId: subscription.id },
+        });
+        return { merchant, stores: savedStores, subscription };
+      });
+    } catch (error: any) {
+      if ((error.driverError?.code || error.code) === '23505') throw new ConflictException('Merchant email, merchant code or store code already exists');
+      throw error;
+    }
+    for (const store of result.stores) await this.cacheStorePin(store.activationPin, store);
+    return result;
+  }
+
   async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
     const id = data.id || await this.allocateId('merchant');
     const merchant: MerchantEntity = {
@@ -405,6 +502,7 @@ export class MerchantRepository implements OnModuleInit {
       autoAcceptOrders: data.autoAcceptOrders ?? true,
       status: data.status || StoreStatus.ACTIVE,
       operationalStatus: data.operationalStatus || OperationalStatus.OPEN,
+      onboardingSetup: data.onboardingSetup || {},
       channels: data.channels || [{ platform: 'POS', externalStoreId: id, apiKey: `key_${id}`, enabled: true }],
       createdAt: new Date(),
       updatedAt: new Date(),
