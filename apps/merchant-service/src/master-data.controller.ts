@@ -1,6 +1,6 @@
 import { IsIn } from 'class-validator';
 import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
-import { filterMasterList } from './master-list';
+import { filterMasterList, groupFeaturesByCategory } from './master-list';
 import { MerchantRepository } from './merchant.repository';
 import { FeatureDto, StoreTypeDto, RoleTemplateDto, PlanDto } from './master-data.dto';
 import { MasterFormValidationPipe } from './master-form.pipe';
@@ -31,6 +31,12 @@ export class FeatureController {
       .filter((category: string | undefined): category is string => Boolean(category)))]
       .sort((left, right) => left.localeCompare(right));
     return { success: true, count: categories.length, categories };
+  }
+  @Get('by-category')
+  async byCategory(@Query() query: Record<string, string>) {
+    const features = filterMasterList(await this.repository.masterData('features', 'list'), query);
+    const categories = groupFeaturesByCategory(features);
+    return { success: true, count: categories.length, total: features.length, categories };
   }
   @Get() async list(@Query() query: Record<string, string>) { const features = filterMasterList(await this.repository.masterData('features', 'list'), query); return { success: true, count: features.length, features }; }
   @Get(':id') async get(@Param('id', new ParseUUIDPipe()) id: string) { return { success: true, feature: await this.repository.masterData('features', 'get', id) }; }

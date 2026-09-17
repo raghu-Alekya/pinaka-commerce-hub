@@ -1,0 +1,573 @@
+{
+  "info": {
+    "_postman_id": "c8e4d1a2-7b91-4f33-9c12-vendor-tendor-map17",
+    "name": "PCH - Vendors, Tendors and Store Type Mappings (2026-09-17)",
+    "description": "APIs added/updated 17 Sep 2026 on feature/merchant-service.\n\n- Vendors and tendors master CRUD (status, unique tendor name, organizer contactPerson).\n- Features grouped by category.\n- Store type feature catalog (by-category + mapped flags) and bulk feature mapping.\n- Store type role-template catalog (available) and bulk role-template mapping.\n\nSet masterBaseUrl (default http://localhost:3003/api/v1) and accessToken. Mapping routes require an OWNER session. Run Create first so IDs are saved into collection variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "masterBaseUrl", "value": "http://localhost:3003/api/v1" },
+    { "key": "accessToken", "value": "" },
+    { "key": "vendorId", "value": "" },
+    { "key": "tendorId", "value": "" },
+    { "key": "storeTypeId", "value": "" },
+    { "key": "featureId", "value": "" },
+    { "key": "featureId2", "value": "" },
+    { "key": "roleTemplateId", "value": "" },
+    { "key": "roleTemplateId2", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Vendors",
+      "description": "vendorName and vendorType are required. vendorType is ORGANIZER or SUPPLIER. contactPerson is required when ORGANIZER. status defaults to ACTIVE. DELETE is a soft delete.",
+      "item": [
+        {
+          "name": "Create organizer",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "if (pm.response.code === 200 || pm.response.code === 201) { const data = pm.response.json(); if (data.vendor && data.vendor.id) pm.collectionVariables.set('vendorId', data.vendor.id); }"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"vendorCode\": \"VEN_ORG_001\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"address\": \"Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{masterBaseUrl}}/vendors", "host": ["{{masterBaseUrl}}"], "path": ["vendors"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create supplier",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendorName\": \"Fresh Farms Supply\",\n  \"vendorType\": \"SUPPLIER\",\n  \"vendorCode\": \"VEN_SUP_001\",\n  \"contactPerson\": \"Rahul\",\n  \"phone\": \"8888888888\",\n  \"email\": \"rahul@freshfarms.example\",\n  \"productCategory\": \"Produce\",\n  \"address\": \"Vijayawada\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{masterBaseUrl}}/vendors", "host": ["{{masterBaseUrl}}"], "path": ["vendors"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get all",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get organizers (active)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors?vendorType=ORGANIZER&status=ACTIVE",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors"],
+              "query": [
+                { "key": "vendorType", "value": "ORGANIZER" },
+                { "key": "status", "value": "ACTIVE" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors/{{vendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors", "{{vendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update (PUT)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"vendorCode\": \"VEN_ORG_001\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"address\": \"Banjara Hills, Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors/{{vendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors", "{{vendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Partial update (PATCH status)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"INACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors/{{vendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors", "{{vendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/vendors/{{vendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["vendors", "{{vendorId}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 - Tendors",
+      "description": "tendorName is required and unique among non-deleted rows (case-insensitive). status defaults to ACTIVE. Duplicate names return 409. DELETE is a soft delete.",
+      "item": [
+        {
+          "name": "Create",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "if (pm.response.code === 200 || pm.response.code === 201) { const data = pm.response.json(); if (data.tendor && data.tendor.id) pm.collectionVariables.set('tendorId', data.tendor.id); }"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tendorName\": \"Daily Produce Tender\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{masterBaseUrl}}/tendors", "host": ["{{masterBaseUrl}}"], "path": ["tendors"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get all",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{masterBaseUrl}}/tendors", "host": ["{{masterBaseUrl}}"], "path": ["tendors"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get all active",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/tendors?status=ACTIVE",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["tendors"],
+              "query": [{ "key": "status", "value": "ACTIVE" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/tendors/{{tendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["tendors", "{{tendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update (PUT)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tendorName\": \"Daily Produce Tender\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/tendors/{{tendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["tendors", "{{tendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Partial update (PATCH status)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"INACTIVE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/tendors/{{tendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["tendors", "{{tendorId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/tendors/{{tendorId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["tendors", "{{tendorId}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 - Features by category",
+      "description": "Category-wise feature catalog used by Add Features. Also use GET /features/categories for names only.",
+      "item": [
+        {
+          "name": "List features grouped by category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/features/by-category?status=ACTIVE",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["features", "by-category"],
+              "query": [{ "key": "status", "value": "ACTIVE" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List feature category names",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/features/categories",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["features", "categories"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 - Store type feature mappings",
+      "description": "OWNER session required. by-category is for the Add Features modal. Mapped list includes name and category. Bulk accepts featureIds (skips already mapped) or items[].",
+      "item": [
+        {
+          "name": "Features by category for store type",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/by-category?status=ACTIVE",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "by-category"],
+              "query": [{ "key": "status", "value": "ACTIVE" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Features by category (unmapped only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/by-category?status=ACTIVE&unmappedOnly=true",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "by-category"],
+              "query": [
+                { "key": "status", "value": "ACTIVE" },
+                { "key": "unmappedOnly", "value": "true" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List mapped features",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk map features (featureIds)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"featureIds\": [\n    \"{{featureId}}\",\n    \"{{featureId2}}\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/bulk",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "bulk"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk map features (items)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"featureId\": \"{{featureId}}\",\n      \"defaultEnabled\": true,\n      \"required\": false,\n      \"displayOrder\": 1\n    },\n    {\n      \"featureId\": \"{{featureId2}}\",\n      \"defaultEnabled\": true,\n      \"required\": false,\n      \"displayOrder\": 2\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/bulk",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "bulk"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Map one feature",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"featureId\": \"{{featureId}}\",\n  \"defaultEnabled\": true,\n  \"required\": false,\n  \"displayOrder\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Patch mapped feature (active toggle)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"defaultEnabled\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/{{featureId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "{{featureId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove mapped feature",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/features/{{featureId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "features", "{{featureId}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 - Store type role template mappings",
+      "description": "OWNER session required. available is for Add Role Template picker. Bulk accepts roleTemplateIds (skips already mapped) or items[].",
+      "item": [
+        {
+          "name": "List available role templates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/available",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "available"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List available (unmapped only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/available?unmappedOnly=true",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "available"],
+              "query": [{ "key": "unmappedOnly", "value": "true" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List mapped role templates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk map role templates (roleTemplateIds)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleTemplateIds\": [\n    \"{{roleTemplateId}}\",\n    \"{{roleTemplateId2}}\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/bulk",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "bulk"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk map role templates (items)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"roleTemplateId\": \"{{roleTemplateId}}\",\n      \"defaultEnabled\": true,\n      \"required\": false\n    },\n    {\n      \"roleTemplateId\": \"{{roleTemplateId2}}\",\n      \"defaultEnabled\": true,\n      \"required\": false\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/bulk",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "bulk"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Map one role template",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleTemplateId\": \"{{roleTemplateId}}\",\n  \"defaultEnabled\": true,\n  \"required\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Patch mapped role template (active toggle)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"defaultEnabled\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/{{roleTemplateId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "{{roleTemplateId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove mapped role template",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{masterBaseUrl}}/store-types/{{storeTypeId}}/role-templates/{{roleTemplateId}}",
+              "host": ["{{masterBaseUrl}}"],
+              "path": ["store-types", "{{storeTypeId}}", "role-templates", "{{roleTemplateId}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

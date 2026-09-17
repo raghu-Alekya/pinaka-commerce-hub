@@ -1,2 +1,6 @@
-❌ [HTTP FAILED] [CorrelationID: corr_8921f78e-d53c-4f60-a57e-8168a6833825] POST /api/v1/tendors - Status: 409 (16ms)
-❌ [HTTP FAILED] [CorrelationID: corr_132d11e5-c295-4645-8229-68367ac6e66a] PATCH /api/v1/tendors/93088347-f68e-4a7b-a80d-495e8425a9ac - Status: 404 (6ms)
+❌ [HTTP FAILED] [CorrelationID: corr_44ccf5af-08ea-4823-bd6f-426bc88e8a7f] GET /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features/by-category?status=ACTIVE - Status: 404 (18ms)
+❌ [HTTP FAILED] [CorrelationID: corr_98289071-e79f-4d17-ac26-da06118223db] GET /api/v1/store-types/517da22c-97c6-47db-b056-7f2a2b308062/features/by-category?status=ACTIVE&unmappedOnly=true - Status: 404 (18ms)
+❌ [HTTP FAILED] [CorrelationID: corr_6ed114f6-b97e-45b3-b5a8-49c91aebe06a] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/role-templates/bulk - Status: 400 (1ms)
+❌ [HTTP FAILED] [CorrelationID: corr_b63ddeb6-4199-4865-b177-270fd9150535] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/features/bulk - Status: 404 (19ms)
+❌ [HTTP FAILED] [CorrelationID: corr_0216d371-de84-4dbd-8526-dd3beadfb6e9] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/role-templates/bulk - Status: 404 (27ms)
+❌ [HTTP FAILED] [CorrelationID: corr_45fdd4e0-bec5-49cb-bd16-8f930fb6b6c1] POST /api/v1/store-types/99134b36-9eb9-4427-9a5c-6d954170a4d4/role-templates/bulk - Status: 409 (23ms)

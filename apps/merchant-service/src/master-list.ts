@@ -25,3 +25,16 @@ export function filterMasterList<T extends object>(items: T[], query: Record<str
         .some((key) => String(row[key] ?? '').toLowerCase().includes(search)));
   });
 }
+
+export function groupFeaturesByCategory<T extends { category?: string | null }>(features: T[]) {
+  const groups = new Map<string, T[]>();
+  for (const feature of features) {
+    const category = feature.category?.trim() || 'Uncategorized';
+    const list = groups.get(category) || [];
+    list.push(feature);
+    groups.set(category, list);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([category, items]) => ({ category, count: items.length, features: items }));
+}

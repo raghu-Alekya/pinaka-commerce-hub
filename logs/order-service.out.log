@@ -1,15 +1,15 @@
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:15 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:15 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +11ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/orders}:[39m[38;5;3m +1028ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/health, GET} route[39m[38;5;3m +4ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id/status, PATCH} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id/cancel, POST} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:22 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:22 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +10ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/orders}:[39m[38;5;3m +650ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/health, GET} route[39m[38;5;3m +4ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders, POST} route[39m[38;5;3m +2ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id/status, PATCH} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/orders/:id/cancel, POST} route[39m[38;5;3m +1ms[39m
 🐘 [Order Service DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 ⚡ [Order Service Redis] Connected to Redis Container
-[32m[Nest] 17532  - [39m09/17/2026, 12:25:16 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +299ms[39m
+🐘 [Order Service DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
+⚡ [Order Service Redis] Connected to Redis Container
+[32m[Nest] 25444  - [39m09/17/2026, 3:21:23 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +628ms[39m
 🚀 Order Service running on http://localhost:3002
-🐘 [Order Service DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
-⚡ [Order Service Redis] Connected to Redis Container

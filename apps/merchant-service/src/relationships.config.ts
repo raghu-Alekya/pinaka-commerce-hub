@@ -6,8 +6,8 @@ export type Relationship = {
   tenantColumn?: boolean; timestamps?: boolean; fields: Record<string, Field>;
   tenantField?: string; childOwnerColumn?: string; createdColumn?: string; updatedColumn?: string;
 };
-const defaults: Record<string, Field> = {
-  defaultEnabled: { column: 'defaultEnabled', kind: 'boolean', default: false },
+const storeTypeDefaults: Record<string, Field> = {
+  defaultEnabled: { column: 'default_enabled', kind: 'boolean', default: false },
   required: { column: 'required', kind: 'boolean', default: false },
 };
 const entitlement: Record<string, Field> = {
@@ -24,13 +24,15 @@ const overrides: Record<string, Field> = {
 // Only these fixed identifiers are interpolated into SQL; request values are parameters.
 export const RELATIONSHIPS: Relationship[] = [
   { name: 'StoreTypeFeatures', path: 'api/v1/store-types/:storeTypeId/features', table: 'store_type_features',
-    parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'storeTypeId', parentUuid: true,
-    childTable: 'features', childKey: 'featureId', childColumn: 'featureId', childUuid: true, timestamps: true,
-    fields: { ...defaults, displayOrder: { column: 'displayOrder', kind: 'integer', nullable: true, default: null },
-      configurationJson: { column: 'configurationJson', kind: 'object', nullable: true, default: null } } },
+    parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'store_type_id', parentUuid: true,
+    childTable: 'features', childKey: 'featureId', childColumn: 'feature_id', childUuid: true, timestamps: true,
+    createdColumn: 'created_at', updatedColumn: 'updated_at',
+    fields: { ...storeTypeDefaults, displayOrder: { column: 'display_order', kind: 'integer', nullable: true, default: null },
+      configurationJson: { column: 'configuration_json', kind: 'object', nullable: true, default: null } } },
   { name: 'StoreTypeRoleTemplates', path: 'api/v1/store-types/:storeTypeId/role-templates', table: 'store_type_role_templates',
-    parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'storeTypeId', parentUuid: true,
-    childTable: 'role_templates', childKey: 'roleTemplateId', childColumn: 'roleTemplateId', childUuid: true, timestamps: true, fields: defaults },
+    parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'store_type_id', parentUuid: true,
+    childTable: 'role_templates', childKey: 'roleTemplateId', childColumn: 'role_template_id', childUuid: true, timestamps: true,
+    createdColumn: 'created_at', updatedColumn: 'updated_at', fields: storeTypeDefaults },
   { name: 'PlanEntitlements', path: 'api/v1/plans/:planId/entitlements', table: 'plan_entitlements',
     parentTable: 'plans', parentParam: 'planId', parentColumn: 'planId', parentUuid: true,
     childTable: 'features', childKey: 'featureId', childColumn: 'featureId', childUuid: true, timestamps: true,

@@ -97,9 +97,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   async createBulk(config: Relationship, params: Record<string, string>, body: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
-    const items = (body as { items?: unknown }).items;
+    const { items, skipExisting } = this.bulkItems(config, body);
     if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
       throw new BadRequestException('items must contain between 1 and 100 mappings');
     }
@@ -116,6 +114,13 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return await this.db.transaction(async manager => {
         const created = [];
         for (const item of prepared) {
+          if (skipExisting) {
+            const existing = await manager.query(
+              `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
+              [parent, item.child],
+            );
+            if (existing.length) continue;
+          }
           const result = await this.perform(manager, config, 'create', parent, undefined, item.child, item.fields);
           created.push(result.item);
         }
@@ -124,6 +129,63 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     } catch (error: any) {
       this.rethrow(error);
     }
+  }
+
+  private bulkItems(config: Relationship, body: unknown): { items: Record<string, unknown>[]; skipExisting: boolean } {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide { items: [...] }');
+    const payload = body as Record<string, unknown>;
+    const idAlias = `${config.childKey}s`;
+    const hasItems = 'items' in payload;
+    const hasIds = idAlias in payload || 'ids' in payload;
+    if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
+    if (hasIds) {
+      if (Object.keys(payload).some(key => key !== idAlias && key !== 'ids' && key !== 'skipExisting')) {
+        throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
+      }
+      const ids = payload[idAlias] ?? payload.ids;
+      if (!Array.isArray(ids)) throw new BadRequestException(`${idAlias} must be an array`);
+      const defaults = config.name === 'PlanEntitlements'
+        ? { enabled: true }
+        : { defaultEnabled: true, required: false };
+      return {
+        skipExisting: payload.skipExisting !== false,
+        items: ids.map(id => (typeof id === 'string' ? { [config.childKey]: id, ...defaults } : id)),
+      };
+    }
+    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
+    return { items: payload.items as Record<string, unknown>[], skipExisting: false };
+  }
+
+  private async withChildDetails(manager: EntityManager, config: Relationship, items: Record<string, any>[]) {
+    if (!items.length) return items;
+    if (config.name === 'StoreTypeFeatures') {
+      const rows = await manager.query(
+        `SELECT id, name, category, status,
+           COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key') AS "featureKey"
+         FROM public.features f WHERE id = ANY($1::uuid[])`,
+        [items.map(item => item.featureId)],
+      );
+      const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
+      return items.map(item => {
+        const feature = byId.get(String(item.featureId).toLowerCase()) || {};
+        return { ...item, name: feature.name, category: feature.category, featureKey: feature.featureKey, featureStatus: feature.status };
+      });
+    }
+    if (config.name === 'StoreTypeRoleTemplates') {
+      const rows = await manager.query(
+        `SELECT id, name, status,
+           COALESCE(to_jsonb(t)->>'roleCode', to_jsonb(t)->>'role_code') AS "roleCode",
+           COALESCE(to_jsonb(t)->>'scopeType', to_jsonb(t)->>'scope_type') AS "scopeType"
+         FROM public.role_templates t WHERE id = ANY($1::uuid[])`,
+        [items.map(item => item.roleTemplateId)],
+      );
+      const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
+      return items.map(item => {
+        const template = byId.get(String(item.roleTemplateId).toLowerCase()) || {};
+        return { ...item, name: template.name, roleCode: template.roleCode, scopeType: template.scopeType, templateStatus: template.status };
+      });
+    }
+    return items;
   }
 
   private rethrow(error: any): never {
@@ -145,7 +207,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     const projection = this.projection(config);
     if (operation === 'list') {
       const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`, [parent]);
-      return { success: true, count: items.length, items };
+      return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
     }
     if (operation === 'create') {
       let childOwner = config.childOwnerColumn || 'merchantId';

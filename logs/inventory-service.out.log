@@ -1,12 +1,12 @@
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +12ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/inventory}:[39m[38;5;3m +510ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/health, GET} route[39m[38;5;3m +4ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory, GET} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/alerts/low-stock, GET} route[39m[38;5;3m +0ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/decrement, POST} route[39m[38;5;3m +1ms[39m
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:31 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/adjust, POST} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:43 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:43 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +16ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/api/v1/inventory}:[39m[38;5;3m +1537ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/health, GET} route[39m[38;5;3m +8ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory, GET} route[39m[38;5;3m +2ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/alerts/low-stock, GET} route[39m[38;5;3m +1ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/decrement, POST} route[39m[38;5;3m +2ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:45 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/v1/inventory/adjust, POST} route[39m[38;5;3m +1ms[39m
 🐘 [Inventory DB] Connected to PostgreSQL 127.0.0.1:5432/pinaka_commerce_hub
 âš¡ [Inventory Redis] Connected to Redis for <1ms stock check
-[32m[Nest] 30168  - [39m09/17/2026, 12:25:32 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +358ms[39m
+[32m[Nest] 14692  - [39m09/17/2026, 3:21:46 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +718ms[39m
 🚀 Inventory Service running on http://localhost:3005
