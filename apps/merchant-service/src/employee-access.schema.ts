@@ -1,4 +1,4 @@
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 
 /** Additive, repository-owned section 5 schema. No global TypeORM synchronization required. */
 export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> {
@@ -48,22 +48,12 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       END $schema$;
     `);
     // Older application builds used camelCase entity columns. Preserve their data.
-    const columns: Record<string, string[]> = {
+    await renameLegacyCamelCaseColumns(manager, {
       employees: ['merchantId', 'employeeCode', 'firstName', 'lastName', 'createdAt', 'updatedAt'],
       roles: ['merchantId', 'sourceRoleTemplateId', 'roleCode', 'scopeType', 'isCustom', 'createdAt', 'updatedAt'],
       role_templates: ['roleCode', 'scopeType', 'createdAt', 'updatedAt'],
       permissions: ['featureId', 'permissionKey', 'createdAt', 'updatedAt'],
-    };
-    for (const [table, names] of Object.entries(columns)) {
-      const existing = new Set((await manager.query(
-        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1", [table],
-      )).map((row: { column_name: string }) => row.column_name));
-      for (const from of names) {
-        const to = from.replace(/[A-Z]/g, letter => '_' + letter.toLowerCase());
-        if (existing.has(from) && existing.has(to)) throw new Error(`Ambiguous schema: ${table} has both ${from} and ${to}`);
-        if (existing.has(from)) await manager.query(`ALTER TABLE public."${table}" RENAME COLUMN "${from}" TO "${to}"`);
-      }
-    }
+    });
     await manager.query(`
       DO $schema$
       DECLARE merchant_type text; store_type text; store_owner text; ddl text;
@@ -113,11 +103,6 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
             created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
             UNIQUE(role_id,permission_id)
           );
-          CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary;
-          CREATE INDEX IF NOT EXISTS pch_employee_stores_store ON public.employee_stores(store_id);
-          CREATE INDEX IF NOT EXISTS pch_employee_store_roles_role ON public.employee_store_roles(role_id);
-          CREATE INDEX IF NOT EXISTS pch_role_permissions_permission ON public.role_permissions(permission_id);
-          CREATE INDEX IF NOT EXISTS pch_role_template_permissions_permission ON public.role_template_permissions(permission_id);
         $ddl$;
         ddl := replace(ddl,'__MERCHANT_TYPE__',merchant_type);
         ddl := replace(ddl,'__STORE_TYPE__',store_type);
@@ -125,5 +110,35 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         EXECUTE ddl;
       END $schema$;
     `);
+    await renameLegacyCamelCaseColumns(manager, {
+      employee_stores: ['merchantId', 'employeeId', 'storeId', 'isPrimary', 'effectiveFrom', 'effectiveUntil', 'createdAt', 'updatedAt'],
+      employee_store_roles: ['merchantId', 'employeeStoreId', 'roleId', 'effectiveFrom', 'effectiveUntil', 'createdAt', 'updatedAt'],
+      role_template_permissions: ['roleTemplateId', 'permissionId', 'defaultAllowed', 'createdAt', 'updatedAt'],
+      role_permissions: ['roleId', 'permissionId', 'createdAt', 'updatedAt'],
+    });
+    for (const index of [
+      'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary',
+      'CREATE INDEX IF NOT EXISTS pch_employee_stores_store ON public.employee_stores(store_id)',
+      'CREATE INDEX IF NOT EXISTS pch_employee_store_roles_role ON public.employee_store_roles(role_id)',
+      'CREATE INDEX IF NOT EXISTS pch_role_permissions_permission ON public.role_permissions(permission_id)',
+      'CREATE INDEX IF NOT EXISTS pch_role_template_permissions_permission ON public.role_template_permissions(permission_id)',
+    ]) await manager.query(index);
   });
+}
+
+async function renameLegacyCamelCaseColumns(manager: EntityManager, columns: Record<string, string[]>): Promise<void> {
+  for (const [table, names] of Object.entries(columns)) {
+    const existing = new Set((await manager.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1", [table],
+    )).map((row: { column_name: string }) => row.column_name));
+    for (const from of names) {
+      const to = from.replace(/[A-Z]/g, letter => '_' + letter.toLowerCase());
+      if (existing.has(from) && existing.has(to)) throw new Error(`Ambiguous schema: ${table} has both ${from} and ${to}`);
+      if (existing.has(from)) {
+        await manager.query(`ALTER TABLE public."${table}" RENAME COLUMN "${from}" TO "${to}"`);
+        existing.delete(from);
+        existing.add(to);
+      }
+    }
+  }
 }

@@ -66,6 +66,14 @@ async function main() {
       CREATE TABLE plan_entitlements (plan_id uuid,feature_id uuid,enabled boolean);
       CREATE TABLE subscription_entitlements (subscription_id varchar(100),feature_id uuid,enabled boolean,effective_from timestamptz,effective_until timestamptz);
       CREATE TABLE store_entitlements (store_id varchar(100),feature_id uuid,enabled boolean,effective_from timestamptz,effective_until timestamptz);
+      CREATE TABLE role_template_permissions (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), "roleTemplateId" uuid, "permissionId" uuid,
+        "defaultAllowed" boolean NOT NULL DEFAULT false, "createdAt" timestamptz, "updatedAt" timestamptz
+      );
+      CREATE TABLE role_permissions (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), "roleId" uuid, "permissionId" uuid,
+        allowed boolean NOT NULL DEFAULT false, "createdAt" timestamptz, "updatedAt" timestamptz
+      );
     `);
     await ensureEmployeeAccessSchema(db);
     await ensureEmployeeAccessSchema(db);
@@ -97,6 +105,8 @@ async function main() {
       }
     }
     expect((await db.query("SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('employees','roles','permissions','role_templates','employee_stores','employee_store_roles','role_permissions','role_template_permissions')"))[0].count, 8);
+    expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='permission_id'")).length, 1, 'legacy camelCase permissionId is renamed');
+    expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_template_permissions' AND column_name='permission_id'")).length, 1);
     Object.assign(relationships, { db }); Object.assign(access, { db });
     Object.assign(merchants, { dataSource: db, employeeRepo: db.getRepository(EmployeeEntity), roleRepo: db.getRepository(RoleEntity),
       permissionRepo: db.getRepository(PermissionEntity), roleTemplateRepo: db.getRepository(RoleTemplateEntity), merchantRepo: db.getRepository(MerchantEntity) });

@@ -36,7 +36,7 @@ function createController(config: Relationship) {
 }
 
 export const MASTER_BULK_RELATIONSHIPS = RELATIONSHIPS.filter(config =>
-  ['StoreTypeFeatures', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name));
+  ['StoreTypeFeatures', 'FeatureStoreTypes', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name));
 
 function createBulkController(config: Relationship) {
   @Controller(config.path)

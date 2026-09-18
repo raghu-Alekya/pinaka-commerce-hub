@@ -1421,6 +1421,134 @@ export class MerchantRepository implements OnModuleInit {
     return true;
   }
 
+  private permissionBulkItems(body: unknown, extraKeys: string[] = []): Record<string, unknown>[] {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide { items: [...] }');
+    const payload = body as Record<string, unknown>;
+    if (Object.keys(payload).some(key => key !== 'items' && !extraKeys.includes(key))) {
+      throw new BadRequestException('Provide { items: [...] }');
+    }
+    if (!Array.isArray(payload.items) || payload.items.length < 1 || payload.items.length > 100) {
+      throw new BadRequestException('items must contain between 1 and 100 permissions');
+    }
+    if (payload.items.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+      throw new BadRequestException('Each item must be a JSON object');
+    }
+    return payload.items as Record<string, unknown>[];
+  }
+
+  private permissionText(value: unknown, field: string, max: number, required = false): string | undefined {
+    if (value === undefined || value === null) {
+      if (required) throw new BadRequestException(`${field} is required`);
+      return undefined;
+    }
+    if (typeof value !== 'string') throw new BadRequestException(`Invalid ${field}`);
+    const text = value.trim();
+    if (!text) {
+      if (required) throw new BadRequestException(`${field} is required`);
+      return '';
+    }
+    if (text.length > max) throw new BadRequestException(`Invalid ${field}`);
+    return field === 'permissionKey' ? text.toUpperCase() : text;
+  }
+
+  private permissionStatusValue(value: unknown, required = false): PermissionStatus | undefined {
+    if (value === undefined || value === null) {
+      if (required) throw new BadRequestException('status is required');
+      return undefined;
+    }
+    if (typeof value !== 'string') throw new BadRequestException('Invalid status');
+    const status = value.trim().toUpperCase().replace(/\s+/g, '_');
+    if (!['ACTIVE', 'INACTIVE'].includes(status)) throw new BadRequestException('Invalid status');
+    return status as PermissionStatus;
+  }
+
+  async createFeaturePermissions(featureId: string, body: unknown): Promise<{ success: true; count: number; permissions: PermissionEntity[] }> {
+    if (!this.permissionRepo || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
+    await this.masterData('features', 'get', featureId);
+    const skipExisting = (body as { skipExisting?: unknown })?.skipExisting === true;
+    const prepared = this.permissionBulkItems(body, ['skipExisting']).map(item => {
+      const allowed = ['permissionKey', 'name', 'description', 'status', 'featureId'];
+      if (Object.keys(item).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown or immutable field');
+      if (typeof item.featureId === 'string' && item.featureId.toLowerCase() !== featureId.toLowerCase()) {
+        throw new BadRequestException('featureId must match the feature in the URL');
+      }
+      return {
+        permissionKey: this.permissionText(item.permissionKey, 'permissionKey', 100, true)!,
+        name: this.permissionText(item.name, 'name', 150, true)!,
+        description: this.permissionText(item.description, 'description', 2000) ?? '',
+        status: this.permissionStatusValue(item.status) || PermissionStatus.ACTIVE,
+      };
+    });
+    const seen = new Set<string>();
+    for (const item of prepared) {
+      if (seen.has(item.permissionKey)) throw new BadRequestException('Duplicate permissionKey in items');
+      seen.add(item.permissionKey);
+    }
+    try {
+      return await this.dataSource.transaction(async manager => {
+        const repo = manager.getRepository(PermissionEntity);
+        const permissions: PermissionEntity[] = [];
+        for (const item of prepared) {
+          const existing = await repo.findOneBy({ permissionKey: item.permissionKey });
+          if (existing) {
+            if (skipExisting && existing.featureId.toLowerCase() === featureId.toLowerCase()) continue;
+            throw new ConflictException(`Permission key '${item.permissionKey}' already exists`);
+          }
+          permissions.push(await repo.save(repo.create({ ...item, featureId })));
+        }
+        return { success: true as const, count: permissions.length, permissions };
+      });
+    } catch (error: any) {
+      const code = error.driverError?.code || error.code;
+      if (code === '23505') throw new ConflictException('Permission key already exists');
+      if (code === '23503') throw new BadRequestException(`Feature '${featureId}' does not exist. Use an existing featureId.`);
+      throw error;
+    }
+  }
+
+  async updateFeaturePermissions(featureId: string, body: unknown): Promise<{ success: true; count: number; permissions: PermissionEntity[] }> {
+    if (!this.permissionRepo || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
+    await this.masterData('features', 'get', featureId);
+    const prepared = this.permissionBulkItems(body).map(item => {
+      const allowed = ['id', 'permissionKey', 'name', 'description', 'status'];
+      if (Object.keys(item).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown or immutable field');
+      const id = typeof item.id === 'string' ? item.id.trim() : undefined;
+      const permissionKey = this.permissionText(item.permissionKey, 'permissionKey', 100);
+      if (!id && !permissionKey) throw new BadRequestException('Each item requires id or permissionKey');
+      const name = this.permissionText(item.name, 'name', 150);
+      const description = this.permissionText(item.description, 'description', 2000);
+      const status = this.permissionStatusValue(item.status);
+      if (name === undefined && description === undefined && status === undefined) {
+        throw new BadRequestException('Provide at least one field to update');
+      }
+      return { id, permissionKey, name, description, status };
+    });
+    const seen = new Set<string>();
+    for (const item of prepared) {
+      const token = (item.id || item.permissionKey)!.toLowerCase();
+      if (seen.has(token)) throw new BadRequestException('Duplicate permission in items');
+      seen.add(token);
+    }
+    return this.dataSource.transaction(async manager => {
+      const repo = manager.getRepository(PermissionEntity);
+      const permissions: PermissionEntity[] = [];
+      for (const item of prepared) {
+        const existing = item.id
+          ? await repo.findOneBy({ id: item.id })
+          : await repo.findOneBy({ permissionKey: item.permissionKey });
+        if (!existing || existing.featureId.toLowerCase() !== featureId.toLowerCase()) {
+          throw new NotFoundException(`Permission '${item.id || item.permissionKey}' not found`);
+        }
+        if (item.name !== undefined) existing.name = item.name;
+        if (item.description !== undefined) existing.description = item.description;
+        if (item.status !== undefined) existing.status = item.status;
+        existing.updatedAt = new Date();
+        permissions.push(await repo.save(existing));
+      }
+      return { success: true as const, count: permissions.length, permissions };
+    });
+  }
+
   // --- Role Templates CRUD ---
   async listRoleTemplates(scopeType?: string, status?: string): Promise<RoleTemplateEntity[]> {
     if (!this.roleTemplateRepo) return [];
