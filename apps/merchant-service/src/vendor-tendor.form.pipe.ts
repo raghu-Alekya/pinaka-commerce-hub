@@ -1,4 +1,4 @@
-import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
+import { ArgumentMetadata, BadRequestException, PipeTransform, ValidationPipe, ValidationPipeOptions } from '@nestjs/common';
 
 const vendorAliases: Record<string, string> = {
   name: 'vendorName',
@@ -11,7 +11,12 @@ const vendorAliases: Record<string, string> = {
 
 const tendorAliases: Record<string, string> = {
   name: 'tendorName',
+  code: 'tendorCode',
   tenderName: 'tendorName',
+  tenderCode: 'tendorCode',
+  tendor_Name: 'tendorName',
+  tendor_name: 'tendorName',
+  tendor_code: 'tendorCode',
 };
 
 function applyAliases(body: Record<string, unknown>, aliases: Record<string, string>): void {
@@ -25,28 +30,59 @@ function applyAliases(body: Record<string, unknown>, aliases: Record<string, str
   }
 }
 
-export function normalizeVendorForm(body: unknown): unknown {
+function camelizeSnakeCaseKeys(body: Record<string, unknown>): void {
+  for (const key of Object.keys(body)) {
+    if (!key.includes('_')) continue;
+    const camel = key.replace(/_([a-zA-Z])/g, (_, letter: string) => letter.toUpperCase()).replace(/_/g, '');
+    if (camel === key) continue;
+    if (camel in body && body[camel] !== body[key]) {
+      throw new BadRequestException(`Supply either ${key} or ${camel}, not conflicting values`);
+    }
+    body[camel] = body[key];
+    delete body[key];
+  }
+}
+
+function asPlainObject(body: unknown): Record<string, unknown> | unknown {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
-  const values = { ...body } as Record<string, unknown>;
-  applyAliases(values, vendorAliases);
+  return { ...(body as Record<string, unknown>) };
+}
+
+export function normalizeVendorForm(body: unknown): unknown {
+  const values = asPlainObject(body);
+  if (!values || typeof values !== 'object') return body;
+  applyAliases(values as Record<string, unknown>, vendorAliases);
   return values;
 }
 
 export function normalizeTendorForm(body: unknown): unknown {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
-  const values = { ...body } as Record<string, unknown>;
-  applyAliases(values, tendorAliases);
+  const values = asPlainObject(body);
+  if (!values || typeof values !== 'object') return body;
+  camelizeSnakeCaseKeys(values as Record<string, unknown>);
+  applyAliases(values as Record<string, unknown>, tendorAliases);
   return values;
 }
 
-export class VendorFormValidationPipe extends ValidationPipe {
-  override transform(value: unknown, metadata: ArgumentMetadata) {
-    return super.transform(normalizeVendorForm(value), metadata);
+export class VendorFormValidationPipe implements PipeTransform {
+  private readonly validator: ValidationPipe;
+
+  constructor(options: ValidationPipeOptions) {
+    this.validator = new ValidationPipe(options);
+  }
+
+  transform(value: unknown, metadata: ArgumentMetadata) {
+    return this.validator.transform(normalizeVendorForm(value) as object, metadata);
   }
 }
 
-export class TendorFormValidationPipe extends ValidationPipe {
-  override transform(value: unknown, metadata: ArgumentMetadata) {
-    return super.transform(normalizeTendorForm(value), metadata);
+export class TendorFormValidationPipe implements PipeTransform {
+  private readonly validator: ValidationPipe;
+
+  constructor(options: ValidationPipeOptions) {
+    this.validator = new ValidationPipe(options);
+  }
+
+  transform(value: unknown, metadata: ArgumentMetadata) {
+    return this.validator.transform(normalizeTendorForm(value) as object, metadata);
   }
 }

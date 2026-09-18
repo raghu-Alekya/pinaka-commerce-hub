@@ -41,18 +41,18 @@ export class TendorController {
   }
 
   @Post()
-  async create(@Body(createValidation) body: CreateTendorDto) {
-    return { success: true, message: 'Tendor created', tendor: await this.repository.create(body) };
+  async create(@Body(createValidation) body: Record<string, unknown>) {
+    return { success: true, message: 'Tendor created', tendor: await this.repository.create(body as CreateTendorDto) };
   }
 
   @Put(':id')
-  async replace(@Param('id', new ParseUUIDPipe()) id: string, @Body(createValidation) body: CreateTendorDto) {
-    return { success: true, message: 'Tendor updated', tendor: await this.repository.update(id, body) };
+  async replace(@Param('id', new ParseUUIDPipe()) id: string, @Body(createValidation) body: Record<string, unknown>) {
+    return { success: true, message: 'Tendor updated', tendor: await this.repository.update(id, body as CreateTendorDto) };
   }
 
   @Patch(':id')
-  async patch(@Param('id', new ParseUUIDPipe()) id: string, @Body(patchValidation) body: UpdateTendorDto) {
-    return { success: true, message: 'Tendor updated', tendor: await this.repository.update(id, body) };
+  async patch(@Param('id', new ParseUUIDPipe()) id: string, @Body(patchValidation) body: Record<string, unknown>) {
+    return { success: true, message: 'Tendor updated', tendor: await this.repository.update(id, body as UpdateTendorDto) };
   }
 
   @Delete(':id')

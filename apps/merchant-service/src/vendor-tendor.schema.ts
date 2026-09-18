@@ -36,6 +36,7 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
   await db.query(`
     CREATE TABLE IF NOT EXISTS public.tendors (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      "tendorCode" VARCHAR(50) NOT NULL,
       "tendorName" VARCHAR(150) NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
       "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -44,6 +45,13 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
       CONSTRAINT tendors_status_valid CHECK (status IN ('ACTIVE', 'INACTIVE'))
     )
   `);
+  await db.query(`ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorCode" VARCHAR(50)`);
+  await db.query(`
+    UPDATE public.tendors
+    SET "tendorCode" = 'T' || REPLACE(id::text, '-', '')
+    WHERE "tendorCode" IS NULL OR "tendorCode" = ''
+  `);
+  await db.query(`ALTER TABLE public.tendors ALTER COLUMN "tendorCode" SET NOT NULL`);
   await db.query(`
     UPDATE public.tendors AS duplicate
     SET "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
@@ -58,8 +66,30 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
       )
   `);
   await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS tendors_name_active_uidx
-    ON public.tendors (LOWER("tendorName"))
+    UPDATE public.tendors AS duplicate
+    SET "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+    WHERE duplicate."deletedAt" IS NULL
+      AND duplicate."tendorCode" IS NOT NULL
+      AND duplicate."tendorCode" <> ''
+      AND duplicate.id NOT IN (
+        SELECT kept.id FROM (
+          SELECT DISTINCT ON (LOWER("tendorCode")) id
+          FROM public.tendors
+          WHERE "deletedAt" IS NULL AND "tendorCode" IS NOT NULL AND "tendorCode" <> ''
+          ORDER BY LOWER("tendorCode"), "createdAt" ASC, id ASC
+        ) AS kept
+      )
+  `);
+  await db.query(`DROP INDEX IF EXISTS public.tendors_name_active_uidx`);
+  await db.query(`
+    CREATE UNIQUE INDEX tendors_name_active_uidx
+    ON public.tendors (LOWER(BTRIM("tendorName")))
     WHERE "deletedAt" IS NULL
+  `);
+  await db.query(`DROP INDEX IF EXISTS public.tendors_code_active_uidx`);
+  await db.query(`
+    CREATE UNIQUE INDEX tendors_code_active_uidx
+    ON public.tendors (LOWER(BTRIM("tendorCode")))
+    WHERE "deletedAt" IS NULL AND "tendorCode" IS NOT NULL AND BTRIM("tendorCode") <> ''
   `);
 }
