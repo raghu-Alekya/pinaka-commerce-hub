@@ -10,9 +10,16 @@ export enum TendorStatus {
   unique: true,
   where: `"deletedAt" IS NULL`,
 })
+@Index('tendors_code_active_uidx', ['tendorCode'], {
+  unique: true,
+  where: `"deletedAt" IS NULL AND "tendorCode" IS NOT NULL AND "tendorCode" <> ''`,
+})
 export class TendorEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
+
+  @Column({ type: 'varchar', length: 50 })
+  tendorCode!: string;
 
   @Column({ type: 'varchar', length: 150 })
   tendorName!: string;
