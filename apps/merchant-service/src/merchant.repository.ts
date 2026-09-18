@@ -1,7 +1,7 @@
 import { ensureOnboardingSchema } from './onboarding.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
-﻿import * as crypto from 'crypto';
+import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
 import { ensureEmployeeAccessSchema } from './employee-access.schema';
