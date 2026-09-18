@@ -1,8 +1,9 @@
+import { StoreSetupDto } from './store-setup.dto';
 import { Transform, Type } from 'class-transformer';
 import { ArrayMinSize, ArrayMaxSize, IsArray, ValidateNested, IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength, Matches } from 'class-validator';
 import { StoreStatus } from './entities/store.entity';
 
-export class UpdateStoreDto {
+export class UpdateStoreDto extends StoreSetupDto {
   @IsString() @IsNotEmpty() @MaxLength(100) merchantId!: string;
   @IsString() @IsNotEmpty() @MaxLength(100) storeId!: string;
   @IsString() @Matches(/\S/) @MaxLength(255) name!: string;

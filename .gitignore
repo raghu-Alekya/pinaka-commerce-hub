@@ -95,3 +95,5 @@ logs/
 scripts/*
 !scripts/launch-pdh.sh
 !scripts/launch-pdh.ps1
+!scripts/employee-access-api.test.ts
+!scripts/onboarding-api.test.ts

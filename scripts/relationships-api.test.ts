@@ -63,6 +63,20 @@ async function main() {
       };
       expect((await request('GET','',undefined,'STAFF')).status,403);
       expect((await request('GET', '', undefined, '')).status,403);
+      if (['StoreTypeFeatures', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name)) {
+        const secondChild = randomUUID();
+        await runner.query(`INSERT INTO ${config.childTable} (id,${config.childTable === 'features' ? 'feature_key,name,category,feature_type' : 'role_code,name,scope_type'}) VALUES ($1,$2,${config.childTable === 'features' ? "'Bulk feature','TEST','BOOLEAN'" : "'Bulk role','STORE'"})`, [secondChild, `B-${secondChild}`]);
+        const batch = { items: [{ [config.childKey]: child }, { [config.childKey]: secondChild }] };
+        expect((await request('POST', '/bulk', batch, 'STAFF')).status, 403);
+        expect((await request('POST', '/bulk', { items: [{ [config.childKey]: child }, { [config.childKey]: randomUUID() }] })).status, 404);
+        expect((await request('GET')).data.count, 0, 'failed batch rolled back');
+        const bulk = await request('POST', '/bulk', batch);
+        expect(bulk.status, 201); expect(bulk.data.count, 2);
+        expect((await request('DELETE', `/${child}`)).status, 200);
+        expect((await request('POST', '/bulk', batch)).status, 409);
+        expect((await request('GET')).data.count, 1, 'duplicate batch rolled back its first insert');
+        expect((await request('DELETE', `/${secondChild}`)).status, 200);
+      }
       expect((await request('GET')).data.count,0);
       expect((await request('POST','',{})).status,400);
       expect((await request('POST','',{ [config.childKey]: child, unexpected: true })).status,400);

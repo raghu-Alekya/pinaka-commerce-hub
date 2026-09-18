@@ -15,7 +15,7 @@ export class RoleTemplateEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
+  @Column({ name: 'role_code', type: 'varchar', length: 50, unique: true })
   roleCode!: string;
 
   @Column({ type: 'varchar', length: 100 })
@@ -24,15 +24,15 @@ export class RoleTemplateEntity {
   @Column({ type: 'text', default: '' })
   description!: string;
 
-  @Column({ type: 'varchar', length: 20, default: RoleScopeType.STORE })
+  @Column({ name: 'scope_type', type: 'varchar', length: 20, default: RoleScopeType.STORE })
   scopeType!: RoleScopeType;
 
   @Column({ type: 'varchar', length: 20, default: RoleTemplateStatus.ACTIVE })
   status!: RoleTemplateStatus;
 
-  @CreateDateColumn({ type: 'timestamptz' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 }

@@ -1,5 +1,5 @@
 import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
-import { RELATIONSHIPS, Relationship } from './relationships.config';
+import { RELATIONSHIPS, EMPLOYEE_ACCESS_RELATIONSHIPS, Relationship } from './relationships.config';
 import { RelationshipsRepository } from './relationships.repository';
 
 // The existing global session guard authenticates first. These new administration
@@ -35,4 +35,24 @@ function createController(config: Relationship) {
   return RelationshipController;
 }
 
-export const RELATIONSHIP_CONTROLLERS = RELATIONSHIPS.map(createController);
+export const MASTER_BULK_RELATIONSHIPS = RELATIONSHIPS.filter(config =>
+  ['StoreTypeFeatures', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name));
+
+function createBulkController(config: Relationship) {
+  @Controller(config.path)
+  @UseGuards(RelationshipOwnerGuard)
+  class BulkRelationshipController {
+    constructor(@Inject(RelationshipsRepository) readonly repository: RelationshipsRepository) {}
+    @Post('bulk')
+    create(@Param() params: Record<string, string>, @Body() body: unknown) {
+      return this.repository.createBulk(config, params, body);
+    }
+  }
+  Object.defineProperty(BulkRelationshipController, 'name', { value: `${config.name}BulkController` });
+  return BulkRelationshipController;
+}
+
+export const RELATIONSHIP_CONTROLLERS = [
+  ...[...RELATIONSHIPS, ...EMPLOYEE_ACCESS_RELATIONSHIPS].map(createController),
+  ...MASTER_BULK_RELATIONSHIPS.map(createBulkController),
+];

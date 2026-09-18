@@ -11,16 +11,16 @@ export class EmployeeEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
   merchantId!: string;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
+  @Column({ name: 'employee_code', type: 'varchar', length: 50, unique: true })
   employeeCode!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'first_name', type: 'varchar', length: 100 })
   firstName!: string;
 
-  @Column({ type: 'varchar', length: 100, default: '' })
+  @Column({ name: 'last_name', type: 'varchar', length: 100, default: '' })
   lastName!: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
@@ -32,9 +32,9 @@ export class EmployeeEntity {
   @Column({ type: 'varchar', length: 20, default: EmployeeStatus.ACTIVE })
   status!: EmployeeStatus;
 
-  @CreateDateColumn({ type: 'timestamptz' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 }

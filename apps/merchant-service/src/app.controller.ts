@@ -1,3 +1,4 @@
+import { storeSetup } from './store-setup';
 import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
@@ -410,8 +411,9 @@ export class AppController {
       phone: body.phone?.trim() || '', baseUrl: body.url?.trim(),
       currency: body.currency, status: body.status,
       timezone: timezones[body.timezone || ''] || body.timezone || 'UTC',
+      onboardingSetup: storeSetup(body),
       address: { street: body.address.trim(), city: body.city.trim(), state: body.state.trim(),
-        zipCode: body.zip.trim(), country: country || '' },
+        zipCode: body.zip.trim(), country: body.country || country || '' },
     };
   }
 
@@ -473,8 +475,9 @@ export class AppController {
       currency: body.currency ?? existing.currency,
       status: body.status ?? existing.status,
       timezone: body.timezone ?? existing.timezone,
+      onboardingSetup: storeSetup(body, existing.onboardingSetup),
       address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
-        state: body.state.trim(), zipCode: body.zip.trim() },
+        state: body.state.trim(), zipCode: body.zip.trim(), country: body.country ?? existing.address.country },
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     return { success: true, store };

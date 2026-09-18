@@ -4,7 +4,7 @@ import { RoleScopeType } from './entities/role-template.entity';
 
 export class CreateRoleDto {
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(100)
   merchantId!: string;
 
@@ -41,6 +41,7 @@ export class CreateRoleDto {
 
 export class UpdateRoleDto {
   @IsString()
+  @IsNotEmpty()
   @IsOptional()
   @MaxLength(100)
   name?: string;

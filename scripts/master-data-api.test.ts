@@ -7,6 +7,7 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MerchantRepository } from '../apps/merchant-service/src/merchant.repository';
 import { FeatureController, RoleTemplateController, PlanController } from '../apps/merchant-service/src/master-data.controller';
+import { ensureFeaturePlanCatalogSchema } from '../apps/merchant-service/src/feature-plan-catalog.schema';
 
 const repository = new MerchantRepository();
 Object.assign(repository, { onModuleInit: async () => {} });
@@ -18,10 +19,11 @@ async function main() {
     username: process.env.POSTGRES_USER || 'pdh_user', password: process.env.POSTGRES_PASSWORD || 'pdh_password',
     database: process.env.POSTGRES_DB || 'pinaka_commerce_hub', synchronize: false });
   await db.initialize();
+  await ensureFeaturePlanCatalogSchema(db);
   const runner = db.createQueryRunner();
   await runner.startTransaction();
   // Each request gets a savepoint so expected SQL constraint failures do not abort the test transaction.
-  Object.assign(repository, { dataSource: { isInitialized: true, query: async (sql: string, values: unknown[]) => {
+  Object.assign(repository, { isDbConnected: true, dataSource: { isInitialized: true, query: async (sql: string, values: unknown[]) => {
     await runner.query('SAVEPOINT request');
     try { const result = await runner.query(sql, values); await runner.query('RELEASE SAVEPOINT request'); return result; }
     catch (error) { await runner.query('ROLLBACK TO SAVEPOINT request'); throw error; }

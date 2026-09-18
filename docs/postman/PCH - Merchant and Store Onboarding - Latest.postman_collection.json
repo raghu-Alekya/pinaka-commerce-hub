@@ -1,0 +1,875 @@
+{
+  "info": {
+    "_postman_id": "a81f90ea-b621-4537-80e2-123f36e43a4d",
+    "name": "PCH - Merchant and Store Onboarding - Latest",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Updated 2026-09-16. New two-stage onboarding and existing store APIs. Run login, inspect active masters, allocate IDs, create merchant, then add stores. Choose an existing active commercial plan/store-type code. Requests are examples to run individually: alternate create-store routes must not all be run with the same ID. No payment or access provisioning: device/role/feature selections are configuration drafts. New onboarding subscriptions/stores remain PENDING. Omitted stores are preserved. Requires latest merchant-service code and additive migration 08_store_onboarding_setup.sql (also applied on service startup)."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3003",
+      "type": "string"
+    },
+    {
+      "key": "authBaseUrl",
+      "value": "http://localhost:3010",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "merchantId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "storeId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "planCode",
+      "value": "STARTER",
+      "type": "string"
+    },
+    {
+      "key": "storeTypeCode",
+      "value": "GROCERY",
+      "type": "string"
+    },
+    {
+      "key": "merchantEmail",
+      "value": "onboarding-demo@example.com",
+      "type": "string"
+    },
+    {
+      "key": "deviceSerial",
+      "value": "POS-DEMO-001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Authentication",
+      "item": [
+        {
+          "name": "Login — save access token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{authBaseUrl}}/api/v1/auth/login",
+            "description": "Enter your local account credentials. Tokens are saved only in your local collection variables.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const data = pm.response.json(); const token = data.accessToken || data.data?.accessToken; if (token) pm.collectionVariables.set(\"accessToken\", token); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Prerequisites and IDs",
+      "item": [
+        {
+          "name": "List active commercial plans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/plans?status=ACTIVE",
+            "description": "Set planCode to an existing active plans master code."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List active store types",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/store-types?status=ACTIVE",
+            "description": "Set storeTypeCode to an existing active master code."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Allocate merchant ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/ids/merchant",
+            "description": "Reserves a new server-wide merchant code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { pm.collectionVariables.set(\"merchantId\", pm.response.json().id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Allocate store ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/ids/store",
+            "description": "Reserves a new server-wide store code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { pm.collectionVariables.set(\"storeId\", pm.response.json().id); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Merchant Onboarding (new screens)",
+      "item": [
+        {
+          "name": "Create merchant and pending subscription — no stores yet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/onboarding",
+            "description": "First stage. Change merchantEmail for each new merchant. All writes are atomic.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant\": {\n    \"code\": \"{{merchantId}}\",\n    \"business\": \"Example Retail LLC\",\n    \"display\": \"Example Retail\",\n    \"name\": \"Example Owner\",\n    \"email\": \"{{merchantEmail}}\",\n    \"phone\": \"+15555550123\",\n    \"country\": \"United States\",\n    \"city\": \"Phoenix\",\n    \"state\": \"Arizona\",\n    \"address\": \"100 Example Street\",\n    \"postal\": \"85001\"\n  },\n  \"subscription\": {\n    \"planCode\": \"{{planCode}}\",\n    \"billingCycle\": \"MONTHLY\",\n    \"startDate\": \"2026-09-16\",\n    \"licensedStoreCount\": 2,\n    \"licensedDeviceCount\": 3\n  },\n  \"stores\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read onboarding details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/onboarding",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update merchant contact only",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/onboarding",
+            "description": "Full merchant contact object is required. Subscription and stores are preserved when omitted.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant\": {\n    \"code\": \"{{merchantId}}\",\n    \"business\": \"Example Retail LLC\",\n    \"display\": \"Example Retail Updated\",\n    \"name\": \"Example Owner\",\n    \"email\": \"{{merchantEmail}}\",\n    \"phone\": \"+15555550123\",\n    \"country\": \"United States\",\n    \"city\": \"Phoenix\",\n    \"state\": \"Arizona\",\n    \"address\": \"100 Example Street\",\n    \"postal\": \"85001\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update subscription selection",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/onboarding",
+            "description": "Plan and agreed license counts. Does not mark payment successful or activate the subscription.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant\": {\n    \"code\": \"{{merchantId}}\",\n    \"business\": \"Example Retail LLC\",\n    \"display\": \"Example Retail\",\n    \"name\": \"Example Owner\",\n    \"email\": \"{{merchantEmail}}\",\n    \"phone\": \"+15555550123\",\n    \"country\": \"United States\",\n    \"city\": \"Phoenix\",\n    \"state\": \"Arizona\",\n    \"address\": \"100 Example Street\",\n    \"postal\": \"85001\"\n  },\n  \"subscription\": {\n    \"planCode\": \"{{planCode}}\",\n    \"billingCycle\": \"MONTHLY\",\n    \"startDate\": \"2026-09-16\",\n    \"licensedStoreCount\": 2,\n    \"licensedDeviceCount\": 3\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add or update store setup",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/onboarding",
+            "description": "Second stage. Existing store IDs are updated; new IDs added. Cross-merchant IDs rejected. Includes schedules and setup drafts. All writes roll back on failure.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant\": {\n    \"code\": \"{{merchantId}}\",\n    \"business\": \"Example Retail LLC\",\n    \"display\": \"Example Retail\",\n    \"name\": \"Example Owner\",\n    \"email\": \"{{merchantEmail}}\",\n    \"phone\": \"+15555550123\",\n    \"country\": \"United States\",\n    \"city\": \"Phoenix\",\n    \"state\": \"Arizona\",\n    \"address\": \"100 Example Street\",\n    \"postal\": \"85001\"\n  },\n  \"stores\": [\n    {\n      \"merchantId\": \"{{merchantId}}\",\n      \"storeId\": \"{{storeId}}\",\n      \"name\": \"Example Main Store\",\n      \"type\": \"{{storeTypeCode}}\",\n      \"phone\": \"+15555550124\",\n      \"url\": \"https://example.com\",\n      \"currency\": \"USD\",\n      \"status\": \"PENDING\",\n      \"address\": \"101 Example Street\",\n      \"city\": \"Phoenix\",\n      \"state\": \"Arizona\",\n      \"zip\": \"85001\",\n      \"country\": \"United States\",\n      \"timezone\": \"America/Phoenix\",\n      \"licensed\": true,\n      \"logo\": \"\",\n      \"hours\": [\n        {\n          \"day\": \"Monday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Tuesday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Wednesday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Thursday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Friday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Saturday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Sunday\",\n          \"status\": \"Closed\",\n          \"open\": \"\",\n          \"close\": \"\",\n          \"shifts\": 2\n        }\n      ],\n      \"devices\": [\n        {\n          \"name\": \"Main POS\",\n          \"type\": \"POS\",\n          \"serial\": \"{{deviceSerial}}\"\n        }\n      ],\n      \"features\": [\n        \"REFUNDS\"\n      ],\n      \"roles\": [\n        {\n          \"name\": \"Cashier\",\n          \"scope\": \"Store\",\n          \"permissions\": {\n            \"REFUNDS\": [\n              \"VIEW_REFUND\"\n            ]\n          }\n        }\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create merchant with store in one transaction — alternative",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/onboarding",
+            "description": "Alternative to the staged create flow. Allocate fresh IDs/email before running.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant\": {\n    \"code\": \"{{merchantId}}\",\n    \"business\": \"Example Retail LLC\",\n    \"display\": \"Example Retail\",\n    \"name\": \"Example Owner\",\n    \"email\": \"{{merchantEmail}}\",\n    \"phone\": \"+15555550123\",\n    \"country\": \"United States\",\n    \"city\": \"Phoenix\",\n    \"state\": \"Arizona\",\n    \"address\": \"100 Example Street\",\n    \"postal\": \"85001\"\n  },\n  \"subscription\": {\n    \"planCode\": \"{{planCode}}\",\n    \"billingCycle\": \"MONTHLY\",\n    \"startDate\": \"2026-09-16\",\n    \"licensedStoreCount\": 2,\n    \"licensedDeviceCount\": 3\n  },\n  \"stores\": [\n    {\n      \"merchantId\": \"{{merchantId}}\",\n      \"storeId\": \"{{storeId}}\",\n      \"name\": \"Example Main Store\",\n      \"type\": \"{{storeTypeCode}}\",\n      \"phone\": \"+15555550124\",\n      \"url\": \"https://example.com\",\n      \"currency\": \"USD\",\n      \"status\": \"PENDING\",\n      \"address\": \"101 Example Street\",\n      \"city\": \"Phoenix\",\n      \"state\": \"Arizona\",\n      \"zip\": \"85001\",\n      \"country\": \"United States\",\n      \"timezone\": \"America/Phoenix\",\n      \"licensed\": true,\n      \"logo\": \"\",\n      \"hours\": [\n        {\n          \"day\": \"Monday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Tuesday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Wednesday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Thursday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Friday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Saturday\",\n          \"status\": \"Open\",\n          \"open\": \"09:00\",\n          \"close\": \"21:00\",\n          \"shifts\": 2\n        },\n        {\n          \"day\": \"Sunday\",\n          \"status\": \"Closed\",\n          \"open\": \"\",\n          \"close\": \"\",\n          \"shifts\": 2\n        }\n      ],\n      \"devices\": [\n        {\n          \"name\": \"Main POS\",\n          \"type\": \"POS\",\n          \"serial\": \"{{deviceSerial}}\"\n        }\n      ],\n      \"features\": [\n        \"REFUNDS\"\n      ],\n      \"roles\": [\n        {\n          \"name\": \"Cashier\",\n          \"scope\": \"Store\",\n          \"permissions\": {\n            \"REFUNDS\": [\n              \"VIEW_REFUND\"\n            ]\n          }\n        }\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Existing Merchant Reads",
+      "item": [
+        {
+          "name": "List merchants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get merchant with stores and subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - Store CRUD (extended setup fields)",
+      "item": [
+        {
+          "name": "List all stores",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List merchant stores",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/stores",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create merchant store — alternative",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/stores",
+            "description": "Use a new store ID. This is an alternative to onboarding store upsert.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Example Main Store\",\n  \"type\": \"{{storeTypeCode}}\",\n  \"phone\": \"+15555550124\",\n  \"url\": \"https://example.com\",\n  \"currency\": \"USD\",\n  \"status\": \"PENDING\",\n  \"address\": \"101 Example Street\",\n  \"city\": \"Phoenix\",\n  \"state\": \"Arizona\",\n  \"zip\": \"85001\",\n  \"country\": \"United States\",\n  \"timezone\": \"America/Phoenix\",\n  \"licensed\": true,\n  \"logo\": \"\",\n  \"hours\": [\n    {\n      \"day\": \"Monday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Tuesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Wednesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Thursday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Friday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Saturday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Sunday\",\n      \"status\": \"Closed\",\n      \"open\": \"\",\n      \"close\": \"\",\n      \"shifts\": 2\n    }\n  ],\n  \"devices\": [\n    {\n      \"name\": \"Main POS\",\n      \"type\": \"POS\",\n      \"serial\": \"{{deviceSerial}}\"\n    }\n  ],\n  \"features\": [\n    \"REFUNDS\"\n  ],\n  \"roles\": [\n    {\n      \"name\": \"Cashier\",\n      \"scope\": \"Store\",\n      \"permissions\": {\n        \"REFUNDS\": [\n          \"VIEW_REFUND\"\n        ]\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create standalone store — alternative",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores",
+            "description": "Requires merchantId; use a new store ID.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Example Main Store\",\n  \"type\": \"{{storeTypeCode}}\",\n  \"phone\": \"+15555550124\",\n  \"url\": \"https://example.com\",\n  \"currency\": \"USD\",\n  \"status\": \"PENDING\",\n  \"address\": \"101 Example Street\",\n  \"city\": \"Phoenix\",\n  \"state\": \"Arizona\",\n  \"zip\": \"85001\",\n  \"country\": \"United States\",\n  \"timezone\": \"America/Phoenix\",\n  \"licensed\": true,\n  \"logo\": \"\",\n  \"hours\": [\n    {\n      \"day\": \"Monday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Tuesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Wednesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Thursday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Friday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Saturday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Sunday\",\n      \"status\": \"Closed\",\n      \"open\": \"\",\n      \"close\": \"\",\n      \"shifts\": 2\n    }\n  ],\n  \"devices\": [\n    {\n      \"name\": \"Main POS\",\n      \"type\": \"POS\",\n      \"serial\": \"{{deviceSerial}}\"\n    }\n  ],\n  \"features\": [\n    \"REFUNDS\"\n  ],\n  \"roles\": [\n    {\n      \"name\": \"Cashier\",\n      \"scope\": \"Store\",\n      \"permissions\": {\n        \"REFUNDS\": [\n          \"VIEW_REFUND\"\n        ]\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read store",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores/{{storeId}}",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read merchant store",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/stores/{{storeId}}",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update store and setup",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}/stores/{{storeId}}",
+            "description": "IDs are immutable. Omitting setup fields preserves them.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Example Main Store Updated\",\n  \"type\": \"{{storeTypeCode}}\",\n  \"phone\": \"+15555550124\",\n  \"url\": \"https://example.com\",\n  \"currency\": \"USD\",\n  \"status\": \"PENDING\",\n  \"address\": \"101 Example Street\",\n  \"city\": \"Phoenix\",\n  \"state\": \"Arizona\",\n  \"zip\": \"85001\",\n  \"country\": \"United States\",\n  \"timezone\": \"America/Phoenix\",\n  \"licensed\": true,\n  \"logo\": \"\",\n  \"hours\": [\n    {\n      \"day\": \"Monday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Tuesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Wednesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Thursday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Friday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Saturday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Sunday\",\n      \"status\": \"Closed\",\n      \"open\": \"\",\n      \"close\": \"\",\n      \"shifts\": 2\n    }\n  ],\n  \"devices\": [\n    {\n      \"name\": \"Main POS\",\n      \"type\": \"POS\",\n      \"serial\": \"{{deviceSerial}}\"\n    }\n  ],\n  \"features\": [\n    \"REFUNDS\"\n  ],\n  \"roles\": [\n    {\n      \"name\": \"Cashier\",\n      \"scope\": \"Store\",\n      \"permissions\": {\n        \"REFUNDS\": [\n          \"VIEW_REFUND\"\n        ]\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clear setup selections",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores/{{storeId}}",
+            "description": "Explicit empty arrays clear draft selections; hours remain supplied.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Example Main Store\",\n  \"type\": \"{{storeTypeCode}}\",\n  \"phone\": \"+15555550124\",\n  \"url\": \"https://example.com\",\n  \"currency\": \"USD\",\n  \"status\": \"PENDING\",\n  \"address\": \"101 Example Street\",\n  \"city\": \"Phoenix\",\n  \"state\": \"Arizona\",\n  \"zip\": \"85001\",\n  \"country\": \"United States\",\n  \"timezone\": \"America/Phoenix\",\n  \"licensed\": true,\n  \"logo\": \"\",\n  \"hours\": [\n    {\n      \"day\": \"Monday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Tuesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Wednesday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Thursday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Friday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Saturday\",\n      \"status\": \"Open\",\n      \"open\": \"09:00\",\n      \"close\": \"21:00\",\n      \"shifts\": 2\n    },\n    {\n      \"day\": \"Sunday\",\n      \"status\": \"Closed\",\n      \"open\": \"\",\n      \"close\": \"\",\n      \"shifts\": 2\n    }\n  ],\n  \"devices\": [],\n  \"features\": [],\n  \"roles\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deactivate store",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores/{{storeId}}",
+            "description": "Uses existing update endpoint; retains configuration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"storeId\": \"{{storeId}}\",\n  \"name\": \"Example Main Store\",\n  \"type\": \"{{storeTypeCode}}\",\n  \"phone\": \"+15555550124\",\n  \"url\": \"https://example.com\",\n  \"currency\": \"USD\",\n  \"status\": \"INACTIVE\",\n  \"address\": \"101 Example Street\",\n  \"city\": \"Phoenix\",\n  \"state\": \"Arizona\",\n  \"zip\": \"85001\",\n  \"country\": \"United States\",\n  \"timezone\": \"America/Phoenix\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read store configuration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/stores/{{storeId}}/configuration",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Successful response\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

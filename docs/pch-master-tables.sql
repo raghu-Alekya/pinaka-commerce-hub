@@ -83,18 +83,32 @@ CREATE TABLE public.plans (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT plans_billing_model_valid CHECK (billing_model IN ('FLAT', 'PER_STORE', 'PER_DEVICE', 'CUSTOM')),
     CONSTRAINT plans_price_valid CHECK (base_price >= 0 AND base_price <> 'NaN'::NUMERIC),
-    CONSTRAINT plans_billing_cycle_valid CHECK (billing_cycle IN ('MONTHLY', 'ANNUAL')),
+    CONSTRAINT plans_billing_cycle_valid CHECK (billing_cycle IN ('MONTHLY', 'QUARTERLY', 'ANNUAL')),
     CONSTRAINT plans_status_valid CHECK (status IN ('ACTIVE', 'INACTIVE'))
 );
 
 -- Keep audit timestamps current for SQL clients as well as application writes.
-CREATE FUNCTION public.pch_master_set_updated_at()
+CREATE OR REPLACE FUNCTION public.pch_master_set_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    row_data jsonb := to_jsonb(NEW);
+    old_data jsonb := to_jsonb(OLD);
+    audit_values jsonb := '{}'::jsonb;
+    column_name text;
 BEGIN
-    NEW.created_at := OLD.created_at;
-    NEW.updated_at := clock_timestamp();
+    FOREACH column_name IN ARRAY ARRAY['created_at', 'createdAt'] LOOP
+        IF row_data ? column_name THEN
+            audit_values := audit_values || jsonb_build_object(column_name, old_data -> column_name);
+        END IF;
+    END LOOP;
+    FOREACH column_name IN ARRAY ARRAY['updated_at', 'updatedAt'] LOOP
+        IF row_data ? column_name THEN
+            audit_values := audit_values || jsonb_build_object(column_name, clock_timestamp());
+        END IF;
+    END LOOP;
+    NEW := jsonb_populate_record(NEW, audit_values);
     RETURN NEW;
 END;
 $$;

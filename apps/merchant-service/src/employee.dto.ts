@@ -3,7 +3,7 @@ import { EmployeeStatus } from './entities/employee.entity';
 
 export class CreateEmployeeDto {
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(100)
   merchantId!: string;
 
@@ -37,6 +37,7 @@ export class CreateEmployeeDto {
 
 export class UpdateEmployeeDto {
   @IsString()
+  @IsNotEmpty()
   @IsOptional()
   @MaxLength(100)
   firstName?: string;

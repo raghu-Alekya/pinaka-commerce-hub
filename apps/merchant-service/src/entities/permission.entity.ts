@@ -10,10 +10,10 @@ export class PermissionEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ name: 'feature_id', type: 'uuid' })
   featureId!: string;
 
-  @Column({ type: 'varchar', length: 100, unique: true })
+  @Column({ name: 'permission_key', type: 'varchar', length: 100, unique: true })
   permissionKey!: string;
 
   @Column({ type: 'varchar', length: 150 })
@@ -25,9 +25,9 @@ export class PermissionEntity {
   @Column({ type: 'varchar', length: 20, default: PermissionStatus.ACTIVE })
   status!: PermissionStatus;
 
-  @CreateDateColumn({ type: 'timestamptz' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 }
