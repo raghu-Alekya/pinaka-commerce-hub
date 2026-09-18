@@ -25,6 +25,46 @@ export class CreatePermissionDto {
   status?: PermissionStatus;
 }
 
+export class CreateFeaturePermissionDto {
+  @IsUUID()
+  @IsOptional()
+  featureId?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  permissionKey!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(150)
+  name!: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsEnum(PermissionStatus)
+  @IsOptional()
+  status?: PermissionStatus;
+}
+
+export class UpdateFeaturePermissionDto {
+  @IsString()
+  @IsNotEmpty()
+  @IsOptional()
+  @MaxLength(150)
+  name?: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsEnum(PermissionStatus)
+  @IsOptional()
+  status?: PermissionStatus;
+}
+
 export class UpdatePermissionDto {
   @IsUUID()
   @IsOptional()

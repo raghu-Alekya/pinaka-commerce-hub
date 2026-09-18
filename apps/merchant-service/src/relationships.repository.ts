@@ -171,6 +171,19 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         return { ...item, name: feature.name, category: feature.category, featureKey: feature.featureKey, featureStatus: feature.status };
       });
     }
+    if (config.name === 'FeatureStoreTypes') {
+      const rows = await manager.query(
+        `SELECT id, name, description, status,
+           COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code') AS "storeTypeCode"
+         FROM public.store_types s WHERE id = ANY($1::uuid[])`,
+        [items.map(item => item.storeTypeId)],
+      );
+      const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
+      return items.map(item => {
+        const storeType = byId.get(String(item.storeTypeId).toLowerCase()) || {};
+        return { ...item, name: storeType.name, description: storeType.description, storeTypeCode: storeType.storeTypeCode, storeTypeStatus: storeType.status };
+      });
+    }
     if (config.name === 'StoreTypeRoleTemplates') {
       const rows = await manager.query(
         `SELECT id, name, status,

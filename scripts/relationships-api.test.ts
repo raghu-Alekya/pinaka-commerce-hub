@@ -63,9 +63,13 @@ async function main() {
       };
       expect((await request('GET','',undefined,'STAFF')).status,403);
       expect((await request('GET', '', undefined, '')).status,403);
-      if (['StoreTypeFeatures', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name)) {
+      if (['StoreTypeFeatures', 'FeatureStoreTypes', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name)) {
         const secondChild = randomUUID();
-        await runner.query(`INSERT INTO ${config.childTable} (id,${config.childTable === 'features' ? 'feature_key,name,category,feature_type' : 'role_code,name,scope_type'}) VALUES ($1,$2,${config.childTable === 'features' ? "'Bulk feature','TEST','BOOLEAN'" : "'Bulk role','STORE'"})`, [secondChild, `B-${secondChild}`]);
+        const columns = config.childTable === 'features' ? 'feature_key,name,category,feature_type'
+          : config.childTable === 'store_types' ? 'store_type_code,name' : 'role_code,name,scope_type';
+        const values = config.childTable === 'features' ? "'Bulk feature','TEST','BOOLEAN'"
+          : config.childTable === 'store_types' ? "'Bulk type'" : "'Bulk role','STORE'";
+        await runner.query(`INSERT INTO ${config.childTable} (id,${columns}) VALUES ($1,$2,${values})`, [secondChild, `B-${secondChild}`]);
         const batch = { items: [{ [config.childKey]: child }, { [config.childKey]: secondChild }] };
         expect((await request('POST', '/bulk', batch, 'STAFF')).status, 403);
         expect((await request('POST', '/bulk', { items: [{ [config.childKey]: child }, { [config.childKey]: randomUUID() }] })).status, 404);

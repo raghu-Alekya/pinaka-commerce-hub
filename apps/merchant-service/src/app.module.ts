@@ -17,7 +17,8 @@ import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
 import { StoreTypeController } from './store-type.controller';
-import { StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
+import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
+import { FeaturePermissionController } from './feature-permission.controller';
 import { FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
 import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard } from './relationships.controller';
@@ -27,9 +28,11 @@ import { RelationshipsRepository } from './relationships.repository';
   imports: [],
   controllers: [
     StoreTypeFeatureCatalogController,
+    FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,
     ...RELATIONSHIP_CONTROLLERS,
     AppController,
+    FeaturePermissionController,
     PermissionController,
     RoleController,
     EmployeeController,

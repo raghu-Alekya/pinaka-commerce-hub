@@ -6,6 +6,7 @@ import { RelationshipOwnerGuard } from './relationships.controller';
 import { RelationshipsRepository } from './relationships.repository';
 
 const storeTypeFeatures = RELATIONSHIPS.find(config => config.name === 'StoreTypeFeatures')!;
+const featureStoreTypes = RELATIONSHIPS.find(config => config.name === 'FeatureStoreTypes')!;
 const storeTypeRoleTemplates = RELATIONSHIPS.find(config => config.name === 'StoreTypeRoleTemplates')!;
 
 @Controller(['api/v1/store-types/:storeTypeId/features', 'api/v1/store_types/:storeTypeId/features'])
@@ -29,6 +30,38 @@ export class StoreTypeFeatureCatalogController {
       mappedCount: group.features.filter(feature => feature.mapped).length,
     }));
     return { success: true, count: categories.length, total: visible.length, categories };
+  }
+}
+
+@Controller(['api/v1/features/:featureId/store-types', 'api/v1/features/:featureId/store_types'])
+@UseGuards(RelationshipOwnerGuard)
+export class FeatureStoreTypeCatalogController {
+  constructor(
+    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
+    @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
+  ) {}
+
+  @Get('available')
+  async available(@Param('featureId') featureId: string, @Query() query: Record<string, string>) {
+    const mapped = await this.relationships.execute(featureStoreTypes, 'list', { featureId });
+    const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean; displayOrder: number | null; configurationJson: object | null }[])
+      .map(item => [item.storeTypeId.toLowerCase(), item]));
+    const storeTypes = filterMasterList(await this.merchants.masterData('store_types', 'list'), query)
+      .map((storeType: { id: string }) => {
+        const mapping = mappings.get(String(storeType.id).toLowerCase());
+        return {
+          ...storeType,
+          mapped: Boolean(mapping),
+          mappingId: mapping?.id || null,
+          defaultEnabled: mapping?.defaultEnabled ?? false,
+          required: mapping?.required ?? false,
+          displayOrder: mapping?.displayOrder ?? null,
+          configurationJson: mapping?.configurationJson ?? null,
+        };
+      });
+    const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
+    const visible = unmappedOnly ? storeTypes.filter(storeType => !storeType.mapped) : storeTypes;
+    return { success: true, count: visible.length, storeTypes: visible };
   }
 }
 
