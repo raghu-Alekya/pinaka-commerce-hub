@@ -61,7 +61,12 @@ export class VendorRepository {
       phone: optionalText(dto.phone),
       email: optionalText(dto.email)?.toLowerCase(),
       productCategory: optionalText(dto.productCategory),
-      address: optionalText(dto.address),
+      addressLine1: optionalText(dto.addressLine1),
+      addressLine2: optionalText(dto.addressLine2),
+      city: optionalText(dto.city),
+      state: optionalText(dto.state),
+      zipCode: optionalText(dto.zipCode),
+      country: optionalText(dto.country),
       status: dto.status || VendorStatus.ACTIVE,
     });
     try {
@@ -83,7 +88,12 @@ export class VendorRepository {
     if (dto.phone !== undefined) existing.phone = optionalText(dto.phone);
     if (dto.email !== undefined) existing.email = optionalText(dto.email)?.toLowerCase() ?? null;
     if (dto.productCategory !== undefined) existing.productCategory = optionalText(dto.productCategory);
-    if (dto.address !== undefined) existing.address = optionalText(dto.address);
+    if (dto.addressLine1 !== undefined) existing.addressLine1 = optionalText(dto.addressLine1);
+    if (dto.addressLine2 !== undefined) existing.addressLine2 = optionalText(dto.addressLine2);
+    if (dto.city !== undefined) existing.city = optionalText(dto.city);
+    if (dto.state !== undefined) existing.state = optionalText(dto.state);
+    if (dto.zipCode !== undefined) existing.zipCode = optionalText(dto.zipCode);
+    if (dto.country !== undefined) existing.country = optionalText(dto.country);
     if (dto.status !== undefined) existing.status = dto.status;
     this.assertOrganizerContact(existing.vendorType, existing.contactPerson);
     try {

@@ -167,7 +167,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       );
       const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
       return items.map(item => {
-        const feature = byId.get(String(item.featureId).toLowerCase()) || {};
+        const feature: Record<string, any> = byId.get(String(item.featureId).toLowerCase()) || {};
         return { ...item, name: feature.name, category: feature.category, featureKey: feature.featureKey, featureStatus: feature.status };
       });
     }
@@ -181,7 +181,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       );
       const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
       return items.map(item => {
-        const template = byId.get(String(item.roleTemplateId).toLowerCase()) || {};
+        const template: Record<string, any> = byId.get(String(item.roleTemplateId).toLowerCase()) || {};
         return { ...item, name: template.name, roleCode: template.roleCode, scopeType: template.scopeType, templateStatus: template.status };
       });
     }

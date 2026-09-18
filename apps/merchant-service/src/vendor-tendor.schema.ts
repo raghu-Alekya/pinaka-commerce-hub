@@ -21,6 +21,13 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
     )
   `);
   await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'`);
+  await db.query(`ALTER TABLE public.vendors DROP COLUMN IF EXISTS address`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "addressLine1" VARCHAR(255)`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "addressLine2" VARCHAR(255)`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "city" VARCHAR(100)`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "state" VARCHAR(50)`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "zipCode" VARCHAR(20)`);
+  await db.query(`ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "country" VARCHAR(100)`);
   await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS vendors_vendor_code_active_uidx
     ON public.vendors ("vendorCode")

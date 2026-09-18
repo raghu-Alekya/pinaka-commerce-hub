@@ -62,8 +62,38 @@ export class CreateVendorDto {
   @Transform(blankToUndefined)
   @IsOptional()
   @IsString()
-  @MaxLength(500)
-  address?: string;
+  @MaxLength(255)
+  addressLine1?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  addressLine2?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  state?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  zipCode?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsOptional()
@@ -118,8 +148,38 @@ export class UpdateVendorDto {
   @Transform(blankToUndefined)
   @IsOptional()
   @IsString()
-  @MaxLength(500)
-  address?: string;
+  @MaxLength(255)
+  addressLine1?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  addressLine2?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  state?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  zipCode?: string;
+
+  @Transform(blankToUndefined)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsOptional()

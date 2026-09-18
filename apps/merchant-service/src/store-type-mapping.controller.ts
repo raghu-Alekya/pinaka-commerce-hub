@@ -20,13 +20,13 @@ export class StoreTypeFeatureCatalogController {
   async byCategory(@Param('storeTypeId') storeTypeId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(storeTypeFeatures, 'list', { storeTypeId });
     const mappedIds = new Set((mapped.items as { featureId: string }[]).map(item => item.featureId.toLowerCase()));
-    const features = filterMasterList(await this.merchants.masterData('features', 'list'), query)
-      .map((feature: { id: string }) => ({ ...feature, mapped: mappedIds.has(String(feature.id).toLowerCase()) }));
+    const masterFeatures = (filterMasterList(await this.merchants.masterData('features', 'list'), query) || []) as Record<string, any>[];
+    const features = masterFeatures.map(feature => ({ ...feature, mapped: mappedIds.has(String(feature.id).toLowerCase()) }));
     const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
     const visible = unmappedOnly ? features.filter(feature => !feature.mapped) : features;
-    const categories = groupFeaturesByCategory(visible).map(group => ({
+    const categories = groupFeaturesByCategory(visible as any).map(group => ({
       ...group,
-      mappedCount: group.features.filter(feature => feature.mapped).length,
+      mappedCount: group.features.filter((feature: any) => feature.mapped).length,
     }));
     return { success: true, count: categories.length, total: visible.length, categories };
   }
@@ -44,8 +44,8 @@ export class StoreTypeRoleTemplateCatalogController {
   async available(@Param('storeTypeId') storeTypeId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(storeTypeRoleTemplates, 'list', { storeTypeId });
     const mappedIds = new Set((mapped.items as { roleTemplateId: string }[]).map(item => item.roleTemplateId.toLowerCase()));
-    const roleTemplates = filterMasterList(await this.merchants.masterData('role_templates', 'list'), query)
-      .map((template: { id: string }) => ({ ...template, mapped: mappedIds.has(String(template.id).toLowerCase()) }));
+    const masterTemplates = (filterMasterList(await this.merchants.masterData('role_templates', 'list'), query) || []) as Record<string, any>[];
+    const roleTemplates = masterTemplates.map(template => ({ ...template, mapped: mappedIds.has(String(template.id).toLowerCase()) }));
     const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
     const visible = unmappedOnly ? roleTemplates.filter(template => !template.mapped) : roleTemplates;
     return { success: true, count: visible.length, roleTemplates: visible };
