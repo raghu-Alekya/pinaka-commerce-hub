@@ -46,8 +46,8 @@ export class FeatureStoreTypeCatalogController {
     const mapped = await this.relationships.execute(featureStoreTypes, 'list', { featureId });
     const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean; displayOrder: number | null; configurationJson: object | null }[])
       .map(item => [item.storeTypeId.toLowerCase(), item]));
-    const storeTypes = filterMasterList(await this.merchants.masterData('store_types', 'list'), query)
-      .map((storeType: { id: string }) => {
+    const masterStoreTypes = (filterMasterList(await this.merchants.masterData('store_types', 'list'), query) || []) as Record<string, any>[];
+    const storeTypes = masterStoreTypes.map((storeType: Record<string, any>) => {
         const mapping = mappings.get(String(storeType.id).toLowerCase());
         return {
           ...storeType,

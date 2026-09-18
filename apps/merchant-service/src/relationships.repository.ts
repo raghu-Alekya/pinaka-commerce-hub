@@ -180,7 +180,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       );
       const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
       return items.map(item => {
-        const storeType = byId.get(String(item.storeTypeId).toLowerCase()) || {};
+        const storeType: Record<string, any> = byId.get(String(item.storeTypeId).toLowerCase()) || {};
         return { ...item, name: storeType.name, description: storeType.description, storeTypeCode: storeType.storeTypeCode, storeTypeStatus: storeType.status };
       });
     }
