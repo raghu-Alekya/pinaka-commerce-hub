@@ -9,7 +9,13 @@ const storeTypeFeatures = RELATIONSHIPS.find(config => config.name === 'StoreTyp
 const featureStoreTypes = RELATIONSHIPS.find(config => config.name === 'FeatureStoreTypes')!;
 const storeTypeRoleTemplates = RELATIONSHIPS.find(config => config.name === 'StoreTypeRoleTemplates')!;
 
-@Controller(['api/v1/store-types/:storeTypeId/features', 'api/v1/store_types/:storeTypeId/features'])
+// Use full unique controller paths. Sharing the same @Controller path as the
+// generated relationship CRUD controllers causes Nest to drop these routes.
+
+@Controller([
+  'api/v1/store-types/:storeTypeId/features/by-category',
+  'api/v1/store_types/:storeTypeId/features/by-category',
+])
 @UseGuards(RelationshipOwnerGuard)
 export class StoreTypeFeatureCatalogController {
   constructor(
@@ -17,7 +23,7 @@ export class StoreTypeFeatureCatalogController {
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
-  @Get('by-category')
+  @Get()
   async byCategory(@Param('storeTypeId') storeTypeId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(storeTypeFeatures, 'list', { storeTypeId });
     const mappedIds = new Set((mapped.items as { featureId: string }[]).map(item => item.featureId.toLowerCase()));
@@ -33,7 +39,10 @@ export class StoreTypeFeatureCatalogController {
   }
 }
 
-@Controller(['api/v1/features/:featureId/store-types', 'api/v1/features/:featureId/store_types'])
+@Controller([
+  'api/v1/features/:featureId/store-types/available',
+  'api/v1/features/:featureId/store_types/available',
+])
 @UseGuards(RelationshipOwnerGuard)
 export class FeatureStoreTypeCatalogController {
   constructor(
@@ -41,7 +50,7 @@ export class FeatureStoreTypeCatalogController {
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
-  @Get('available')
+  @Get()
   async available(@Param('featureId') featureId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(featureStoreTypes, 'list', { featureId });
     const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean; displayOrder: number | null; configurationJson: object | null }[])
@@ -65,7 +74,10 @@ export class FeatureStoreTypeCatalogController {
   }
 }
 
-@Controller(['api/v1/store-types/:storeTypeId/role-templates', 'api/v1/store_types/:storeTypeId/role-templates'])
+@Controller([
+  'api/v1/store-types/:storeTypeId/role-templates/available',
+  'api/v1/store_types/:storeTypeId/role-templates/available',
+])
 @UseGuards(RelationshipOwnerGuard)
 export class StoreTypeRoleTemplateCatalogController {
   constructor(
@@ -73,7 +85,7 @@ export class StoreTypeRoleTemplateCatalogController {
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
-  @Get('available')
+  @Get()
   async available(@Param('storeTypeId') storeTypeId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(storeTypeRoleTemplates, 'list', { storeTypeId });
     const mappedIds = new Set((mapped.items as { roleTemplateId: string }[]).map(item => item.roleTemplateId.toLowerCase()));

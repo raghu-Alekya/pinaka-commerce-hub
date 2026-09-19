@@ -336,96 +336,259 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return { child, defaultAllowed: row.defaultAllowed !== false };
     });
   }
+  async listRoleTemplateAccess(
+  roleTemplateId: string,
+  query: Record<string, string | string[] | undefined> = {},
+) {
+  const parent = this.id(roleTemplateId, 'roleTemplateId', true);
 
-  async listRoleTemplateAccess(roleTemplateId: string, query: Record<string, string | string[] | undefined> = {}) {
-    const parent = this.id(roleTemplateId, 'roleTemplateId', true);
-    try {
-      return await this.db.transaction(async manager => {
-        const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1', [parent]);
-        if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
-        const assigned = await manager.query(
-          `SELECT ${quoteIdent('store_type_id')} AS ${quoteIdent('storeTypeId')}
-           FROM public.store_type_role_templates WHERE ${quoteIdent('role_template_id')} = $1`,
-          [parent],
+  try {
+    return await this.db.transaction(async manager => {
+      const owners = await manager.query(
+        'SELECT id FROM public.role_templates WHERE id = $1',
+        [parent],
+      );
+
+      if (!owners.length) {
+        throw new NotFoundException(
+          'Parent not found in the requested scope',
         );
-        const assignedIds = assigned.map((row: { storeTypeId: string }) => String(row.storeTypeId).toLowerCase());
-        const requested = this.requestedStoreTypeIds(query);
-        const storeTypeIds = requested || assignedIds;
-        const featureRows = storeTypeIds.length ? await manager.query(
-          `SELECT f.id, f.name, f.description, f.category, f.status,
-             COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key') AS "featureKey",
-             COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type') AS "featureType",
-             ARRAY_AGG(DISTINCT stf.store_type_id) AS "storeTypeIds"
-           FROM public.store_type_features stf
-           JOIN public.features f ON f.id = stf.feature_id
-           WHERE stf.store_type_id = ANY($1::uuid[])
-           GROUP BY f.id, f.name, f.description, f.category, f.status
-           ORDER BY f.name, f.id`,
-          [storeTypeIds],
-        ) : [];
-        const featureIds = featureRows.map((row: { id: string }) => row.id);
-        const permissions = featureIds.length ? await manager.query(
-          `SELECT p.id, p.name, p.description, p.status,
-             COALESCE(to_jsonb(p)->>'permissionKey', to_jsonb(p)->>'permission_key') AS "permissionKey",
-             COALESCE(to_jsonb(p)->>'featureId', to_jsonb(p)->>'feature_id') AS "featureId"
-           FROM public.permissions p
-           WHERE p.feature_id = ANY($1::uuid[])
-           ORDER BY p.name, p.id`,
-          [featureIds],
-        ) : [];
-        const grants = await manager.query(
-          `SELECT id, permission_id AS "permissionId", default_allowed AS "defaultAllowed"
-           FROM public.role_template_permissions WHERE role_template_id = $1`,
-          [parent],
-        );
-        const grantByPermission = new Map(grants.map((row: { permissionId: string; id: string; defaultAllowed: boolean }) =>
-          [String(row.permissionId).toLowerCase(), row]));
-        const search = query.search?.trim().toLowerCase();
-        const status = query.status?.trim().toUpperCase();
-        const features = featureRows.map((feature: Record<string, any>) => {
+      }
+
+      const assigned = await manager.query(
+        `SELECT ${quoteIdent('store_type_id')} AS ${quoteIdent('storeTypeId')}
+         FROM public.store_type_role_templates
+         WHERE ${quoteIdent('role_template_id')} = $1`,
+        [parent],
+      );
+
+      const assignedIds = assigned.map(
+        (row: { storeTypeId: string }) =>
+          String(row.storeTypeId).toLowerCase(),
+      );
+
+      const requested = this.requestedStoreTypeIds(query);
+      const storeTypeIds = requested || assignedIds;
+
+      const featureRows = storeTypeIds.length
+        ? await manager.query(
+            `SELECT
+               f.id,
+               f.name,
+               f.description,
+               f.category,
+               f.status,
+               COALESCE(
+                 to_jsonb(f)->>'featureKey',
+                 to_jsonb(f)->>'feature_key'
+               ) AS "featureKey",
+               COALESCE(
+                 to_jsonb(f)->>'featureType',
+                 to_jsonb(f)->>'feature_type'
+               ) AS "featureType",
+               ARRAY_AGG(DISTINCT stf.store_type_id) AS "storeTypeIds"
+             FROM public.store_type_features stf
+             JOIN public.features f ON f.id = stf.feature_id
+             WHERE stf.store_type_id = ANY($1::uuid[])
+             GROUP BY
+               f.id,
+               f.name,
+               f.description,
+               f.category,
+               f.status
+             ORDER BY f.name, f.id`,
+            [storeTypeIds],
+          )
+        : [];
+
+      const featureIds = featureRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      const permissions = featureIds.length
+        ? await manager.query(
+            `SELECT
+               p.id,
+               p.name,
+               p.description,
+               p.status,
+               COALESCE(
+                 to_jsonb(p)->>'permissionKey',
+                 to_jsonb(p)->>'permission_key'
+               ) AS "permissionKey",
+               COALESCE(
+                 to_jsonb(p)->>'featureId',
+                 to_jsonb(p)->>'feature_id'
+               ) AS "featureId"
+             FROM public.permissions p
+             WHERE p.feature_id = ANY($1::uuid[])
+             ORDER BY p.name, p.id`,
+            [featureIds],
+          )
+        : [];
+
+      const grants = await manager.query(
+        `SELECT
+           id,
+           permission_id AS "permissionId",
+           default_allowed AS "defaultAllowed"
+         FROM public.role_template_permissions
+         WHERE role_template_id = $1`,
+        [parent],
+      );
+
+      /**
+       * Create a lookup map so we don't repeatedly call grants.find().
+       */
+      const grantByPermission = new Map<
+        string,
+        {
+          permissionId: string;
+          id: string;
+          defaultAllowed: boolean;
+        }
+      >(
+        grants.map(
+          (row: {
+            permissionId: string;
+            id: string;
+            defaultAllowed: boolean;
+          }) => [
+            String(row.permissionId).toLowerCase(),
+            row,
+          ],
+        ),
+      );
+
+      const search = Array.isArray(query.search)
+        ? query.search[0]?.trim().toLowerCase()
+        : query.search?.trim().toLowerCase();
+
+      const status = Array.isArray(query.status)
+        ? query.status[0]?.trim().toUpperCase()
+        : query.status?.trim().toUpperCase();
+
+      const features = featureRows
+        .map((feature: Record<string, any>) => {
           const nested = permissions
-            .filter((permission: Record<string, any>) => String(permission.featureId).toLowerCase() === String(feature.id).toLowerCase())
-            .filter((permission: Record<string, any>) => !status || status === 'ALL STATUSES' || String(permission.status).toUpperCase() === status)
+            .filter(
+              (permission: Record<string, any>) =>
+                String(permission.featureId).toLowerCase() ===
+                String(feature.id).toLowerCase(),
+            )
+            .filter(
+              (permission: Record<string, any>) =>
+                !status ||
+                status === 'ALL STATUSES' ||
+                String(permission.status).toUpperCase() === status,
+            )
             .map((permission: Record<string, any>) => {
-              const grant = grantByPermission.get(String(permission.id).toLowerCase());
+              const grant =
+                grantByPermission.get(
+                  String(permission.id).toLowerCase(),
+                );
+
               return {
                 ...permission,
                 mapped: Boolean(grant),
                 checked: grant?.defaultAllowed === true,
-                mappingId: grant?.id || null,
-                defaultAllowed: grant?.defaultAllowed ?? false,
+                mappingId: grant?.id ?? null,
+                defaultAllowed:
+                  grant?.defaultAllowed ?? false,
               };
             })
-            .filter((permission: Record<string, any>) => !search
-              || [permission.name, permission.permissionKey, permission.description].some(value => String(value ?? '').toLowerCase().includes(search)));
-          const selectedCount = nested.filter((permission: Record<string, any>) => permission.checked).length;
+            .filter(
+              (permission: Record<string, any>) =>
+                !search ||
+                [
+                  permission.name,
+                  permission.permissionKey,
+                  permission.description,
+                ].some(value =>
+                  String(value ?? '')
+                    .toLowerCase()
+                    .includes(search),
+                ),
+            );
+
+          const selectedCount = nested.filter(
+            (permission: Record<string, any>) =>
+              permission.checked,
+          ).length;
+
           return {
             ...feature,
-            mapped: nested.some((permission: Record<string, any>) => permission.mapped),
+            mapped: nested.some(
+              (permission: Record<string, any>) =>
+                permission.mapped,
+            ),
             checked: selectedCount > 0,
             enabled: selectedCount > 0,
             permissionCount: nested.length,
             selectedCount,
             permissions: nested,
           };
-        }).filter((feature: Record<string, any>) => {
-          if (search && !feature.permissions.length
-            && ![feature.name, feature.featureKey, feature.description, feature.category].some(value => String(value ?? '').toLowerCase().includes(search))) {
+        })
+        .filter((feature: Record<string, any>) => {
+          if (
+            search &&
+            !feature.permissions.length &&
+            ![
+              feature.name,
+              feature.featureKey,
+              feature.description,
+              feature.category,
+            ].some(value =>
+              String(value ?? '')
+                .toLowerCase()
+                .includes(search),
+            )
+          ) {
             return false;
           }
-          if (!status || status === 'ALL STATUSES') return true;
-          return String(feature.status).toUpperCase() === status || feature.permissions.length > 0;
-        });
-        const mappedOnly = query.mappedOnly?.trim().toLowerCase() === 'true';
-        const visible = mappedOnly ? features.filter((feature: Record<string, any>) => feature.mapped) : features;
-        const selectedCount = visible.reduce((total: number, feature: Record<string, any>) => total + feature.selectedCount, 0);
-        return { success: true, count: visible.length, selectedCount, storeTypeIds, features: visible };
-      });
-    } catch (error: any) {
-      this.rethrow(error);
-    }
-  }
 
+          if (!status || status === 'ALL STATUSES') {
+            return true;
+          }
+
+          return (
+            String(feature.status).toUpperCase() === status ||
+            feature.permissions.length > 0
+          );
+        });
+
+      const mappedOnly =
+        (Array.isArray(query.mappedOnly)
+          ? query.mappedOnly[0]
+          : query.mappedOnly
+        )
+          ?.trim()
+          .toLowerCase() === 'true';
+
+      const visible = mappedOnly
+        ? features.filter(
+            (feature: Record<string, any>) => feature.mapped,
+          )
+        : features;
+
+      const selectedCount = visible.reduce(
+        (total: number, feature: Record<string, any>) =>
+          total + feature.selectedCount,
+        0,
+      );
+
+      return {
+        success: true,
+        count: visible.length,
+        selectedCount,
+        storeTypeIds,
+        features: visible,
+      };
+    });
+  } catch (error: any) {
+    this.rethrow(error);
+  }
+}
   private requestedStoreTypeIds(query: Record<string, string | string[] | undefined>): string[] | null {
     const values = [query.storeTypeIds, query.storeTypeId].flatMap(value => {
       if (Array.isArray(value)) return value;
