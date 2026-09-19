@@ -96,6 +96,8 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async createBulk(config: Relationship, params: Record<string, string>, body: unknown) {
+    if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
+    if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
     const { items, skipExisting } = this.bulkItems(config, body);
     if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
@@ -112,23 +114,326 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     });
     try {
       return await this.db.transaction(async manager => {
-        const created = [];
+        const projection = this.projection(config);
+        const resolved = [];
         for (const item of prepared) {
           if (skipExisting) {
             const existing = await manager.query(
-              `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
+              `SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
               [parent, item.child],
             );
-            if (existing.length) continue;
+            if (existing.length) {
+              resolved.push(existing[0]);
+              continue;
+            }
           }
           const result = await this.perform(manager, config, 'create', parent, undefined, item.child, item.fields);
-          created.push(result.item);
+          resolved.push(result.item);
         }
-        return { success: true, count: created.length, items: created };
+        return { success: true, count: resolved.length, items: await this.withChildDetails(manager, config, resolved) };
       });
     } catch (error: any) {
       this.rethrow(error);
     }
+  }
+
+  async replaceBulk(config: Relationship, params: Record<string, string>, body: unknown) {
+    if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
+    if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
+    const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
+    const payload = body as Record<string, unknown>;
+    const idAlias = `${config.childKey}s`;
+    const ids = payload[idAlias] ?? payload.ids;
+    if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
+    const allowed = new Set([idAlias, 'ids', 'defaultAllowed']);
+    if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
+    const defaults = this.bulkDefaults(config, payload);
+    const seen = new Set<string>();
+    const children = ids.map(id => {
+      const child = this.id(id, config.childKey, config.childUuid);
+      const normalized = config.childUuid ? child.toLowerCase() : child;
+      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
+      seen.add(normalized);
+      return child;
+    });
+    try {
+      return await this.db.transaction(async manager => {
+        const existing = await manager.query(
+          `SELECT ${quoteIdent(config.childColumn)} AS id FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1`,
+          [parent],
+        );
+        for (const row of existing) {
+          const current = String(row.id);
+          if (!seen.has(config.childUuid ? current.toLowerCase() : current)) {
+            await this.perform(manager, config, 'delete', parent, undefined, current, {});
+          }
+        }
+        const items = [];
+        for (const child of children) {
+          const current = await manager.query(
+            `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
+            [parent, child],
+          );
+          const result = await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, child, defaults);
+          items.push(result.item);
+        }
+        return { success: true, count: items.length, items };
+      });
+    } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  async syncRoleTemplatePermissions(config: Relationship, params: Record<string, string>, body: unknown) {
+    const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    const selected = this.roleTemplatePermissionSelections(config, body);
+    try {
+      return await this.db.transaction(async manager => {
+        const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1 FOR SHARE', [parent]);
+        if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
+        const catalog = await manager.query(
+          `SELECT DISTINCT p.id
+           FROM public.store_type_role_templates mapping
+           JOIN public.store_type_features stf ON stf.store_type_id = mapping.store_type_id
+           JOIN public.permissions p ON p.feature_id = stf.feature_id
+           WHERE mapping.role_template_id = $1`,
+          [parent],
+        );
+        const allowed = new Map<string, boolean>();
+        for (const row of catalog) allowed.set(String(row.id).toLowerCase(), false);
+        for (const item of selected) {
+          allowed.set(item.child.toLowerCase(), item.defaultAllowed);
+        }
+        await manager.query(
+          `DELETE FROM public.role_template_permissions WHERE ${quoteIdent(config.parentColumn)} = $1`,
+          [parent],
+        );
+        if (!allowed.size) return { success: true, count: 0, items: [] };
+        const items = [];
+        for (const [permissionId, defaultAllowed] of allowed) {
+          const child = selected.find(item => item.child.toLowerCase() === permissionId)?.child || permissionId;
+          const result = await this.perform(manager, config, 'create', parent, undefined, child, { defaultAllowed });
+          items.push(result.item);
+        }
+        return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
+      });
+    } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  async saveRoleTemplateStoreTypes(config: Relationship, params: Record<string, string>, body: unknown) {
+    const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    const selected = this.roleTemplateStoreTypeSelections(config, body);
+    try {
+      return await this.db.transaction(async manager => {
+        const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1 FOR SHARE', [parent]);
+        if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
+        const existing = await manager.query(
+          `SELECT ${quoteIdent(config.childColumn)} AS id FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1`,
+          [parent],
+        );
+        const selectedIds = new Set(selected.map(item => item.child.toLowerCase()));
+        for (const row of existing) {
+          const current = String(row.id);
+          if (!selectedIds.has(current.toLowerCase())) {
+            await this.perform(manager, config, 'delete', parent, undefined, current, {});
+          }
+        }
+        const items = [];
+        for (const item of selected) {
+          const current = await manager.query(
+            `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
+            [parent, item.child],
+          );
+          const result = await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, item.child, item.fields);
+          items.push(result.item);
+        }
+        await manager.query('DELETE FROM public.role_template_permissions WHERE role_template_id = $1', [parent]);
+        return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
+      });
+    } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  private roleTemplateStoreTypeSelections(config: Relationship, body: unknown): { child: string; fields: Record<string, unknown> }[] {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
+    const payload = body as Record<string, unknown>;
+    const idAlias = `${config.childKey}s`;
+    const hasItems = 'items' in payload;
+    const hasIds = idAlias in payload || 'ids' in payload;
+    if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
+    if (hasIds) {
+      const allowed = new Set([idAlias, 'ids', 'skipExisting', 'defaultEnabled', 'required']);
+      if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
+      const ids = payload[idAlias] ?? payload.ids;
+      if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
+      const fields = this.fields(config, {
+        defaultEnabled: payload.defaultEnabled !== false,
+        required: payload.required === true,
+      }, 'create');
+      const seen = new Set<string>();
+      return ids.map(id => {
+        const child = this.id(id, config.childKey, config.childUuid);
+        const normalized = child.toLowerCase();
+        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
+        seen.add(normalized);
+        return { child, fields };
+      });
+    }
+    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
+    const items = payload.items;
+    if (!Array.isArray(items) || items.length > 100) throw new BadRequestException('items must contain at most 100 mappings');
+    const seen = new Set<string>();
+    return items.map(item => {
+      const fields = this.fields(config, item, 'create');
+      const child = this.id((item as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
+      const normalized = child.toLowerCase();
+      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+      seen.add(normalized);
+      return { child, fields };
+    });
+  }
+
+  private roleTemplatePermissionSelections(config: Relationship, body: unknown): { child: string; defaultAllowed: boolean }[] {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
+    const payload = body as Record<string, unknown>;
+    const idAlias = `${config.childKey}s`;
+    const hasItems = 'items' in payload;
+    const hasIds = idAlias in payload || 'ids' in payload;
+    if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
+    if (hasIds) {
+      const allowed = new Set([idAlias, 'ids', 'defaultAllowed', 'skipExisting']);
+      if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
+      const ids = payload[idAlias] ?? payload.ids;
+      if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
+      const defaultAllowed = payload.defaultAllowed !== false;
+      const seen = new Set<string>();
+      return ids.map(id => {
+        const child = this.id(id, config.childKey, config.childUuid);
+        const normalized = child.toLowerCase();
+        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
+        seen.add(normalized);
+        return { child, defaultAllowed };
+      });
+    }
+    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
+    const items = payload.items;
+    if (!Array.isArray(items) || items.length > 100) throw new BadRequestException('items must contain at most 100 mappings');
+    const seen = new Set<string>();
+    return items.map(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new BadRequestException('Each item must be an object');
+      const row = item as Record<string, unknown>;
+      const child = this.id(row[config.childKey], config.childKey, config.childUuid);
+      const normalized = child.toLowerCase();
+      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+      seen.add(normalized);
+      if (row.defaultAllowed !== undefined && typeof row.defaultAllowed !== 'boolean') {
+        throw new BadRequestException('Invalid defaultAllowed');
+      }
+      return { child, defaultAllowed: row.defaultAllowed !== false };
+    });
+  }
+
+  async listRoleTemplateAccess(roleTemplateId: string, query: Record<string, string> = {}) {
+    const parent = this.id(roleTemplateId, 'roleTemplateId', true);
+    try {
+      return await this.db.transaction(async manager => {
+        const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1', [parent]);
+        if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
+        const assigned = await manager.query(
+          `SELECT ${quoteIdent('store_type_id')} AS ${quoteIdent('storeTypeId')}
+           FROM public.store_type_role_templates WHERE ${quoteIdent('role_template_id')} = $1`,
+          [parent],
+        );
+        const assignedIds = assigned.map((row: { storeTypeId: string }) => String(row.storeTypeId).toLowerCase());
+        const requested = this.requestedStoreTypeIds(query);
+        const storeTypeIds = requested || assignedIds;
+        const featureRows = storeTypeIds.length ? await manager.query(
+          `SELECT DISTINCT f.id, f.name, f.description, f.category, f.status,
+             COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key') AS "featureKey",
+             COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type') AS "featureType"
+           FROM public.store_type_features stf
+           JOIN public.features f ON f.id = stf.feature_id
+           WHERE stf.store_type_id = ANY($1::uuid[])
+           ORDER BY f.name, f.id`,
+          [storeTypeIds],
+        ) : [];
+        const featureIds = featureRows.map((row: { id: string }) => row.id);
+        const permissions = featureIds.length ? await manager.query(
+          `SELECT p.id, p.name, p.description, p.status,
+             COALESCE(to_jsonb(p)->>'permissionKey', to_jsonb(p)->>'permission_key') AS "permissionKey",
+             COALESCE(to_jsonb(p)->>'featureId', to_jsonb(p)->>'feature_id') AS "featureId"
+           FROM public.permissions p
+           WHERE p.feature_id = ANY($1::uuid[])
+           ORDER BY p.name, p.id`,
+          [featureIds],
+        ) : [];
+        const grants = await manager.query(
+          `SELECT id, permission_id AS "permissionId", default_allowed AS "defaultAllowed"
+           FROM public.role_template_permissions WHERE role_template_id = $1`,
+          [parent],
+        );
+        const grantByPermission = new Map(grants.map((row: { permissionId: string; id: string; defaultAllowed: boolean }) =>
+          [String(row.permissionId).toLowerCase(), row]));
+        const search = query.search?.trim().toLowerCase();
+        const status = query.status?.trim().toUpperCase();
+        const features = featureRows.map((feature: Record<string, any>) => {
+          const nested = permissions
+            .filter((permission: Record<string, any>) => String(permission.featureId).toLowerCase() === String(feature.id).toLowerCase())
+            .filter((permission: Record<string, any>) => !status || status === 'ALL STATUSES' || String(permission.status).toUpperCase() === status)
+            .map((permission: Record<string, any>) => {
+              const grant = grantByPermission.get(String(permission.id).toLowerCase());
+              return {
+                ...permission,
+                mapped: Boolean(grant),
+                checked: grant?.defaultAllowed === true,
+                mappingId: grant?.id || null,
+                defaultAllowed: grant?.defaultAllowed ?? false,
+              };
+            })
+            .filter((permission: Record<string, any>) => !search
+              || [permission.name, permission.permissionKey, permission.description].some(value => String(value ?? '').toLowerCase().includes(search)));
+          const selectedCount = nested.filter((permission: Record<string, any>) => permission.checked).length;
+          return {
+            ...feature,
+            mapped: nested.some((permission: Record<string, any>) => permission.mapped),
+            checked: selectedCount > 0,
+            enabled: selectedCount > 0,
+            permissionCount: nested.length,
+            selectedCount,
+            permissions: nested,
+          };
+        }).filter((feature: Record<string, any>) => {
+          if (search && !feature.permissions.length
+            && ![feature.name, feature.featureKey, feature.description, feature.category].some(value => String(value ?? '').toLowerCase().includes(search))) {
+            return false;
+          }
+          if (!status || status === 'ALL STATUSES') return true;
+          return String(feature.status).toUpperCase() === status || feature.permissions.length > 0;
+        });
+        const mappedOnly = query.mappedOnly?.trim().toLowerCase() === 'true';
+        const visible = mappedOnly ? features.filter((feature: Record<string, any>) => feature.mapped) : features;
+        const selectedCount = visible.reduce((total: number, feature: Record<string, any>) => total + feature.selectedCount, 0);
+        return { success: true, count: visible.length, selectedCount, features: visible };
+      });
+    } catch (error: any) {
+      this.rethrow(error);
+    }
+  }
+
+  private requestedStoreTypeIds(query: Record<string, string>): string[] | null {
+    const raw = [query.storeTypeIds, query.storeTypeId].filter(value => value?.trim()).join(',');
+    if (!raw.trim()) return null;
+    return [...new Set(raw.split(',').map(value => this.id(value.trim(), 'storeTypeId', true).toLowerCase()))];
+  }
+
+  private bulkDefaults(config: Relationship, payload: Record<string, unknown> = {}) {
+    if (config.name === 'PlanEntitlements') return { enabled: true };
+    if (config.name === 'RoleTemplatePermissions') return { defaultAllowed: payload.defaultAllowed !== false };
+    return { defaultEnabled: true, required: false };
   }
 
   private bulkItems(config: Relationship, body: unknown): { items: Record<string, unknown>[]; skipExisting: boolean } {
@@ -139,14 +444,13 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     const hasIds = idAlias in payload || 'ids' in payload;
     if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
     if (hasIds) {
-      if (Object.keys(payload).some(key => key !== idAlias && key !== 'ids' && key !== 'skipExisting')) {
+      const allowed = new Set([idAlias, 'ids', 'skipExisting', ...(config.name === 'RoleTemplatePermissions' ? ['defaultAllowed'] : [])]);
+      if (Object.keys(payload).some(key => !allowed.has(key))) {
         throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
       }
       const ids = payload[idAlias] ?? payload.ids;
       if (!Array.isArray(ids)) throw new BadRequestException(`${idAlias} must be an array`);
-      const defaults = config.name === 'PlanEntitlements'
-        ? { enabled: true }
-        : { defaultEnabled: true, required: false };
+      const defaults = this.bulkDefaults(config, payload);
       return {
         skipExisting: payload.skipExisting !== false,
         items: ids.map(id => (typeof id === 'string' ? { [config.childKey]: id, ...defaults } : id)),
@@ -196,6 +500,40 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return items.map(item => {
         const template: Record<string, any> = byId.get(String(item.roleTemplateId).toLowerCase()) || {};
         return { ...item, name: template.name, roleCode: template.roleCode, scopeType: template.scopeType, templateStatus: template.status };
+      });
+    }
+    if (config.name === 'RoleTemplateStoreTypes') {
+      const rows = await manager.query(
+        `SELECT id, name, description, status,
+           COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code') AS "storeTypeCode"
+         FROM public.store_types s WHERE id = ANY($1::uuid[])`,
+        [items.map(item => item.storeTypeId)],
+      );
+      const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
+      return items.map(item => {
+        const storeType: Record<string, any> = byId.get(String(item.storeTypeId).toLowerCase()) || {};
+        return { ...item, name: storeType.name, description: storeType.description, storeTypeCode: storeType.storeTypeCode, storeTypeStatus: storeType.status };
+      });
+    }
+    if (config.name === 'RoleTemplatePermissions') {
+      const rows = await manager.query(
+        `SELECT id, name, description, status,
+           COALESCE(to_jsonb(p)->>'permissionKey', to_jsonb(p)->>'permission_key') AS "permissionKey",
+           COALESCE(to_jsonb(p)->>'featureId', to_jsonb(p)->>'feature_id') AS "featureId"
+         FROM public.permissions p WHERE id = ANY($1::uuid[])`,
+        [items.map(item => item.permissionId)],
+      );
+      const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
+      return items.map(item => {
+        const permission: Record<string, any> = byId.get(String(item.permissionId).toLowerCase()) || {};
+        return {
+          ...item,
+          name: permission.name,
+          description: permission.description,
+          permissionKey: permission.permissionKey,
+          featureId: permission.featureId,
+          permissionStatus: permission.status,
+        };
       });
     }
     return items;

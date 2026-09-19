@@ -62,7 +62,7 @@ export class VendorController {
 
   @Delete(':id')
   async remove(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.repository.softDelete(id);
+    await this.repository.remove(id);
     return { success: true, message: 'Vendor deleted' };
   }
 }
