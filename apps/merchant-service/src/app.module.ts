@@ -18,7 +18,7 @@ import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
 import { StoreTypeController } from './store-type.controller';
 import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
-import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
+import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
 import { FeaturePermissionController } from './feature-permission.controller';
 import { FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
@@ -33,6 +33,7 @@ import { RelationshipsRepository } from './relationships.repository';
     FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,
     RoleTemplateStoreTypeCatalogController,
+    RoleTemplateStoreTypeBulkController,
     RoleTemplateFeatureAccessController,
     RoleTemplatePermissionsReplaceController,
     ...RELATIONSHIP_CONTROLLERS,

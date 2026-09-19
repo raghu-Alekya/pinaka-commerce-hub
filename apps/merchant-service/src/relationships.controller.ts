@@ -13,6 +13,10 @@ export class RelationshipOwnerGuard implements CanActivate {
   }
 }
 
+// Catalog controllers own GET available / PUT bulk on some of these paths.
+// Keep :relatedId as UUID-only so it cannot swallow the static "available" segment.
+const RELATED_ID = ':relatedId([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})';
+
 function createController(config: Relationship) {
   @Controller(config.path)
   @UseGuards(RelationshipOwnerGuard)
@@ -20,15 +24,15 @@ function createController(config: Relationship) {
     constructor(@Inject(RelationshipsRepository) public readonly repository: RelationshipsRepository) {}
     @Get()
     list(@Param() params: Record<string,string>) { return this.repository.execute(config, 'list', params); }
-    @Get(':relatedId')
+    @Get(RELATED_ID)
     get(@Param() params: Record<string,string>) { return this.repository.execute(config, 'get', params, params.relatedId); }
     @Post()
     create(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'create', params, undefined, body); }
-    @Put(':relatedId')
+    @Put(RELATED_ID)
     replace(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'replace', params, params.relatedId, body); }
-    @Patch(':relatedId')
+    @Patch(RELATED_ID)
     patch(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'patch', params, params.relatedId, body); }
-    @Delete(':relatedId')
+    @Delete(RELATED_ID)
     remove(@Param() params: Record<string,string>) { return this.repository.execute(config, 'delete', params, params.relatedId); }
   }
   Object.defineProperty(RelationshipController, 'name', { value: `${config.name}Controller` });
