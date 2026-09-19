@@ -15,6 +15,7 @@ export class RoleTemplateStoreTypeCatalogController {
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
+
   @Get('available')
   async available(@Param('roleTemplateId') roleTemplateId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(roleTemplateStoreTypes, 'list', { roleTemplateId });
