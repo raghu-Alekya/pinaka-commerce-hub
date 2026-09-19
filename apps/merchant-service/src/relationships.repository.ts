@@ -380,19 +380,27 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         );
         const grantByPermission = new Map(grants.map((row: { permissionId: string; id: string; defaultAllowed: boolean }) =>
           [String(row.permissionId).toLowerCase(), row]));
-        const search = query.search?.trim().toLowerCase();
-        const status = query.status?.trim().toUpperCase();
+        const search = Array.isArray(query.search)
+            ? query.search[0]?.trim().toLowerCase()
+            : query.search?.trim().toLowerCase();
+
+        const status = Array.isArray(query.status)
+            ? query.status[0]?.trim().toUpperCase()
+            : query.status?.trim().toUpperCase();
         const features = featureRows.map((feature: Record<string, any>) => {
           const nested = permissions
             .filter((permission: Record<string, any>) => String(permission.featureId).toLowerCase() === String(feature.id).toLowerCase())
             .filter((permission: Record<string, any>) => !status || status === 'ALL STATUSES' || String(permission.status).toUpperCase() === status)
             .map((permission: Record<string, any>) => {
-              const grant = grantByPermission.get(String(permission.id).toLowerCase());
+                            const grant = grants.find(
+                (item) => item.permissionId === permission.id
+              );
+
               return {
                 ...permission,
                 mapped: Boolean(grant),
                 checked: grant?.defaultAllowed === true,
-                mappingId: grant?.id || null,
+                mappingId: grant?.id ?? null,
                 defaultAllowed: grant?.defaultAllowed ?? false,
               };
             })
@@ -416,7 +424,10 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
           if (!status || status === 'ALL STATUSES') return true;
           return String(feature.status).toUpperCase() === status || feature.permissions.length > 0;
         });
-        const mappedOnly = query.mappedOnly?.trim().toLowerCase() === 'true';
+        const mappedOnly = (Array.isArray(query.mappedOnly)
+            ? query.mappedOnly[0]
+            : query.mappedOnly
+          )?.trim().toLowerCase() === 'true';
         const visible = mappedOnly ? features.filter((feature: Record<string, any>) => feature.mapped) : features;
         const selectedCount = visible.reduce((total: number, feature: Record<string, any>) => total + feature.selectedCount, 0);
         return { success: true, count: visible.length, selectedCount, storeTypeIds, features: visible };
