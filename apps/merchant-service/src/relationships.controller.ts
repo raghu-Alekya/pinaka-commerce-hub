@@ -35,8 +35,11 @@ function createController(config: Relationship) {
   return RelationshipController;
 }
 
-export const MASTER_BULK_RELATIONSHIPS = RELATIONSHIPS.filter(config =>
-  ['StoreTypeFeatures', 'FeatureStoreTypes', 'StoreTypeRoleTemplates', 'PlanEntitlements'].includes(config.name));
+export const MASTER_BULK_RELATIONSHIPS = [
+  ...RELATIONSHIPS.filter(config =>
+    ['StoreTypeFeatures', 'FeatureStoreTypes', 'StoreTypeRoleTemplates', 'RoleTemplateStoreTypes', 'PlanEntitlements'].includes(config.name)),
+  ...EMPLOYEE_ACCESS_RELATIONSHIPS.filter(config => config.name === 'RoleTemplatePermissions'),
+];
 
 function createBulkController(config: Relationship) {
   @Controller(config.path)
@@ -52,7 +55,18 @@ function createBulkController(config: Relationship) {
   return BulkRelationshipController;
 }
 
+const roleTemplatePermissions = EMPLOYEE_ACCESS_RELATIONSHIPS.find(config => config.name === 'RoleTemplatePermissions')!;
+@Controller(roleTemplatePermissions.path)
+@UseGuards(RelationshipOwnerGuard)
+export class RoleTemplatePermissionsReplaceController {
+  constructor(@Inject(RelationshipsRepository) readonly repository: RelationshipsRepository) {}
+  @Put('bulk')
+  replace(@Param() params: Record<string, string>, @Body() body: unknown) {
+    return this.repository.replaceBulk(roleTemplatePermissions, params, body);
+  }
+}
+
 export const RELATIONSHIP_CONTROLLERS = [
-  ...[...RELATIONSHIPS, ...EMPLOYEE_ACCESS_RELATIONSHIPS].map(createController),
   ...MASTER_BULK_RELATIONSHIPS.map(createBulkController),
+  ...[...RELATIONSHIPS, ...EMPLOYEE_ACCESS_RELATIONSHIPS].map(createController),
 ];

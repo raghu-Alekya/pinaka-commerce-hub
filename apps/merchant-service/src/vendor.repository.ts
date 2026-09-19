@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { ILike, IsNull, Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { MerchantRepository } from './merchant.repository';
 import { VendorEntity, VendorStatus, VendorType } from './entities/vendor.entity';
 import { CreateVendorDto, UpdateVendorDto } from './vendor.dto';
@@ -106,8 +106,15 @@ export class VendorRepository {
     }
   }
 
-  async softDelete(id: string): Promise<void> {
+  async remove(id: string): Promise<void> {
     await this.getById(id);
-    await this.store().softDelete({ id, deletedAt: IsNull() });
+    try {
+      await this.store().createQueryBuilder().delete().from(VendorEntity).where('id = :id', { id }).execute();
+    } catch (error: any) {
+      if (error?.code === '23503' || error?.driverError?.code === '23503') {
+        throw new ConflictException('Vendor is in use and cannot be deleted');
+      }
+      throw error;
+    }
   }
 }
