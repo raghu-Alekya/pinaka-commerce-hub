@@ -1,6 +1,7 @@
 {
   "name": "@pinaka-commerce-hub/source",
   "version": "0.0.0",
+  "packageManager": "pnpm@11.18.0",
   "license": "MIT",
   "scripts": {
     "start:all": "bash ./scripts/launch-pdh.sh",
