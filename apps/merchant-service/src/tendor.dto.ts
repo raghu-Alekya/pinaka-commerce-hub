@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { Allow, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { TendorStatus } from './entities/tendor.entity';
 
 
@@ -39,18 +39,6 @@ export class CreateTendorDto {
   @IsOptional()
   @IsIn([TendorStatus.ACTIVE, TendorStatus.INACTIVE])
   status?: TendorStatus;
-
-  @IsOptional()
-  @Allow()
-  tendor_code?: string;
-
-  @IsOptional()
-  @Allow()
-  tendor_Name?: string;
-
-  @IsOptional()
-  @Allow()
-  tendor_name?: string;
 }
 
 export class UpdateTendorDto {
@@ -72,16 +60,4 @@ export class UpdateTendorDto {
   @IsOptional()
   @IsIn([TendorStatus.ACTIVE, TendorStatus.INACTIVE])
   status?: TendorStatus;
-
-  @IsOptional()
-  @Allow()
-  tendor_code?: string;
-
-  @IsOptional()
-  @Allow()
-  tendor_Name?: string;
-
-  @IsOptional()
-  @Allow()
-  tendor_name?: string;
 }
