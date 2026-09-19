@@ -5,6 +5,7 @@ export enum TendorStatus {
   INACTIVE = 'INACTIVE',
 }
 
+
 @Entity('tendors')
 @Index('tendors_name_active_uidx', ['tendorName'], {
   unique: true,

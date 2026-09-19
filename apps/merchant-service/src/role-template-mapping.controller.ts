@@ -49,7 +49,7 @@ export class RoleTemplateFeatureAccessController {
   constructor(@Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository) {}
 
   @Get()
-  list(@Param('roleTemplateId') roleTemplateId: string, @Query() query: Record<string, string>) {
+  list(@Param('roleTemplateId') roleTemplateId: string, @Query() query: Record<string, string | string[]>) {
     return this.relationships.listRoleTemplateAccess(roleTemplateId, query);
   }
 }
