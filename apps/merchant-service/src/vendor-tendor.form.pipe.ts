@@ -1,4 +1,4 @@
-import { ArgumentMetadata, BadRequestException, PipeTransform, ValidationPipe, ValidationPipeOptions } from '@nestjs/common';
+import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
 
 const vendorAliases: Record<string, string> = {
   name: 'vendorName',
@@ -63,26 +63,36 @@ export function normalizeTendorForm(body: unknown): unknown {
   return values;
 }
 
-export class VendorFormValidationPipe implements PipeTransform {
-  private readonly validator: ValidationPipe;
+const TENDOR_FIELDS = ['tendorCode', 'tendorName', 'status'] as const;
 
-  constructor(options: ValidationPipeOptions) {
-    this.validator = new ValidationPipe(options);
+function pickTendorFields(body: Record<string, unknown>): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of TENDOR_FIELDS) {
+    if (key in body) picked[key] = body[key];
   }
+  return picked;
+}
 
-  transform(value: unknown, metadata: ArgumentMetadata) {
-    return this.validator.transform(normalizeVendorForm(value) as object, metadata);
+export class VendorFormValidationPipe extends ValidationPipe {
+  override transform(value: unknown, metadata: ArgumentMetadata) {
+    return super.transform(normalizeVendorForm(value) as object, {
+      ...metadata,
+      type: 'body',
+      metatype: this.expectedType || metadata.metatype,
+    });
   }
 }
 
-export class TendorFormValidationPipe implements PipeTransform {
-  private readonly validator: ValidationPipe;
-
-  constructor(options: ValidationPipeOptions) {
-    this.validator = new ValidationPipe(options);
-  }
-
-  transform(value: unknown, metadata: ArgumentMetadata) {
-    return this.validator.transform(normalizeTendorForm(value) as object, metadata);
+export class TendorFormValidationPipe extends ValidationPipe {
+  override transform(value: unknown, metadata: ArgumentMetadata) {
+    const normalized = normalizeTendorForm(value);
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+      throw new BadRequestException('Provide a JSON object');
+    }
+    return super.transform(pickTendorFields(normalized as Record<string, unknown>), {
+      ...metadata,
+      type: 'body',
+      metatype: this.expectedType || metadata.metatype,
+    });
   }
 }
