@@ -337,7 +337,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async listRoleTemplateAccess(roleTemplateId: string, query: Record<string, string> = {}) {
+  async listRoleTemplateAccess(roleTemplateId: string, query: Record<string, string | string[] | undefined> = {}) {
     const parent = this.id(roleTemplateId, 'roleTemplateId', true);
     try {
       return await this.db.transaction(async manager => {
@@ -352,12 +352,14 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         const requested = this.requestedStoreTypeIds(query);
         const storeTypeIds = requested || assignedIds;
         const featureRows = storeTypeIds.length ? await manager.query(
-          `SELECT DISTINCT f.id, f.name, f.description, f.category, f.status,
+          `SELECT f.id, f.name, f.description, f.category, f.status,
              COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key') AS "featureKey",
-             COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type') AS "featureType"
+             COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type') AS "featureType",
+             ARRAY_AGG(DISTINCT stf.store_type_id) AS "storeTypeIds"
            FROM public.store_type_features stf
            JOIN public.features f ON f.id = stf.feature_id
            WHERE stf.store_type_id = ANY($1::uuid[])
+           GROUP BY f.id, f.name, f.description, f.category, f.status
            ORDER BY f.name, f.id`,
           [storeTypeIds],
         ) : [];
@@ -417,17 +419,21 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         const mappedOnly = query.mappedOnly?.trim().toLowerCase() === 'true';
         const visible = mappedOnly ? features.filter((feature: Record<string, any>) => feature.mapped) : features;
         const selectedCount = visible.reduce((total: number, feature: Record<string, any>) => total + feature.selectedCount, 0);
-        return { success: true, count: visible.length, selectedCount, features: visible };
+        return { success: true, count: visible.length, selectedCount, storeTypeIds, features: visible };
       });
     } catch (error: any) {
       this.rethrow(error);
     }
   }
 
-  private requestedStoreTypeIds(query: Record<string, string>): string[] | null {
-    const raw = [query.storeTypeIds, query.storeTypeId].filter(value => value?.trim()).join(',');
-    if (!raw.trim()) return null;
-    return [...new Set(raw.split(',').map(value => this.id(value.trim(), 'storeTypeId', true).toLowerCase()))];
+  private requestedStoreTypeIds(query: Record<string, string | string[] | undefined>): string[] | null {
+    const values = [query.storeTypeIds, query.storeTypeId].flatMap(value => {
+      if (Array.isArray(value)) return value;
+      return value ? [value] : [];
+    });
+    const ids = values.flatMap(value => String(value).split(',')).map(value => value.trim()).filter(Boolean);
+    if (!ids.length) return null;
+    return [...new Set(ids.map(value => this.id(value, 'storeTypeId', true).toLowerCase()))];
   }
 
   private bulkDefaults(config: Relationship, payload: Record<string, unknown> = {}) {

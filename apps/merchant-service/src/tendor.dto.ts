@@ -2,6 +2,7 @@ import { Transform } from 'class-transformer';
 import { Allow, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { TendorStatus } from './entities/tendor.entity';
 
+
 const firstText = (...values: unknown[]) => {
   for (const value of values) {
     if (value === undefined || value === null) continue;

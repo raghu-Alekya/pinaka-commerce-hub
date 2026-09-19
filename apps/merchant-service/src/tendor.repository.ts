@@ -4,6 +4,7 @@ import { MerchantRepository } from './merchant.repository';
 import { TendorEntity, TendorStatus } from './entities/tendor.entity';
 import { CreateTendorDto, UpdateTendorDto } from './tendor.dto';
 
+
 @Injectable()
 export class TendorRepository {
   private repo?: Repository<TendorEntity>;

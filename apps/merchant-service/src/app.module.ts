@@ -25,6 +25,7 @@ import { SessionAuthGuard } from './session-auth.guard';
 import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard, RoleTemplatePermissionsReplaceController } from './relationships.controller';
 import { RelationshipsRepository } from './relationships.repository';
 
+
 @Module({
   imports: [],
   controllers: [
