@@ -7,7 +7,11 @@ import { RelationshipsRepository } from './relationships.repository';
 
 const roleTemplateStoreTypes = RELATIONSHIPS.find(config => config.name === 'RoleTemplateStoreTypes')!;
 
-@Controller(['api/v1/role-templates/:roleTemplateId/store-types', 'api/v1/role_templates/:roleTemplateId/store-types'])
+// Full unique paths — must not share @Controller path with generated RoleTemplateStoreTypes CRUD.
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/store-types/available',
+  'api/v1/role_templates/:roleTemplateId/store-types/available',
+])
 @UseGuards(RelationshipOwnerGuard)
 export class RoleTemplateStoreTypeCatalogController {
   constructor(
@@ -15,8 +19,7 @@ export class RoleTemplateStoreTypeCatalogController {
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
-
-  @Get('available')
+  @Get()
   async available(@Param('roleTemplateId') roleTemplateId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(roleTemplateStoreTypes, 'list', { roleTemplateId });
     const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean }[])
@@ -37,8 +40,17 @@ export class RoleTemplateStoreTypeCatalogController {
     const visible = unmappedOnly ? storeTypes.filter(storeType => !storeType.mapped) : storeTypes;
     return { success: true, count: visible.length, storeTypes: visible };
   }
+}
 
-  @Put('bulk')
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/store-types/bulk',
+  'api/v1/role_templates/:roleTemplateId/store-types/bulk',
+])
+@UseGuards(RelationshipOwnerGuard)
+export class RoleTemplateStoreTypeBulkController {
+  constructor(@Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository) {}
+
+  @Put()
   replace(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown) {
     return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body);
   }
