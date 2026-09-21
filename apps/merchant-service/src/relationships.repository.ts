@@ -99,6 +99,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
     if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    const merchant = config.ownerColumn ? this.id(params.merchantId, 'merchantId') : undefined;
     const { items, skipExisting } = this.bulkItems(config, body);
     if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
       throw new BadRequestException('items must contain between 1 and 100 mappings');
@@ -127,7 +128,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
               continue;
             }
           }
-          const result = await this.perform(manager, config, 'create', parent, undefined, item.child, item.fields);
+          const result = await this.perform(manager, config, 'create', parent, merchant, item.child, item.fields);
           resolved.push(result.item);
         }
         return { success: true, count: resolved.length, items: await this.withChildDetails(manager, config, resolved) };
@@ -187,11 +188,30 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   async syncRoleTemplatePermissions(config: Relationship, params: Record<string, string>, body: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const selected = this.roleTemplatePermissionSelections(config, body);
+    const parsed = this.roleTemplatePermissionSelections(config, body);
     try {
       return await this.db.transaction(async manager => {
         const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1 FOR SHARE', [parent]);
         if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
+        if (parsed.remove) {
+          if (parsed.removeFeatureIds.length) {
+            await manager.query(
+              `DELETE FROM public.role_template_permissions rtp
+               USING public.permissions p
+               WHERE rtp.${quoteIdent(config.parentColumn)} = $1
+                 AND rtp.${quoteIdent(config.childColumn)} = p.id
+                 AND p.feature_id = ANY($2::uuid[])`,
+              [parent, parsed.removeFeatureIds],
+            );
+          }
+          const remaining = await manager.query(
+            `SELECT ${this.projection(config)} FROM public.${config.table}
+             WHERE ${quoteIdent(config.parentColumn)} = $1
+             ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`,
+            [parent],
+          );
+          return { success: true, count: remaining.length, items: await this.withChildDetails(manager, config, remaining) };
+        }
         const catalog = await manager.query(
           `SELECT DISTINCT p.id
            FROM public.store_type_role_templates mapping
@@ -202,7 +222,14 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         );
         const allowed = new Map<string, boolean>();
         for (const row of catalog) allowed.set(String(row.id).toLowerCase(), false);
-        for (const item of selected) {
+        if (parsed.featureIds.length) {
+          const featurePermissions = await manager.query(
+            'SELECT id FROM public.permissions WHERE feature_id = ANY($1::uuid[])',
+            [parsed.featureIds],
+          );
+          for (const row of featurePermissions) allowed.set(String(row.id).toLowerCase(), false);
+        }
+        for (const item of parsed.selected) {
           allowed.set(item.child.toLowerCase(), item.defaultAllowed);
         }
         await manager.query(
@@ -212,7 +239,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         if (!allowed.size) return { success: true, count: 0, items: [] };
         const items = [];
         for (const [permissionId, defaultAllowed] of allowed) {
-          const child = selected.find(item => item.child.toLowerCase() === permissionId)?.child || permissionId;
+          const child = parsed.selected.find(item => item.child.toLowerCase() === permissionId)?.child || permissionId;
           const result = await this.perform(manager, config, 'create', parent, undefined, child, { defaultAllowed });
           items.push(result.item);
         }
@@ -297,43 +324,73 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private roleTemplatePermissionSelections(config: Relationship, body: unknown): { child: string; defaultAllowed: boolean }[] {
+  private roleTemplatePermissionSelections(config: Relationship, body: unknown): {
+    selected: { child: string; defaultAllowed: boolean }[];
+    featureIds: string[];
+    removeFeatureIds: string[];
+    remove: boolean;
+  } {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
     const payload = body as Record<string, unknown>;
     const idAlias = `${config.childKey}s`;
+    const allowed = new Set(['items', idAlias, 'ids', 'defaultAllowed', 'skipExisting', 'featureIds', 'removeFeatureIds']);
+    if (Object.keys(payload).some(key => !allowed.has(key))) {
+      throw new BadRequestException('Provide { items: [...] }, { permissionIds, featureIds }, or { removeFeatureIds }');
+    }
     const hasItems = 'items' in payload;
     const hasIds = idAlias in payload || 'ids' in payload;
-    if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
-    if (hasIds) {
-      const allowed = new Set([idAlias, 'ids', 'defaultAllowed', 'skipExisting']);
-      if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
-      const ids = payload[idAlias] ?? payload.ids;
-      if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
-      const defaultAllowed = payload.defaultAllowed !== false;
-      const seen = new Set<string>();
-      return ids.map(id => {
-        const child = this.id(id, config.childKey, config.childUuid);
-        const normalized = child.toLowerCase();
-        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
-        seen.add(normalized);
-        return { child, defaultAllowed };
-      });
+    const hasFeatures = 'featureIds' in payload;
+    const hasRemove = 'removeFeatureIds' in payload;
+    if (hasRemove && (hasItems || hasIds || hasFeatures)) {
+      throw new BadRequestException('Supply removeFeatureIds by itself');
     }
-    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
-    const items = payload.items;
-    if (!Array.isArray(items) || items.length > 100) throw new BadRequestException('items must contain at most 100 mappings');
+    if (hasItems && (hasIds || hasFeatures)) {
+      throw new BadRequestException(`Supply either items or ${idAlias}/featureIds, not both`);
+    }
+    if (!hasItems && !hasIds && !hasFeatures && !hasRemove) {
+      throw new BadRequestException('Provide { items: [...] }, { permissionIds, featureIds }, or { removeFeatureIds }');
+    }
+    if (hasRemove) {
+      return { selected: [], featureIds: [], removeFeatureIds: this.uuidArray(payload.removeFeatureIds, 'featureId'), remove: true };
+    }
+    if (hasItems) {
+      const items = payload.items;
+      if (!Array.isArray(items) || items.length > 100) throw new BadRequestException('items must contain at most 100 mappings');
+      const seen = new Set<string>();
+      const selected = items.map(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) throw new BadRequestException('Each item must be an object');
+        const row = item as Record<string, unknown>;
+        const child = this.id(row[config.childKey], config.childKey, config.childUuid);
+        const normalized = child.toLowerCase();
+        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+        seen.add(normalized);
+        if (row.defaultAllowed !== undefined && typeof row.defaultAllowed !== 'boolean') {
+          throw new BadRequestException('Invalid defaultAllowed');
+        }
+        return { child, defaultAllowed: row.defaultAllowed !== false };
+      });
+      return { selected, featureIds: [], removeFeatureIds: [], remove: false };
+    }
+    const defaultAllowed = payload.defaultAllowed !== false;
+    return {
+      selected: hasIds
+        ? this.uuidArray(payload[idAlias] ?? payload.ids, config.childKey).map(child => ({ child, defaultAllowed }))
+        : [],
+      featureIds: hasFeatures ? this.uuidArray(payload.featureIds, 'featureId') : [],
+      removeFeatureIds: [],
+      remove: false,
+    };
+  }
+
+  private uuidArray(value: unknown, label: string): string[] {
+    if (!Array.isArray(value) || value.length > 100) throw new BadRequestException(`${label}s must contain at most 100 mappings`);
     const seen = new Set<string>();
-    return items.map(item => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new BadRequestException('Each item must be an object');
-      const row = item as Record<string, unknown>;
-      const child = this.id(row[config.childKey], config.childKey, config.childUuid);
+    return value.map(id => {
+      const child = this.id(id, label, true);
       const normalized = child.toLowerCase();
-      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${label} in ${label}s`);
       seen.add(normalized);
-      if (row.defaultAllowed !== undefined && typeof row.defaultAllowed !== 'boolean') {
-        throw new BadRequestException('Invalid defaultAllowed');
-      }
-      return { child, defaultAllowed: row.defaultAllowed !== false };
+      return child;
     });
   }
 
@@ -399,11 +456,12 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
             .filter((permission: Record<string, any>) => !search
               || [permission.name, permission.permissionKey, permission.description].some(value => String(value ?? '').toLowerCase().includes(search)));
           const selectedCount = nested.filter((permission: Record<string, any>) => permission.checked).length;
+          const mapped = nested.some((permission: Record<string, any>) => permission.mapped);
           return {
             ...feature,
-            mapped: nested.some((permission: Record<string, any>) => permission.mapped),
-            checked: selectedCount > 0,
-            enabled: selectedCount > 0,
+            mapped,
+            checked: mapped,
+            enabled: mapped,
             permissionCount: nested.length,
             selectedCount,
             permissions: nested,
