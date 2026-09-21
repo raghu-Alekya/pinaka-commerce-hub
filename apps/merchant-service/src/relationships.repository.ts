@@ -83,11 +83,15 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const merchant = config.ownerColumn ? this.id(params.merchantId, 'merchantId') : undefined;
+    const merchant = config.ownerColumn ? await this.resolveMerchantCode(params.merchantId) : undefined;
     let fields: Record<string, unknown> = {};
     if (['create', 'replace', 'patch'].includes(operation)) fields = this.fields(config, body, operation);
+    if (config.name === 'RolePermissions' && 'storeId' in fields) {
+      fields.storeId = this.id(fields.storeId, 'storeId', true);
+    }
     if (operation === 'create') child = this.id((body as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
     else if (operation !== 'list') child = this.id(child, config.childKey, config.childUuid);
+    if (config.name === 'EmployeeStores' && child) child = await this.resolveStoreCode(child, merchant!);
     try {
       return await this.db.transaction(async manager => this.perform(manager, config, operation, parent, merchant, child, fields));
     } catch (error: any) {
@@ -99,7 +103,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
     if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const merchant = config.ownerColumn ? this.id(params.merchantId, 'merchantId') : undefined;
+    const merchant = config.ownerColumn ? await this.resolveMerchantCode(params.merchantId) : undefined;
     const { items, skipExisting } = this.bulkItems(config, body);
     if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
       throw new BadRequestException('items must contain between 1 and 100 mappings');
@@ -107,6 +111,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     const seen = new Set<string>();
     const prepared = items.map(item => {
       const fields = this.fields(config, item, 'create');
+      if (config.name === 'RolePermissions') fields.storeId = this.id(fields.storeId, 'storeId', true);
       const child = this.id(item[config.childKey], config.childKey, config.childUuid);
       const normalized = config.childUuid ? child.toLowerCase() : child;
       if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
@@ -118,6 +123,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         const projection = this.projection(config);
         const resolved = [];
         for (const item of prepared) {
+          if (config.name === 'EmployeeStores') item.child = await this.resolveStoreCode(item.child, merchant!);
           if (skipExisting) {
             const existing = await manager.query(
               `SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
@@ -142,6 +148,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
     if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
+    const merchant = config.ownerColumn ? await this.resolveMerchantCode(params.merchantId) : undefined;
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
     const payload = body as Record<string, unknown>;
     const idAlias = `${config.childKey}s`;
@@ -167,7 +174,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         for (const row of existing) {
           const current = String(row.id);
           if (!seen.has(config.childUuid ? current.toLowerCase() : current)) {
-            await this.perform(manager, config, 'delete', parent, undefined, current, {});
+            await this.perform(manager, config, 'delete', parent, merchant, current, {});
           }
         }
         const items = [];
@@ -176,7 +183,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
             `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
             [parent, child],
           );
-          const result = await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, child, defaults);
+          const result = await this.perform(manager, config, current.length ? 'replace' : 'create', parent, merchant, child, defaults);
           items.push(result.item);
         }
         return { success: true, count: items.length, items };
@@ -252,7 +259,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   async saveRoleTemplateStoreTypes(config: Relationship, params: Record<string, string>, body: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const selected = this.roleTemplateStoreTypeSelections(config, body);
+    const { selected, replace } = this.roleTemplateStoreTypeSelections(config, body);
     try {
       return await this.db.transaction(async manager => {
         const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1 FOR SHARE', [parent]);
@@ -262,22 +269,42 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
           [parent],
         );
         const selectedIds = new Set(selected.map(item => item.child.toLowerCase()));
-        for (const row of existing) {
-          const current = String(row.id);
-          if (!selectedIds.has(current.toLowerCase())) {
-            await this.perform(manager, config, 'delete', parent, undefined, current, {});
+        if (replace) {
+          for (const row of existing) {
+            const current = String(row.id);
+            if (!selectedIds.has(current.toLowerCase())) {
+              await this.perform(manager, config, 'delete', parent, undefined, current, {});
+            }
           }
         }
-        const items = [];
         for (const item of selected) {
           const current = await manager.query(
             `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
             [parent, item.child],
           );
-          const result = await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, item.child, item.fields);
-          items.push(result.item);
+          await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, item.child, item.fields);
         }
-        await manager.query('DELETE FROM public.role_template_permissions WHERE role_template_id = $1', [parent]);
+        if (replace) {
+          await manager.query(
+            `DELETE FROM public.role_template_permissions rtp
+             WHERE rtp.role_template_id = $1
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM public.store_type_role_templates mapping
+                 JOIN public.store_type_features stf ON stf.store_type_id = mapping.store_type_id
+                 JOIN public.permissions p ON p.feature_id = stf.feature_id
+                 WHERE mapping.role_template_id = rtp.role_template_id
+                   AND p.id = rtp.permission_id
+               )`,
+            [parent],
+          );
+        }
+        const items = await manager.query(
+          `SELECT ${this.projection(config)} FROM public.${config.table}
+           WHERE ${quoteIdent(config.parentColumn)} = $1
+           ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`,
+          [parent],
+        );
         return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
       });
     } catch (error: any) {
@@ -285,15 +312,23 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private roleTemplateStoreTypeSelections(config: Relationship, body: unknown): { child: string; fields: Record<string, unknown> }[] {
+  private roleTemplateStoreTypeSelections(config: Relationship, body: unknown): {
+    selected: { child: string; fields: Record<string, unknown> }[];
+    replace: boolean;
+  } {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a JSON object');
     const payload = body as Record<string, unknown>;
     const idAlias = `${config.childKey}s`;
     const hasItems = 'items' in payload;
     const hasIds = idAlias in payload || 'ids' in payload;
+    if (payload.replace !== undefined && typeof payload.replace !== 'boolean') {
+      throw new BadRequestException('Invalid replace');
+    }
+    const replace = payload.replace === true;
     if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
+    if (!hasItems && !hasIds) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
     if (hasIds) {
-      const allowed = new Set([idAlias, 'ids', 'skipExisting', 'defaultEnabled', 'required']);
+      const allowed = new Set([idAlias, 'ids', 'skipExisting', 'defaultEnabled', 'required', 'replace']);
       if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
       const ids = payload[idAlias] ?? payload.ids;
       if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
@@ -302,26 +337,34 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         required: payload.required === true,
       }, 'create');
       const seen = new Set<string>();
-      return ids.map(id => {
-        const child = this.id(id, config.childKey, config.childUuid);
-        const normalized = child.toLowerCase();
-        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
-        seen.add(normalized);
-        return { child, fields };
-      });
+      return {
+        replace,
+        selected: ids.map(id => {
+          const child = this.id(id, config.childKey, config.childUuid);
+          const normalized = child.toLowerCase();
+          if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in ${idAlias}`);
+          seen.add(normalized);
+          return { child, fields };
+        }),
+      };
     }
-    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
+    if (Object.keys(payload).some(key => key !== 'items' && key !== 'replace')) {
+      throw new BadRequestException('Provide { items: [...] }');
+    }
     const items = payload.items;
     if (!Array.isArray(items) || items.length > 100) throw new BadRequestException('items must contain at most 100 mappings');
     const seen = new Set<string>();
-    return items.map(item => {
-      const fields = this.fields(config, item, 'create');
-      const child = this.id((item as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
-      const normalized = child.toLowerCase();
-      if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
-      seen.add(normalized);
-      return { child, fields };
-    });
+    return {
+      replace,
+      selected: items.map(item => {
+        const fields = this.fields(config, item, 'create');
+        const child = this.id((item as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
+        const normalized = child.toLowerCase();
+        if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
+        seen.add(normalized);
+        return { child, fields };
+      }),
+    };
   }
 
   private roleTemplatePermissionSelections(config: Relationship, body: unknown): {
@@ -683,8 +726,16 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         items: ids.map(id => (typeof id === 'string' ? { [config.childKey]: id, ...defaults } : id)),
       };
     }
-    if (Object.keys(payload).some(key => key !== 'items')) throw new BadRequestException('Provide { items: [...] }');
-    return { items: payload.items as Record<string, unknown>[], skipExisting: false };
+    if (Object.keys(payload).some(key => !['items', 'skipExisting'].includes(key))) {
+      throw new BadRequestException('Provide { items: [...], skipExisting?: boolean }');
+    }
+    if (payload.skipExisting !== undefined && typeof payload.skipExisting !== 'boolean') {
+      throw new BadRequestException('skipExisting must be a boolean');
+    }
+    return {
+      items: payload.items as Record<string, unknown>[],
+      skipExisting: payload.skipExisting === true,
+    };
   }
 
   private async withChildDetails(manager: EntityManager, config: Relationship, items: Record<string, any>[]) {
@@ -788,18 +839,30 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
     }
     if (operation === 'create') {
+      let tenantValue = merchant;
+      if (config.name === 'RolePermissions') {
+        const merchants = await manager.query('SELECT uuid FROM public.merchants WHERE id::text=$1 LIMIT 1', [merchant]);
+        if (!merchants.length) throw new NotFoundException('Merchant not found in the requested scope');
+        tenantValue = merchants[0].uuid;
+        const stores = await manager.query(
+          'SELECT 1 FROM public.stores WHERE merchant_uuid=$1::uuid AND uuid=$2::uuid FOR SHARE',
+          [tenantValue, fields.storeId],
+        );
+        if (!stores.length) throw new NotFoundException('Store UUID not found for this merchant');
+      }
       let childOwner = config.childOwnerColumn || 'merchantId';
       if (config.name === 'EmployeeStores') {
         const columns = await manager.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='stores' AND column_name IN ('merchant_id','merchantId')");
         if (columns.length !== 1) throw new ServiceUnavailableException('Store ownership column is missing or ambiguous');
         childOwner = columns[0].column_name;
       }
-      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${config.tenantColumn ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, config.tenantColumn ? [child, merchant] : [child]);
+      const scopeChild = config.tenantColumn && config.name !== 'RolePermissions';
+      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${scopeChild ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, scopeChild ? [child, merchant] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
       this.dates(fields);
       const entries = Object.entries(fields);
       const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
-      const values = [parent, child, ...(config.tenantColumn ? [merchant] : []), ...entries.map(([,value]) => value)];
+      const values = [parent, child, ...(config.tenantColumn ? [tenantValue] : []), ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       return { success: true, item };
     }
@@ -818,5 +881,22 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
     const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value)]);
     return { success: true, item: rows[0] };
+  }
+
+  private async resolveMerchantCode(identifier: string): Promise<string> {
+    this.id(identifier, 'merchantId');
+    const rows = await this.db.query('SELECT id FROM public.merchants WHERE id=$1 OR uuid::text=$1 LIMIT 1', [identifier]);
+    if (!rows.length) throw new NotFoundException('Merchant not found');
+    return rows[0].id;
+  }
+
+  private async resolveStoreCode(identifier: string, merchant: string): Promise<string> {
+    const rows = await this.db.query(
+      `SELECT id FROM public.stores WHERE (id=$1 OR uuid::text=$1)
+       AND COALESCE(to_jsonb(stores)->>'merchant_id',to_jsonb(stores)->>'merchantId')=$2 LIMIT 1`,
+      [identifier, merchant],
+    );
+    if (!rows.length) throw new NotFoundException('Store not found for this merchant');
+    return rows[0].id;
   }
 }
