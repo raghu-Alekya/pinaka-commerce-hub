@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { filterMasterList } from './master-list';
 import { MerchantRepository } from './merchant.repository';
 import { RELATIONSHIPS } from './relationships.config';
@@ -52,6 +52,11 @@ export class RoleTemplateStoreTypeBulkController {
 
   @Put()
   replace(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown) {
+    return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body);
+  }
+
+  @Post()
+  create(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown) {
     return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body);
   }
 }
