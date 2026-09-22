@@ -316,7 +316,7 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
   }
 
   if (!storeColumns.includes('legacy_store_id')) {
-    for (const candidate of ['store_id', 'storeId', 'store_code', 'storeCode']) {
+    for (const candidate of ['store_id', 'storeId']) {
       if (storeColumns.includes(candidate)) {
         await manager.query(
           `ALTER TABLE public.stores RENAME COLUMN "${candidate}" TO legacy_store_id`,
