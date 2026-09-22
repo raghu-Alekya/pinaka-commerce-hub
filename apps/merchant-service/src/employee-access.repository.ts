@@ -32,9 +32,10 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
     }
     try {
       return await this.db.transaction('REPEATABLE READ', async manager => {
+        const [merchant] = await this.read(manager, 'merchants', 'id', merchantId);
         const [employee] = await this.read(manager, 'employees', 'id', employeeId);
         const [store] = await this.read(manager, 'stores', 'id', storeId);
-        if (!employee || employee.merchantId !== merchantId || !store || store.merchantId !== merchantId) {
+        if (!merchant || !employee || employee.merchantId !== merchantId || !store || store.merchantUuid !== merchantId) {
           throw new NotFoundException('Employee or store not found in the requested merchant');
         }
         const now = Date.now();
@@ -49,7 +50,7 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
         const granted = new Set<string>();
         for (const link of roleLinks) {
           const [role] = await this.read(manager, 'roles', 'id', link.roleId);
-          if (!active(role) || role.merchantId !== merchantId) continue;
+          if (!active(role) || role.merchantId !== merchant.merchantCode) continue;
           roles.push(role);
           for (const grant of await this.read(manager, 'role_permissions', 'roleId', role.id)) {
             if (grant.allowed === true) granted.add(grant.permissionId);
@@ -57,11 +58,11 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
         }
         const licensedSubscriptions: Row[] = [];
         for (const license of await this.read(manager, 'subscription_stores', 'storeId', storeId)) {
-          if (license.merchantId !== merchantId || !active(license) ||
+          if (![merchantId, merchant.merchantCode].includes(license.merchantId) || !active(license) ||
               (license.activatedAt && Date.parse(license.activatedAt) > now) ||
               (license.deactivatedAt && Date.parse(license.deactivatedAt) <= now)) continue;
           const [subscription] = await this.read(manager, 'subscriptions', 'id', license.subscriptionId);
-          if (!subscription || subscription.merchantId !== merchantId || !['ACTIVE', 'TRIAL', 'TRIALING'].includes(subscription.status) ||
+          if (!subscription || ![merchantId, merchant.merchantCode].includes(subscription.merchantId) || !['ACTIVE', 'TRIAL', 'TRIALING'].includes(subscription.status) ||
               (subscription.startDate && Date.parse(subscription.startDate) > now) ||
               (subscription.currentPeriodEnd && Date.parse(subscription.currentPeriodEnd) <= now) ||
               (subscription.cancelledAt && Date.parse(subscription.cancelledAt) <= now)) continue;

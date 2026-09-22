@@ -10,6 +10,7 @@ import { RoleController } from './role.controller';
 import { EmployeeController } from './employee.controller';
 import { EmployeeAccessController } from './employee-access.controller';
 import { EmployeeAccessRepository } from './employee-access.repository';
+import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalog.controller';
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
 import { SubscriptionController } from './subscription.controller';
@@ -43,6 +44,7 @@ import { RelationshipsRepository } from './relationships.repository';
     RoleController,
     EmployeeController,
     EmployeeAccessController,
+    EmployeeStoreRoleCatalogController,
     SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,

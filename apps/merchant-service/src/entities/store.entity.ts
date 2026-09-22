@@ -38,8 +38,11 @@ export interface StoreWebsiteConnectorConfig {
 
 @Entity('stores')
 export class StoreEntity {
-  @PrimaryColumn({ type: 'varchar', length: 100 })
+  @PrimaryColumn({ name: 'legacy_store_id', type: 'varchar', length: 100 })
   id!: string; // e.g. "STR-5001" or "STR-50069"
+
+  @Column({ name: 'id', type: 'uuid', default: () => 'gen_random_uuid()' })
+  uuid?: string;
 
   @Column({ type: 'varchar', length: 100 })
   merchantId!: string;

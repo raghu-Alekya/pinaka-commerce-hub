@@ -306,7 +306,7 @@ CREATE TABLE public.employee_stores (
         CHECK (effective_until IS NULL OR effective_from IS NULL OR effective_until > effective_from),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_employee_stores_tenant_id UNIQUE (merchant_id, id),
+    CONSTRAINT uq_employee_stores_tenant_id UNIQUE (merchant_id, store_id, id),
     CONSTRAINT fk_employee_stores_tenant_employee
         FOREIGN KEY (merchant_id, employee_id) REFERENCES public.employees(merchant_id, id),
     CONSTRAINT fk_employee_stores_tenant_store
@@ -321,6 +321,7 @@ CREATE TABLE public.employee_stores (
 CREATE TABLE public.employee_store_roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     merchant_id UUID NOT NULL, -- Shared tenant, enforced against both parents.
+    store_id UUID NOT NULL,
     employee_store_id UUID NOT NULL,
     role_id UUID NOT NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
@@ -331,7 +332,7 @@ CREATE TABLE public.employee_store_roles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_employee_store_roles_tenant_assignment
-        FOREIGN KEY (merchant_id, employee_store_id) REFERENCES public.employee_stores(merchant_id, id),
+        FOREIGN KEY (merchant_id, store_id, employee_store_id) REFERENCES public.employee_stores(merchant_id, store_id, id),
     CONSTRAINT fk_employee_store_roles_tenant_role
         FOREIGN KEY (merchant_id, role_id) REFERENCES public.roles(merchant_id, id),
     CONSTRAINT uq_employee_store_role UNIQUE (employee_store_id, role_id),
@@ -357,6 +358,8 @@ CREATE TABLE public.role_template_permissions (
 
 CREATE TABLE public.role_permissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id UUID,
+    store_id UUID,
     role_id UUID NOT NULL,
     permission_id UUID NOT NULL,
     allowed BOOLEAN NOT NULL DEFAULT FALSE,
@@ -366,7 +369,11 @@ CREATE TABLE public.role_permissions (
     CONSTRAINT fk_role_permissions_role
         FOREIGN KEY (role_id) REFERENCES public.roles(id),
     CONSTRAINT fk_role_permissions_permission
-        FOREIGN KEY (permission_id) REFERENCES public.permissions(id)
+        FOREIGN KEY (permission_id) REFERENCES public.permissions(id),
+    CONSTRAINT fk_role_permissions_merchant
+        FOREIGN KEY (merchant_id) REFERENCES public.merchants(id),
+    CONSTRAINT fk_role_permissions_store
+        FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(merchant_id, id)
 );
 
 -- =========================================================

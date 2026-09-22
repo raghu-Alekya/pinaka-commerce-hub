@@ -49,7 +49,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.users.findByEmailWithPassword(dto.email);
+    const user = await this.users.findByLoginWithPassword(dto.username || dto.email || '');
     if (
       !user?.passwordHash ||
       user.status !== UserStatus.ACTIVE ||

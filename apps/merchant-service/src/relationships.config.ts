@@ -70,7 +70,7 @@ const audit = { timestamps: true, createdColumn: 'created_at', updatedColumn: 'u
 export const EMPLOYEE_ACCESS_RELATIONSHIPS: Relationship[] = [
   { name: 'EmployeeStores', path: 'api/v1/merchants/:merchantId/employees/:employeeId/stores', table: 'employee_stores',
     parentTable: 'employees', parentParam: 'employeeId', parentColumn: 'employee_id', parentUuid: true, ownerColumn: 'merchant_id',
-    childTable: 'stores', childKey: 'storeId', childColumn: 'store_id', tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchantId',
+    childTable: 'stores', childKey: 'storeId', childColumn: 'store_id', childUuid: true, tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchant_uuid',
     ...audit, fields: { isPrimary: { column: 'is_primary', kind: 'boolean', default: false }, ...assignment } },
   { name: 'EmployeeStoreRoles', path: 'api/v1/merchants/:merchantId/employee-stores/:employeeStoreId/roles', table: 'employee_store_roles',
     parentTable: 'employee_stores', parentParam: 'employeeStoreId', parentColumn: 'employee_store_id', parentUuid: true, ownerColumn: 'merchant_id',
@@ -83,5 +83,9 @@ export const EMPLOYEE_ACCESS_RELATIONSHIPS: Relationship[] = [
   { name: 'RolePermissions', path: 'api/v1/merchants/:merchantId/roles/:roleId/permissions', table: 'role_permissions',
     parentTable: 'roles', parentParam: 'roleId', parentColumn: 'role_id', parentUuid: true, ownerColumn: 'merchant_id',
     childTable: 'permissions', childKey: 'permissionId', childColumn: 'permission_id', childUuid: true,
-    ...audit, fields: { allowed: { column: 'allowed', kind: 'boolean', default: false } } },
+    tenantColumn: true, tenantField: 'merchant_id',
+    ...audit, fields: {
+      storeId: { column: 'store_id', kind: 'string' },
+      allowed: { column: 'allowed', kind: 'boolean', default: false },
+    } },
 ];

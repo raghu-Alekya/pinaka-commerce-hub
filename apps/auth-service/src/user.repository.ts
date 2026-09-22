@@ -104,6 +104,14 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       .getOne();
   }
 
+  async findByLoginWithPassword(login: string): Promise<UserEntity | null> {
+    return this.repository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('lower(user.email) = lower(:login) OR lower(user.username) = lower(:login)', { login })
+      .getOne();
+  }
+
   async findByEmail(email: string): Promise<UserEntity | null> {
     return this.repository.findOneBy({ email });
   }

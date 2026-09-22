@@ -432,15 +432,17 @@ export class AppController {
 
   @Get(['stores', 'merchants/:merchantId/stores'])
   async listStores(@Param('merchantId') merchantId?: string) {
+    const resolvedMerchantId = merchantId ? await this.merchantRepository.resolveMerchantId(merchantId) : undefined;
+    if (merchantId && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
     const [stores, merchants] = await Promise.all([
-      this.merchantRepository.listStores(merchantId),
+      this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
     ]);
     const names = new Map(merchants.map(m => [m.id, m.businessName]));
-    if (merchantId && !names.has(merchantId)) throw new NotFoundException('Merchant not found');
+    if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
-      id: s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
+      id: s.uuid, storeCode: s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
       storeName: s.storeName, storeType: s.storeType, address: s.address,
       status: s.status, currency: s.currency, timezone: s.timezone,
       createdAt: s.createdAt, updatedAt: s.updatedAt,
