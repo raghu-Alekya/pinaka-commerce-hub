@@ -3,6 +3,7 @@ import '../../../scripts/load-env';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
+import { join } from 'node:path';
 import { TracingInterceptor } from '@pinaka-delivery-hub/observability';
 import { AppModule } from './app.module';
 import { normalizeTendorForm } from './vendor-tendor.form.pipe';
@@ -29,6 +30,7 @@ async function bootstrap() {
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: '*',
   });
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalInterceptors(new TracingInterceptor());
   const port = process.env.MERCHANT_SERVICE_PORT || 3003;

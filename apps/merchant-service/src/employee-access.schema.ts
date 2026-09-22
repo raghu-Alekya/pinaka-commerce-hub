@@ -6,6 +6,56 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
     await manager.query('SELECT pg_advisory_xact_lock(724621, 1)');
     // Resolve column metadata without INTO STRICT — missing optional columns used to crash boot (502).
     await ensureStoreIdentityColumns(manager);
+    // Foreign keys created below target the generated UUID identities.  Older
+    // databases use merchant_code / legacy_store_id as their primary keys, so
+    // prepare and uniquely index the UUID columns before creating any FK that
+    // references them.  Doing this later causes PostgreSQL error 42830 and the
+    // surrounding schema transaction rolls back every newly-created table.
+    await manager.query(`
+      DO $schema$
+      BEGIN
+        ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid();
+        UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
+        ALTER TABLE public.merchants ALTER COLUMN id SET DEFAULT gen_random_uuid();
+        ALTER TABLE public.merchants ALTER COLUMN id SET NOT NULL;
+
+        ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid();
+        UPDATE public.stores SET id = gen_random_uuid() WHERE id IS NULL;
+        ALTER TABLE public.stores ALTER COLUMN id SET DEFAULT gen_random_uuid();
+        ALTER TABLE public.stores ALTER COLUMN id SET NOT NULL;
+
+        ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS merchant_uuid uuid;
+        UPDATE public.stores s SET merchant_uuid = m.id
+          FROM public.merchants m
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = m.merchant_code::text
+            AND s.merchant_uuid IS NULL;
+        CREATE OR REPLACE FUNCTION public.pch_set_store_merchant_uuid()
+        RETURNS trigger LANGUAGE plpgsql AS $trigger$
+        BEGIN
+          IF NEW.merchant_uuid IS NULL THEN
+            SELECT m.id INTO NEW.merchant_uuid
+              FROM public.merchants m
+              WHERE m.merchant_code::text = COALESCE(
+                to_jsonb(NEW)->>'merchant_id',
+                to_jsonb(NEW)->>'merchantId'
+              )
+              LIMIT 1;
+          END IF;
+          RETURN NEW;
+        END $trigger$;
+        DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores;
+        CREATE TRIGGER pch_store_merchant_uuid_biu
+          BEFORE INSERT OR UPDATE ON public.stores
+          FOR EACH ROW EXECUTE FUNCTION public.pch_set_store_merchant_uuid();
+        IF EXISTS (SELECT 1 FROM public.stores WHERE merchant_uuid IS NULL) THEN
+          RAISE EXCEPTION 'Cannot set stores.merchant_uuid NOT NULL: unresolved merchant mapping';
+        END IF;
+        ALTER TABLE public.stores ALTER COLUMN merchant_uuid SET NOT NULL;
+      END $schema$;
+      CREATE UNIQUE INDEX IF NOT EXISTS merchants_generated_id_uq ON public.merchants(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS stores_generated_id_uq ON public.stores(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS stores_merchant_uuid_uq ON public.stores(merchant_uuid,id);
+    `);
     await manager.query(`
       DO $schema$
       DECLARE merchant_type text; ddl text;
@@ -73,7 +123,8 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128),
         ADD COLUMN IF NOT EXISTS password_hash varchar(128),
         ADD COLUMN IF NOT EXISTS send_credentials boolean NOT NULL DEFAULT true,
-        ADD COLUMN IF NOT EXISTS last_active_at timestamptz;
+        ADD COLUMN IF NOT EXISTS last_active_at timestamptz,
+        ADD COLUMN IF NOT EXISTS profile_image_url varchar(500);
       ALTER TABLE public.employees DROP CONSTRAINT IF EXISTS employees_employee_code_key;
       CREATE UNIQUE INDEX IF NOT EXISTS pch_employees_tenant_code ON public.employees(merchant_id,employee_code);
       CREATE UNIQUE INDEX IF NOT EXISTS pch_employees_tenant_username ON public.employees(merchant_id,lower(username)) WHERE username IS NOT NULL;

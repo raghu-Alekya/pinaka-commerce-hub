@@ -8,8 +8,8 @@ export class EmployeeStoreAssignmentDto {
 }
 
 export class CreateEmployeeDto {
-  @IsUUID()
-  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   merchantId!: string;
 

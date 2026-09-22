@@ -23,21 +23,22 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
     return rows.map((result: { row: Row }) => normalize(result.row));
   }
 
-  async resolve(merchantId: string, employeeId: string, storeId: string, permissionKey?: string) {
+  async resolve(employeeId: string, storeId: string, permissionKey?: string) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(employeeId)) {
       throw new BadRequestException('employeeId must be a UUID');
     }
-    if (!merchantId.trim() || !storeId.trim() || (permissionKey !== undefined && !permissionKey.trim())) {
+    if (!storeId.trim() || (permissionKey !== undefined && !permissionKey.trim())) {
       throw new BadRequestException('Provide non-empty scope and permission identifiers');
     }
     try {
       return await this.db.transaction('REPEATABLE READ', async manager => {
-        const [merchant] = await this.read(manager, 'merchants', 'id', merchantId);
         const [employee] = await this.read(manager, 'employees', 'id', employeeId);
         const [store] = await this.read(manager, 'stores', 'id', storeId);
-        if (!merchant || !employee || employee.merchantId !== merchantId || !store || store.merchantUuid !== merchantId) {
-          throw new NotFoundException('Employee or store not found in the requested merchant');
+        if (!employee || !store || store.merchantUuid !== employee.merchantId) {
+          throw new NotFoundException('Employee and store were not found in the same merchant');
         }
+        const merchantId = employee.merchantId;
+        const [merchant] = await this.read(manager, 'merchants', 'id', merchantId);
         const now = Date.now();
         const active = (row: Row | undefined) => row?.status === 'ACTIVE';
         const inPeriod = (row: Row) => (!row.effectiveFrom || Date.parse(row.effectiveFrom) <= now) &&

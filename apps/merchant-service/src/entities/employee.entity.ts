@@ -45,6 +45,7 @@ export class EmployeeEntity {
   @Column({ name: 'password_hash', type: 'varchar', length: 128, nullable: true, select: false }) passwordHash?: string | null;
   @Column({ name: 'send_credentials', type: 'boolean', default: true }) sendCredentials!: boolean;
   @Column({ name: 'last_active_at', type: 'timestamptz', nullable: true }) lastActiveAt?: Date | null;
+  @Column({ name: 'profile_image_url', type: 'varchar', length: 500, nullable: true }) profileImageUrl?: string | null;
 
   @Column({ type: 'varchar', length: 20, default: EmployeeStatus.ACTIVE })
   status!: EmployeeStatus;

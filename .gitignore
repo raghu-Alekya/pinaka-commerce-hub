@@ -69,6 +69,7 @@ typings/
 # Generated artifacts
 # ==========================================
 graph.json
+uploads/
 
 # ==========================================
 # Logs - IGNORE ALL LOG FILES
