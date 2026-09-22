@@ -123,10 +123,11 @@ if [[ "$SKIP_DOCKER" -eq 0 ]]; then
     echo "Docker PostgreSQL did not become ready. Check: docker compose logs postgres" >&2
     exit 1
   fi
-  docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-    psql -U pdh_user -d postgres -c \
-    "SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')\gexec" \
-    >/dev/null || true
+  if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+    psql -U pdh_user -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub'" 2>/dev/null | grep -q 1; then
+    docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+      psql -U pdh_user -d postgres -c "CREATE DATABASE pinaka_commerce_hub;" >/dev/null 2>&1 || true
+  fi
   echo "PostgreSQL ready: pinaka_commerce_hub"
 fi
 
