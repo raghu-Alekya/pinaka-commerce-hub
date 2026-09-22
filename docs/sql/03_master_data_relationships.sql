@@ -91,9 +91,9 @@ CREATE TABLE IF NOT EXISTS public.plan_entitlements (
 
 CREATE TABLE IF NOT EXISTS public.subscription_stores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    merchant_id __MERCHANT_TYPE__ NOT NULL, -- Shared tenant, enforced against both parents.
+    merchant_id UUID NOT NULL,
     subscription_id __SUBSCRIPTION_TYPE__ NOT NULL,
-    store_id __STORE_TYPE__ NOT NULL,
+    store_id UUID NOT NULL,
     status VARCHAR(30) NOT NULL,
     activated_at TIMESTAMPTZ,
     deactivated_at TIMESTAMPTZ,
@@ -153,9 +153,9 @@ CREATE TABLE IF NOT EXISTS public.store_entitlements (
 
 CREATE TABLE IF NOT EXISTS public.employee_stores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    merchant_id __MERCHANT_TYPE__ NOT NULL, -- Shared tenant, enforced against both parents.
+    merchant_id UUID NOT NULL,
     employee_id UUID NOT NULL,
-    store_id __STORE_TYPE__ NOT NULL,
+    store_id UUID NOT NULL,
     is_primary BOOLEAN NOT NULL DEFAULT FALSE,
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
     effective_from TIMESTAMPTZ,
@@ -164,11 +164,11 @@ CREATE TABLE IF NOT EXISTS public.employee_stores (
         CHECK (effective_until IS NULL OR effective_from IS NULL OR effective_until > effective_from),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_employee_stores_tenant_id UNIQUE (merchant_id, id),
-    CONSTRAINT fk_employee_stores_tenant_employee
-        FOREIGN KEY (merchant_id, employee_id) REFERENCES public.employees(merchant_id, id),
+    CONSTRAINT uq_employee_stores_tenant_id UNIQUE (merchant_id, store_id, id),
+    CONSTRAINT fk_employee_stores_merchant
+        FOREIGN KEY (merchant_id) REFERENCES public.merchants(id),
     CONSTRAINT fk_employee_stores_tenant_store
-        FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(__STORE_MERCHANT__, id),
+        FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(merchant_uuid, id),
     CONSTRAINT uq_employee_store UNIQUE (employee_id, store_id),
     CONSTRAINT fk_employee_stores_employee
         FOREIGN KEY (employee_id) REFERENCES public.employees(id),
@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS public.employee_stores (
 
 CREATE TABLE IF NOT EXISTS public.employee_store_roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    merchant_id __MERCHANT_TYPE__ NOT NULL, -- Shared tenant, enforced against both parents.
+    merchant_id UUID NOT NULL,
+    store_id UUID NOT NULL,
     employee_store_id UUID NOT NULL,
     role_id UUID NOT NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
@@ -189,9 +190,7 @@ CREATE TABLE IF NOT EXISTS public.employee_store_roles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_employee_store_roles_tenant_assignment
-        FOREIGN KEY (merchant_id, employee_store_id) REFERENCES public.employee_stores(merchant_id, id),
-    CONSTRAINT fk_employee_store_roles_tenant_role
-        FOREIGN KEY (merchant_id, role_id) REFERENCES public.roles(merchant_id, id),
+        FOREIGN KEY (merchant_id, store_id, employee_store_id) REFERENCES public.employee_stores(merchant_id, store_id, id),
     CONSTRAINT uq_employee_store_role UNIQUE (employee_store_id, role_id),
     CONSTRAINT fk_employee_store_roles_employee_store
         FOREIGN KEY (employee_store_id) REFERENCES public.employee_stores(id),
@@ -215,6 +214,8 @@ CREATE TABLE IF NOT EXISTS public.role_template_permissions (
 
 CREATE TABLE IF NOT EXISTS public.role_permissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id __MERCHANT_TYPE__,
+    store_id __STORE_TYPE__,
     role_id UUID NOT NULL,
     permission_id UUID NOT NULL,
     allowed BOOLEAN NOT NULL DEFAULT FALSE,
@@ -224,8 +225,13 @@ CREATE TABLE IF NOT EXISTS public.role_permissions (
     CONSTRAINT fk_role_permissions_role
         FOREIGN KEY (role_id) REFERENCES public.roles(id),
     CONSTRAINT fk_role_permissions_permission
-        FOREIGN KEY (permission_id) REFERENCES public.permissions(id)
+        FOREIGN KEY (permission_id) REFERENCES public.permissions(id),
+    CONSTRAINT fk_role_permissions_merchant
+        FOREIGN KEY (merchant_id) REFERENCES public.merchants(id),
+    CONSTRAINT fk_role_permissions_store
+        FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(__STORE_MERCHANT__, id)
 );
+
 $ddl$;
     statement := replace(statement, '__MERCHANT_TYPE__', merchant_type);
     statement := replace(statement, '__STORE_TYPE__', store_type);

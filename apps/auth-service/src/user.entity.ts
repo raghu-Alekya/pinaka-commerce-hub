@@ -21,6 +21,9 @@ export enum UserStatus {
 @Entity('users')
 export class UserEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ type: 'varchar', length: 100, nullable: true }) username?: string | null;
+  @Column({ type: 'varchar', length: 100, nullable: true }) merchantId?: string | null;
+  @Column({ type: 'uuid', nullable: true }) employeeId?: string | null;
   @Column({ type: 'uuid', nullable: true }) accountId?: string | null;
   @Column({ type: 'varchar', length: 100 }) firstName!: string;
   @Column({ type: 'varchar', length: 100 }) lastName!: string;

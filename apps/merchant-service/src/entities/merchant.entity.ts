@@ -34,8 +34,11 @@ export interface KycDocument {
 
 @Entity('merchants')
 export class MerchantEntity {
-  @PrimaryColumn({ type: 'varchar', length: 100 })
+  @PrimaryColumn({ name: 'merchant_code', type: 'varchar', length: 100 })
   id!: string; // e.g. "MCH-1001"
+
+  @Column({ name: 'id', type: 'uuid', default: () => 'gen_random_uuid()' })
+  uuid?: string;
 
   @Column({ type: 'varchar', length: 255 })
   businessName!: string;

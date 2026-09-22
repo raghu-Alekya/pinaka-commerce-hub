@@ -77,6 +77,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   private projection(config: Relationship) {
     return ['id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
       ...(config.tenantColumn ? [`${quoteIdent(config.tenantField || 'merchantId')} AS ${quoteIdent('merchantId')}`] : []),
+      ...(config.name === 'EmployeeStoreRoles' ? [`${quoteIdent('store_id')} AS ${quoteIdent('storeId')}`] : []),
       ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
       `${quoteIdent(config.createdColumn || 'createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent(config.updatedColumn || 'updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
   }
@@ -91,7 +92,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     }
     if (operation === 'create') child = this.id((body as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
     else if (operation !== 'list') child = this.id(child, config.childKey, config.childUuid);
-    if (config.name === 'EmployeeStores' && child) child = await this.resolveStoreCode(child, merchant!);
+    if (config.name === 'EmployeeStores' && child) child = await this.resolveStoreUuid(child, merchant!);
     try {
       return await this.db.transaction(async manager => this.perform(manager, config, operation, parent, merchant, child, fields));
     } catch (error: any) {
@@ -123,7 +124,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         const projection = this.projection(config);
         const resolved = [];
         for (const item of prepared) {
-          if (config.name === 'EmployeeStores') item.child = await this.resolveStoreCode(item.child, merchant!);
+          if (config.name === 'EmployeeStores') item.child = await this.resolveStoreUuid(item.child, merchant!);
           if (skipExisting) {
             const existing = await manager.query(
               `SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
@@ -831,7 +832,10 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private async perform(manager: EntityManager, config: Relationship, operation: RelationshipOperation,
     parent: string, merchant: string | undefined, child: string | undefined, fields: Record<string, unknown>) {
-    const owners = await manager.query(`SELECT id FROM public.${config.parentTable} WHERE id = $1${config.ownerColumn ? ` AND ${quoteIdent(config.ownerColumn)} = $2` : ''} FOR SHARE`, config.ownerColumn ? [parent, merchant] : [parent]);
+    const merchantUuid = merchant && ['EmployeeStores', 'EmployeeStoreRoles'].includes(config.name)
+      ? await this.resolveMerchantUuid(merchant) : undefined;
+    const parentOwner = ['EmployeeStores', 'EmployeeStoreRoles'].includes(config.name) ? merchantUuid : merchant;
+    const owners = await manager.query(`SELECT id FROM public.${config.parentTable} WHERE id = $1${config.ownerColumn ? ` AND ${quoteIdent(config.ownerColumn)} = $2` : ''} FOR SHARE`, config.ownerColumn ? [parent, parentOwner] : [parent]);
     if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
     const projection = this.projection(config);
     if (operation === 'list') {
@@ -839,7 +843,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
     }
     if (operation === 'create') {
-      let tenantValue = merchant;
+      let tenantValue = merchantUuid || merchant;
       if (config.name === 'RolePermissions') {
         const merchants = await manager.query('SELECT uuid FROM public.merchants WHERE id::text=$1 LIMIT 1', [merchant]);
         if (!merchants.length) throw new NotFoundException('Merchant not found in the requested scope');
@@ -851,18 +855,19 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         if (!stores.length) throw new NotFoundException('Store UUID not found for this merchant');
       }
       let childOwner = config.childOwnerColumn || 'merchantId';
-      if (config.name === 'EmployeeStores') {
-        const columns = await manager.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='stores' AND column_name IN ('merchant_id','merchantId')");
-        if (columns.length !== 1) throw new ServiceUnavailableException('Store ownership column is missing or ambiguous');
-        childOwner = columns[0].column_name;
-      }
+      if (config.name === 'EmployeeStores') childOwner = 'merchant_uuid';
       const scopeChild = config.tenantColumn && config.name !== 'RolePermissions';
-      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${scopeChild ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, scopeChild ? [child, merchant] : [child]);
+      const childOwnerValue = config.name === 'EmployeeStores' ? merchantUuid : merchant;
+      const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${scopeChild ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, scopeChild ? [child, childOwnerValue] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
       this.dates(fields);
       const entries = Object.entries(fields);
-      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
-      const values = [parent, child, ...(config.tenantColumn ? [tenantValue] : []), ...entries.map(([,value]) => value)];
+      const assignmentStore = config.name === 'EmployeeStoreRoles'
+        ? (await manager.query('SELECT store_id FROM public.employee_stores WHERE id=$1', [parent]))[0]?.store_id : undefined;
+      const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []),
+        ...(config.name === 'EmployeeStoreRoles' ? ['store_id'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
+      const values = [parent, child, ...(config.tenantColumn ? [tenantValue] : []),
+        ...(config.name === 'EmployeeStoreRoles' ? [assignmentStore] : []), ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       return { success: true, item };
     }
@@ -885,14 +890,20 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private async resolveMerchantCode(identifier: string): Promise<string> {
     this.id(identifier, 'merchantId');
-    const rows = await this.db.query('SELECT id FROM public.merchants WHERE id=$1 OR uuid::text=$1 LIMIT 1', [identifier]);
+    const rows = await this.db.query('SELECT merchant_code AS id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [identifier]);
     if (!rows.length) throw new NotFoundException('Merchant not found');
     return rows[0].id;
   }
 
-  private async resolveStoreCode(identifier: string, merchant: string): Promise<string> {
+  private async resolveMerchantUuid(identifier: string): Promise<string> {
+    const rows = await this.db.query('SELECT id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [identifier]);
+    if (!rows.length) throw new NotFoundException('Merchant not found');
+    return rows[0].id;
+  }
+
+  private async resolveStoreUuid(identifier: string, merchant: string): Promise<string> {
     const rows = await this.db.query(
-      `SELECT id FROM public.stores WHERE (id=$1 OR uuid::text=$1)
+      `SELECT id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1)
        AND COALESCE(to_jsonb(stores)->>'merchant_id',to_jsonb(stores)->>'merchantId')=$2 LIMIT 1`,
       [identifier, merchant],
     );

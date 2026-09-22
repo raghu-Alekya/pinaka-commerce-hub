@@ -5,6 +5,7 @@ import {
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 const normalizeEmail = ({ value }: { value: unknown }) =>
@@ -26,9 +27,16 @@ export class SignUpDto {
 
 export class LoginDto {
   @Transform(normalizeEmail)
+  @ValidateIf(dto => !dto.username)
   @IsEmail()
   @MaxLength(255)
-  email!: string;
+  email?: string;
+
+  @ValidateIf(dto => !dto.email)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  username?: string;
 
   @IsString()
   @MaxLength(128)
