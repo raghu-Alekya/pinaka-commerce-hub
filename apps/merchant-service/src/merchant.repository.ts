@@ -1757,15 +1757,16 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   // --- Employees (Tenant-specific) CRUD ---
-  async listEmployees(merchantId: string, status?: string): Promise<Record<string, unknown>[]> {
+  async listEmployees(merchantId?: string, status?: string): Promise<Record<string, unknown>[]> {
     if (!this.employeeRepo) return [];
-    const where: any = { merchantId };
+    const where: any = {};
+    if (merchantId) where.merchantId = merchantId;
     if (status) where.status = status.toUpperCase();
     const employees = await this.employeeRepo.find({ where, order: { firstName: 'ASC' } });
     return Promise.all(employees.map(employee => this.employeeDetails(employee)));
   }
 
-  async getEmployeeDetails(merchantId: string, idOrCode: string): Promise<Record<string, unknown> | null> {
+  async getEmployeeDetails(merchantId: string | undefined, idOrCode: string): Promise<Record<string, unknown> | null> {
     const employee = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     return employee ? this.employeeDetails(employee) : null;
   }
@@ -1788,14 +1789,19 @@ export class MerchantRepository implements OnModuleInit {
       username: users[0]?.username || null, storeAssignments: assignments };
   }
 
-  async getEmployeeByIdOrCode(merchantId: string, idOrCode: string): Promise<EmployeeEntity | null> {
+  async getEmployeeByIdOrCode(merchantId: string | undefined, idOrCode: string): Promise<EmployeeEntity | null> {
     if (!this.employeeRepo || !idOrCode) return null;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
     if (isUuid) {
-      const byId = await this.employeeRepo.findOneBy({ merchantId, id: idOrCode.trim() });
+      const byId = await this.employeeRepo.findOneBy(merchantId ? { merchantId, id: idOrCode.trim() } : { id: idOrCode.trim() });
       if (byId) return byId;
     }
-    return this.employeeRepo.findOneBy({ merchantId, employeeCode: idOrCode.trim().toUpperCase() });
+    const matches = await this.employeeRepo.find({
+      where: merchantId ? { merchantId, employeeCode: idOrCode.trim().toUpperCase() } : { employeeCode: idOrCode.trim().toUpperCase() },
+      take: 2,
+    });
+    if (matches.length > 1) throw new ConflictException(`Employee code '${idOrCode}' exists for more than one merchant; use the employee UUID`);
+    return matches[0] || null;
   }
 
   async createEmployee(dto: CreateEmployeeDto): Promise<EmployeeEntity> {
@@ -1840,7 +1846,7 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
-  async updateEmployee(merchantId: string, idOrCode: string, dto: UpdateEmployeeDto): Promise<EmployeeEntity | null> {
+  async updateEmployee(merchantId: string | undefined, idOrCode: string, dto: UpdateEmployeeDto): Promise<EmployeeEntity | null> {
     const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!existing) return null;
     if (dto.firstName !== undefined) existing.firstName = dto.firstName.trim();
@@ -1871,12 +1877,12 @@ export class MerchantRepository implements OnModuleInit {
         if (dto.temporaryPassword !== undefined) { values.push(this.hashUserPassword(dto.temporaryPassword)); updates.push(`"passwordHash"=$${values.length}`); }
         await manager.query(`UPDATE public.users SET ${updates.join(',')} WHERE id=$1`, values);
       }
-      if (dto.storeAssignments) await this.syncEmployeeAssignmentsWithManager(manager, merchantId, saved.id, dto.storeAssignments);
+      if (dto.storeAssignments) await this.syncEmployeeAssignmentsWithManager(manager, saved.merchantId, saved.id, dto.storeAssignments);
       return saved;
     });
   }
 
-  async deleteEmployee(merchantId: string, idOrCode: string): Promise<boolean> {
+  async deleteEmployee(merchantId: string | undefined, idOrCode: string): Promise<boolean> {
     const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!existing) return false;
     existing.status = EmployeeStatus.INACTIVE;
@@ -1886,15 +1892,25 @@ export class MerchantRepository implements OnModuleInit {
     return true;
   }
 
-  async listRolesAvailableForStore(merchantId: string, storeId: string): Promise<Record<string, unknown>[]> {
+  async updateEmployeeProfileImage(idOrCode: string, profileImageUrl: string | null): Promise<EmployeeEntity | null> {
+    const employee = await this.getEmployeeByIdOrCode(undefined, idOrCode);
+    if (!employee) return null;
+    employee.profileImageUrl = profileImageUrl;
+    employee.updatedAt = new Date();
+    return this.employeeRepo.save(employee);
+  }
+
+  async listRolesAvailableForStore(storeId: string): Promise<Record<string, unknown>[]> {
     const stores = await this.dataSource.query(
       `SELECT s.legacy_store_id AS id,s.id AS "storeUuid",s.merchant_uuid AS "merchantUuid",
+              COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId') AS "merchantId",
               COALESCE(to_jsonb(s)->>'store_type_id',to_jsonb(s)->>'storeType') AS "storeTypeId"
        FROM public.stores s
-       WHERE (s.legacy_store_id::text=$2 OR s.id::text=$2) AND COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId')=$1 LIMIT 1`,
-      [merchantId, storeId],
+       WHERE (s.legacy_store_id::text=$1 OR s.id::text=$1) LIMIT 1`,
+      [storeId],
     );
-    if (!stores[0]) throw new NotFoundException('Store not found for this merchant');
+    if (!stores[0]) throw new NotFoundException('Store not found');
+    const merchantId = stores[0].merchantId;
     const storeTypeValue = stores[0].storeTypeId;
     if (!storeTypeValue) throw new BadRequestException('Store does not have a store type');
     const storeTypes = await this.dataSource.query(

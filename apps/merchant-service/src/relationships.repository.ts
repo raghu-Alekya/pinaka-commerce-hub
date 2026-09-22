@@ -84,7 +84,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const merchant = config.ownerColumn ? await this.resolveMerchantCode(params.merchantId) : undefined;
+    const merchant = config.ownerColumn ? await this.resolveRelationshipMerchant(config, parent, params.merchantId) : undefined;
     let fields: Record<string, unknown> = {};
     if (['create', 'replace', 'patch'].includes(operation)) fields = this.fields(config, body, operation);
     if (config.name === 'RolePermissions' && 'storeId' in fields) {
@@ -104,7 +104,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
     if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
-    const merchant = config.ownerColumn ? await this.resolveMerchantCode(params.merchantId) : undefined;
+    const merchant = config.ownerColumn ? await this.resolveRelationshipMerchant(config, parent, params.merchantId) : undefined;
     const { items, skipExisting } = this.bulkItems(config, body);
     if (!Array.isArray(items) || items.length < 1 || items.length > 100) {
       throw new BadRequestException('items must contain between 1 and 100 mappings');
@@ -892,6 +892,26 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     this.id(identifier, 'merchantId');
     const rows = await this.db.query('SELECT merchant_code AS id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [identifier]);
     if (!rows.length) throw new NotFoundException('Merchant not found');
+    return rows[0].id;
+  }
+
+  private async resolveRelationshipMerchant(config: Relationship, parent: string, identifier?: string): Promise<string> {
+    if (identifier) return this.resolveMerchantCode(identifier);
+    let rows: Array<{ id: string }> = [];
+    if (config.name === 'EmployeeStores') {
+      rows = await this.db.query(
+        `SELECT m.merchant_code AS id FROM public.employees e
+         JOIN public.merchants m ON m.id=e.merchant_id WHERE e.id=$1::uuid LIMIT 1`,
+        [parent],
+      );
+    } else if (config.name === 'EmployeeStoreRoles') {
+      rows = await this.db.query(
+        `SELECT m.merchant_code AS id FROM public.employee_stores es
+         JOIN public.merchants m ON m.id=es.merchant_id WHERE es.id=$1::uuid LIMIT 1`,
+        [parent],
+      );
+    }
+    if (!rows.length) throw new NotFoundException('Parent not found');
     return rows[0].id;
   }
 
