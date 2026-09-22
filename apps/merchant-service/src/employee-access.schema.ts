@@ -245,109 +245,51 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
     `);
     await manager.query(`
       DO $schema$
-      DECLARE item record;
+      DECLARE merchant_type text; store_type text;
       BEGIN
-        IF (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_stores' AND column_name='merchant_id') <> 'uuid'
-           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_stores' AND column_name='store_id') <> 'uuid' THEN
-          ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid, ADD COLUMN IF NOT EXISTS store_uuid_tmp uuid;
-          EXECUTE $sql$
-            UPDATE public.employee_stores es SET merchant_uuid_tmp=m.id,store_uuid_tmp=s.id
-            FROM public.merchants m,public.stores s
-            WHERE (m.merchant_code::text=es.merchant_id::text OR m.id::text=es.merchant_id::text)
-              AND (s.legacy_store_id::text=es.store_id::text OR s.id::text=es.store_id::text)
-              AND (s.merchant_uuid=m.id OR s.merchant_uuid IS NULL)
-          $sql$;
-          IF EXISTS (SELECT 1 FROM public.employee_stores WHERE merchant_uuid_tmp IS NULL OR store_uuid_tmp IS NULL) THEN
-            RAISE EXCEPTION 'Cannot migrate employee_stores: unresolved merchant_id or store_id';
-          END IF;
-          FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='public.employee_store_roles'::regclass AND contype IN ('f','u') LOOP
-            EXECUTE format('ALTER TABLE public.employee_store_roles DROP CONSTRAINT IF EXISTS %I',item.conname);
-          END LOOP;
-          FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='public.employee_stores'::regclass AND contype IN ('f','u') LOOP
-            EXECUTE format('ALTER TABLE public.employee_stores DROP CONSTRAINT IF EXISTS %I',item.conname);
-          END LOOP;
-          ALTER TABLE public.employee_stores DROP COLUMN merchant_id, DROP COLUMN store_id;
-          ALTER TABLE public.employee_stores RENAME COLUMN merchant_uuid_tmp TO merchant_id;
-          ALTER TABLE public.employee_stores RENAME COLUMN store_uuid_tmp TO store_id;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id')
-           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='merchant_id') <> 'uuid'
-           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id') <> 'uuid' THEN
-          ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid;
-          ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS store_uuid_tmp uuid;
-          EXECUTE $sql$
-            UPDATE public.employee_store_roles esr SET merchant_uuid_tmp=es.merchant_id,store_uuid_tmp=es.store_id
-            FROM public.employee_stores es WHERE es.id=esr.employee_store_id
-          $sql$;
-          IF EXISTS (SELECT 1 FROM public.employee_store_roles WHERE merchant_uuid_tmp IS NULL OR store_uuid_tmp IS NULL) THEN
-            RAISE EXCEPTION 'Cannot migrate employee_store_roles: unresolved merchant_id or store_id';
-          END IF;
-          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='merchant_id') THEN
-            ALTER TABLE public.employee_store_roles DROP COLUMN merchant_id;
-          END IF;
-          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id') THEN
-            ALTER TABLE public.employee_store_roles DROP COLUMN store_id;
-          END IF;
-          ALTER TABLE public.employee_store_roles RENAME COLUMN merchant_uuid_tmp TO merchant_id;
-          ALTER TABLE public.employee_store_roles RENAME COLUMN store_uuid_tmp TO store_id;
-        END IF;
+        SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname IN ('merchant_code', 'merchantId', 'merchant_id', 'id') AND NOT a.attisdropped
+          ORDER BY CASE a.attname WHEN 'merchant_code' THEN 0 WHEN 'merchantId' THEN 1 WHEN 'merchant_id' THEN 2 ELSE 3 END
+          LIMIT 1;
+        SELECT format_type(a.atttypid, a.atttypmod) INTO store_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.stores'::regclass AND a.attname IN ('legacy_store_id', 'store_id', 'storeId', 'id') AND NOT a.attisdropped
+          ORDER BY CASE a.attname WHEN 'legacy_store_id' THEN 0 WHEN 'store_id' THEN 1 WHEN 'storeId' THEN 2 ELSE 3 END
+          LIMIT 1;
+
+        IF merchant_type IS NULL THEN merchant_type := 'varchar(100)'; END IF;
+        IF store_type IS NULL THEN store_type := 'varchar(100)'; END IF;
+
+        -- Ensure employee_stores columns
+        EXECUTE format('ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
+        EXECUTE format('ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS store_id %s', store_type);
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS is_primary boolean NOT NULL DEFAULT false;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'ACTIVE';
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_from timestamptz;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_until timestamptz;
+
+        -- Ensure employee_store_roles columns
+        EXECUTE format('ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
+        EXECUTE format('ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS store_id %s', store_type);
+        ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'ACTIVE';
+        ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS effective_from timestamptz;
+        ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS effective_until timestamptz;
+
+        -- Backfill missing merchant_id or store_id in employee_store_roles from employee_stores
+        UPDATE public.employee_store_roles esr
+          SET merchant_id = es.merchant_id, store_id = es.store_id
+          FROM public.employee_stores es
+          WHERE es.id = esr.employee_store_id
+            AND (esr.merchant_id IS NULL OR esr.store_id IS NULL);
+
+        -- Ensure role_permissions columns
+        EXECUTE format('ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
+        EXECUTE format('ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS store_id %s', store_type);
       END $schema$;
-      ALTER TABLE public.employee_stores ALTER COLUMN merchant_id SET NOT NULL,ALTER COLUMN store_id SET NOT NULL;
-      ALTER TABLE public.employee_store_roles ALTER COLUMN merchant_id SET NOT NULL,ALTER COLUMN store_id SET NOT NULL;
+
       CREATE UNIQUE INDEX IF NOT EXISTS employee_stores_employee_store_uq ON public.employee_stores(employee_id,store_id);
-      CREATE UNIQUE INDEX IF NOT EXISTS employee_stores_tenant_assignment_uq ON public.employee_stores(merchant_id,store_id,id);
       CREATE UNIQUE INDEX IF NOT EXISTS employee_store_roles_assignment_role_uq ON public.employee_store_roles(employee_store_id,role_id);
-      DO $schema$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employee_stores_merchant_uuid_fk') THEN
-          ALTER TABLE public.employee_stores ADD CONSTRAINT employee_stores_merchant_uuid_fk FOREIGN KEY(merchant_id) REFERENCES public.merchants(id);
-          ALTER TABLE public.employee_stores ADD CONSTRAINT employee_stores_employee_uuid_fk FOREIGN KEY(employee_id) REFERENCES public.employees(id);
-          ALTER TABLE public.employee_stores ADD CONSTRAINT employee_stores_store_uuid_fk FOREIGN KEY(merchant_id,store_id) REFERENCES public.stores(merchant_uuid,id);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employee_store_roles_assignment_uuid_fk') THEN
-          ALTER TABLE public.employee_store_roles ADD CONSTRAINT employee_store_roles_assignment_uuid_fk FOREIGN KEY(merchant_id,store_id,employee_store_id) REFERENCES public.employee_stores(merchant_id,store_id,id);
-          ALTER TABLE public.employee_store_roles ADD CONSTRAINT employee_store_roles_role_uuid_fk FOREIGN KEY(role_id) REFERENCES public.roles(id);
-        END IF;
-      END $schema$;
-    `);
-    await manager.query(`
-      DO $schema$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='merchant_id') THEN
-          ALTER TABLE public.role_permissions ADD COLUMN merchant_id uuid;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='store_id') THEN
-          ALTER TABLE public.role_permissions ADD COLUMN store_id uuid;
-        END IF;
-        IF (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='merchant_id') <> 'uuid'
-           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='store_id') <> 'uuid' THEN
-          RAISE EXCEPTION 'role_permissions merchant_id and store_id must be migrated to UUID';
-        END IF;
-      END $schema$;
-      UPDATE public.role_permissions rp SET merchant_id=m.id FROM public.roles r
-        JOIN public.merchants m ON m.merchant_code::text=r.merchant_id::text
-        WHERE r.id=rp.role_id AND rp.merchant_id IS NULL;
-      DO $schema$
-      BEGIN
-        -- store_id may still be null on legacy rows; only enforce NOT NULL when fully backfilled.
-        IF NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL) THEN
-          ALTER TABLE public.role_permissions ALTER COLUMN merchant_id SET NOT NULL;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE store_id IS NULL)
-           AND EXISTS (SELECT 1 FROM public.role_permissions) THEN
-          ALTER TABLE public.role_permissions ALTER COLUMN store_id SET NOT NULL;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_merchant_fk')
-           AND NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL) THEN
-          ALTER TABLE public.role_permissions ADD CONSTRAINT role_permissions_merchant_fk
-            FOREIGN KEY(merchant_id) REFERENCES public.merchants(id);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_store_fk')
-           AND NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL OR store_id IS NULL) THEN
-          ALTER TABLE public.role_permissions ADD CONSTRAINT role_permissions_store_fk
-            FOREIGN KEY(merchant_id,store_id) REFERENCES public.stores(merchant_uuid,id);
-        END IF;
-      END $schema$;
     `);
     for (const index of [
       'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary',
