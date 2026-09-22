@@ -217,14 +217,16 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       DECLARE item record;
       BEGIN
         IF (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employees' AND column_name='merchant_id') <> 'uuid' THEN
-          ALTER TABLE public.employees ADD COLUMN merchant_uuid_tmp uuid;
-          UPDATE public.employees e SET merchant_uuid_tmp=m.id FROM public.merchants m
-            WHERE m.merchant_code::text=e.merchant_id::text OR m.id::text=e.merchant_id::text;
+          ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid;
+          EXECUTE $sql$
+            UPDATE public.employees e SET merchant_uuid_tmp=m.id FROM public.merchants m
+            WHERE m.merchant_code::text=e.merchant_id::text OR m.id::text=e.merchant_id::text
+          $sql$;
           IF EXISTS (SELECT 1 FROM public.employees WHERE merchant_uuid_tmp IS NULL) THEN
             RAISE EXCEPTION 'Cannot migrate employees: unresolved merchant_id';
           END IF;
           FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='public.employees'::regclass AND contype IN ('f','u') LOOP
-            EXECUTE format('ALTER TABLE public.employees DROP CONSTRAINT %I',item.conname);
+            EXECUTE format('ALTER TABLE public.employees DROP CONSTRAINT IF EXISTS %I',item.conname);
           END LOOP;
           ALTER TABLE public.employees DROP COLUMN merchant_id;
           ALTER TABLE public.employees RENAME COLUMN merchant_uuid_tmp TO merchant_id;
@@ -247,35 +249,45 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       BEGIN
         IF (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_stores' AND column_name='merchant_id') <> 'uuid'
            OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_stores' AND column_name='store_id') <> 'uuid' THEN
-          ALTER TABLE public.employee_stores ADD COLUMN merchant_uuid_tmp uuid, ADD COLUMN store_uuid_tmp uuid;
-          UPDATE public.employee_stores es SET merchant_uuid_tmp=m.id,store_uuid_tmp=s.id
+          ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid, ADD COLUMN IF NOT EXISTS store_uuid_tmp uuid;
+          EXECUTE $sql$
+            UPDATE public.employee_stores es SET merchant_uuid_tmp=m.id,store_uuid_tmp=s.id
             FROM public.merchants m,public.stores s
-            WHERE m.merchant_code::text=es.merchant_id::text
+            WHERE (m.merchant_code::text=es.merchant_id::text OR m.id::text=es.merchant_id::text)
               AND (s.legacy_store_id::text=es.store_id::text OR s.id::text=es.store_id::text)
-              AND s.merchant_uuid=m.id;
+              AND (s.merchant_uuid=m.id OR s.merchant_uuid IS NULL)
+          $sql$;
           IF EXISTS (SELECT 1 FROM public.employee_stores WHERE merchant_uuid_tmp IS NULL OR store_uuid_tmp IS NULL) THEN
             RAISE EXCEPTION 'Cannot migrate employee_stores: unresolved merchant_id or store_id';
           END IF;
           FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='public.employee_store_roles'::regclass AND contype IN ('f','u') LOOP
-            EXECUTE format('ALTER TABLE public.employee_store_roles DROP CONSTRAINT %I',item.conname);
+            EXECUTE format('ALTER TABLE public.employee_store_roles DROP CONSTRAINT IF EXISTS %I',item.conname);
           END LOOP;
           FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='public.employee_stores'::regclass AND contype IN ('f','u') LOOP
-            EXECUTE format('ALTER TABLE public.employee_stores DROP CONSTRAINT %I',item.conname);
+            EXECUTE format('ALTER TABLE public.employee_stores DROP CONSTRAINT IF EXISTS %I',item.conname);
           END LOOP;
           ALTER TABLE public.employee_stores DROP COLUMN merchant_id, DROP COLUMN store_id;
           ALTER TABLE public.employee_stores RENAME COLUMN merchant_uuid_tmp TO merchant_id;
           ALTER TABLE public.employee_stores RENAME COLUMN store_uuid_tmp TO store_id;
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id')
-           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='merchant_id') <> 'uuid' THEN
+           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='merchant_id') <> 'uuid'
+           OR (SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id') <> 'uuid' THEN
           ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid;
           ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS store_uuid_tmp uuid;
-          UPDATE public.employee_store_roles esr SET merchant_uuid_tmp=es.merchant_id,store_uuid_tmp=es.store_id
-            FROM public.employee_stores es WHERE es.id=esr.employee_store_id;
+          EXECUTE $sql$
+            UPDATE public.employee_store_roles esr SET merchant_uuid_tmp=es.merchant_id,store_uuid_tmp=es.store_id
+            FROM public.employee_stores es WHERE es.id=esr.employee_store_id
+          $sql$;
           IF EXISTS (SELECT 1 FROM public.employee_store_roles WHERE merchant_uuid_tmp IS NULL OR store_uuid_tmp IS NULL) THEN
             RAISE EXCEPTION 'Cannot migrate employee_store_roles: unresolved merchant_id or store_id';
           END IF;
-          ALTER TABLE public.employee_store_roles DROP COLUMN merchant_id;
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='merchant_id') THEN
+            ALTER TABLE public.employee_store_roles DROP COLUMN merchant_id;
+          END IF;
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='employee_store_roles' AND column_name='store_id') THEN
+            ALTER TABLE public.employee_store_roles DROP COLUMN store_id;
+          END IF;
           ALTER TABLE public.employee_store_roles RENAME COLUMN merchant_uuid_tmp TO merchant_id;
           ALTER TABLE public.employee_store_roles RENAME COLUMN store_uuid_tmp TO store_id;
         END IF;
