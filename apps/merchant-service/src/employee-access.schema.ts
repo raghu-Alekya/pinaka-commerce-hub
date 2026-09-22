@@ -4,16 +4,20 @@ import { DataSource, EntityManager } from 'typeorm';
 export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {
     await manager.query('SELECT pg_advisory_xact_lock(724621, 1)');
+    // Resolve column metadata without INTO STRICT — missing optional columns used to crash boot (502).
+    await ensureStoreIdentityColumns(manager);
     await manager.query(`
       DO $schema$
-      DECLARE merchant_type text; store_type text; store_owner text; ddl text;
+      DECLARE merchant_type text; ddl text;
       BEGIN
-        SELECT format_type(atttypid, atttypmod) INTO STRICT merchant_type
-          FROM pg_attribute WHERE attrelid='public.merchants'::regclass AND attname='merchant_code' AND NOT attisdropped;
-        SELECT format_type(atttypid, atttypmod) INTO STRICT store_type
-          FROM pg_attribute WHERE attrelid='public.stores'::regclass AND attname='legacy_store_id' AND NOT attisdropped;
-        SELECT quote_ident(attname) INTO STRICT store_owner FROM pg_attribute
-          WHERE attrelid='public.stores'::regclass AND attname IN ('merchant_id','merchantId') AND NOT attisdropped;
+        SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.merchants'::regclass
+            AND a.attname = 'merchant_code'
+            AND NOT a.attisdropped;
+        IF merchant_type IS NULL THEN
+          RAISE EXCEPTION 'public.merchants.merchant_code is required for employee-access schema';
+        END IF;
         ddl := $ddl$
           CREATE TABLE IF NOT EXISTS public.role_templates (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role_code varchar(50) NOT NULL UNIQUE,
@@ -91,12 +95,28 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       DO $schema$
       DECLARE merchant_type text; store_type text; store_owner text; ddl text;
       BEGIN
-        SELECT format_type(atttypid, atttypmod) INTO STRICT merchant_type FROM pg_attribute
-          WHERE attrelid='public.merchants'::regclass AND attname='merchant_code' AND NOT attisdropped;
-        SELECT format_type(atttypid, atttypmod) INTO STRICT store_type FROM pg_attribute
-          WHERE attrelid='public.stores'::regclass AND attname='legacy_store_id' AND NOT attisdropped;
-        SELECT quote_ident(attname) INTO STRICT store_owner FROM pg_attribute
-          WHERE attrelid='public.stores'::regclass AND attname IN ('merchant_id','merchantId') AND NOT attisdropped;
+        SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname = 'merchant_code' AND NOT a.attisdropped;
+        SELECT format_type(a.atttypid, a.atttypmod) INTO store_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.stores'::regclass AND a.attname = 'legacy_store_id' AND NOT a.attisdropped;
+        SELECT quote_ident(a.attname) INTO store_owner
+          FROM pg_attribute a
+          WHERE a.attrelid = 'public.stores'::regclass
+            AND a.attname IN ('merchant_id', 'merchantId')
+            AND NOT a.attisdropped
+          ORDER BY CASE a.attname WHEN 'merchant_id' THEN 0 ELSE 1 END
+          LIMIT 1;
+        IF merchant_type IS NULL THEN
+          RAISE EXCEPTION 'public.merchants.merchant_code is required for employee-access schema';
+        END IF;
+        IF store_type IS NULL THEN
+          RAISE EXCEPTION 'public.stores.legacy_store_id is required for employee-access schema';
+        END IF;
+        IF store_owner IS NULL THEN
+          RAISE EXCEPTION 'public.stores.merchant_id (or "merchantId") is required for employee-access schema';
+        END IF;
         CREATE UNIQUE INDEX IF NOT EXISTS pch_employees_tenant_id ON public.employees(merchant_id,id);
         CREATE UNIQUE INDEX IF NOT EXISTS pch_roles_tenant_id ON public.roles(merchant_id,id);
         CREATE UNIQUE INDEX IF NOT EXISTS pch_roles_tenant_code ON public.roles(merchant_id,role_code);
@@ -288,6 +308,87 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       'CREATE INDEX IF NOT EXISTS pch_role_template_permissions_permission ON public.role_template_permissions(permission_id)',
     ]) await manager.query(index);
   });
+}
+
+/** Make stores/merchants column names match what employee-access DDL expects. */
+async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void> {
+  const storeColumns: string[] = (
+    await manager.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'stores'`,
+    )
+  ).map((row: { column_name: string }) => row.column_name);
+
+  if (!storeColumns.length) {
+    throw new Error('public.stores is missing; start merchant-service after merchants/stores tables exist');
+  }
+
+  if (!storeColumns.includes('legacy_store_id')) {
+    for (const candidate of ['store_id', 'storeId', 'store_code', 'storeCode']) {
+      if (storeColumns.includes(candidate)) {
+        await manager.query(
+          `ALTER TABLE public.stores RENAME COLUMN "${candidate}" TO legacy_store_id`,
+        );
+        storeColumns.splice(storeColumns.indexOf(candidate), 1, 'legacy_store_id');
+        break;
+      }
+    }
+  }
+
+  if (!storeColumns.includes('legacy_store_id')) {
+    // Older DBs used a varchar business id as primary "id" while uuid lived elsewhere.
+    const idMeta = await manager.query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'stores' AND column_name = 'id'`,
+    );
+    if (idMeta[0]?.data_type === 'character varying' || idMeta[0]?.data_type === 'text') {
+      await manager.query(`ALTER TABLE public.stores RENAME COLUMN id TO legacy_store_id`);
+      await manager.query(
+        `ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid()`,
+      );
+      await manager.query(`UPDATE public.stores SET id = gen_random_uuid() WHERE id IS NULL`);
+      storeColumns.push('legacy_store_id');
+    } else {
+      await manager.query(
+        `ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS legacy_store_id varchar(100)`,
+      );
+      await manager.query(
+        `UPDATE public.stores SET legacy_store_id = COALESCE(NULLIF(legacy_store_id, ''), id::text)
+         WHERE legacy_store_id IS NULL OR legacy_store_id = ''`,
+      );
+      storeColumns.push('legacy_store_id');
+    }
+  }
+
+  if (!storeColumns.includes('merchant_id') && !storeColumns.includes('merchantId')) {
+    throw new Error(
+      'public.stores is missing merchant_id / merchantId; cannot install employee-access schema',
+    );
+  }
+
+  const merchantColumns: string[] = (
+    await manager.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'merchants'`,
+    )
+  ).map((row: { column_name: string }) => row.column_name);
+
+  if (!merchantColumns.includes('merchant_code')) {
+    for (const candidate of ['merchantCode', 'merchant_id', 'id']) {
+      if (!merchantColumns.includes(candidate)) continue;
+      if (candidate === 'id') {
+        const idMeta = await manager.query(
+          `SELECT data_type FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
+        );
+        if (idMeta[0]?.data_type === 'uuid') continue;
+      }
+      await manager.query(
+        `ALTER TABLE public.merchants RENAME COLUMN "${candidate}" TO merchant_code`,
+      );
+      break;
+    }
+  }
 }
 
 async function renameLegacyCamelCaseColumns(manager: EntityManager, columns: Record<string, string[]>): Promise<void> {
