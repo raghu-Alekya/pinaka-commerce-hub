@@ -171,15 +171,44 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       role_permissions: ['roleId', 'permissionId', 'createdAt', 'updatedAt'],
     });
     await manager.query(`
-      ALTER TABLE public.merchants ALTER COLUMN id SET DEFAULT gen_random_uuid(), ALTER COLUMN id SET NOT NULL;
+      DO $schema$
+      BEGIN
+        -- merchants.id is a generated uuid separate from merchant_code PK; older DBs may lack it.
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'
+        ) THEN
+          ALTER TABLE public.merchants ADD COLUMN id uuid DEFAULT gen_random_uuid();
+        END IF;
+        UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
+        ALTER TABLE public.merchants ALTER COLUMN id SET DEFAULT gen_random_uuid();
+        IF NOT EXISTS (SELECT 1 FROM public.merchants WHERE id IS NULL) THEN
+          ALTER TABLE public.merchants ALTER COLUMN id SET NOT NULL;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'stores' AND column_name = 'id'
+        ) THEN
+          ALTER TABLE public.stores ADD COLUMN id uuid DEFAULT gen_random_uuid();
+        END IF;
+        UPDATE public.stores SET id = gen_random_uuid() WHERE id IS NULL;
+        ALTER TABLE public.stores ALTER COLUMN id SET DEFAULT gen_random_uuid();
+        IF NOT EXISTS (SELECT 1 FROM public.stores WHERE id IS NULL) THEN
+          ALTER TABLE public.stores ALTER COLUMN id SET NOT NULL;
+        END IF;
+
+        ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS merchant_uuid uuid;
+        UPDATE public.stores s SET merchant_uuid = m.id
+          FROM public.merchants m
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = m.merchant_code::text
+            AND s.merchant_uuid IS NULL;
+        IF EXISTS (SELECT 1 FROM public.stores WHERE merchant_uuid IS NULL) THEN
+          RAISE EXCEPTION 'Cannot set stores.merchant_uuid NOT NULL: unresolved merchant mapping';
+        END IF;
+        ALTER TABLE public.stores ALTER COLUMN merchant_uuid SET NOT NULL;
+      END $schema$;
       CREATE UNIQUE INDEX IF NOT EXISTS merchants_generated_id_uq ON public.merchants(id);
-      ALTER TABLE public.stores
-        ADD COLUMN IF NOT EXISTS merchant_uuid uuid;
-      ALTER TABLE public.stores ALTER COLUMN id SET DEFAULT gen_random_uuid();
-      UPDATE public.stores s SET merchant_uuid=m.id FROM public.merchants m
-        WHERE COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId')=m.merchant_code::text
-          AND s.merchant_uuid IS NULL;
-      ALTER TABLE public.stores ALTER COLUMN id SET NOT NULL, ALTER COLUMN merchant_uuid SET NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS stores_generated_id_uq ON public.stores(id);
       CREATE UNIQUE INDEX IF NOT EXISTS stores_merchant_uuid_uq ON public.stores(merchant_uuid,id);
     `);
@@ -286,14 +315,23 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       UPDATE public.role_permissions rp SET merchant_id=m.id FROM public.roles r
         JOIN public.merchants m ON m.merchant_code::text=r.merchant_id::text
         WHERE r.id=rp.role_id AND rp.merchant_id IS NULL;
-      ALTER TABLE public.role_permissions ALTER COLUMN merchant_id SET NOT NULL, ALTER COLUMN store_id SET NOT NULL;
       DO $schema$
       BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_merchant_fk') THEN
+        -- store_id may still be null on legacy rows; only enforce NOT NULL when fully backfilled.
+        IF NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL) THEN
+          ALTER TABLE public.role_permissions ALTER COLUMN merchant_id SET NOT NULL;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE store_id IS NULL)
+           AND EXISTS (SELECT 1 FROM public.role_permissions) THEN
+          ALTER TABLE public.role_permissions ALTER COLUMN store_id SET NOT NULL;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_merchant_fk')
+           AND NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL) THEN
           ALTER TABLE public.role_permissions ADD CONSTRAINT role_permissions_merchant_fk
             FOREIGN KEY(merchant_id) REFERENCES public.merchants(id);
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_store_fk') THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='role_permissions_store_fk')
+           AND NOT EXISTS (SELECT 1 FROM public.role_permissions WHERE merchant_id IS NULL OR store_id IS NULL) THEN
           ALTER TABLE public.role_permissions ADD CONSTRAINT role_permissions_store_fk
             FOREIGN KEY(merchant_id,store_id) REFERENCES public.stores(merchant_uuid,id);
         END IF;
