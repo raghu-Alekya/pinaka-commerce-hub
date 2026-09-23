@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
 import { ensureEmployeeAccessSchema } from './employee-access.schema';
+import { ensureStoreRoleTemplateSchema } from './store-role-template.schema';
 import { ensurePlanSchema } from './plan.schema';
 import { FeatureEntity, FeatureStatus } from './entities/feature.entity';
 import { PermissionEntity, PermissionStatus } from './entities/permission.entity';
@@ -207,6 +208,7 @@ export class MerchantRepository implements OnModuleInit {
     // Repository-managed foreign keys depend on indexes unknown to TypeORM.
     // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
     await ensureEmployeeAccessSchema(this.dataSource);
+    await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureOnboardingSchema(this.dataSource);
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
@@ -1804,6 +1806,177 @@ export class MerchantRepository implements OnModuleInit {
     const where: Record<string, string> = { merchantId: merchantUuid };
     if (status) where.status = status.toUpperCase();
     return this.merchantRoleTemplateRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  /** Master: role templates linked to a store type via store_type_role_templates. */
+  async listRoleTemplatesForStoreType(
+    storeTypeIdOrCode: string,
+    options: { status?: string; defaultEnabled?: boolean } = {},
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    const storeTypes = await this.dataSource.query(
+      `SELECT st.id FROM public.store_types st
+       WHERE st.id::text=$1
+          OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1)
+       LIMIT 1`,
+      [storeTypeIdOrCode],
+    );
+    if (!storeTypes[0]) throw new NotFoundException(`Store type '${storeTypeIdOrCode}' not found`);
+
+    const params: unknown[] = [storeTypes[0].id];
+    const filters: string[] = ['mapping.store_type_id = $1'];
+    if (options.status) {
+      params.push(options.status.toUpperCase());
+      filters.push(`rt.status = $${params.length}`);
+    }
+    if (options.defaultEnabled !== undefined) {
+      params.push(options.defaultEnabled);
+      filters.push(`mapping.default_enabled = $${params.length}`);
+    }
+
+    return this.dataSource.query(
+      `SELECT rt.id, rt.role_code AS "roleCode", rt.name, rt.description,
+              rt.scope_type AS "scopeType", rt.status,
+              mapping.id AS "mappingId",
+              mapping.default_enabled AS "defaultEnabled",
+              mapping.required,
+              mapping.created_at AS "mappedAt"
+       FROM public.store_type_role_templates mapping
+       JOIN public.role_templates rt ON rt.id = mapping.role_template_id
+       WHERE ${filters.join(' AND ')}
+       ORDER BY rt.name`,
+      params,
+    );
+  }
+
+  /** Tenant: role templates saved for a merchant store. */
+  async listStoreRoleTemplates(merchantId: string, storeId: string): Promise<Record<string, unknown>[]> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    return this.dataSource.query(
+      `SELECT srt.id, srt.merchant_id AS "merchantId", srt.store_id AS "storeId",
+              srt.role_template_id AS "roleTemplateId", srt.enabled, srt.status,
+              rt.role_code AS "roleCode", rt.name, rt.description,
+              rt.scope_type AS "scopeType", rt.status AS "roleTemplateStatus",
+              srt.created_at AS "createdAt", srt.updated_at AS "updatedAt"
+       FROM public.store_role_templates srt
+       JOIN public.role_templates rt ON rt.id = srt.role_template_id
+       WHERE srt.merchant_id = $1::uuid AND srt.store_id = $2::uuid AND srt.status = 'ACTIVE'
+       ORDER BY rt.name`,
+      [merchantUuid, storeUuid],
+    );
+  }
+
+  /**
+   * Replace the set of role templates for a merchant store.
+   * Each template must be mapped to the store's store type in store_type_role_templates.
+   * Also ensures a merchant `roles` row exists (source_role_template_id) for workforce assignment.
+   */
+  async saveStoreRoleTemplates(
+    merchantId: string,
+    storeId: string,
+    body: { roleTemplateIds: string[]; enabled?: boolean },
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    const { merchantCode, merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const enabled = body.enabled !== false;
+    const ids = [...new Set((body.roleTemplateIds || []).map(id => id.trim().toLowerCase()))];
+
+    const stores = await this.dataSource.query(
+      `SELECT COALESCE(to_jsonb(s)->>'store_type_id', to_jsonb(s)->>'storeType') AS "storeType"
+       FROM public.stores s WHERE s.id = $1::uuid LIMIT 1`,
+      [storeUuid],
+    );
+    const storeTypeValue = stores[0]?.storeType;
+    if (!storeTypeValue) throw new BadRequestException('Store does not have a store type');
+
+    const storeTypes = await this.dataSource.query(
+      `SELECT st.id FROM public.store_types st
+       WHERE st.id::text=$1
+          OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1)
+       LIMIT 1`,
+      [String(storeTypeValue)],
+    );
+    if (!storeTypes[0]) throw new BadRequestException(`Store type '${storeTypeValue}' is not configured`);
+    const storeTypeId = String(storeTypes[0].id);
+
+    if (ids.length) {
+      const allowed = await this.dataSource.query(
+        `SELECT role_template_id::text AS id
+         FROM public.store_type_role_templates
+         WHERE store_type_id = $1::uuid AND role_template_id = ANY($2::uuid[])`,
+        [storeTypeId, ids],
+      );
+      const allowedSet = new Set(allowed.map((row: { id: string }) => row.id.toLowerCase()));
+      const invalid = ids.filter(id => !allowedSet.has(id));
+      if (invalid.length) {
+        throw new BadRequestException(
+          `Role template(s) not mapped to this store type: ${invalid.join(', ')}`,
+        );
+      }
+    }
+
+    await this.dataSource.transaction(async manager => {
+      await manager.query(
+        `DELETE FROM public.store_role_templates
+         WHERE merchant_id = $1::uuid AND store_id = $2::uuid`,
+        [merchantUuid, storeUuid],
+      );
+
+      for (const roleTemplateId of ids) {
+        const templates = await manager.query(
+          `SELECT id, role_code AS "roleCode", name, description, scope_type AS "scopeType", status
+           FROM public.role_templates WHERE id = $1::uuid LIMIT 1`,
+          [roleTemplateId],
+        );
+        if (!templates[0] || templates[0].status !== 'ACTIVE') {
+          throw new BadRequestException(`Role template '${roleTemplateId}' is missing or inactive`);
+        }
+
+        await manager.query(
+          `INSERT INTO public.store_role_templates
+             (merchant_id, store_id, role_template_id, enabled, status)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'ACTIVE')`,
+          [merchantUuid, storeUuid, roleTemplateId, enabled],
+        );
+
+        // Ensure merchant role exists so employees can be assigned later.
+        const existingRole = await manager.query(
+          `SELECT id FROM public.roles
+           WHERE merchant_id = $1 AND source_role_template_id = $2::uuid LIMIT 1`,
+          [merchantCode, roleTemplateId],
+        );
+        if (!existingRole[0]) {
+          await manager.query(
+            `INSERT INTO public.roles
+               (merchant_id, source_role_template_id, role_code, name, description, scope_type, is_custom, status)
+             VALUES ($1, $2::uuid, $3, $4, $5, $6, false, 'ACTIVE')
+             ON CONFLICT (merchant_id, role_code) DO UPDATE
+               SET source_role_template_id = EXCLUDED.source_role_template_id,
+                   name = EXCLUDED.name,
+                   description = EXCLUDED.description,
+                   status = 'ACTIVE',
+                   updated_at = now()`,
+            [
+              merchantCode,
+              roleTemplateId,
+              templates[0].roleCode,
+              templates[0].name,
+              templates[0].description || '',
+              templates[0].scopeType || 'STORE',
+            ],
+          );
+        }
+      }
+    });
+
+    return this.listStoreRoleTemplates(merchantId, storeId);
   }
 
   async getMerchantRoleTemplate(merchantId: string, idOrCode: string): Promise<MerchantRoleTemplateEntity | null> {

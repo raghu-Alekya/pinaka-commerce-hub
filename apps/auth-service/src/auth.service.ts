@@ -30,8 +30,11 @@ import { UserRepository } from './user.repository';
 import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 
 const scrypt = promisify(scryptCallback);
-const TOKEN_LIFETIME_SECONDS = 3600;
-const REFRESH_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
+/** Access JWT lifetime (default 15 minutes). Override with AUTH_ACCESS_TOKEN_SECONDS. */
+const TOKEN_LIFETIME_SECONDS = Number(process.env.AUTH_ACCESS_TOKEN_SECONDS) || 60 * 60;
+/** Refresh JWT lifetime (default 7 days). Override with AUTH_REFRESH_TOKEN_SECONDS. */
+const REFRESH_TOKEN_LIFETIME_SECONDS =
+  Number(process.env.AUTH_REFRESH_TOKEN_SECONDS) || 7 * 24 * 60 * 60;
 
 @Injectable()
 export class AuthService {
@@ -45,7 +48,7 @@ export class AuthService {
       dto.email,
       await this.hashPassword(dto.password),
     );
-    return { ...(await this.createSession(user)), account };
+    return { ...this.toAuthResponse(await this.createSession(user)), account };
   }
 
   async login(dto: LoginDto) {
@@ -57,7 +60,7 @@ export class AuthService {
     ) {
       throw new UnauthorizedException('Invalid email or password');
     }
-    return this.createSession(user);
+    return this.toAuthResponse(await this.createSession(user));
   }
 
   async loginWithGoogle(dto: GoogleLoginDto) {
@@ -95,7 +98,7 @@ export class AuthService {
       ));
     if (user.status !== UserStatus.ACTIVE)
       throw new UnauthorizedException('Account is not active');
-    return this.createSession(user);
+    return this.toAuthResponse(await this.createSession(user));
   }
 
   async inviteUser(dto: CreateUserDto, accountId: string | null = null) {
@@ -139,10 +142,12 @@ export class AuthService {
     ) {
       throw new BadRequestException('The link is invalid or has expired');
     }
-    return this.createSession(
-      await this.users.activateWithPassword(
-        user,
-        await this.hashPassword(dto.password),
+    return this.toAuthResponse(
+      await this.createSession(
+        await this.users.activateWithPassword(
+          user,
+          await this.hashPassword(dto.password),
+        ),
       ),
     );
   }
@@ -185,8 +190,7 @@ export class AuthService {
     await this.users.revokeSessionsForRefreshToken(tokenId);
     const session = await this.createSession(user);
     await this.users.revokeRefreshToken(tokenId, session.refreshTokenId);
-    const { refreshTokenId: _refreshTokenId, ...result } = session;
-    return result;
+    return this.toAuthResponse(session);
   }
 
   async logout(dto: RefreshTokenDto, authorization?: string): Promise<void> {
@@ -335,6 +339,12 @@ export class AuthService {
       user: this.toPublicUser(user),
       refreshTokenId,
     };
+  }
+
+  /** Public auth payload — never expose internal refreshTokenId. */
+  private toAuthResponse(session: Awaited<ReturnType<AuthService['createSession']>>) {
+    const { refreshTokenId: _refreshTokenId, ...result } = session;
+    return result;
   }
 
   private createActionToken(lifetimeSeconds: number) {
