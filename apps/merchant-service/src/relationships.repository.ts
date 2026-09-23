@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { DataSource, EntityManager } from 'typeorm';
 import { postgresConnectionOptions } from '@pinaka-delivery-hub/database';
 import { isISO8601 } from 'class-validator';
@@ -78,17 +79,48 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     return ['id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
       ...(config.tenantColumn ? [`${quoteIdent(config.tenantField || 'merchantId')} AS ${quoteIdent('merchantId')}`] : []),
       ...(config.name === 'EmployeeStoreRoles' ? [`${quoteIdent('store_id')} AS ${quoteIdent('storeId')}`] : []),
+      ...(config.name === 'EmployeeStores' ? ['(login_pin_hash IS NOT NULL) AS "hasLoginPin"'] : []),
       ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
       `${quoteIdent(config.createdColumn || 'createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent(config.updatedColumn || 'updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
+  }
+
+  private hashStoreLoginPin(value: unknown): string {
+    if (typeof value !== 'string' || !/^\d{6}$/.test(value)) {
+      throw new BadRequestException('loginPin must be a 6-digit PIN');
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    return `${salt}:${crypto.scryptSync(value, salt, 32).toString('hex')}`;
+  }
+
+  private takeStoreLoginPin(body: unknown, required: boolean): { body: unknown; loginPinHash?: string } {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      if (required) throw new BadRequestException('loginPin is required for a store employee assignment');
+      return { body };
+    }
+    const payload = { ...(body as Record<string, unknown>) };
+    if (!('loginPin' in payload)) {
+      if (required) throw new BadRequestException('loginPin is required for a store employee assignment');
+      return { body: payload };
+    }
+    const loginPinHash = this.hashStoreLoginPin(payload.loginPin);
+    delete payload.loginPin;
+    return { body: payload, loginPinHash };
   }
 
   async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
     const merchant = config.ownerColumn ? await this.resolveRelationshipMerchant(config, parent, params.merchantId) : undefined;
     let fields: Record<string, unknown> = {};
-    if (['create', 'replace', 'patch'].includes(operation)) fields = this.fields(config, body, operation);
-    if (config.name === 'RolePermissions' && 'storeId' in fields) {
-      fields.storeId = this.id(fields.storeId, 'storeId', true);
+    if (config.name === 'EmployeeStores' && ['create', 'replace', 'patch'].includes(operation)) {
+      const extracted = this.takeStoreLoginPin(body, false);
+      body = extracted.body;
+      if (extracted.loginPinHash) fields.__loginPinHash = extracted.loginPinHash;
+    }
+    if (['create', 'replace', 'patch'].includes(operation)) fields = { ...fields, ...this.fields(config, body, operation) };
+    if (config.name === 'RolePermissions' && fields.storeId) {
+      fields.storeId = this.id(String(fields.storeId), 'storeId');
+    } else if (config.name === 'RolePermissions') {
+      delete fields.storeId;
     }
     if (operation === 'create') child = this.id((body as Record<string, unknown>)[config.childKey], config.childKey, config.childUuid);
     else if (operation !== 'list') child = this.id(child, config.childKey, config.childUuid);
@@ -111,8 +143,16 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     }
     const seen = new Set<string>();
     const prepared = items.map(item => {
-      const fields = this.fields(config, item, 'create');
-      if (config.name === 'RolePermissions') fields.storeId = this.id(fields.storeId, 'storeId', true);
+      let payload: unknown = item;
+      const fields: Record<string, unknown> = {};
+      if (config.name === 'EmployeeStores') {
+        const extracted = this.takeStoreLoginPin(item, false);
+        payload = extracted.body;
+        if (extracted.loginPinHash) fields.__loginPinHash = extracted.loginPinHash;
+      }
+      Object.assign(fields, this.fields(config, payload, 'create'));
+      if (config.name === 'RolePermissions' && fields.storeId) fields.storeId = this.id(String(fields.storeId), 'storeId');
+      else if (config.name === 'RolePermissions') delete fields.storeId;
       const child = this.id(item[config.childKey], config.childKey, config.childUuid);
       const normalized = config.childUuid ? child.toLowerCase() : child;
       if (seen.has(normalized)) throw new BadRequestException(`Duplicate ${config.childKey} in items`);
@@ -845,14 +885,10 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (operation === 'create') {
       let tenantValue = merchantUuid || merchant;
       if (config.name === 'RolePermissions') {
-        const merchants = await manager.query('SELECT uuid FROM public.merchants WHERE id::text=$1 LIMIT 1', [merchant]);
-        if (!merchants.length) throw new NotFoundException('Merchant not found in the requested scope');
-        tenantValue = merchants[0].uuid;
-        const stores = await manager.query(
-          'SELECT 1 FROM public.stores WHERE merchant_uuid=$1::uuid AND uuid=$2::uuid FOR SHARE',
-          [tenantValue, fields.storeId],
-        );
-        if (!stores.length) throw new NotFoundException('Store UUID not found for this merchant');
+        tenantValue = await this.resolveMerchantUuid(merchant!);
+        if (fields.storeId) {
+          fields.storeId = await this.resolveStoreUuid(String(fields.storeId), merchant!);
+        }
       }
       let childOwner = config.childOwnerColumn || 'merchantId';
       if (config.name === 'EmployeeStores') childOwner = 'merchant_uuid';
@@ -861,13 +897,19 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${scopeChild ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, scopeChild ? [child, childOwnerValue] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
       this.dates(fields);
+      const loginPinHash = fields.__loginPinHash;
+      delete fields.__loginPinHash;
       const entries = Object.entries(fields);
       const assignmentStore = config.name === 'EmployeeStoreRoles'
         ? (await manager.query('SELECT store_id FROM public.employee_stores WHERE id=$1', [parent]))[0]?.store_id : undefined;
       const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []),
-        ...(config.name === 'EmployeeStoreRoles' ? ['store_id'] : []), ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
+        ...(config.name === 'EmployeeStoreRoles' ? ['store_id'] : []),
+        ...(config.name === 'EmployeeStores' && loginPinHash ? ['login_pin_hash'] : []),
+        ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
       const values = [parent, child, ...(config.tenantColumn ? [tenantValue] : []),
-        ...(config.name === 'EmployeeStoreRoles' ? [assignmentStore] : []), ...entries.map(([,value]) => value)];
+        ...(config.name === 'EmployeeStoreRoles' ? [assignmentStore] : []),
+        ...(config.name === 'EmployeeStores' && loginPinHash ? [loginPinHash] : []),
+        ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       return { success: true, item };
     }
@@ -880,11 +922,14 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       return { success: true, message: 'Relationship removed' };
     }
     this.dates({ ...existing, ...fields });
+    const loginPinHash = fields.__loginPinHash;
+    delete fields.__loginPinHash;
     const entries = Object.entries(fields);
     const assignments = entries.map(([key], i) => `${quoteIdent(config.fields[key].column)} = $${i+3}`);
+    if (loginPinHash) assignments.push(`${quoteIdent('login_pin_hash')} = $${entries.length + 3}`);
     if (config.timestamps) assignments.push(`${quoteIdent(config.updatedColumn || 'updatedAt')} = clock_timestamp()`);
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
-    const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value)]);
+    const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value), ...(loginPinHash ? [loginPinHash] : [])]);
     return { success: true, item: rows[0] };
   }
 
