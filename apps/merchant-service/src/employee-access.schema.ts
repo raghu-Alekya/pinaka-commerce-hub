@@ -371,7 +371,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           ALTER TABLE public.role_permissions ADD COLUMN merchant_id uuid;
         ELSIF merchant_udt <> 'uuid' THEN
           ALTER TABLE public.role_permissions ADD COLUMN merchant_id_uuid uuid;
-          UPDATE public.role_permissions rp SET merchant_id_uuid = m.id
+          UPDATE public.role_permissions rp SET merchant_id_uuid = m.id::uuid
             FROM public.merchants m
             WHERE rp.merchant_id IS NOT NULL
               AND rp.merchant_id::text IN (m.id::text, m.merchant_code::text);
@@ -386,7 +386,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           ALTER TABLE public.role_permissions ADD COLUMN store_id uuid;
         ELSIF store_udt <> 'uuid' THEN
           ALTER TABLE public.role_permissions ADD COLUMN store_id_uuid uuid;
-          UPDATE public.role_permissions rp SET store_id_uuid = s.id
+          UPDATE public.role_permissions rp SET store_id_uuid = s.id::uuid
             FROM public.stores s
             WHERE rp.store_id IS NOT NULL
               AND rp.store_id::text IN (s.id::text, COALESCE(s.legacy_store_id::text, ''));
@@ -469,12 +469,12 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
     }
   }
 
+  const idMeta = await manager.query(
+    `SELECT data_type FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'stores' AND column_name = 'id'`,
+  );
+
   if (!storeColumns.includes('legacy_store_id')) {
-    // Older DBs used a varchar business id as primary "id" while uuid lived elsewhere.
-    const idMeta = await manager.query(
-      `SELECT data_type FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'stores' AND column_name = 'id'`,
-    );
     if (idMeta[0]?.data_type === 'character varying' || idMeta[0]?.data_type === 'text') {
       await manager.query(`ALTER TABLE public.stores RENAME COLUMN id TO legacy_store_id`);
       await manager.query(
@@ -491,6 +491,19 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
          WHERE legacy_store_id IS NULL OR legacy_store_id = ''`,
       );
       storeColumns.push('legacy_store_id');
+    }
+  } else {
+    // legacy_store_id exists, check if id is still varchar
+    if (idMeta[0]?.data_type === 'character varying' || idMeta[0]?.data_type === 'text') {
+      await manager.query(
+        `UPDATE public.stores SET legacy_store_id = COALESCE(NULLIF(legacy_store_id, ''), id::text)
+         WHERE legacy_store_id IS NULL OR legacy_store_id = ''`,
+      );
+      await manager.query(`ALTER TABLE public.stores DROP COLUMN id`);
+      await manager.query(
+        `ALTER TABLE public.stores ADD COLUMN id uuid DEFAULT gen_random_uuid()`,
+      );
+      await manager.query(`UPDATE public.stores SET id = gen_random_uuid() WHERE id IS NULL`);
     }
   }
 
@@ -511,17 +524,34 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
     for (const candidate of ['merchantCode', 'merchant_id', 'id']) {
       if (!merchantColumns.includes(candidate)) continue;
       if (candidate === 'id') {
-        const idMeta = await manager.query(
+        const mIdMeta = await manager.query(
           `SELECT data_type FROM information_schema.columns
            WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
         );
-        if (idMeta[0]?.data_type === 'uuid') continue;
+        if (mIdMeta[0]?.data_type === 'uuid') continue;
       }
       await manager.query(
         `ALTER TABLE public.merchants RENAME COLUMN "${candidate}" TO merchant_code`,
       );
+      merchantColumns.push('merchant_code');
       break;
     }
+  }
+
+  const mIdMeta = await manager.query(
+    `SELECT data_type FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
+  );
+  if (mIdMeta[0]?.data_type === 'character varying' || mIdMeta[0]?.data_type === 'text') {
+    await manager.query(
+      `UPDATE public.merchants SET merchant_code = COALESCE(NULLIF(merchant_code, ''), id::text)
+       WHERE merchant_code IS NULL OR merchant_code = ''`,
+    );
+    await manager.query(`ALTER TABLE public.merchants DROP COLUMN id`);
+    await manager.query(
+      `ALTER TABLE public.merchants ADD COLUMN id uuid DEFAULT gen_random_uuid()`,
+    );
+    await manager.query(`UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL`);
   }
 }
 

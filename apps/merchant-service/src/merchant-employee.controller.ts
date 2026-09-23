@@ -30,7 +30,7 @@ const employeeImageUpload = FileInterceptor('image', {
 type UploadedEmployeeImage = { filename: string; path: string };
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller('api/v1/merchants/:merchantId/employees')
+@Controller(['api/v1/merchants/:merchantId/employees', 'connector/api/v1/merchants/:merchantId/employees'])
 export class MerchantEmployeeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
