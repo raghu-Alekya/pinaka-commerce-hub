@@ -23,7 +23,7 @@ import { CreateRoleDto, UpdateRoleDto } from './role.dto';
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employee.dto';
 import { StoreTypeEntity, StoreTypeStatus } from './entities/store-type.entity';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository, Table } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
@@ -38,6 +38,7 @@ import { ProductEntity } from './entities/product.entity';
 import { DeviceEntity } from './entities/device.entity';
 import { VendorEntity } from './entities/vendor.entity';
 import { TendorEntity } from './entities/tendor.entity';
+import { MerchantVendorEntity } from './entities/merchant-vendor.entity';
 import { ensureVendorTendorSchema } from './vendor-tendor.schema';
 
 interface WordPressProductNode {
@@ -151,6 +152,17 @@ export class MerchantRepository implements OnModuleInit {
     return this.dataSource;
   }
 
+  private async ensureMerchantVendorTable() {
+    const queryRunner = this.dataSource.createQueryRunner();
+    try {
+      const metadata = this.dataSource.getMetadata(MerchantVendorEntity);
+      if (await queryRunner.hasTable(metadata.tableName)) return;
+      await queryRunner.createTable(Table.create(metadata, this.dataSource.driver), true, true, true);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
     async onModuleInit() {
     this.dataSource = await connectPostgres('PCH Merchant DB', [
       MerchantEntity,
@@ -173,6 +185,7 @@ export class MerchantRepository implements OnModuleInit {
       SessionEntity,
       VendorEntity,
       TendorEntity,
+      MerchantVendorEntity,
     ], { synchronize: false });
     const [{ compact_schema: compactSchema }] = await this.dataSource.query(`
       SELECT EXISTS (SELECT 1 FROM information_schema.columns
@@ -183,6 +196,7 @@ export class MerchantRepository implements OnModuleInit {
       // session repository available to the shared authentication guard.
       this.sessionRepo = this.dataSource.getRepository(SessionEntity);
       this.isDbConnected = true;
+      await this.ensureMerchantVendorTable();
       return;
     }
     // A brand-new local database has no base tables yet. Bootstrap it once before
@@ -220,6 +234,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureOnboardingSchema(this.dataSource);
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
+    await this.ensureMerchantVendorTable();
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
