@@ -216,7 +216,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       END $schema$;
     `);
     await renameLegacyCamelCaseColumns(manager, {
-      employee_stores: ['merchantId', 'employeeId', 'storeId', 'isPrimary', 'effectiveFrom', 'effectiveUntil', 'createdAt', 'updatedAt'],
+      employee_stores: ['merchantId', 'employeeId', 'storeId', 'isPrimary', 'effectiveFrom', 'effectiveUntil', 'loginPinHash', 'createdAt', 'updatedAt'],
       employee_store_roles: ['merchantId', 'employeeStoreId', 'roleId', 'effectiveFrom', 'effectiveUntil', 'createdAt', 'updatedAt'],
       role_template_permissions: ['roleTemplateId', 'permissionId', 'defaultAllowed', 'createdAt', 'updatedAt'],
       role_permissions: ['roleId', 'permissionId', 'createdAt', 'updatedAt'],
@@ -319,6 +319,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'ACTIVE';
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_from timestamptz;
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_until timestamptz;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128);
 
         -- Ensure employee_store_roles columns
         EXECUTE format('ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
@@ -334,13 +335,100 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           WHERE es.id = esr.employee_store_id
             AND (esr.merchant_id IS NULL OR esr.store_id IS NULL);
 
-        -- Ensure role_permissions columns
-        EXECUTE format('ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
-        EXECUTE format('ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS store_id %s', store_type);
+        -- role_permissions.merchant_id / store_id are UUIDs after merchant + store exist
+        ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS merchant_id uuid;
+        ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS store_id uuid;
       END $schema$;
 
       CREATE UNIQUE INDEX IF NOT EXISTS employee_stores_employee_store_uq ON public.employee_stores(employee_id,store_id);
       CREATE UNIQUE INDEX IF NOT EXISTS employee_store_roles_assignment_role_uq ON public.employee_store_roles(employee_store_id,role_id);
+
+      CREATE TABLE IF NOT EXISTS public.merchant_role_templates (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        merchant_id uuid NOT NULL REFERENCES public.merchants(id),
+        source_role_template_id uuid REFERENCES public.role_templates(id),
+        role_code varchar(50) NOT NULL,
+        name varchar(100) NOT NULL,
+        description text NOT NULL DEFAULT '',
+        scope_type varchar(20) NOT NULL DEFAULT 'STORE',
+        status varchar(20) NOT NULL DEFAULT 'ACTIVE',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (merchant_id, role_code)
+      );
+    `);
+    await renameLegacyCamelCaseColumns(manager, {
+      merchant_role_templates: ['merchantId', 'sourceRoleTemplateId', 'roleCode', 'scopeType', 'createdAt', 'updatedAt'],
+    });
+    await manager.query(`
+      DO $schema$
+      DECLARE merchant_udt text; store_udt text;
+      BEGIN
+        SELECT t.typname INTO merchant_udt
+          FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+          WHERE a.attrelid = 'public.role_permissions'::regclass AND a.attname = 'merchant_id' AND NOT a.attisdropped;
+        IF merchant_udt IS NULL THEN
+          ALTER TABLE public.role_permissions ADD COLUMN merchant_id uuid;
+        ELSIF merchant_udt <> 'uuid' THEN
+          ALTER TABLE public.role_permissions ADD COLUMN merchant_id_uuid uuid;
+          UPDATE public.role_permissions rp SET merchant_id_uuid = m.id
+            FROM public.merchants m
+            WHERE rp.merchant_id IS NOT NULL
+              AND rp.merchant_id::text IN (m.id::text, m.merchant_code::text);
+          ALTER TABLE public.role_permissions DROP COLUMN merchant_id;
+          ALTER TABLE public.role_permissions RENAME COLUMN merchant_id_uuid TO merchant_id;
+        END IF;
+
+        SELECT t.typname INTO store_udt
+          FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+          WHERE a.attrelid = 'public.role_permissions'::regclass AND a.attname = 'store_id' AND NOT a.attisdropped;
+        IF store_udt IS NULL THEN
+          ALTER TABLE public.role_permissions ADD COLUMN store_id uuid;
+        ELSIF store_udt <> 'uuid' THEN
+          ALTER TABLE public.role_permissions ADD COLUMN store_id_uuid uuid;
+          UPDATE public.role_permissions rp SET store_id_uuid = s.id
+            FROM public.stores s
+            WHERE rp.store_id IS NOT NULL
+              AND rp.store_id::text IN (s.id::text, COALESCE(s.legacy_store_id::text, ''));
+          ALTER TABLE public.role_permissions DROP COLUMN store_id;
+          ALTER TABLE public.role_permissions RENAME COLUMN store_id_uuid TO store_id;
+        END IF;
+
+        ALTER TABLE public.role_permissions DROP CONSTRAINT IF EXISTS role_permissions_role_id_permission_id_key;
+        DROP INDEX IF EXISTS public.role_permissions_role_id_permission_id_key;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'role_permissions_merchant_fk')
+           AND NOT EXISTS (
+             SELECT 1 FROM public.role_permissions rp
+             WHERE rp.merchant_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM public.merchants m WHERE m.id = rp.merchant_id)
+           ) THEN
+          ALTER TABLE public.role_permissions
+            ADD CONSTRAINT role_permissions_merchant_fk FOREIGN KEY (merchant_id) REFERENCES public.merchants(id);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'role_permissions_store_fk')
+           AND NOT EXISTS (
+             SELECT 1 FROM public.role_permissions rp
+             WHERE rp.store_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM public.stores s WHERE s.id = rp.store_id)
+           ) THEN
+          ALTER TABLE public.role_permissions
+            ADD CONSTRAINT role_permissions_store_fk FOREIGN KEY (store_id) REFERENCES public.stores(id);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'role_permissions_merchant_store_fk')
+           AND NOT EXISTS (
+             SELECT 1 FROM public.role_permissions rp
+             WHERE rp.merchant_id IS NOT NULL AND rp.store_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM public.stores s
+                 WHERE s.merchant_uuid = rp.merchant_id AND s.id = rp.store_id
+               )
+           ) THEN
+          ALTER TABLE public.role_permissions
+            ADD CONSTRAINT role_permissions_merchant_store_fk
+            FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(merchant_uuid, id);
+        END IF;
+      END $schema$;
     `);
     for (const index of [
       'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary',
@@ -348,6 +436,9 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       'CREATE INDEX IF NOT EXISTS pch_employee_store_roles_role ON public.employee_store_roles(role_id)',
       'CREATE INDEX IF NOT EXISTS pch_role_permissions_permission ON public.role_permissions(permission_id)',
       'CREATE INDEX IF NOT EXISTS pch_role_permissions_merchant_store ON public.role_permissions(merchant_id,store_id)',
+      'CREATE UNIQUE INDEX IF NOT EXISTS pch_role_permissions_role_perm_store ON public.role_permissions(role_id,permission_id,store_id) WHERE store_id IS NOT NULL',
+      'CREATE UNIQUE INDEX IF NOT EXISTS pch_role_permissions_role_perm_global ON public.role_permissions(role_id,permission_id) WHERE store_id IS NULL',
+      'CREATE UNIQUE INDEX IF NOT EXISTS pch_merchant_role_templates_code ON public.merchant_role_templates(merchant_id,role_code)',
       'CREATE INDEX IF NOT EXISTS pch_role_template_permissions_permission ON public.role_template_permissions(permission_id)',
     ]) await manager.query(index);
   });

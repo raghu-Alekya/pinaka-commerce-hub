@@ -53,8 +53,15 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
           const [role] = await this.read(manager, 'roles', 'id', link.roleId);
           if (!active(role) || role.merchantId !== merchant.merchantCode) continue;
           roles.push(role);
-          for (const grant of await this.read(manager, 'role_permissions', 'roleId', role.id)) {
+          const grants = await this.read(manager, 'role_permissions', 'roleId', role.id);
+          const storeMatches = (grant: Row) => [store.id, store.uuid, store.legacyStoreId].filter(Boolean).includes(grant.storeId);
+          for (const grant of grants.filter(row => !row.storeId)) {
             if (grant.allowed === true) granted.add(grant.permissionId);
+            else granted.delete(grant.permissionId);
+          }
+          for (const grant of grants.filter(storeMatches)) {
+            if (grant.allowed === true) granted.add(grant.permissionId);
+            else granted.delete(grant.permissionId);
           }
         }
         const licensedSubscriptions: Row[] = [];

@@ -54,6 +54,10 @@
     {
       "key": "employeeStoreId",
       "value": ""
+    },
+    {
+      "key": "merchantRoleTemplateId",
+      "value": ""
     }
   ],
   "item": [
@@ -274,6 +278,114 @@
       ]
     },
     {
+      "name": "Merchant Role Templates",
+      "item": [
+        {
+          "name": "Create from global template",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceRoleTemplateId\": \"{{roleTemplateId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('merchantRoleTemplateId', pm.response.json().roleTemplate.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create custom",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleCode\": \"SHIFT-LEAD\",\n  \"name\": \"Shift Lead\",\n  \"description\": \"Merchant-specific store role\",\n  \"scopeType\": \"STORE\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates"
+          }
+        },
+        {
+          "name": "Get",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates/{{merchantRoleTemplateId}}"
+          }
+        },
+        {
+          "name": "Update",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates/{{merchantRoleTemplateId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Shift Lead\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete (deactivate)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/role-templates/{{merchantRoleTemplateId}}"
+          }
+        }
+      ]
+    },
+    {
       "name": "Permissions",
       "item": [
         {
@@ -397,7 +509,7 @@
             "url": "{{baseUrl}}/merchants/{{merchantId}}/employees/{{employeeId}}/stores",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"storeId\": \"{{storeId}}\",\n  \"isPrimary\": true,\n  \"status\": \"ACTIVE\"\n}",
+              "raw": "{\n  \"storeId\": \"{{storeId}}\",\n  \"isPrimary\": true,\n  \"status\": \"ACTIVE\",\n  \"loginPin\": \"482731\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -695,7 +807,7 @@
             "url": "{{baseUrl}}/merchants/{{merchantId}}/roles/{{roleId}}/permissions",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"permissionId\": \"{{permissionId}}\",\n  \"allowed\": true\n}",
+              "raw": "{\n  \"permissionId\": \"{{permissionId}}\",\n  \"allowed\": true,\n  \"storeId\": \"{{storeId}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -770,6 +882,123 @@
             "method": "DELETE",
             "header": [],
             "url": "{{baseUrl}}/merchants/{{merchantId}}/roles/{{roleId}}/permissions/{{permissionId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Store Role Permissions",
+      "item": [
+        {
+          "name": "Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permissionId\": \"{{permissionId}}\",\n  \"allowed\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Create bulk",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions/bulk",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"permissionId\": \"{{permissionId}}\", \"allowed\": true }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions"
+          }
+        },
+        {
+          "name": "Get",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions/{{permissionId}}"
+          }
+        },
+        {
+          "name": "Update",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions/{{permissionId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"allowed\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Replace",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions/{{permissionId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"allowed\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/stores/{{storeId}}/roles/{{roleId}}/permissions/{{permissionId}}"
           }
         }
       ]

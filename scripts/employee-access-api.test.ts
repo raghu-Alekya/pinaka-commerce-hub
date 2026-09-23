@@ -16,11 +16,14 @@ import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard } from '../apps/mercha
 import { MerchantRepository } from '../apps/merchant-service/src/merchant.repository';
 import { EmployeeController } from '../apps/merchant-service/src/employee.controller';
 import { RoleController } from '../apps/merchant-service/src/role.controller';
+import { MerchantRoleTemplateController } from '../apps/merchant-service/src/merchant-role-template.controller';
+import { RolePermissionController } from '../apps/merchant-service/src/role-permission.controller';
 import { PermissionController } from '../apps/merchant-service/src/permission.controller';
 import { EmployeeEntity } from '../apps/merchant-service/src/entities/employee.entity';
 import { RoleEntity } from '../apps/merchant-service/src/entities/role.entity';
 import { PermissionEntity } from '../apps/merchant-service/src/entities/permission.entity';
 import { RoleTemplateEntity } from '../apps/merchant-service/src/entities/role-template.entity';
+import { MerchantRoleTemplateEntity } from '../apps/merchant-service/src/entities/merchant-role-template.entity';
 import { MerchantEntity } from '../apps/merchant-service/src/entities/merchant.entity';
 
 // Use a fresh, uniquely named database; never drop or clear the application database.
@@ -31,7 +34,7 @@ const merchants = new MerchantRepository();
 for (const repository of [relationships, access, merchants]) {
   Object.assign(repository, { onModuleInit: async () => {}, onModuleDestroy: async () => {} });
 }
-@Module({ controllers: [...RELATIONSHIP_CONTROLLERS, EmployeeController, RoleController, PermissionController, EmployeeAccessController],
+@Module({ controllers: [...RELATIONSHIP_CONTROLLERS, EmployeeController, RoleController, MerchantRoleTemplateController, RolePermissionController, PermissionController, EmployeeAccessController],
   providers: [RelationshipOwnerGuard, { provide: RelationshipsRepository, useValue: relationships },
     { provide: EmployeeAccessRepository, useValue: access }, { provide: MerchantRepository, useValue: merchants }] })
 class TestModule {}
@@ -52,7 +55,7 @@ async function main() {
     createdDatabase = true;
     const testOptions = options.url ? { ...options, url: (() => { const url = new URL(options.url); url.pathname = '/' + database; return url.toString(); })() } : { ...options, database };
     db = new DataSource({ ...testOptions, synchronize: false,
-      entities: [EmployeeEntity, RoleEntity, PermissionEntity, RoleTemplateEntity, MerchantEntity] });
+      entities: [EmployeeEntity, RoleEntity, PermissionEntity, RoleTemplateEntity, MerchantRoleTemplateEntity, MerchantEntity] });
     await db.initialize();
     await db.query(`
       CREATE TABLE merchants (id varchar(100) PRIMARY KEY);
@@ -104,12 +107,13 @@ async function main() {
         else process.env[key] = previousEnv[key];
       }
     }
-    expect((await db.query("SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('employees','roles','permissions','role_templates','employee_stores','employee_store_roles','role_permissions','role_template_permissions')"))[0].count, 8);
+    expect((await db.query("SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('employees','roles','permissions','role_templates','merchant_role_templates','employee_stores','employee_store_roles','role_permissions','role_template_permissions')"))[0].count, 9);
     expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='permission_id'")).length, 1, 'legacy camelCase permissionId is renamed');
     expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_template_permissions' AND column_name='permission_id'")).length, 1);
     Object.assign(relationships, { db }); Object.assign(access, { db });
     Object.assign(merchants, { dataSource: db, employeeRepo: db.getRepository(EmployeeEntity), roleRepo: db.getRepository(RoleEntity),
-      permissionRepo: db.getRepository(PermissionEntity), roleTemplateRepo: db.getRepository(RoleTemplateEntity), merchantRepo: db.getRepository(MerchantEntity) });
+      permissionRepo: db.getRepository(PermissionEntity), roleTemplateRepo: db.getRepository(RoleTemplateEntity),
+      merchantRoleTemplateRepo: db.getRepository(MerchantRoleTemplateEntity), merchantRepo: db.getRepository(MerchantEntity) });
     const feature = randomUUID(), storeType = randomUUID(), plan = randomUUID(), template = randomUUID();
     await db.query("INSERT INTO merchants VALUES ('M1'),('M2')");
     await db.query("INSERT INTO features VALUES ($1,'POS','ACTIVE')", [feature]);
@@ -136,33 +140,38 @@ async function main() {
     expect((await request('POST', '/permissions', {})).status, 400);
     expect((await request('POST', '/permissions', { featureId: randomUUID(), permissionKey: 'MISSING', name: 'Missing' })).status, 400);
     const permission = await create('/permissions', { featureId: feature, permissionKey: 'POS_SALE_CREATE', name: 'Create sale' }, 'permission');
-    const employee = await create('/merchants/M1/employees', { employeeCode: 'EMP-1', firstName: 'Sarah' }, 'employee');
-    expect((await request('POST', '/merchants/M1/employees', { employeeCode: '  ', firstName: 'Sarah' })).status, 400);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { firstName: null })).status, 400);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { firstName: '  ' })).status, 400);
-    expect((await request('POST', '/merchants/M1/employees', { employeeCode: 'X' })).status, 400);
-    expect((await request('POST', '/merchants/M2/employees', { employeeCode: 'EMP-1', firstName: 'Duplicate' })).status, 409);
     await create(`/role-templates/${template}/permissions`, { permissionId: permission.id, defaultAllowed: true }, 'item');
     const role = await create('/merchants/M1/roles', { roleCode: 'CASHIER', name: 'Cashier', sourceRoleTemplateId: template }, 'role');
     expect((await request('GET', `/merchants/M1/roles/${role.id}/permissions`)).data.items[0].allowed, true, 'template grants copied');
+    const merchantTemplate = await create('/merchants/M1/role-templates', { sourceRoleTemplateId: template }, 'roleTemplate');
+    expect(merchantTemplate.roleCode, 'CASHIER');
+    const storePermissionPath = `/merchants/M1/stores/S1/roles/${role.id}/permissions`;
+    expect((await request('POST', storePermissionPath, { permissionId: permission.id, allowed: true })).status, 201);
+    expect((await request('GET', storePermissionPath)).data.count, 1);
+    const employee = await create('/merchants/employees', { merchantId: 'M1', employeeCode: 'EMP-1', firstName: 'Sarah' }, 'employee');
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M1', employeeCode: '  ', firstName: 'Sarah' })).status, 400);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { firstName: null })).status, 400);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { firstName: '  ' })).status, 400);
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M1', employeeCode: 'X' })).status, 400);
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M2', employeeCode: 'EMP-1', firstName: 'Duplicate' })).status, 409);
     const otherRole = await create('/merchants/M2/roles', { roleCode: 'CASHIER', name: 'Other cashier' }, 'role');
-    const storesPath = `/merchants/M1/employees/${employee.id}/stores`;
-    const assignment = await create(storesPath, { storeId: 'S1', isPrimary: true }, 'item');
+    const storesPath = `/merchants/employees/${employee.id}/stores`;
+    const assignment = await create(storesPath, { storeId: 'S1', isPrimary: true, loginPin: '482731' }, 'item');
     expect(assignment.employeeId, employee.id); expect(assignment.merchantId, 'M1');
-    expect((await request('POST', storesPath, { storeId: 'S1' })).status, 409);
-    expect((await request('POST', storesPath, { storeId: 'S2', isPrimary: true })).status, 409);
-    expect((await request('POST', storesPath, { storeId: 'OTHER' })).status, 404);
-    expect((await request('POST', storesPath, { storeId: 'S2', effectiveFrom: '2026-10-02T00:00:00Z', effectiveUntil: '2026-10-01T00:00:00Z' })).status, 400);
+    expect((await request('POST', storesPath, { storeId: 'S1', loginPin: '482731' })).status, 409);
+    expect((await request('POST', storesPath, { storeId: 'S2', isPrimary: true, loginPin: '482732' })).status, 409);
+    expect((await request('POST', storesPath, { storeId: 'OTHER', loginPin: '482733' })).status, 404);
+    expect((await request('POST', storesPath, { storeId: 'S2', loginPin: '482734', effectiveFrom: '2026-10-02T00:00:00Z', effectiveUntil: '2026-10-01T00:00:00Z' })).status, 400);
     expect((await request('PATCH', storesPath + '/S1', { employeeId: randomUUID() })).status, 400);
-    const rolePath = `/merchants/M1/employee-stores/${assignment.id}/roles`;
+    const rolePath = `/merchants/employees/employee-stores/${assignment.id}/roles`;
     expect((await request('POST', rolePath, { roleId: otherRole.id })).status, 404);
     await create(rolePath, { roleId: role.id }, 'item');
-    for (const path of [storesPath, rolePath, `/merchants/M1/roles/${role.id}/permissions`, `/role-templates/${template}/permissions`, '/permissions', '/merchants/M1/employees', '/merchants/M1/roles']) {
+    for (const path of [storesPath, rolePath, `/merchants/M1/roles/${role.id}/permissions`, `/role-templates/${template}/permissions`, '/permissions', '/merchants/employees', '/merchants/M1/roles']) {
       expect((await request('GET', path, undefined, 'STAFF')).status, 403);
       expect((await request('GET', path, undefined, '')).status, 403);
     }
-    expect((await request('GET', storesPath.replace('/M1/', '/M2/'))).status, 404);
-    expect((await request('GET', rolePath.replace('/M1/', '/M2/'))).status, 404);
+    expect((await request('GET', `/merchants/employees/${randomUUID()}/stores`)).status, 404);
+    expect((await request('GET', `/merchants/employees/employee-stores/${randomUUID()}/roles`)).status, 404);
     const effectivePath = storesPath + '/S1/effective-access?permissionKey=POS_SALE_CREATE';
     const reason = async (expected: string) => {
       const response = await request('GET', effectivePath); expect(response.status, 200, JSON.stringify(response.data));
@@ -183,8 +192,8 @@ async function main() {
     await reason('PERMISSION_MISSING');
     expect((await request('PATCH', storesPath + '/S1', { status: 'SUSPENDED' })).status, 200); await reason('STORE_ASSIGNMENT_MISSING');
     expect((await request('PUT', storesPath + '/S1', {})).status, 200);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { status: 'INACTIVE' })).status, 200); await reason('EMPLOYEE_INACTIVE');
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { status: 'ACTIVE' })).status, 200);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { status: 'INACTIVE' })).status, 200); await reason('EMPLOYEE_INACTIVE');
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { status: 'ACTIVE' })).status, 200);
     await db.query("UPDATE subscription_stores SET status='INACTIVE'"); await reason('STORE_NOT_LICENSED');
     expect((await request('DELETE', storesPath + '/S1')).status, 409, 'remove role links before assignment');
     expect((await request('DELETE', rolePath + '/' + role.id)).status, 200);

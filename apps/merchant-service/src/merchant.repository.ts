@@ -11,6 +11,9 @@ import { PermissionEntity, PermissionStatus } from './entities/permission.entity
 import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from './entities/role-template.entity';
 import { PlanEntity, PlanStatus, PlanBillingModel, PlanBillingCycle } from './entities/plan.entity';
 import { RoleEntity, RoleStatus } from './entities/role.entity';
+import { MerchantRoleTemplateEntity } from './entities/merchant-role-template.entity';
+import { CreateMerchantRoleTemplateDto, UpdateMerchantRoleTemplateDto } from './merchant-role-template.dto';
+import { CreateStoreRolePermissionDto } from './role-permission.dto';
 import { EmployeeEntity, EmployeeStatus } from './entities/employee.entity';
 import { CreateFeatureDto, UpdateFeatureDto } from './feature.dto';
 import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
@@ -122,6 +125,7 @@ export class MerchantRepository implements OnModuleInit {
   private roleTemplateRepo!: Repository<RoleTemplateEntity>;
   private planMasterRepo!: Repository<PlanEntity>;
   private roleRepo!: Repository<RoleEntity>;
+  private merchantRoleTemplateRepo!: Repository<MerchantRoleTemplateEntity>;
   private employeeRepo!: Repository<EmployeeEntity>;
   private subRepo!: Repository<SubscriptionEntity>;
   private planRepo!: Repository<SubscriptionPlanEntity>;
@@ -157,6 +161,7 @@ export class MerchantRepository implements OnModuleInit {
       RoleTemplateEntity,
       PlanEntity,
       RoleEntity,
+      MerchantRoleTemplateEntity,
       EmployeeEntity,
       SubscriptionEntity,
       OnboardingAuditEntity,
@@ -213,6 +218,7 @@ export class MerchantRepository implements OnModuleInit {
     this.roleTemplateRepo = this.dataSource.getRepository(RoleTemplateEntity);
     this.planMasterRepo = this.dataSource.getRepository(PlanEntity);
     this.roleRepo = this.dataSource.getRepository(RoleEntity);
+    this.merchantRoleTemplateRepo = this.dataSource.getRepository(MerchantRoleTemplateEntity);
     this.employeeRepo = this.dataSource.getRepository(EmployeeEntity);
     this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
     this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
@@ -1723,9 +1729,13 @@ export class MerchantRepository implements OnModuleInit {
       try {
         const role = await manager.getRepository(RoleEntity).save(entity);
         if (role.sourceRoleTemplateId) {
-          await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed)
-            SELECT $1,permission_id,default_allowed FROM public.role_template_permissions WHERE role_template_id=$2`,
-          [role.id, role.sourceRoleTemplateId]);
+          const merchantUuid = (await manager.query(
+            'SELECT id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1',
+            [dto.merchantId],
+          ))[0]?.id || null;
+          await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed,merchant_id)
+            SELECT $1,permission_id,default_allowed,$3 FROM public.role_template_permissions WHERE role_template_id=$2`,
+          [role.id, role.sourceRoleTemplateId, merchantUuid]);
         }
         return role;
       } catch (error: any) {
@@ -1756,6 +1766,179 @@ export class MerchantRepository implements OnModuleInit {
     return true;
   }
 
+  private async requireMerchantRecord(idOrCode: string): Promise<{ merchantCode: string; merchantUuid: string }> {
+    const rows = await this.dataSource.query(
+      `SELECT merchant_code AS "merchantCode", id AS "merchantUuid"
+       FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1`,
+      [idOrCode],
+    );
+    if (!rows.length) throw new NotFoundException(`Merchant '${idOrCode}' not found`);
+    return rows[0];
+  }
+
+  private async requireStoreRecord(merchantId: string, storeId: string): Promise<{ merchantCode: string; merchantUuid: string; storeUuid: string }> {
+    const merchant = await this.requireMerchantRecord(merchantId);
+    const rows = await this.dataSource.query(
+      `SELECT id FROM public.stores WHERE (legacy_store_id=$2 OR id::text=$2) AND merchant_uuid=$1::uuid LIMIT 1`,
+      [merchant.merchantUuid, storeId],
+    );
+    if (!rows.length) throw new NotFoundException(`Store '${storeId}' not found for merchant '${merchantId}'`);
+    return { ...merchant, storeUuid: rows[0].id };
+  }
+
+  private async requireMerchantRole(merchantId: string, roleId: string): Promise<RoleEntity> {
+    const { merchantCode } = await this.requireMerchantRecord(merchantId);
+    const role = await this.getRoleByIdOrCode(merchantCode, roleId);
+    if (!role) throw new NotFoundException(`Role '${roleId}' not found for merchant '${merchantId}'`);
+    return role;
+  }
+
+  private storeRolePermissionProjection = `rp.id, rp.role_id AS "roleId", rp.permission_id AS "permissionId", rp.allowed,
+            rp.merchant_id AS "merchantId", rp.store_id AS "storeId",
+            p.permission_key AS "permissionKey", p.name AS "permissionName",
+            rp.created_at AS "createdAt", rp.updated_at AS "updatedAt"`;
+
+  async listMerchantRoleTemplates(merchantId: string, status?: string): Promise<MerchantRoleTemplateEntity[]> {
+    if (!this.merchantRoleTemplateRepo) return [];
+    const { merchantUuid } = await this.requireMerchantRecord(merchantId);
+    const where: Record<string, string> = { merchantId: merchantUuid };
+    if (status) where.status = status.toUpperCase();
+    return this.merchantRoleTemplateRepo.find({ where, order: { name: 'ASC' } });
+  }
+
+  async getMerchantRoleTemplate(merchantId: string, idOrCode: string): Promise<MerchantRoleTemplateEntity | null> {
+    if (!this.merchantRoleTemplateRepo || !idOrCode) return null;
+    const { merchantUuid } = await this.requireMerchantRecord(merchantId);
+    const trimmed = idOrCode.trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      const byId = await this.merchantRoleTemplateRepo.findOneBy({ merchantId: merchantUuid, id: trimmed });
+      if (byId) return byId;
+    }
+    return this.merchantRoleTemplateRepo.findOneBy({ merchantId: merchantUuid, roleCode: trimmed.toUpperCase() });
+  }
+
+  async createMerchantRoleTemplate(merchantId: string, dto: CreateMerchantRoleTemplateDto): Promise<MerchantRoleTemplateEntity> {
+    const { merchantUuid } = await this.requireMerchantRecord(merchantId);
+    let source: RoleTemplateEntity | null = null;
+    if (dto.sourceRoleTemplateId) {
+      source = await this.getRoleTemplateByIdOrCode(dto.sourceRoleTemplateId);
+      if (!source) throw new BadRequestException('Source role template does not exist');
+    }
+    const roleCode = (dto.roleCode || source?.roleCode || '').trim().toUpperCase();
+    if (!roleCode) throw new BadRequestException('roleCode or sourceRoleTemplateId is required');
+    const name = (dto.name || source?.name || '').trim();
+    if (!name) throw new BadRequestException('name or sourceRoleTemplateId is required');
+    const existing = await this.merchantRoleTemplateRepo.findOneBy({ merchantId: merchantUuid, roleCode });
+    if (existing) throw new ConflictException(`Role code '${roleCode}' already exists for this merchant`);
+    try {
+      return await this.merchantRoleTemplateRepo.save(this.merchantRoleTemplateRepo.create({
+        merchantId: merchantUuid,
+        sourceRoleTemplateId: source?.id || null,
+        roleCode,
+        name,
+        description: dto.description?.trim() ?? source?.description ?? '',
+        scopeType: dto.scopeType || source?.scopeType || RoleScopeType.STORE,
+        status: dto.status || RoleTemplateStatus.ACTIVE,
+      }));
+    } catch (error: any) {
+      if (error.driverError?.code === '23505') throw new ConflictException(`Role code '${roleCode}' already exists for this merchant`);
+      throw error;
+    }
+  }
+
+  async updateMerchantRoleTemplate(merchantId: string, idOrCode: string, dto: UpdateMerchantRoleTemplateDto): Promise<MerchantRoleTemplateEntity | null> {
+    const existing = await this.getMerchantRoleTemplate(merchantId, idOrCode);
+    if (!existing) return null;
+    if (dto.name !== undefined) existing.name = dto.name.trim();
+    if (dto.description !== undefined) existing.description = dto.description.trim();
+    if (dto.scopeType !== undefined) existing.scopeType = dto.scopeType;
+    if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedAt = new Date();
+    return this.merchantRoleTemplateRepo.save(existing);
+  }
+
+  async deleteMerchantRoleTemplate(merchantId: string, idOrCode: string): Promise<boolean> {
+    const existing = await this.getMerchantRoleTemplate(merchantId, idOrCode);
+    if (!existing) return false;
+    existing.status = RoleTemplateStatus.INACTIVE;
+    existing.updatedAt = new Date();
+    await this.merchantRoleTemplateRepo.save(existing);
+    return true;
+  }
+
+  async listStoreRolePermissions(merchantId: string, storeId: string, roleId: string): Promise<Record<string, unknown>[]> {
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const role = await this.requireMerchantRole(merchantId, roleId);
+    return this.dataSource.query(
+      `SELECT ${this.storeRolePermissionProjection}
+       FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id
+       WHERE rp.role_id=$1 AND rp.merchant_id=$2 AND rp.store_id=$3
+       ORDER BY p.permission_key`,
+      [role.id, merchantUuid, storeUuid],
+    );
+  }
+
+  async getStoreRolePermission(merchantId: string, storeId: string, roleId: string, permissionId: string): Promise<Record<string, unknown> | null> {
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const role = await this.requireMerchantRole(merchantId, roleId);
+    const permission = await this.getPermissionByIdOrKey(permissionId);
+    if (!permission) return null;
+    const rows = await this.dataSource.query(
+      `SELECT ${this.storeRolePermissionProjection}
+       FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id
+       WHERE rp.role_id=$1 AND rp.permission_id=$2 AND rp.merchant_id=$3 AND rp.store_id=$4`,
+      [role.id, permission.id, merchantUuid, storeUuid],
+    );
+    return rows[0] || null;
+  }
+
+  async upsertStoreRolePermission(merchantId: string, storeId: string, roleId: string, permissionId: string, allowed: boolean): Promise<Record<string, unknown>> {
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const role = await this.requireMerchantRole(merchantId, roleId);
+    const permission = await this.getPermissionByIdOrKey(permissionId);
+    if (!permission) throw new NotFoundException(`Permission '${permissionId}' not found`);
+    const rows = await this.dataSource.query(
+      `INSERT INTO public.role_permissions(role_id,permission_id,allowed,merchant_id,store_id)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (role_id,permission_id,store_id) WHERE store_id IS NOT NULL
+       DO UPDATE SET allowed=EXCLUDED.allowed, merchant_id=EXCLUDED.merchant_id, updated_at=now()
+       RETURNING id`,
+      [role.id, permission.id, allowed, merchantUuid, storeUuid],
+    );
+    const [item] = await this.dataSource.query(
+      `SELECT ${this.storeRolePermissionProjection}
+       FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id
+       WHERE rp.id=$1`,
+      [rows[0].id],
+    );
+    return item;
+  }
+
+  async upsertStoreRolePermissionsBulk(merchantId: string, storeId: string, roleId: string, items: CreateStoreRolePermissionDto[]): Promise<Record<string, unknown>[]> {
+    const seen = new Set<string>();
+    const saved = [];
+    for (const item of items) {
+      if (seen.has(item.permissionId)) throw new BadRequestException('Duplicate permissionId in items');
+      seen.add(item.permissionId);
+      saved.push(await this.upsertStoreRolePermission(merchantId, storeId, roleId, item.permissionId, item.allowed !== false));
+    }
+    return saved;
+  }
+
+  async deleteStoreRolePermission(merchantId: string, storeId: string, roleId: string, permissionId: string): Promise<boolean> {
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const role = await this.requireMerchantRole(merchantId, roleId);
+    const permission = await this.getPermissionByIdOrKey(permissionId);
+    if (!permission) return false;
+    const result = await this.dataSource.query(
+      `DELETE FROM public.role_permissions
+       WHERE role_id=$1 AND permission_id=$2 AND merchant_id=$3 AND store_id=$4
+       RETURNING id`,
+      [role.id, permission.id, merchantUuid, storeUuid],
+    );
+    return result.length > 0;
+  }
+
   // --- Employees (Tenant-specific) CRUD ---
   async listEmployees(merchantId?: string, status?: string): Promise<Record<string, unknown>[]> {
     if (!this.employeeRepo) return [];
@@ -1772,21 +1955,20 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   private async employeeDetails(employee: EmployeeEntity): Promise<Record<string, unknown>> {
-    const assignments = await this.dataSource.query(
-      `SELECT es.id,s.id AS store,s.legacy_store_id AS "storeCode",s."storeName",s."storeType",es.is_primary AS "isPrimary",es.status,
-              COALESCE(jsonb_agg(jsonb_build_object('id',r.id,'name',r.name,'roleCode',r.role_code)
-                ORDER BY r.name) FILTER (WHERE r.id IS NOT NULL),'[]'::jsonb) AS roles
-       FROM public.employee_stores es JOIN public.stores s ON s.id=es.store_id
-       LEFT JOIN public.employee_store_roles esr ON esr.employee_store_id=es.id AND esr.status='ACTIVE'
-       LEFT JOIN public.roles r ON r.id=esr.role_id
-       WHERE es.merchant_id=$1::uuid AND es.employee_id=$2
-       GROUP BY es.id,s.id,s.legacy_store_id,s."storeName",s."storeType" ORDER BY es.is_primary DESC,s."storeName"`,
-      [employee.merchantId, employee.id],
-    );
     const users = employee.userId ? await this.dataSource.query('SELECT username FROM public.users WHERE id=$1', [employee.userId]) : [];
-    const merchants = await this.dataSource.query('SELECT merchant_code FROM public.merchants WHERE id=$1', [employee.merchantId]);
-    return { ...employee, merchantCode: merchants[0]?.merchant_code || null,
-      username: users[0]?.username || null, storeAssignments: assignments };
+    const merchants = await this.dataSource.query(
+      `SELECT merchant_code,
+              COALESCE(to_jsonb(m)->>'businessName', to_jsonb(m)->>'business_name', to_jsonb(m)->>'legalBusinessName') AS "merchantName"
+       FROM public.merchants m WHERE id=$1`,
+      [employee.merchantId],
+    );
+    const { loginPinHash: _loginPinHash, passwordHash: _passwordHash, ...details } = employee as EmployeeEntity & { loginPinHash?: unknown; passwordHash?: unknown };
+    return {
+      ...details,
+      merchantCode: merchants[0]?.merchant_code || null,
+      merchantName: merchants[0]?.merchantName || null,
+      username: users[0]?.username || null,
+    };
   }
 
   async getEmployeeByIdOrCode(merchantId: string | undefined, idOrCode: string): Promise<EmployeeEntity | null> {
@@ -1813,14 +1995,20 @@ export class MerchantRepository implements OnModuleInit {
         const username = dto.username.trim().toLowerCase();
         const duplicate = await manager.query('SELECT 1 FROM public.users WHERE lower(email)=lower($1) OR lower(username)=lower($2) LIMIT 1', [email, username]);
         if (duplicate.length) throw new ConflictException('Employee email or username already exists');
+        const employeeCode = dto.employeeCode?.trim()
+          ? dto.employeeCode.trim().toUpperCase()
+          : await this.nextEmployeeCode(manager, dto.merchantId);
+        if (await manager.getRepository(EmployeeEntity).existsBy({ merchantId: dto.merchantId, employeeCode })) {
+          throw new ConflictException(`Employee code '${employeeCode}' already exists for this merchant`);
+        }
         const employee = await employeeRepo.save(employeeRepo.create({
-          merchantId: dto.merchantId, employeeCode: dto.employeeCode.trim().toUpperCase(),
+          merchantId: dto.merchantId, employeeCode,
           firstName: dto.firstName.trim(), lastName: dto.lastName?.trim() || '', email,
           phone: dto.phone?.trim() || null, dateOfBirth: dto.dateOfBirth || null,
           gender: dto.gender?.trim() || null, addressLine1: dto.addressLine1?.trim() || '',
           addressLine2: dto.addressLine2?.trim() || '', city: dto.city?.trim() || '',
           state: dto.state?.trim() || '', postalCode: dto.postalCode?.trim() || '', country: dto.country?.trim() || '',
-          loginPinHash: this.hashEmployeePin(dto.loginPin), sendCredentials: dto.sendCredentials ?? true,
+          loginPinHash: dto.loginPin ? this.hashEmployeePin(dto.loginPin) : null, sendCredentials: dto.sendCredentials ?? true,
           status: dto.status || EmployeeStatus.ACTIVE,
         }));
         const account = await manager.query(
@@ -1836,7 +2024,6 @@ export class MerchantRepository implements OnModuleInit {
         );
         employee.userId = user.id;
         await employeeRepo.save(employee);
-        await this.syncEmployeeAssignmentsWithManager(manager, dto.merchantId, employee.id, dto.storeAssignments);
         return employee;
       });
     } catch (error: any) {
@@ -1862,7 +2049,7 @@ export class MerchantRepository implements OnModuleInit {
     if (dto.postalCode !== undefined) existing.postalCode = dto.postalCode.trim();
     if (dto.country !== undefined) existing.country = dto.country.trim();
     if (dto.username !== undefined) existing.username = dto.username.trim().toLowerCase();
-    if (dto.loginPin !== undefined) existing.loginPinHash = this.hashEmployeePin(dto.loginPin);
+    if (dto.loginPin !== undefined) existing.loginPinHash = dto.loginPin ? this.hashEmployeePin(dto.loginPin) : null;
     if (dto.temporaryPassword !== undefined) existing.passwordHash = null;
     if (dto.sendCredentials !== undefined) existing.sendCredentials = dto.sendCredentials;
     if (dto.status !== undefined) existing.status = dto.status;
@@ -1877,7 +2064,6 @@ export class MerchantRepository implements OnModuleInit {
         if (dto.temporaryPassword !== undefined) { values.push(this.hashUserPassword(dto.temporaryPassword)); updates.push(`"passwordHash"=$${values.length}`); }
         await manager.query(`UPDATE public.users SET ${updates.join(',')} WHERE id=$1`, values);
       }
-      if (dto.storeAssignments) await this.syncEmployeeAssignmentsWithManager(manager, saved.merchantId, saved.id, dto.storeAssignments);
       return saved;
     });
   }
@@ -1892,15 +2078,15 @@ export class MerchantRepository implements OnModuleInit {
     return true;
   }
 
-  async updateEmployeeProfileImage(idOrCode: string, profileImageUrl: string | null): Promise<EmployeeEntity | null> {
-    const employee = await this.getEmployeeByIdOrCode(undefined, idOrCode);
+  async updateEmployeeProfileImage(merchantId: string | undefined, idOrCode: string, profileImageUrl: string | null): Promise<EmployeeEntity | null> {
+    const employee = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!employee) return null;
     employee.profileImageUrl = profileImageUrl;
     employee.updatedAt = new Date();
     return this.employeeRepo.save(employee);
   }
 
-  async listRolesAvailableForStore(storeId: string): Promise<Record<string, unknown>[]> {
+  async listRolesAvailableForStore(storeId: string, merchantIdentifier?: string): Promise<Record<string, unknown>[]> {
     const stores = await this.dataSource.query(
       `SELECT s.legacy_store_id AS id,s.id AS "storeUuid",s.merchant_uuid AS "merchantUuid",
               COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId') AS "merchantId",
@@ -1910,6 +2096,9 @@ export class MerchantRepository implements OnModuleInit {
       [storeId],
     );
     if (!stores[0]) throw new NotFoundException('Store not found');
+    if (merchantIdentifier && ![stores[0].merchantId, stores[0].merchantUuid].includes(merchantIdentifier)) {
+      throw new NotFoundException('Store not found for merchant');
+    }
     const merchantId = stores[0].merchantId;
     const storeTypeValue = stores[0].storeTypeId;
     if (!storeTypeValue) throw new BadRequestException('Store does not have a store type');
@@ -1940,6 +2129,17 @@ export class MerchantRepository implements OnModuleInit {
     );
   }
 
+  private async nextEmployeeCode(manager: EntityManager, merchantId: string): Promise<string> {
+    const rows = await manager.query(
+      `SELECT employee_code FROM public.employees
+       WHERE merchant_id=$1::uuid AND employee_code ~ '^EMP-[0-9]+$'
+       ORDER BY length(employee_code) DESC, employee_code DESC LIMIT 1`,
+      [merchantId],
+    );
+    const last = Number(String(rows[0]?.employee_code || 'EMP-1000').replace(/\D/g, '')) || 1000;
+    return `EMP-${last + 1}`;
+  }
+
   private hashEmployeePin(value: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
     return `${salt}:${crypto.scryptSync(value, salt, 32).toString('hex')}`;
@@ -1950,14 +2150,12 @@ export class MerchantRepository implements OnModuleInit {
     return `${salt.toString('base64url')}:${crypto.scryptSync(value, salt, 64).toString('base64url')}`;
   }
 
-  private async syncEmployeeAssignmentsWithManager(manager: EntityManager, merchantId: string, employeeId: string, assignments: Array<{ store: string; roles: string[] }>): Promise<void> {
+  private async syncEmployeeAssignmentsWithManager(manager: EntityManager, merchantId: string, employeeId: string, assignments: Array<{ store: string; roles: string[]; loginPin?: string }>): Promise<void> {
       const merchants = await manager.query('SELECT id,merchant_code FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [merchantId]);
       if (!merchants[0]) throw new NotFoundException('Merchant not found');
       const merchantUuid = merchants[0].id;
       const merchantCode = merchants[0].merchant_code;
-      await manager.query(`DELETE FROM public.employee_store_roles WHERE merchant_id=$1::uuid AND employee_store_id IN
-        (SELECT id FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2)`, [merchantUuid, employeeId]);
-      await manager.query('DELETE FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2', [merchantUuid, employeeId]);
+      const keepStoreIds: string[] = [];
       for (const [index, assignment] of assignments.entries()) {
         const stores = await manager.query(
           `SELECT s.id,COALESCE(to_jsonb(s)->>'store_type_id',to_jsonb(s)->>'storeType') AS "storeType"
@@ -1970,10 +2168,25 @@ export class MerchantRepository implements OnModuleInit {
           [merchantCode, assignment.store],
         );
         if (!stores[0]) throw new BadRequestException(`Store '${assignment.store}' does not belong to this merchant`);
-        const inserted = await manager.query(
-          `INSERT INTO public.employee_stores(merchant_id,employee_id,store_id,is_primary) VALUES($1,$2,$3,$4) RETURNING id`,
-          [merchantUuid, employeeId, stores[0].id, index === 0],
+        keepStoreIds.push(stores[0].id);
+        const existing = await manager.query(
+          `SELECT id,login_pin_hash AS "loginPinHash" FROM public.employee_stores
+           WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id=$3::uuid LIMIT 1`,
+          [merchantUuid, employeeId, stores[0].id],
         );
+        const pinHash = assignment.loginPin ? this.hashEmployeePin(assignment.loginPin) : existing[0]?.loginPinHash || null;
+        const upserted = existing[0]
+          ? (await manager.query(
+            `UPDATE public.employee_stores SET is_primary=$2, login_pin_hash=$3, updated_at=now()
+             WHERE id=$1 RETURNING id`,
+            [existing[0].id, index === 0, pinHash],
+          ))
+          : (await manager.query(
+            `INSERT INTO public.employee_stores(merchant_id,employee_id,store_id,is_primary,login_pin_hash)
+             VALUES($1,$2,$3,$4,$5) RETURNING id`,
+            [merchantUuid, employeeId, stores[0].id, index === 0, pinHash],
+          ));
+        await manager.query('DELETE FROM public.employee_store_roles WHERE merchant_id=$1::uuid AND employee_store_id=$2', [merchantUuid, upserted[0].id]);
         for (const role of assignment.roles || []) {
           const existingRole = await manager.query(
             `SELECT id FROM public.roles WHERE id=$1::uuid AND merchant_id=$2 AND status='ACTIVE' LIMIT 1`,
@@ -1992,8 +2205,19 @@ export class MerchantRepository implements OnModuleInit {
           );
           if (!roles[0]) throw new BadRequestException(`Role '${role}' is not available for store '${assignment.store}' and its store type`);
           await manager.query(`INSERT INTO public.employee_store_roles(merchant_id,store_id,employee_store_id,role_id) VALUES($1,$2,$3,$4)`,
-            [merchantUuid, stores[0].id, inserted[0].id, roles[0].id]);
+            [merchantUuid, stores[0].id, upserted[0].id, roles[0].id]);
         }
+      }
+      if (keepStoreIds.length) {
+        await manager.query(
+          `DELETE FROM public.employee_store_roles WHERE merchant_id=$1::uuid AND employee_store_id IN
+           (SELECT id FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[]))`,
+          [merchantUuid, employeeId, keepStoreIds],
+        );
+        await manager.query(
+          `DELETE FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[])`,
+          [merchantUuid, employeeId, keepStoreIds],
+        );
       }
   }
 
