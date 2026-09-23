@@ -499,7 +499,7 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
         `UPDATE public.stores SET legacy_store_id = COALESCE(NULLIF(legacy_store_id, ''), id::text)
          WHERE legacy_store_id IS NULL OR legacy_store_id = ''`,
       );
-      await manager.query(`ALTER TABLE public.stores DROP COLUMN id`);
+      await manager.query(`ALTER TABLE public.stores DROP COLUMN id CASCADE`);
       await manager.query(
         `ALTER TABLE public.stores ADD COLUMN id uuid DEFAULT gen_random_uuid()`,
       );
@@ -547,7 +547,7 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
       `UPDATE public.merchants SET merchant_code = COALESCE(NULLIF(merchant_code, ''), id::text)
        WHERE merchant_code IS NULL OR merchant_code = ''`,
     );
-    await manager.query(`ALTER TABLE public.merchants DROP COLUMN id`);
+    await manager.query(`ALTER TABLE public.merchants DROP COLUMN id CASCADE`);
     await manager.query(
       `ALTER TABLE public.merchants ADD COLUMN id uuid DEFAULT gen_random_uuid()`,
     );
