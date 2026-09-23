@@ -16,8 +16,6 @@ import { EmployeeAccessRepository } from './employee-access.repository';
 import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalog.controller';
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
-import { CompactMerchantController } from './compact-merchant.controller';
-import { CompactSubscriptionController } from './compact-subscription.controller';
 import { SubscriptionController } from './subscription.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
@@ -34,10 +32,7 @@ import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
   imports: [],
-  controllers: [
-    CompactMerchantController,
-    CompactSubscriptionController,
-    StoreTypeFeatureCatalogController,
+  controllers: [    StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,
     RoleTemplateStoreTypeCatalogController,
