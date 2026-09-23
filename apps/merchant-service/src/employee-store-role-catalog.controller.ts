@@ -2,7 +2,7 @@ import { Controller, Get, Inject, Param, UseGuards } from '@nestjs/common';
 import { MerchantRepository } from './merchant.repository';
 import { RelationshipOwnerGuard } from './relationships.controller';
 
-@Controller('api/v1/stores/:storeId/roles/available')
+@Controller('api/v1/merchants/employees/stores/:storeId/roles/available')
 @UseGuards(RelationshipOwnerGuard)
 export class EmployeeStoreRoleCatalogController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}

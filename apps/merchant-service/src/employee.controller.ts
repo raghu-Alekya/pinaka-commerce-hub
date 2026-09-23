@@ -30,7 +30,7 @@ const employeeImageUpload = FileInterceptor('image', {
 type UploadedEmployeeImage = { filename: string; path: string };
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller('api/v1/employees')
+@Controller('api/v1/merchants/employees')
 export class EmployeeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
@@ -79,7 +79,7 @@ export class EmployeeController {
       throw new NotFoundException(`Employee '${idOrCode}' not found`);
     }
     const profileImageUrl = `/uploads/employees/${file.filename}`;
-    const updated = await this.repository.updateEmployeeProfileImage(idOrCode, profileImageUrl);
+    const updated = await this.repository.updateEmployeeProfileImage(undefined, idOrCode, profileImageUrl);
     await this.removeLocalImage(current.profileImageUrl);
     const employee = await this.repository.getEmployeeDetails(updated!.merchantId, updated!.id);
     return { success: true, message: 'Employee profile image uploaded successfully', profileImageUrl, employee };
@@ -89,7 +89,7 @@ export class EmployeeController {
   async deleteProfileImage(@Param('idOrCode') idOrCode: string) {
     const current = await this.repository.getEmployeeDetails(undefined, idOrCode);
     if (!current) throw new NotFoundException(`Employee '${idOrCode}' not found`);
-    const updated = await this.repository.updateEmployeeProfileImage(idOrCode, null);
+    const updated = await this.repository.updateEmployeeProfileImage(undefined, idOrCode, null);
     await this.removeLocalImage(current.profileImageUrl);
     const employee = await this.repository.getEmployeeDetails(updated!.merchantId, updated!.id);
     return { success: true, message: 'Employee profile image removed successfully', employee };
