@@ -1892,15 +1892,15 @@ export class MerchantRepository implements OnModuleInit {
     return true;
   }
 
-  async updateEmployeeProfileImage(idOrCode: string, profileImageUrl: string | null): Promise<EmployeeEntity | null> {
-    const employee = await this.getEmployeeByIdOrCode(undefined, idOrCode);
+  async updateEmployeeProfileImage(merchantId: string | undefined, idOrCode: string, profileImageUrl: string | null): Promise<EmployeeEntity | null> {
+    const employee = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!employee) return null;
     employee.profileImageUrl = profileImageUrl;
     employee.updatedAt = new Date();
     return this.employeeRepo.save(employee);
   }
 
-  async listRolesAvailableForStore(storeId: string): Promise<Record<string, unknown>[]> {
+  async listRolesAvailableForStore(storeId: string, merchantIdentifier?: string): Promise<Record<string, unknown>[]> {
     const stores = await this.dataSource.query(
       `SELECT s.legacy_store_id AS id,s.id AS "storeUuid",s.merchant_uuid AS "merchantUuid",
               COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId') AS "merchantId",
@@ -1910,6 +1910,9 @@ export class MerchantRepository implements OnModuleInit {
       [storeId],
     );
     if (!stores[0]) throw new NotFoundException('Store not found');
+    if (merchantIdentifier && ![stores[0].merchantId, stores[0].merchantUuid].includes(merchantIdentifier)) {
+      throw new NotFoundException('Store not found for merchant');
+    }
     const merchantId = stores[0].merchantId;
     const storeTypeValue = stores[0].storeTypeId;
     if (!storeTypeValue) throw new BadRequestException('Store does not have a store type');

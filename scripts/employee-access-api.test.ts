@@ -136,17 +136,17 @@ async function main() {
     expect((await request('POST', '/permissions', {})).status, 400);
     expect((await request('POST', '/permissions', { featureId: randomUUID(), permissionKey: 'MISSING', name: 'Missing' })).status, 400);
     const permission = await create('/permissions', { featureId: feature, permissionKey: 'POS_SALE_CREATE', name: 'Create sale' }, 'permission');
-    const employee = await create('/merchants/M1/employees', { employeeCode: 'EMP-1', firstName: 'Sarah' }, 'employee');
-    expect((await request('POST', '/merchants/M1/employees', { employeeCode: '  ', firstName: 'Sarah' })).status, 400);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { firstName: null })).status, 400);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { firstName: '  ' })).status, 400);
-    expect((await request('POST', '/merchants/M1/employees', { employeeCode: 'X' })).status, 400);
-    expect((await request('POST', '/merchants/M2/employees', { employeeCode: 'EMP-1', firstName: 'Duplicate' })).status, 409);
+    const employee = await create('/merchants/employees', { merchantId: 'M1', employeeCode: 'EMP-1', firstName: 'Sarah' }, 'employee');
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M1', employeeCode: '  ', firstName: 'Sarah' })).status, 400);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { firstName: null })).status, 400);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { firstName: '  ' })).status, 400);
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M1', employeeCode: 'X' })).status, 400);
+    expect((await request('POST', '/merchants/employees', { merchantId: 'M2', employeeCode: 'EMP-1', firstName: 'Duplicate' })).status, 409);
     await create(`/role-templates/${template}/permissions`, { permissionId: permission.id, defaultAllowed: true }, 'item');
     const role = await create('/merchants/M1/roles', { roleCode: 'CASHIER', name: 'Cashier', sourceRoleTemplateId: template }, 'role');
     expect((await request('GET', `/merchants/M1/roles/${role.id}/permissions`)).data.items[0].allowed, true, 'template grants copied');
     const otherRole = await create('/merchants/M2/roles', { roleCode: 'CASHIER', name: 'Other cashier' }, 'role');
-    const storesPath = `/merchants/M1/employees/${employee.id}/stores`;
+    const storesPath = `/merchants/employees/${employee.id}/stores`;
     const assignment = await create(storesPath, { storeId: 'S1', isPrimary: true }, 'item');
     expect(assignment.employeeId, employee.id); expect(assignment.merchantId, 'M1');
     expect((await request('POST', storesPath, { storeId: 'S1' })).status, 409);
@@ -154,15 +154,15 @@ async function main() {
     expect((await request('POST', storesPath, { storeId: 'OTHER' })).status, 404);
     expect((await request('POST', storesPath, { storeId: 'S2', effectiveFrom: '2026-10-02T00:00:00Z', effectiveUntil: '2026-10-01T00:00:00Z' })).status, 400);
     expect((await request('PATCH', storesPath + '/S1', { employeeId: randomUUID() })).status, 400);
-    const rolePath = `/merchants/M1/employee-stores/${assignment.id}/roles`;
+    const rolePath = `/merchants/employees/employee-stores/${assignment.id}/roles`;
     expect((await request('POST', rolePath, { roleId: otherRole.id })).status, 404);
     await create(rolePath, { roleId: role.id }, 'item');
-    for (const path of [storesPath, rolePath, `/merchants/M1/roles/${role.id}/permissions`, `/role-templates/${template}/permissions`, '/permissions', '/merchants/M1/employees', '/merchants/M1/roles']) {
+    for (const path of [storesPath, rolePath, `/merchants/M1/roles/${role.id}/permissions`, `/role-templates/${template}/permissions`, '/permissions', '/merchants/employees', '/merchants/M1/roles']) {
       expect((await request('GET', path, undefined, 'STAFF')).status, 403);
       expect((await request('GET', path, undefined, '')).status, 403);
     }
-    expect((await request('GET', storesPath.replace('/M1/', '/M2/'))).status, 404);
-    expect((await request('GET', rolePath.replace('/M1/', '/M2/'))).status, 404);
+    expect((await request('GET', `/merchants/employees/${randomUUID()}/stores`)).status, 404);
+    expect((await request('GET', `/merchants/employees/employee-stores/${randomUUID()}/roles`)).status, 404);
     const effectivePath = storesPath + '/S1/effective-access?permissionKey=POS_SALE_CREATE';
     const reason = async (expected: string) => {
       const response = await request('GET', effectivePath); expect(response.status, 200, JSON.stringify(response.data));
@@ -183,8 +183,8 @@ async function main() {
     await reason('PERMISSION_MISSING');
     expect((await request('PATCH', storesPath + '/S1', { status: 'SUSPENDED' })).status, 200); await reason('STORE_ASSIGNMENT_MISSING');
     expect((await request('PUT', storesPath + '/S1', {})).status, 200);
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { status: 'INACTIVE' })).status, 200); await reason('EMPLOYEE_INACTIVE');
-    expect((await request('PATCH', `/merchants/M1/employees/${employee.id}`, { status: 'ACTIVE' })).status, 200);
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { status: 'INACTIVE' })).status, 200); await reason('EMPLOYEE_INACTIVE');
+    expect((await request('PATCH', `/merchants/employees/${employee.id}`, { status: 'ACTIVE' })).status, 200);
     await db.query("UPDATE subscription_stores SET status='INACTIVE'"); await reason('STORE_NOT_LICENSED');
     expect((await request('DELETE', storesPath + '/S1')).status, 409, 'remove role links before assignment');
     expect((await request('DELETE', rolePath + '/' + role.id)).status, 200);
