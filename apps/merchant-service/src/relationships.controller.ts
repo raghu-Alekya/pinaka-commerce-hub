@@ -38,7 +38,9 @@ function createController(config: Relationship) {
 
 export const MASTER_BULK_RELATIONSHIPS = [
   ...RELATIONSHIPS.filter(config =>
-    ['StoreTypeFeatures', 'FeatureStoreTypes', 'StoreTypeRoleTemplates', 'RoleTemplateStoreTypes', 'PlanEntitlements'].includes(config.name)),
+    // StoreTypeRoleTemplates CRUD+bulk lives on StoreTypeAssignedRoleTemplatesController
+    // so static routes like GET .../assigned are not swallowed by :relatedId.
+    ['StoreTypeFeatures', 'FeatureStoreTypes', 'RoleTemplateStoreTypes', 'PlanEntitlements'].includes(config.name)),
   ...EMPLOYEE_ACCESS_RELATIONSHIPS.filter(config =>
     ['EmployeeStores', 'EmployeeStoreRoles', 'RoleTemplatePermissions'].includes(config.name)),
 ];
@@ -68,7 +70,11 @@ export class RoleTemplatePermissionsReplaceController {
   }
 }
 
+const DEDICATED_RELATIONSHIP_CONTROLLERS = new Set(['StoreTypeRoleTemplates']);
+
 export const RELATIONSHIP_CONTROLLERS = [
   ...MASTER_BULK_RELATIONSHIPS.map(createBulkController),
-  ...[...RELATIONSHIPS, ...EMPLOYEE_ACCESS_RELATIONSHIPS].map(createController),
+  ...[...RELATIONSHIPS, ...EMPLOYEE_ACCESS_RELATIONSHIPS]
+    .filter(config => !DEDICATED_RELATIONSHIP_CONTROLLERS.has(config.name))
+    .map(createController),
 ];

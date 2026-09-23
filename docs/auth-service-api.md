@@ -7,13 +7,26 @@ Base URL: `http://localhost:3009`
 | Method | Path                                  | Purpose                                                        |
 | ------ | ------------------------------------- | -------------------------------------------------------------- |
 | `POST` | `/api/v1/auth/signup`                 | Create a restaurant account and its active owner               |
-| `POST` | `/api/v1/auth/login`                  | Email/password login; returns a one-hour Bearer token          |
+| `POST` | `/api/v1/auth/login`                  | Email/password login; returns short-lived access + refresh tokens |
+| `POST` | `/api/v1/auth/refresh`                | Exchange a valid refresh token for a new access + refresh pair (rotation) |
+| `POST` | `/api/v1/auth/logout`                 | Revoke the refresh token and related access session            |
+| `GET`  | `/api/v1/auth/me`                     | Current session for a valid Bearer access token                |
 | `POST` | `/api/v1/auth/google`                 | Verify a Google ID credential and sign in or create the user   |
 | `POST` | `/api/v1/auth/password/reset-request` | Send password-reset email; always returns an accepted response |
 | `POST` | `/api/v1/auth/password/reset`         | Set a password using the one-time reset token                  |
 | `POST` | `/api/v1/auth/invitations/accept`     | Accept a dashboard user invitation and set a password          |
 
 Passwords must contain at least eight characters. One-time invitation links expire after 24 hours and reset links expire after one hour.
+
+Default lifetimes: access token **15 minutes** (`AUTH_ACCESS_TOKEN_SECONDS`), refresh token **7 days** (`AUTH_REFRESH_TOKEN_SECONDS`). Refresh tokens are stored as SHA-256 hashes only and are rotated on every `/auth/refresh` call.
+
+### Refresh after login
+
+1. `POST /api/v1/auth/login` → save `accessToken` and `refreshToken`
+2. Call APIs with `Authorization: Bearer <accessToken>`
+3. When access expires (401), `POST /api/v1/auth/refresh` with `{ "refreshToken": "..." }`
+4. Replace both tokens with the new pair (old refresh is revoked)
+5. On logout, `POST /api/v1/auth/logout` with the refresh token (and optional Authorization header)
 
 Self sign-up creates a restaurant account with a temporary name derived from the email address and makes the signing-up user its active `OWNER`. POS onboarding creates the same account/owner relationship, but its owner remains `PENDING` until the invitation is accepted.
 

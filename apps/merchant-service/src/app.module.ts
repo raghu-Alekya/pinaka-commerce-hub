@@ -24,6 +24,7 @@ import { DeviceController } from './device.controller';
 import { StoreTypeController } from './store-type.controller';
 import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
 import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
+import { StoreRoleTemplateController, StoreTypeAssignedRoleTemplatesController } from './store-role-template.controller';
 import { FeaturePermissionController } from './feature-permission.controller';
 import { FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
@@ -36,6 +37,8 @@ import { RelationshipsRepository } from './relationships.repository';
   controllers: [    StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,
+    StoreTypeAssignedRoleTemplatesController,
+    StoreRoleTemplateController,
     RoleTemplateStoreTypeCatalogController,
     RoleTemplateStoreTypeBulkController,
     RoleTemplateFeatureAccessController,
