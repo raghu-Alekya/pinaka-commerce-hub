@@ -1,3 +1,4 @@
+import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { ensureOnboardingSchema } from './onboarding.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
@@ -174,17 +175,6 @@ export class MerchantRepository implements OnModuleInit {
       VendorEntity,
       TendorEntity,
     ], { synchronize: false });
-    const [{ compact_schema: compactSchema }] = await this.dataSource.query(`
-      SELECT EXISTS (SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='merchants' AND column_name='merchantId') AS compact_schema
-    `);
-    if (compactSchema) {
-      // The compact merchant API uses SQL for its exact-column tables. Keep the
-      // session repository available to the shared authentication guard.
-      this.sessionRepo = this.dataSource.getRepository(SessionEntity);
-      this.isDbConnected = true;
-      return;
-    }
     // A brand-new local database has no base tables yet. Bootstrap it once before
     // installing the additive schemas below. Existing databases deliberately skip
     // global synchronization because it can remove repository-owned indexes.
@@ -220,6 +210,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureOnboardingSchema(this.dataSource);
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
+    await ensureCompactMerchantSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
