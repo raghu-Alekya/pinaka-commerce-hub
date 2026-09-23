@@ -1997,7 +1997,7 @@ export class MerchantRepository implements OnModuleInit {
         if (duplicate.length) throw new ConflictException('Employee email or username already exists');
         const employeeCode = dto.employeeCode?.trim()
           ? dto.employeeCode.trim().toUpperCase()
-          : await this.nextEmployeeCode(manager, dto.merchantId);
+          : await this.nextEmployeeCode(manager, dto.merchantId!);
         if (await manager.getRepository(EmployeeEntity).existsBy({ merchantId: dto.merchantId, employeeCode })) {
           throw new ConflictException(`Employee code '${employeeCode}' already exists for this merchant`);
         }
@@ -2024,6 +2024,9 @@ export class MerchantRepository implements OnModuleInit {
         );
         employee.userId = user.id;
         await employeeRepo.save(employee);
+        if (dto.storeAssignments) {
+          await this.syncEmployeeAssignmentsWithManager(manager, dto.merchantId!, employee.id, dto.storeAssignments);
+        }
         return employee;
       });
     } catch (error: any) {
@@ -2063,6 +2066,9 @@ export class MerchantRepository implements OnModuleInit {
         if (dto.username !== undefined) { values.push(dto.username.trim().toLowerCase()); updates.push(`username=$${values.length}`); }
         if (dto.temporaryPassword !== undefined) { values.push(this.hashUserPassword(dto.temporaryPassword)); updates.push(`"passwordHash"=$${values.length}`); }
         await manager.query(`UPDATE public.users SET ${updates.join(',')} WHERE id=$1`, values);
+      }
+      if (dto.storeAssignments) {
+        await this.syncEmployeeAssignmentsWithManager(manager, saved.merchantId, saved.id, dto.storeAssignments);
       }
       return saved;
     });
@@ -2150,12 +2156,18 @@ export class MerchantRepository implements OnModuleInit {
     return `${salt.toString('base64url')}:${crypto.scryptSync(value, salt, 64).toString('base64url')}`;
   }
 
-  private async syncEmployeeAssignmentsWithManager(manager: EntityManager, merchantId: string, employeeId: string, assignments: Array<{ store: string; roles: string[]; loginPin?: string }>): Promise<void> {
+  private async syncEmployeeAssignmentsWithManager(
+    manager: EntityManager,
+    merchantId: string,
+    employeeId: string,
+    assignments?: Array<{ store: string; roles?: string[]; loginPin?: string }>,
+  ): Promise<void> {
       const merchants = await manager.query('SELECT id,merchant_code FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [merchantId]);
       if (!merchants[0]) throw new NotFoundException('Merchant not found');
       const merchantUuid = merchants[0].id;
       const merchantCode = merchants[0].merchant_code;
       const keepStoreIds: string[] = [];
+      if (!assignments) return;
       for (const [index, assignment] of assignments.entries()) {
         const stores = await manager.query(
           `SELECT s.id,COALESCE(to_jsonb(s)->>'store_type_id',to_jsonb(s)->>'storeType') AS "storeType"

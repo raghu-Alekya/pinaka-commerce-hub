@@ -1,7 +1,32 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, ValidateNested } from 'class-validator';
 import { EmployeeStatus } from './entities/employee.entity';
 
+
+export class EmployeeStoreAssignmentDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  store!: string;
+
+  @IsArray()
+  @IsOptional()
+  roles?: string[];
+
+  @IsString()
+  @IsOptional()
+  @Matches(/^\d{6}$/, { message: 'loginPin must be a 6-digit string' })
+  loginPin?: string;
+}
+
 export class CreateEmployeeDto {
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => EmployeeStoreAssignmentDto)
+  storeAssignments?: EmployeeStoreAssignmentDto[];
+
   @IsString()
   @IsOptional()
   @MaxLength(100)
@@ -48,6 +73,13 @@ export class CreateEmployeeDto {
 }
 
 export class UpdateEmployeeDto {
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => EmployeeStoreAssignmentDto)
+  storeAssignments?: EmployeeStoreAssignmentDto[];
+
   @IsString()
   @IsNotEmpty()
   @IsOptional()
