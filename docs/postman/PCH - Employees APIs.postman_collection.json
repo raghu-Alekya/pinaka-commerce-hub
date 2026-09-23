@@ -1,0 +1,794 @@
+{
+  "info": {
+    "_postman_id": "fa4b917c-66ad-4984-ac93-ddcd644a5c30",
+    "name": "PCH - Employees APIs",
+    "description": "Latest employee APIs. Employee CRUD returns employee details only (no store assignments). Use GET /merchants/:merchantId/employees to list one merchant. employeeCode, loginPin, and storeAssignments are optional and omitted from employee create/update.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "9273981"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Owner Login - Capture Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Owner authenticated', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "const token = body.accessToken || body.access_token || body.token;",
+                  "if (token) pm.collectionVariables.set('token', token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{authBaseUrl}}/auth/login",
+              "host": [
+                "{{authBaseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Employee Login by Username",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{employeeUsername}}\",\n  \"password\": \"{{employeePassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{authBaseUrl}}/auth/login",
+              "host": [
+                "{{authBaseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Store and Role Discovery",
+      "item": [
+        {
+          "name": "List Merchant Stores",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/merchants/{{merchantId}}/stores",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "merchants",
+                "{{merchantId}}",
+                "stores"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Roles Available for Selected Store Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Role catalog loaded', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const roles = (body.roles || []).filter(role => role.assignable);",
+                  "if (roles[0]?.roleId) pm.collectionVariables.set('roleId', roles[0].roleId);",
+                  "if (roles[1]?.roleId) pm.collectionVariables.set('secondRoleId', roles[1].roleId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/stores/{{storeId}}/roles/available"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Employee CRUD",
+      "item": [
+        {
+          "name": "Create Employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Employee created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const body = pm.response.json();",
+                  "if (body.employee?.id) pm.collectionVariables.set('employeeId', body.employee.id);",
+                  "if (body.employee?.employeeCode) pm.collectionVariables.set('employeeCode', body.employee.employeeCode);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"{{merchantId}}\",\n  \"firstName\": \"Arun\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"arun.sharma.1008@example.com\",\n  \"phone\": \"+919876543210\",\n  \"dateOfBirth\": \"1994-08-15\",\n  \"gender\": \"Male\",\n  \"addressLine1\": \"42 Jubilee Hills Road\",\n  \"addressLine2\": \"Near Metro Station\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"postalCode\": \"500033\",\n  \"country\": \"India\",\n  \"username\": \"{{employeeUsername}}\",\n  \"temporaryPassword\": \"{{employeePassword}}\",\n  \"sendCredentials\": false,\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees"
+          },
+          "response": []
+        },
+        {
+          "name": "List Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees"
+          },
+          "response": []
+        },
+        {
+          "name": "List Active Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees?status=ACTIVE"
+          },
+          "response": []
+        },
+        {
+          "name": "List Merchant Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/employees"
+          },
+          "response": []
+        },
+        {
+          "name": "List Active Merchant Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/employees?status=ACTIVE"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Merchant Employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Employee created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const body = pm.response.json();",
+                  "if (body.employee?.id) pm.collectionVariables.set('employeeId', body.employee.id);",
+                  "if (body.employee?.employeeCode) pm.collectionVariables.set('employeeCode', body.employee.employeeCode);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Arun\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"arun.sharma.1008@example.com\",\n  \"phone\": \"+919876543210\",\n  \"dateOfBirth\": \"1994-08-15\",\n  \"gender\": \"Male\",\n  \"addressLine1\": \"42 Jubilee Hills Road\",\n  \"addressLine2\": \"Near Metro Station\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"postalCode\": \"500033\",\n  \"country\": \"India\",\n  \"username\": \"{{employeeUsername}}\",\n  \"temporaryPassword\": \"{{employeePassword}}\",\n  \"sendCredentials\": false,\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/employees"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Employee by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Merchant Employee",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/{{merchantId}}/employees/{{employeeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Employee by Code",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeCode}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Employee",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Sarah\",\n  \"lastName\": \"Williams\",\n  \"phone\": \"+919876543211\",\n  \"city\": \"Secunderabad\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Employee Details",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Sarah\",\n  \"lastName\": \"Williams\",\n  \"email\": \"sarah.williams@example.com\",\n  \"phone\": \"+919876543211\",\n  \"dateOfBirth\": \"1995-05-20\",\n  \"gender\": \"Female\",\n  \"addressLine1\": \"15 Park Avenue\",\n  \"addressLine2\": \"\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"postalCode\": \"500034\",\n  \"country\": \"India\",\n  \"username\": \"sarah_jones\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Deactivate Employee",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Employee Profile Image",
+      "item": [
+        {
+          "name": "Upload Employee Profile Image",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Profile image uploaded', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const body = pm.response.json();",
+                  "if (body.profileImageUrl) pm.collectionVariables.set('profileImageUrl', body.profileImageUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": [],
+                  "description": "Select a JPG, PNG, or WebP image up to 2 MB"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/profile-image"
+          },
+          "response": []
+        },
+        {
+          "name": "Open Employee Profile Image",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{merchantOrigin}}{{profileImageUrl}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Employee Profile Image",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/profile-image"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Employee Store Assignments",
+      "item": [
+        {
+          "name": "Assign Store to Employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Store assigned', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const body = pm.response.json();",
+                  "if (body.item?.id) pm.collectionVariables.set('employeeStoreId', body.item.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"storeId\": \"{{storeId}}\",\n  \"isPrimary\": true,\n  \"status\": \"ACTIVE\",\n  \"loginPin\": \"482731\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores"
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk Assign Stores to Employee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skipExisting\": true,\n  \"items\": [\n    { \"storeId\": \"{{storeId}}\", \"isPrimary\": true, \"status\": \"ACTIVE\", \"loginPin\": \"482731\" }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/bulk"
+          },
+          "response": []
+        },
+        {
+          "name": "List Employee Stores",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Employee Store Assignment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Employee Store Assignment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isPrimary\": false,\n  \"status\": \"ACTIVE\",\n  \"loginPin\": \"482732\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Employee Store Assignment",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isPrimary\": false,\n  \"status\": \"ACTIVE\",\n  \"loginPin\": \"482732\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Store from Employee",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Employee Store Roles",
+      "item": [
+        {
+          "name": "List Roles Available for Store Type",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/stores/{{storeId}}/roles/available"
+          },
+          "response": []
+        },
+        {
+          "name": "Assign Role to Employee Store",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleId\": \"{{roleId}}\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles"
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk Assign Roles to Employee Store",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skipExisting\": true,\n  \"items\": [\n    { \"roleId\": \"{{roleId}}\", \"status\": \"ACTIVE\" },\n    { \"roleId\": \"{{secondRoleId}}\", \"status\": \"ACTIVE\" }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles/bulk"
+          },
+          "response": []
+        },
+        {
+          "name": "List Employee Store Roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Employee Store Role",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles/{{roleId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Employee Store Role",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles/{{roleId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Employee Store Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"SUSPENDED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles/{{roleId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Role from Employee Store",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/employee-stores/{{employeeStoreId}}/roles/{{roleId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Effective Employee Access",
+      "item": [
+        {
+          "name": "Get Effective Access",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Effective access resolved', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Permissions array returned', () => pm.expect(body.permissions).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}/effective-access"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Effective Access for Permission",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/merchants/employees/{{employeeId}}/stores/{{storeId}}/effective-access?permissionKey={{permissionKey}}"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3003/api/v1"
+    },
+    {
+      "key": "merchantOrigin",
+      "value": "http://localhost:3003"
+    },
+    {
+      "key": "authBaseUrl",
+      "value": "http://localhost:3010/api/v1"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "ownerEmail",
+      "value": "admin@alektasolutions.com"
+    },
+    {
+      "key": "ownerPassword",
+      "value": "admin@123"
+    },
+    {
+      "key": "merchantId",
+      "value": "fe3a1356-1344-4a61-8ba5-0b195d533d40",
+      "description": "Merchant UUID; do not use merchant name or business code"
+    },
+    {
+      "key": "employeeId",
+      "value": ""
+    },
+    {
+      "key": "employeeCode",
+      "value": "EMP-1008"
+    },
+    {
+      "key": "storeId",
+      "value": "66666666-6666-4666-8666-666666666661",
+      "description": "Demo Hyderabad Store UUID"
+    },
+    {
+      "key": "roleId",
+      "value": "543b1d7e-a021-481f-a842-4534124a8925",
+      "description": "Store Manager role UUID"
+    },
+    {
+      "key": "secondRoleId",
+      "value": "b5577f83-8717-4bc6-a027-50fc831c02be",
+      "description": "Cashier role UUID"
+    },
+    {
+      "key": "employeeStoreId",
+      "value": ""
+    },
+    {
+      "key": "profileImageUrl",
+      "value": ""
+    },
+    {
+      "key": "employeeUsername",
+      "value": "arun_sharma_1008"
+    },
+    {
+      "key": "employeePassword",
+      "value": "Welcome@1008"
+    },
+    {
+      "key": "permissionKey",
+      "value": "POS_SALE_CREATE"
+    }
+  ]
+}

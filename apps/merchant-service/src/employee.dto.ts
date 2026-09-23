@@ -1,22 +1,16 @@
-import { Type } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, ArrayMinSize, IsUUID, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches } from 'class-validator';
 import { EmployeeStatus } from './entities/employee.entity';
-
-export class EmployeeStoreAssignmentDto {
-  @IsString() @IsNotEmpty() @MaxLength(100) store!: string;
-  @IsArray() @ArrayMinSize(1) @IsUUID('all', { each: true }) roles!: string[];
-}
 
 export class CreateEmployeeDto {
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(100)
-  merchantId!: string;
+  merchantId?: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(50)
-  employeeCode!: string;
+  employeeCode?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -44,11 +38,9 @@ export class CreateEmployeeDto {
   @IsString() @IsOptional() @MaxLength(20) postalCode?: string;
   @IsString() @IsOptional() @MaxLength(50) country?: string;
   @IsString() @IsNotEmpty() @MaxLength(30) username!: string;
-  @IsString() @Matches(/^\d{6}$/) loginPin!: string;
+  @IsString() @IsOptional() @Matches(/^\d{6}$/) loginPin?: string;
   @IsString() @MinLength(8) @MaxLength(128) temporaryPassword!: string;
   @IsBoolean() @IsOptional() sendCredentials?: boolean;
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => EmployeeStoreAssignmentDto)
-  storeAssignments!: EmployeeStoreAssignmentDto[];
 
   @IsEnum(EmployeeStatus)
   @IsOptional()
@@ -87,8 +79,6 @@ export class UpdateEmployeeDto {
   @IsString() @IsOptional() @Matches(/^\d{6}$/) loginPin?: string;
   @IsString() @IsOptional() @MinLength(8) @MaxLength(128) temporaryPassword?: string;
   @IsBoolean() @IsOptional() sendCredentials?: boolean;
-  @IsArray() @IsOptional() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => EmployeeStoreAssignmentDto)
-  storeAssignments?: EmployeeStoreAssignmentDto[];
 
   @IsEnum(EmployeeStatus)
   @IsOptional()

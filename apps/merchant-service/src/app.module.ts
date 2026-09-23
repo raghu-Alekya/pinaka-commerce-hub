@@ -7,7 +7,10 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { PermissionController } from './permission.controller';
 import { RoleController } from './role.controller';
+import { MerchantRoleTemplateController } from './merchant-role-template.controller';
+import { RolePermissionController } from './role-permission.controller';
 import { EmployeeController } from './employee.controller';
+import { MerchantEmployeeController } from './merchant-employee.controller';
 import { EmployeeAccessController } from './employee-access.controller';
 import { EmployeeAccessRepository } from './employee-access.repository';
 import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalog.controller';
@@ -38,8 +41,11 @@ import { RelationshipsRepository } from './relationships.repository';
     RoleTemplateFeatureAccessController,
     RoleTemplatePermissionsReplaceController,
     EmployeeController,
+    MerchantEmployeeController,
     EmployeeAccessController,
     EmployeeStoreRoleCatalogController,
+    MerchantRoleTemplateController,
+    RolePermissionController,
     ...RELATIONSHIP_CONTROLLERS,
     AppController,
     FeaturePermissionController,

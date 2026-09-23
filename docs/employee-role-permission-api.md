@@ -6,7 +6,7 @@ These administration endpoints require an active bearer session with the `OWNER`
 
 ## Automatic tables
 
-`MerchantRepository.onModuleInit()` calls `ensureEmployeeAccessSchema()` before using the workforce repositories. It creates missing `employees`, `roles`, `permissions`, `role_templates`, `employee_stores`, `employee_store_roles`, `role_template_permissions`, and `role_permissions` tables. No manual section 5 SQL execution is needed. The merchant connection always disables TypeORM synchronization, even if `TYPEORM_SYNCHRONIZE=true` enables it for other services: repository-owned foreign keys depend on indexes that TypeORM must not remove. Other services migrate only tables present in their own entity metadata.
+`MerchantRepository.onModuleInit()` calls `ensureEmployeeAccessSchema()` before using the workforce repositories. It creates missing `employees`, `roles`, `permissions`, `role_templates`, `merchant_role_templates`, `employee_stores`, `employee_store_roles`, `role_template_permissions`, and `role_permissions` tables. `role_permissions.merchant_id` and `role_permissions.store_id` are UUIDs that reference an existing merchant and store. No manual section 5 SQL execution is needed. The merchant connection always disables TypeORM synchronization, even if `TYPEORM_SYNCHRONIZE=true` enables it for other services: repository-owned foreign keys depend on indexes that TypeORM must not remove. Other services migrate only tables present in their own entity metadata.
 
 The existing `merchants`, `stores`, and `features` parent tables must be installed. Merchant and store ID types are detected from PostgreSQL. Initialization uses a transaction and the shared schema advisory lock. Existing rows are preserved; legacy camelCase master columns are renamed to their snake_case equivalents. Ambiguous duplicate column layouts fail explicitly. Foreign keys enforce merchant ownership for new employee/store/role tables, and the repository checks tenant scope on requests. A unique index permits only one primary store per employee; clear the old assignment's `isPrimary` flag before choosing another.
 
@@ -14,8 +14,10 @@ The existing `merchants`, `stores`, and `features` parent tables must be install
 
 | Resource | Collection |
 | --- | --- |
-| Employees | `/merchants/:merchantId/employees` |
+| Employees | `/merchants/employees` |
 | Roles | `/merchants/:merchantId/roles` |
+| Merchant role templates | `/merchants/:merchantId/role-templates` |
+| Store role permissions | `/merchants/:merchantId/stores/:storeId/roles/:roleId/permissions` |
 | Permissions | `/permissions` |
 
 Each supports `GET` (list), `POST` (create), and `GET`, `PUT`, `PATCH`, `DELETE` on `/:idOrCode` (employees/roles) or `/:idOrKey` (permissions). PUT and PATCH both update supplied mutable fields. DELETE deactivates the master record. Lists accept `?status=ACTIVE`; permissions also accept `?featureId=<uuid>`. The path supplies the authoritative merchant ID, so it need not appear in the body.
@@ -23,8 +25,22 @@ Each supports `GET` (list), `POST` (create), and `GET`, `PUT`, `PATCH`, `DELETE`
 Create employee:
 
 ```json
-{ "employeeCode": "EMP-1007", "firstName": "Sarah", "lastName": "Jones", "email": "sarah@example.com", "status": "ACTIVE" }
+{
+  "merchantId": "<merchant uuid or code>",
+  "employeeCode": "EMP-1007",
+  "firstName": "Sarah",
+  "lastName": "Jones",
+  "email": "sarah@example.com",
+  "username": "sarah_jones",
+  "temporaryPassword": "Welcome@1008",
+  "status": "ACTIVE",
+  "storeAssignments": [
+    { "store": "STR-5001", "roles": ["<role uuid>"], "loginPin": "482731" }
+  ]
+}
 ```
+
+`loginPin` and `storeAssignments` are optional on create and update. When sent, `loginPin` is a 6-digit PIN (employee root and/or per store assignment). List/get return `storeAssignments[].hasLoginPin` and never the PIN itself. Store assignment APIs accept optional `loginPin`.
 
 Create role:
 
@@ -32,7 +48,29 @@ Create role:
 { "roleCode": "STORE_MANAGER", "name": "Store Manager", "scopeType": "STORE", "isCustom": true, "status": "ACTIVE" }
 ```
 
-Optionally supply `sourceRoleTemplateId`. The repository copies that template's `defaultAllowed` permission mappings into the new role's actual `allowed` mappings in the same transaction. Later template edits do not change existing roles. Roles belong to the merchant and are assigned to employees through a store assignment, never through an `employees.role_id` field.
+Optionally supply `sourceRoleTemplateId`. The repository copies that template's `defaultAllowed` permission mappings into the new role's actual `allowed` mappings in the same transaction and sets `merchant_id`. Later template edits do not change existing roles. Roles belong to the merchant and are assigned to employees through a store assignment, never through an `employees.role_id` field.
+
+Create merchant role template (clone a global template or define a merchant-only catalog entry after the merchant exists):
+
+```json
+{ "sourceRoleTemplateId": "<role template UUID>" }
+```
+
+or
+
+```json
+{ "roleCode": "SHIFT_LEAD", "name": "Shift Lead", "description": "Merchant-specific store role", "scopeType": "STORE" }
+```
+
+Create or replace a store-scoped role permission after both merchant and store exist:
+
+`POST /merchants/:merchantId/stores/:storeId/roles/:roleId/permissions`
+
+```json
+{ "permissionId": "<permission UUID>", "allowed": true }
+```
+
+Bulk: `POST .../permissions/bulk` with `{ "items": [{ "permissionId": "...", "allowed": true }] }`. Store grants override role-level grants (those copied from a template with `store_id` null) for that store only.
 
 Create permission (feature must already exist):
 
@@ -44,7 +82,7 @@ Create permission (feature must already exist):
 
 | Collection path | POST child key | Mutable fields |
 | --- | --- | --- |
-| `/merchants/:merchantId/employees/:employeeId/stores` | `storeId` | `isPrimary`, `status`, `effectiveFrom`, `effectiveUntil` |
+| `/merchants/employees/:employeeId/stores` | `storeId` | `loginPin`, `isPrimary`, `status`, `effectiveFrom`, `effectiveUntil` |
 | `/merchants/:merchantId/employee-stores/:employeeStoreId/roles` | `roleId` | `status`, `effectiveFrom`, `effectiveUntil` |
 | `/role-templates/:roleTemplateId/permissions` | `permissionId` | `defaultAllowed` |
 | `/merchants/:merchantId/roles/:roleId/permissions` | `permissionId` | `allowed` |
@@ -66,7 +104,7 @@ An employee-store POST response's `item.id` is the `employeeStoreId` used for as
 curl --request POST "http://localhost:3003/api/v1/merchants/MER-1001/employees/EMPLOYEE_UUID/stores" \
   --header "Authorization: Bearer YOUR_TOKEN" \
   --header "Content-Type: application/json" \
-  --data '{"storeId":"STR-5001","isPrimary":true,"status":"ACTIVE"}'
+  --data '{"storeId":"STR-5001","isPrimary":true,"status":"ACTIVE","loginPin":"482731"}'
 
 curl --request POST "http://localhost:3003/api/v1/merchants/MER-1001/employee-stores/ASSIGNMENT_UUID/roles" \
   --header "Authorization: Bearer YOUR_TOKEN" \
