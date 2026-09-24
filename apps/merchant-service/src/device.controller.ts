@@ -18,7 +18,6 @@ import { randomUUID } from "node:crypto";
 import { MerchantRepository } from "./merchant.repository";
 import { CreateDeviceDto, UpdateDeviceDto } from "./device.dto";
 import { MerchantEntity } from "./entities/merchant.entity";
-import { StoreEntity } from "./entities/store.entity";
 import { DeviceEntity } from "./entities/device.entity";
 
 @Controller("api/v1/devices")
@@ -42,35 +41,23 @@ export class DeviceController {
     const { merchant } = await this.repository.getMerchantById(body.merchantId);
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.merchantId || body.merchantId;
-    const store = body.storeId
-      ? await this.repository.getStoreById(body.storeId)
-      : null;
-    if (body.storeId && !store) throw new NotFoundException("Store not found");
-    if (store && store.merchantId !== merchantId)
-      throw new BadRequestException("Store does not belong to the selected merchant");
-    const details = this.deviceDetails(body, {});
     const { serialNumber } = body;
     const deviceCode = body.deviceCode || `DEV-${randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
     const device = await this.repository.createDevice({
       id: randomUUID(),
-      deviceName: String(details.deviceName),
+      deviceName: body.deviceName,
       deviceCode,
       deviceType: body.deviceType,
       merchantId,
       merchantName: merchant.businessName,
-      storeId: store?.id ?? null,
-      storeName: store?.storeName ?? null,
       serialNumber,
-      status: String(details.status),
+      status: body.status || "Active",
       createdAt: new Date(),
-      details,
     });
     return {
       success: true,
       device: this.publicDevice(
         device,
-        merchant?.businessName,
-        store?.storeName,
       ),
     };
   }
@@ -101,22 +88,15 @@ export class DeviceController {
           limit,
           search: query.search?.trim() || undefined,
           merchantId: query.merchantId,
-          storeId: query.storeId,
           deviceType: query.deviceType,
           status,
           from,
           to,
         })
       : await this.repository.listDevices().then(devices => ({ devices, total: devices.length, summary: {} }));
-    const [merchants, stores] = await Promise.all([
-      this.repository.getAllMerchants(),
-      this.repository.listStores(),
-    ]);
+    const merchants = await this.repository.getAllMerchants();
     const merchantNames = new Map(
       merchants.map((item: MerchantEntity) => [item.id, item.businessName]),
-    );
-    const storeNames = new Map(
-      stores.map((item: StoreEntity) => [item.id, item.storeName]),
     );
     const response: Record<string, unknown> = {
       count: result.total,
@@ -124,7 +104,6 @@ export class DeviceController {
         this.publicDevice(
           device,
           merchantNames.get(device.merchantId),
-          device.storeId ? storeNames.get(device.storeId) : undefined,
         ),
       ),
     };
@@ -139,20 +118,28 @@ export class DeviceController {
     return response;
   }
 
+  @Get("merchant/:merchantId")
+  async listByMerchant(@Param("merchantId") merchantIdentifier: string) {
+    const { merchant } = await this.repository.getMerchantById(merchantIdentifier);
+    if (!merchant) throw new NotFoundException("Merchant not found");
+    const merchantId = merchant.merchantId || merchantIdentifier;
+    const devices = await this.repository.listDevicesByMerchantId(merchantId);
+    return {
+      count: devices.length,
+      devices: devices.map((device) => this.publicDevice(device, merchant.businessName)),
+    };
+  }
+
   @Get(":deviceId")
   async get(@Param("deviceId", new ParseUUIDPipe()) deviceId: string) {
     const device = await this.repository.getDevice(deviceId);
     if (!device) throw new NotFoundException("Device not found");
-    const [merchants, stores] = await Promise.all([
-      this.repository.getAllMerchants(),
-      this.repository.listStores(),
-    ]);
+    const merchants = await this.repository.getAllMerchants();
     return {
       success: true,
       device: this.publicDevice(
         device,
         merchants.find((item) => item.id === device.merchantId)?.businessName,
-        stores.find((item) => item.id === device.storeId)?.storeName,
       ),
     };
   }
@@ -178,39 +165,19 @@ export class DeviceController {
     const { merchant } = await this.repository.getMerchantById(requestedMerchantId);
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.merchantId || requestedMerchantId;
-    let storeId = current.storeId;
-    let storeName = current.storeName;
-    if (body.storeId === null) {
-      storeId = null;
-      storeName = null;
-    } else if (body.storeId !== undefined) {
-      const store = await this.repository.getStoreById(body.storeId);
-      if (!store) throw new NotFoundException("Store not found");
-      if (store.merchantId !== merchantId)
-        throw new BadRequestException("Store does not belong to the selected merchant");
-      storeId = store.id;
-      storeName = store.storeName;
-    }
-    const existingDetails = (current.details || {}) as Record<string, unknown>;
-    const details = this.deviceDetails(body, existingDetails);
     const updated = await this.repository.updateDevice(deviceId, {
-      deviceName: String(details.deviceName ?? current.deviceName),
-      deviceType: String(details.deviceType ?? current.deviceType),
+      deviceName: body.deviceName ?? current.deviceName,
+      deviceType: body.deviceType ?? current.deviceType,
       deviceCode: body.deviceCode ?? current.deviceCode,
       serialNumber: body.serialNumber ?? current.serialNumber,
       merchantId,
       merchantName: merchant.businessName,
-      storeId,
-      storeName,
-      status: String(details.status),
-      details,
+      status: body.status ?? current.status,
     });
     return {
       success: true,
       device: this.publicDevice(
         updated,
-        merchant.businessName,
-        storeName || undefined,
       ),
     };
   }
@@ -238,75 +205,11 @@ export class DeviceController {
     return { success: true, message: "Device deleted" };
   }
 
-  private deviceDetails(
-    input: Partial<CreateDeviceDto & UpdateDeviceDto>,
-    previous: Record<string, unknown>,
-  ) {
-    const details = { ...previous };
-    for (const key of [
-      "deviceName",
-      "deviceType",
-      "macAddress",
-      "model",
-      "manufacturer",
-      "timeZone",
-      "location",
-      "floor",
-      "notes",
-      "image",
-    ] as const) {
-      if (input[key] !== undefined) details[key] = input[key];
-    }
-    const timeZone =
-      (input.timeZone as string | undefined) ??
-      (details.timeZone as string | undefined) ??
-      "Asia/Kolkata";
-    try {
-      new Intl.DateTimeFormat("en", { timeZone });
-    } catch {
-      throw new BadRequestException("Invalid time zone");
-    }
-    if (input.image) {
-      const bytes = Buffer.from(input.image.split(",")[1], "base64");
-      const png = bytes
-        .subarray(0, 8)
-        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      const jpeg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-      if (
-        bytes.length > 2 * 1024 * 1024 ||
-        !(input.image.startsWith("data:image/png") ? png : jpeg)
-      ) {
-        throw new BadRequestException(
-          "Image must be a JPG or PNG no larger than 2MB",
-        );
-      }
-    }
-    const enableImmediately =
-      input.enableImmediately ??
-      (input.status
-        ? input.status !== "Inactive"
-        : details.enableImmediately !== false);
-    const status = input.status ?? details.status ?? "Active";
-    details.status =
-      status === "Inactive" || !enableImmediately ? "Inactive" : "Active";
-    details.enableImmediately = enableImmediately;
-    details.timeZone = timeZone;
-    if (typeof details.deviceName === "string")
-      details.deviceName = details.deviceName.trim();
-    return details;
-  }
-
   private publicDevice(
     device: DeviceEntity,
     merchantName?: string,
-    storeName?: string | null,
   ) {
-    const { image, ...details } = (device.details || {}) as Record<
-      string,
-      unknown
-    >;
     return {
-      ...details,
       id: device.id,
       deviceName: device.deviceName,
       deviceCode: device.deviceCode,
@@ -314,11 +217,9 @@ export class DeviceController {
       status: device.status,
       merchantId: device.merchantId,
       merchantName: merchantName || device.merchantName || device.merchantId,
-      storeId: device.storeId ?? null,
-      storeName: storeName || device.storeName || device.storeId || null,
       serialNumber: device.serialNumber,
       createdAt: device.createdAt,
-      connectionStatus: details.status === "Inactive" ? "Inactive" : "Offline",
+      connectionStatus: device.status === "Inactive" ? "Inactive" : "Offline",
       lastSeenAt: null,
     };
   }
