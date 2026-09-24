@@ -37,7 +37,8 @@ import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
   imports: [],
-
+  controllers: [
+    CompactMerchantController,
     CompactSubscriptionController,
     StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,
