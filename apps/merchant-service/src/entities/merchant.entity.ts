@@ -34,11 +34,14 @@ export interface KycDocument {
 
 @Entity('merchants')
 export class MerchantEntity {
-  @PrimaryColumn({ name: 'merchant_code', type: 'varchar', length: 100 })
+  @PrimaryColumn({ name: 'merchantCode', type: 'varchar', length: 100 })
   id!: string; // e.g. "MCH-1001"
 
-  @Column({ name: 'id', type: 'uuid', default: () => 'gen_random_uuid()' })
+  @Column({ name: 'id', type: 'uuid', unique: true, default: () => 'gen_random_uuid()' })
   uuid?: string;
+
+  @Column({ type: 'varchar', length: 100 })
+  merchantId?: string;
 
   @Column({ type: 'varchar', length: 255 })
   businessName!: string;
@@ -56,7 +59,8 @@ export class MerchantEntity {
   @Column({ type: 'varchar', length: 150 })
   ownerName!: string;
 
-  @Column({ type: 'varchar', length: 255, unique: true })
+  // Email uniqueness is scoped to ACTIVE rows by merchant-crud.schema.ts.
+  @Column({ type: 'varchar', length: 255 })
   email!: string;
 
   @Column({ type: 'varchar', length: 50 })
@@ -106,6 +110,48 @@ export class MerchantEntity {
 
   @Column({ type: 'varchar', length: 50, default: 'STEP1_BUSINESS' })
   onboardingStep!: string;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  merchantName?: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  businessDisplayName?: string;
+
+  @Column({ type: 'text', nullable: true })
+  addressLine1?: string;
+
+  @Column({ type: 'text', nullable: true })
+  addressLine2?: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  planId?: string;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  billingCycle?: string;
+
+  @Column({ type: 'date', nullable: true })
+  startDate?: string;
+
+  @Column({ type: 'date', nullable: true })
+  renewalDate?: string;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2, nullable: true })
+  agreementPrice?: number;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
+  tax?: number;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
+  totalDueToday?: number;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  paymentMethod?: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  storeTypeId?: string;
+
+  @Column({ type: 'jsonb', default: [] })
+  roleIds?: string[];
 
   @CreateDateColumn()
   createdAt!: Date;

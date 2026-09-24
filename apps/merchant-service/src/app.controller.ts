@@ -1,5 +1,5 @@
 import { storeSetup } from './store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
@@ -90,7 +90,6 @@ export class AppController {
     }));
   }
 
-  @Post('merchants/create-merchant')
   async createMerchantFromWizard(@Body() body: any) {
     this.validateWizardPayload(body);
     await this.requireMasterPlan(body.plan);
@@ -108,8 +107,6 @@ export class AppController {
     return { success: true, message: 'Merchant created successfully', merchant, stores, subscription };
   }
 
-  @Put('merchants/:id')
-  @Patch('merchants/:id')
   async updateMerchantFromWizard(@Param('id') id: string, @Body() body: any) {
     this.validateWizardPayload({ ...body, merchantId: id });
     await this.requireMasterPlan(body.plan);
@@ -485,7 +482,6 @@ export class AppController {
     return { success: true, store };
   }
 
-  @Get('merchants')
   async getAllMerchants() {
     const list = await this.merchantRepository.getAllMerchants();
     const [stores, subscriptions] = await Promise.all([this.merchantRepository.listStores(), this.merchantRepository.listSubscriptions()]);
@@ -496,7 +492,6 @@ export class AppController {
     return { success: true, count: merchants.length, merchants };
   }
 
-  @Get('merchants/:id')
   async getMerchantById(@Param('id') id: string) {
     const result = await this.merchantRepository.getMerchantById(id);
     if (!result.merchant) {
