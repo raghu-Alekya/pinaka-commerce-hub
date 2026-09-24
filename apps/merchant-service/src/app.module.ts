@@ -1,11 +1,11 @@
 import { OnboardingController } from './onboarding.controller';
 import { VendorController } from './vendor.controller';
-import { MerchantVendorController } from './merchant-vendor.controller';
 import { TendorController } from './tendor.controller';
 import { VendorRepository } from './vendor.repository';
 import { TendorRepository } from './tendor.repository';
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { MerchantResponseRelationsInterceptor } from './merchant-response-relations.interceptor';
 import { PermissionController } from './permission.controller';
 import { RoleController } from './role.controller';
 import { MerchantRoleTemplateController } from './merchant-role-template.controller';
@@ -17,7 +17,8 @@ import { EmployeeAccessRepository } from './employee-access.repository';
 import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalog.controller';
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
-import { SubscriptionController } from './subscription.controller';
+import { CompactMerchantController } from './compact-merchant.controller';
+import { CompactSubscriptionController } from './compact-subscription.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
@@ -34,7 +35,10 @@ import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
   imports: [],
-  controllers: [    StoreTypeFeatureCatalogController,
+  controllers: [
+    CompactMerchantController,
+    CompactSubscriptionController,
+    StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,
     StoreTypeAssignedRoleTemplatesController,
@@ -54,14 +58,12 @@ import { RelationshipsRepository } from './relationships.repository';
     FeaturePermissionController,
     PermissionController,
     RoleController,
-    SubscriptionController,
     SubscriptionPlanController,
     ReferenceDataController,
     DeviceController,
     StoreTypeController,
     OnboardingController,
     VendorController,
-    MerchantVendorController,
     TendorController,
     FeatureController,
     RoleTemplateController,
@@ -77,6 +79,7 @@ import { RelationshipsRepository } from './relationships.repository';
     TendorRepository,
     SessionAuthGuard,
     { provide: APP_GUARD, useExisting: SessionAuthGuard },
+    { provide: APP_INTERCEPTOR, useClass: MerchantResponseRelationsInterceptor },
   ],
 })
 export class AppModule {}

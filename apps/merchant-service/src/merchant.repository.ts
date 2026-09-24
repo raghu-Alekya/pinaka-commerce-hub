@@ -1,5 +1,6 @@
-import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { ensureOnboardingSchema } from './onboarding.schema';
+import { ensureMerchantCrudSchema } from './merchant-crud.schema';
+import { ensureMerchantIdentitySchema } from './merchant-identity.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
 import * as crypto from 'crypto';
@@ -25,7 +26,7 @@ import { CreateRoleDto, UpdateRoleDto } from './role.dto';
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employee.dto';
 import { StoreTypeEntity, StoreTypeStatus } from './entities/store-type.entity';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
-import { DataSource, EntityManager, Repository, Table } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
@@ -40,7 +41,6 @@ import { ProductEntity } from './entities/product.entity';
 import { DeviceEntity } from './entities/device.entity';
 import { VendorEntity } from './entities/vendor.entity';
 import { TendorEntity } from './entities/tendor.entity';
-import { MerchantVendorEntity } from './entities/merchant-vendor.entity';
 import { ensureVendorTendorSchema } from './vendor-tendor.schema';
 
 interface WordPressProductNode {
@@ -154,17 +154,6 @@ export class MerchantRepository implements OnModuleInit {
     return this.dataSource;
   }
 
-  private async ensureMerchantVendorTable() {
-    const queryRunner = this.dataSource.createQueryRunner();
-    try {
-      const metadata = this.dataSource.getMetadata(MerchantVendorEntity);
-      if (await queryRunner.hasTable(metadata.tableName)) return;
-      await queryRunner.createTable(Table.create(metadata, this.dataSource.driver), true, true, true);
-    } finally {
-      await queryRunner.release();
-    }
-  }
-
     async onModuleInit() {
     this.dataSource = await connectPostgres('PCH Merchant DB', [
       MerchantEntity,
@@ -187,7 +176,6 @@ export class MerchantRepository implements OnModuleInit {
       SessionEntity,
       VendorEntity,
       TendorEntity,
-      MerchantVendorEntity,
     ], { synchronize: false });
     // A brand-new local database has no base tables yet. Bootstrap it once before
     // installing the additive schemas below. Existing databases deliberately skip
@@ -220,12 +208,13 @@ export class MerchantRepository implements OnModuleInit {
     // 1. Initialize all repositories first
     // Repository-managed foreign keys depend on indexes unknown to TypeORM.
     // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
+    await ensureMerchantIdentitySchema(this.dataSource);
     await ensureEmployeeAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureOnboardingSchema(this.dataSource);
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
-    await ensureCompactMerchantSchema(this.dataSource);
+    await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -325,10 +314,11 @@ export class MerchantRepository implements OnModuleInit {
   private async seedDefaultData() {
     if (!this.merchantRepo || !this.storeRepo) return;
     if (!this.merchantRepo || !this.storeRepo || !this.subRepo) return;
-    const existing = await this.merchantRepo.findOne({ where: { id: 'MCH-1001' } });
+    const existing = await this.merchantRepo.findOne({ where: { merchantId: 'MCH-1001' } });
     if (!existing) {
       const mch1 = this.merchantRepo.create({
-        id: 'MCH-1001',
+        id: `MRC-${crypto.randomUUID()}`,
+        merchantId: 'MCH-1001',
         businessName: 'Fresh Mart Organics LLC',
         businessType: BusinessType.RETAIL,
         retailSubCategory: RetailSubCategory.GROCERY,
@@ -418,10 +408,10 @@ export class MerchantRepository implements OnModuleInit {
         const merchants = manager.getRepository(MerchantEntity);
         const stores = manager.getRepository(StoreEntity);
         const subscriptions = manager.getRepository(SubscriptionEntity);
-        const existing = await merchants.findOne({ where: { id }, lock: { mode: 'pessimistic_write' } });
+        const existing = await merchants.findOne({ where: { merchantId:id }, lock: { mode: 'pessimistic_write' } });
         if (editing && !existing) throw new NotFoundException('Merchant not found');
         if (!editing && existing) throw new ConflictException('Merchant code already exists');
-        const merchant = merchants.create({ ...existing, id, businessName: m.display,
+        const merchant = merchants.create({ ...existing, id:existing?.id || `MRC-${crypto.randomUUID()}`, merchantId:id, businessName: m.display,
           legalBusinessName: m.business, ownerName: m.name, email: m.email.toLowerCase(), phone: m.phone,
           country: m.country, city: m.city, state: m.state, postalCode: m.postal, businessAddress: m.address,
           status: existing?.status || MerchantStatus.PENDING,
@@ -488,7 +478,8 @@ export class MerchantRepository implements OnModuleInit {
   async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
     const id = data.id || await this.allocateId('merchant');
     const merchant: MerchantEntity = {
-      id,
+      id: `MRC-${crypto.randomUUID()}`,
+      merchantId: data.merchantId || id,
       businessName: data.businessName || 'New Merchant Business',
       businessType: data.businessType || BusinessType.RETAIL,
       retailSubCategory: data.retailSubCategory || (data.businessType === BusinessType.RETAIL ? RetailSubCategory.GROCERY : undefined),
@@ -515,8 +506,8 @@ export class MerchantRepository implements OnModuleInit {
       updatedAt: new Date(),
     };
     const saved = await this.merchantRepo.save(this.merchantRepo.create(merchant));
-    await this.recordAuditLog('MERCHANT_CREATED', saved.id, undefined, saved.email, { businessName: saved.businessName });
-    return saved;
+    await this.recordAuditLog('MERCHANT_CREATED', saved.merchantId!, undefined, saved.email, { businessName: saved.businessName });
+    return {...saved,id:saved.merchantId!};
   }
 
   async getAllMerchants(): Promise<MerchantEntity[]> {
@@ -524,9 +515,9 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async updateMerchant(id: string, data: Partial<MerchantEntity>): Promise<MerchantEntity | null> {
-    const merchant = await this.merchantRepo.findOne({ where: { id } });
+    const merchant = await this.merchantRepo.findOne({ where: { merchantId:id }, order:{createdAt:'DESC'} });
     if (!merchant) return null;
-    Object.assign(merchant, data, { id, updatedAt: new Date() });
+    Object.assign(merchant, data, { id:merchant.id, merchantId:merchant.merchantId, updatedAt: new Date() });
     const saved = await this.merchantRepo.save(merchant);
     await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, saved.email, { businessName: saved.businessName });
     return saved;
@@ -534,20 +525,20 @@ export class MerchantRepository implements OnModuleInit {
 
   async getMerchantById(id: string): Promise<{ merchant: MerchantEntity | null; stores: StoreEntity[]; subscription: SubscriptionEntity | null }> {
     const merchantId = await this.resolveMerchantId(id);
-    const merchant = merchantId ? await this.merchantRepo.findOne({ where: { id: merchantId } }) : null;
+    const merchant = merchantId ? await this.merchantRepo.findOne({ where: { merchantId }, order:{createdAt:'DESC'} }) : null;
     if (!merchant) return { merchant: null, stores: [], subscription: null };
-    const stores = await this.storeRepo.find({ where: { merchantId: merchant.id } });
-    const subscription = (await this.listSubscriptions(merchant.id))[0] || null;
-    return { merchant, stores, subscription };
+    const stores = await this.storeRepo.find({ where: { merchantId: merchant.merchantId } });
+    const subscription = (await this.listSubscriptions(merchant.merchantId!))[0] || null;
+    return { merchant:{...merchant,id:merchant.merchantId!}, stores, subscription };
   }
 
   async resolveMerchantId(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT merchant_code FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [idOrUuid]);
-    return rows[0]?.merchant_code || null;
+    const rows = await this.dataSource.query('SELECT "merchantId" FROM public.merchants WHERE "merchantId"=$1 OR "merchantCode"=$1 OR id::text=$1 LIMIT 1', [idOrUuid]);
+    return rows[0]?.merchantId || null;
   }
 
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [idOrUuid]);
+    const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [idOrUuid]);
     return rows[0]?.id || null;
   }
 
@@ -1746,7 +1737,7 @@ export class MerchantRepository implements OnModuleInit {
         const role = await manager.getRepository(RoleEntity).save(entity);
         if (role.sourceRoleTemplateId) {
           const merchantUuid = (await manager.query(
-            'SELECT id FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1',
+            'SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1',
             [dto.merchantId],
           ))[0]?.id || null;
           await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed,merchant_id)
@@ -1784,8 +1775,8 @@ export class MerchantRepository implements OnModuleInit {
 
   private async requireMerchantRecord(idOrCode: string): Promise<{ merchantCode: string; merchantUuid: string }> {
     const rows = await this.dataSource.query(
-      `SELECT merchant_code AS "merchantCode", id AS "merchantUuid"
-       FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1`,
+      `SELECT m."merchantId" AS "merchantCode", m.id AS "merchantUuid"
+       FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1`,
       [idOrCode],
     );
     if (!rows.length) throw new NotFoundException(`Merchant '${idOrCode}' not found`);
@@ -2144,7 +2135,7 @@ export class MerchantRepository implements OnModuleInit {
   private async employeeDetails(employee: EmployeeEntity): Promise<Record<string, unknown>> {
     const users = employee.userId ? await this.dataSource.query('SELECT username FROM public.users WHERE id=$1', [employee.userId]) : [];
     const merchants = await this.dataSource.query(
-      `SELECT merchant_code,
+      `SELECT "merchantCode",
               COALESCE(to_jsonb(m)->>'businessName', to_jsonb(m)->>'business_name', to_jsonb(m)->>'legalBusinessName') AS "merchantName"
        FROM public.merchants m WHERE id=$1`,
       [employee.merchantId],
@@ -2152,7 +2143,7 @@ export class MerchantRepository implements OnModuleInit {
     const { loginPinHash: _loginPinHash, passwordHash: _passwordHash, ...details } = employee as EmployeeEntity & { loginPinHash?: unknown; passwordHash?: unknown };
     return {
       ...details,
-      merchantCode: merchants[0]?.merchant_code || null,
+      merchantCode: merchants[0]?.merchantCode || null,
       merchantName: merchants[0]?.merchantName || null,
       username: users[0]?.username || null,
     };
@@ -2349,10 +2340,10 @@ export class MerchantRepository implements OnModuleInit {
     employeeId: string,
     assignments?: Array<{ store: string; roles?: string[]; loginPin?: string }>,
   ): Promise<void> {
-      const merchants = await manager.query('SELECT id,merchant_code FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1', [merchantId]);
+      const merchants = await manager.query('SELECT m.id,m."merchantId" AS "merchantCode" FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [merchantId]);
       if (!merchants[0]) throw new NotFoundException('Merchant not found');
       const merchantUuid = merchants[0].id;
-      const merchantCode = merchants[0].merchant_code;
+      const merchantCode = merchants[0].merchantCode;
       const keepStoreIds: string[] = [];
       if (!assignments) return;
       for (const [index, assignment] of assignments.entries()) {
