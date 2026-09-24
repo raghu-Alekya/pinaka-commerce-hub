@@ -91,17 +91,21 @@ export class CompactMerchantController {
   }
 
   private async getRecord(id: string) {
-    const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
-      FROM public.merchants m LEFT JOIN LATERAL (
-        SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
-        LEFT JOIN public.plans sp ON sp.id=sub.plan_id
-        WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND sub.status='ACTIVE'
-        ORDER BY sub.created_at DESC LIMIT 1
-      ) s ON true
-      LEFT JOIN public.plans mp ON mp.id=m."planId"
-      WHERE (m."merchantId"=$1 OR m.id::text=$1) AND COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'`, [id]);
-    if (!rows.length) throw new NotFoundException('Merchant not found');
-    return rows[0];
+    try {
+      const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+        FROM public.merchants m LEFT JOIN LATERAL (
+          SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
+          LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
+          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
+          ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
+        ) s ON true
+        LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
+        WHERE (m."merchantId"=$1 OR m.id::text=$1) AND COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'`, [id]);
+      if (rows.length) return rows[0];
+    } catch {}
+    const [row] = await this.db.query(`SELECT * FROM public.merchants WHERE "merchantId"=$1 OR id::text=$1 LIMIT 1`, [id]);
+    if (!row) throw new NotFoundException('Merchant not found');
+    return { merchant: row };
   }
 
   @Post('create-merchant')
@@ -225,16 +229,21 @@ export class CompactMerchantController {
 
   @Get()
   async list() {
-    const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
-      FROM public.merchants m LEFT JOIN LATERAL (
-        SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
-        LEFT JOIN public.plans sp ON sp.id=sub.plan_id
-        WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND sub.status='ACTIVE'
-        ORDER BY sub.created_at DESC LIMIT 1
-      ) s ON true LEFT JOIN public.plans mp ON mp.id=m."planId"
-      WHERE COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'
-      ORDER BY COALESCE(m."createdDate", now()) DESC`);
-    return { success: true, count: rows.length, merchants: rows };
+    try {
+      const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+        FROM public.merchants m LEFT JOIN LATERAL (
+          SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
+          LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
+          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
+          ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
+        ) s ON true LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
+        WHERE COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'
+        ORDER BY COALESCE(m."createdDate", now()) DESC`);
+      return { success: true, count: rows.length, merchants: rows };
+    } catch (err) {
+      const rows = await this.db.query(`SELECT * FROM public.merchants WHERE COALESCE("initialStatus", 'ACTIVE')='ACTIVE' ORDER BY id DESC`);
+      return { success: true, count: rows.length, merchants: rows.map((m: any) => ({ merchant: m })) };
+    }
   }
 
   @Get(':id')
