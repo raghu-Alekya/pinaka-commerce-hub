@@ -632,9 +632,15 @@ export class MerchantRepository implements OnModuleInit {
   
   async createDevice(data: {
     id: string;
+    deviceName?: string;
+    deviceCode?: string;
+    deviceType?: string;
     merchantId: string;
-    storeId: string;
+    merchantName?: string;
+    storeId?: string | null;
+    storeName?: string | null;
     serialNumber: string;
+    status?: string;
     details: Record<string, unknown>;
     createdAt?: Date;
   }): Promise<DeviceEntity> {
@@ -646,9 +652,15 @@ export class MerchantRepository implements OnModuleInit {
 
     const entity = this.deviceRepo.create({
       id: data.id,
+      deviceName: data.deviceName || String(data.details.deviceName || 'Unnamed device'),
+      deviceCode: data.deviceCode || `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+      deviceType: data.deviceType || String(data.details.deviceType || 'Other'),
       merchantId: data.merchantId,
-      storeId: data.storeId,
+      merchantName: data.merchantName || data.merchantId,
+      storeId: data.storeId || null,
+      storeName: data.storeName || data.storeId || null,
       serialNumber: data.serialNumber,
+      status: data.status || String(data.details.status || 'Active'),
       details: cleanDetails,
       createdAt: data.createdAt || new Date(),
     });
@@ -658,10 +670,71 @@ export class MerchantRepository implements OnModuleInit {
     } catch (error: any) {
       const code = error.driverError?.code || error.code;
       if (code === '23505') {
-        throw new ConflictException('Device serial number already exists');
+        throw new ConflictException('Device code or serial number already exists');
       }
       throw error;
     }
+  }
+
+  async getDevice(id: string): Promise<DeviceEntity | null> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    return this.deviceRepo.findOne({ where: { id } });
+  }
+
+  async updateDevice(id: string, fields: Partial<DeviceEntity>): Promise<DeviceEntity> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    try {
+      const current = await this.deviceRepo.findOne({ where: { id } });
+      if (!current) throw new NotFoundException('Device not found');
+      return await this.deviceRepo.save(Object.assign(current, fields));
+    } catch (error: any) {
+      if (error instanceof NotFoundException) throw error;
+      if ((error.driverError?.code || error.code) === '23505') {
+        throw new ConflictException('Device code or serial number already exists');
+      }
+      throw error;
+    }
+  }
+
+  async deleteDevice(id: string): Promise<boolean> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    return (await this.deviceRepo.delete(id)).affected === 1;
+  }
+
+  async queryDevices(filters: {
+    page: number; limit: number; search?: string; merchantId?: string;
+    storeId?: string; deviceType?: string; status?: string; from?: Date; to?: Date;
+  }): Promise<{ devices: DeviceEntity[]; total: number; summary: Record<string, number> }> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    if (typeof (this.deviceRepo as any).createQueryBuilder !== 'function') {
+      const all = await this.deviceRepo.find({ order: { createdAt: 'DESC' } });
+      const filtered = all.filter(device =>
+        (!filters.merchantId || device.merchantId === filters.merchantId) &&
+        (!filters.storeId || device.storeId === filters.storeId) &&
+        (!filters.deviceType || device.deviceType === filters.deviceType) &&
+        (!filters.search || [device.deviceName, device.deviceCode, device.serialNumber].some(value => value.toLowerCase().includes(filters.search!.toLowerCase()))) &&
+        (!filters.from || device.createdAt >= filters.from) && (!filters.to || device.createdAt < filters.to));
+      const devices = filtered.slice((filters.page - 1) * filters.limit, filters.page * filters.limit);
+      return { devices, total: filtered.length, summary: {} };
+    }
+    const query = this.deviceRepo.createQueryBuilder('device');
+    if (filters.search) query.andWhere(`(device."deviceName" ILIKE :search OR device."deviceCode" ILIKE :search OR device."serialNumber" ILIKE :search)`, { search: `%${filters.search}%` });
+    if (filters.merchantId) query.andWhere('device."merchantId" = :merchantId', { merchantId: filters.merchantId });
+    if (filters.storeId) query.andWhere('device."storeId" = :storeId', { storeId: filters.storeId });
+    if (filters.deviceType) query.andWhere('device."deviceType" = :deviceType', { deviceType: filters.deviceType });
+    if (filters.status?.toLowerCase() === 'active') query.andWhere(`device.status = 'Active'`);
+    if (filters.status?.toLowerCase() === 'inactive') query.andWhere(`device.status = 'Inactive'`);
+    if (filters.status?.toLowerCase() === 'offline') query.andWhere(`device.status = 'Active'`);
+    if (filters.status?.toLowerCase() === 'online') query.andWhere('1 = 0');
+    if (filters.from) query.andWhere('device."createdAt" >= :from', { from: filters.from });
+    if (filters.to) query.andWhere('device."createdAt" < :to', { to: filters.to });
+    const [devices, total] = await query.orderBy('device."createdAt"', 'DESC')
+      .skip((filters.page - 1) * filters.limit).take(filters.limit).getManyAndCount();
+    const summaryRows = await this.deviceRepo.createQueryBuilder('device')
+      .select('device.status', 'status').addSelect('COUNT(*)', 'count')
+      .groupBy('device.status').getRawMany();
+    const summary = Object.fromEntries(summaryRows.map((row: any) => [String(row.status).toLowerCase(), Number(row.count)]));
+    return { devices, total, summary };
   }
 
   async listDevices(): Promise<DeviceEntity[]> {

@@ -15,18 +15,16 @@ async function main() {
   const runner = db.createQueryRunner();
   await runner.startTransaction();
   try {
-    const [store] = await runner.query('SELECT id, "merchantId" FROM stores LIMIT 1');
-    assert.ok(store, 'A store is required for the database round-trip test');
     const repository = new MerchantRepository();
     Object.assign(repository, { deviceRepo: runner.manager.getRepository(DeviceEntity) });
     const id = randomUUID();
-    await repository.createDevice({ id, storeId: store.id, merchantId: store.merchantId,
+    await repository.createDevice({ id, merchantId: 'MCH-1001',
       serialNumber: `TEST-${id}`, details: { deviceName: 'Rollback test', status: 'Active', image: 'excluded' }, createdAt: new Date() });
     const device = (await repository.listDevices()).find((item: DeviceEntity) => item.id === id);
     assert.equal(device?.details.deviceName, 'Rollback test');
     assert.equal(device?.details.image, undefined);
-    await assert.rejects(() => repository.createDevice({ id: randomUUID(), storeId: store.id,
-      merchantId: store.merchantId, serialNumber: `TEST-${id}`, details: {}, createdAt: new Date() }),
+    await assert.rejects(() => repository.createDevice({ id: randomUUID(),
+      merchantId: 'MCH-1001', serialNumber: `TEST-${id}`, details: {}, createdAt: new Date() }),
       (error: any) => error.getStatus() === 409);
     console.log('PASS: PostgreSQL device persistence, listing, image exclusion and unique serial constraint (rolled back)');
   } finally { await runner.rollbackTransaction(); await runner.release(); await db.destroy(); }
