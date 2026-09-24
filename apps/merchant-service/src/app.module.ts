@@ -1,5 +1,3 @@
-import { CompactMerchantController } from './compact-merchant.controller';
-import { CompactSubscriptionController } from './compact-subscription.controller';
 import { OnboardingController } from './onboarding.controller';
 import { VendorController } from './vendor.controller';
 import { TendorController } from './tendor.controller';
