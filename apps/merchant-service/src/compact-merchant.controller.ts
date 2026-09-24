@@ -3,13 +3,13 @@ import { MerchantRepository } from './merchant.repository';
 
 const fields = [
   'merchantName', 'merchantEmail', 'merchantPhoneNumber', 'businessName', 'businessDisplayName',
-  'storeTypeId', 'initialStatus', 'addressLine1', 'addressLine2', 'city', 'state', 'pinCode',
+  'storeTypeId', 'addressLine1', 'addressLine2', 'city', 'state', 'pinCode',
   'country', 'planId', 'billingCycle', 'startDate', 'renewalDate', 'agreementPrice',
   'roleIds', 'tax', 'totalDueToday', 'paymentMethod',
 ] as const;
 const required = [
   'merchantName', 'merchantEmail', 'merchantPhoneNumber', 'businessName',
-  'businessDisplayName', 'storeTypeId', 'initialStatus', 'addressLine1', 'city', 'state',
+  'businessDisplayName', 'storeTypeId', 'addressLine1', 'city', 'state',
   'pinCode', 'country', 'planId', 'billingCycle', 'startDate', 'renewalDate', 'agreementPrice',
 ] as const;
 type Input = Record<string, unknown>;
@@ -45,20 +45,52 @@ export class CompactMerchantController {
 
   private async getRecord(id: string) {
     try {
-      const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
-        FROM public.merchants m LEFT JOIN LATERAL (
-          SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
-          LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
-          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text OR sub."merchantId"=m."merchantCode") AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
-          ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
-        ) s ON true
-        LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
-        WHERE (m."merchantId"=$1 OR m.id::text=$1 OR m."merchantCode"=$1) AND COALESCE(m."initialStatus", m.status, 'ACTIVE')='ACTIVE'`, [id]);
+      const rows = await this.db.query(
+        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+         FROM public.merchants m
+         LEFT JOIN LATERAL (
+           SELECT sub.*, row_to_json(sp) AS plan
+           FROM public.subscriptions sub
+           LEFT JOIN public.plans sp
+             ON sp.id::text = COALESCE(to_jsonb(sub)->>'plan_id', to_jsonb(sub)->>'planId')
+           WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
+                   IN (
+                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text),
+                     m.id::text
+                   )
+             AND COALESCE(to_jsonb(sub)->>'status', 'ACTIVE') = 'ACTIVE'
+           ORDER BY COALESCE(
+             (to_jsonb(sub)->>'created_at')::timestamptz,
+             (to_jsonb(sub)->>'createdAt')::timestamptz,
+             now()
+           ) DESC
+           LIMIT 1
+         ) s ON true
+         LEFT JOIN public.plans mp
+           ON mp.id::text = COALESCE(to_jsonb(m)->>'planId', to_jsonb(m)->>'plan_id')
+         WHERE (
+             COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text) = $1
+             OR m.id::text = $1
+           )
+           AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'`,
+        [id],
+      );
       if (rows.length) return rows[0];
-    } catch {}
-    const [row] = await this.db.query(`SELECT * FROM public.merchants WHERE "merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1 LIMIT 1`, [id]);
+    } catch (error: unknown) {
+      console.error(
+        '[CompactMerchantController.getRecord]',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    const [row] = await this.db.query(
+      `SELECT row_to_json(m) AS merchant FROM public.merchants m
+       WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text) = $1
+          OR m.id::text = $1
+       LIMIT 1`,
+      [id],
+    );
     if (!row) throw new NotFoundException('Merchant not found');
-    return { merchant: row };
+    return row;
   }
 
   @Post('create-merchant')
@@ -125,7 +157,6 @@ export class CompactMerchantController {
       businessName: merchant.business || merchant.businessName || body.businessName || 'Business LLC',
       businessDisplayName: merchant.display || merchant.businessDisplayName || merchant.business || body.businessDisplayName || 'Business',
       storeTypeId,
-      initialStatus: merchant.initialStatus || body.initialStatus || 'ACTIVE',
       addressLine1: merchant.addressLine1 || body.addressLine1 || '100 Main St',
       addressLine2: merchant.addressLine2 || body.addressLine2 || '',
       city: merchant.city || body.city || 'City',
@@ -202,8 +233,7 @@ export class CompactMerchantController {
         setCol('totalDueToday', input.totalDueToday);
         setCol('paymentMethod', input.paymentMethod);
         setCol('roleIds', JSON.stringify(input.roleIds || []));
-        setCol('initialStatus', input.initialStatus || 'ACTIVE');
-        setCol('status', input.initialStatus || 'ACTIVE');
+        setCol('status', 'ACTIVE');
         setCol('createdDate', new Date());
         setCol('updatedDate', new Date());
         setCol('created_at', new Date());
@@ -267,19 +297,63 @@ export class CompactMerchantController {
   @Get()
   async list() {
     try {
-      const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
-        FROM public.merchants m LEFT JOIN LATERAL (
-          SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
-          LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
-          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text OR sub."merchantId"=m."merchantCode") AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
-          ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
-        ) s ON true LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
-        WHERE COALESCE(m."initialStatus", m.status, 'ACTIVE')='ACTIVE'
-        ORDER BY COALESCE(m."createdDate", m.created_at, now()) DESC`);
+      const rows = await this.db.query(
+        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+         FROM public.merchants m
+         LEFT JOIN LATERAL (
+           SELECT sub.*, row_to_json(sp) AS plan
+           FROM public.subscriptions sub
+           LEFT JOIN public.plans sp
+             ON sp.id::text = COALESCE(to_jsonb(sub)->>'plan_id', to_jsonb(sub)->>'planId')
+           WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
+                   IN (
+                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text),
+                     m.id::text
+                   )
+             AND COALESCE(to_jsonb(sub)->>'status', 'ACTIVE') = 'ACTIVE'
+           ORDER BY COALESCE(
+             (to_jsonb(sub)->>'created_at')::timestamptz,
+             (to_jsonb(sub)->>'createdAt')::timestamptz,
+             now()
+           ) DESC
+           LIMIT 1
+         ) s ON true
+         LEFT JOIN public.plans mp
+           ON mp.id::text = COALESCE(to_jsonb(m)->>'planId', to_jsonb(m)->>'plan_id')
+         WHERE COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
+         ORDER BY COALESCE(
+           (to_jsonb(m)->>'createdDate')::timestamptz,
+           (to_jsonb(m)->>'created_at')::timestamptz,
+           (to_jsonb(m)->>'createdAt')::timestamptz,
+           now()
+         ) DESC`,
+      );
       return { success: true, count: rows.length, merchants: rows };
-    } catch (err) {
-      const rows = await this.db.query(`SELECT * FROM public.merchants WHERE COALESCE("initialStatus", status, 'ACTIVE')='ACTIVE' ORDER BY COALESCE("createdDate", created_at, now()) DESC`);
-      return { success: true, count: rows.length, merchants: rows.map((m: any) => ({ merchant: m })) };
+    } catch (error: unknown) {
+      console.error(
+        '[CompactMerchantController.list]',
+        error instanceof Error ? error.message : String(error),
+      );
+      try {
+        const rows = await this.db.query(
+          `SELECT row_to_json(m) AS merchant FROM public.merchants m
+           WHERE COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
+           ORDER BY COALESCE(
+             (to_jsonb(m)->>'createdDate')::timestamptz,
+             (to_jsonb(m)->>'created_at')::timestamptz,
+             (to_jsonb(m)->>'createdAt')::timestamptz,
+             now()
+           ) DESC`,
+        );
+        return { success: true, count: rows.length, merchants: rows };
+      } catch (fallbackError: unknown) {
+        console.error(
+          '[CompactMerchantController.list.fallback]',
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        );
+        const rows = await this.db.query(`SELECT row_to_json(m) AS merchant FROM public.merchants m`);
+        return { success: true, count: rows.length, merchants: rows };
+      }
     }
   }
 
@@ -313,10 +387,19 @@ export class CompactMerchantController {
       if (missing.length) throw new BadRequestException(`Missing required fields: ${missing.join(', ')}`);
     }
     await this.db.transaction(async manager => {
-      const [existing] = await manager.query('SELECT * FROM public.merchants WHERE ("merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1) AND COALESCE("initialStatus", status)=\'ACTIVE\' FOR UPDATE', [id]);
+      const [existing] = await manager.query(
+        `SELECT * FROM public.merchants m
+         WHERE (COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1 OR m.id::text = $1)
+           AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
+         FOR UPDATE`,
+        [id],
+      );
       if (!existing) throw new NotFoundException('Merchant not found');
 
-      await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now() WHERE id=$1`, [existing.id]);
+      await manager.query(
+        `UPDATE public.merchants SET status='INACTIVE' WHERE id=$1`,
+        [existing.id],
+      );
 
       const merchantColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`);
       const availMerchantCols = new Set(merchantColsResult.map((r: any) => r.column_name));
@@ -350,7 +433,6 @@ export class CompactMerchantController {
       setCol('tax', input.tax ?? existing.tax);
       setCol('totalDueToday', input.totalDueToday ?? existing.totalDueToday);
       setCol('paymentMethod', input.paymentMethod ?? existing.paymentMethod);
-      setCol('initialStatus', 'ACTIVE');
       setCol('status', 'ACTIVE');
       setCol('createdDate', new Date());
       setCol('updatedDate', new Date());
@@ -364,29 +446,57 @@ export class CompactMerchantController {
   }
 
   @Patch(':id/status')
-  async updateStatus(@Param('id') id:string, @Body() body:{initialStatus?:string}) {
-    if (!body || !['ACTIVE','INACTIVE'].includes(String(body.initialStatus))) throw new BadRequestException('initialStatus must be ACTIVE or INACTIVE');
+  async updateStatus(@Param('id') id: string, @Body() body: { status?: string }) {
+    if (!body || !['ACTIVE', 'INACTIVE'].includes(String(body.status))) {
+      throw new BadRequestException('status must be ACTIVE or INACTIVE');
+    }
     let targetRowId = '';
     let targetMerchantId = '';
-    await this.db.transaction(async manager=>{
-      const [target]=await manager.query(`SELECT id,"merchantId" FROM public.merchants
-        WHERE id::text=$1 OR "merchantId"=$1 OR "merchantCode"=$1
-        ORDER BY CASE WHEN id::text=$1 THEN 0 ELSE 1 END,"createdDate" DESC LIMIT 1 FOR UPDATE`,[id]);
+    await this.db.transaction(async manager => {
+      const [target] = await manager.query(
+        `SELECT m.id,
+                COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) AS "merchantId"
+         FROM public.merchants m
+         WHERE m.id::text = $1
+            OR COALESCE(to_jsonb(m)->>'merchantId', '') = $1
+            OR COALESCE(to_jsonb(m)->>'merchantCode', '') = $1
+         ORDER BY CASE WHEN m.id::text = $1 THEN 0 ELSE 1 END,
+                  COALESCE((to_jsonb(m)->>'createdDate')::timestamptz, (to_jsonb(m)->>'created_at')::timestamptz, now()) DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [id],
+      );
       if (!target) throw new NotFoundException('Merchant not found');
       targetRowId = target.id;
-      targetMerchantId = target.merchantId || target.merchantCode;
-      if (body.initialStatus==='ACTIVE') await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now()
-        WHERE ("merchantId"=$1 OR "merchantCode"=$1) AND COALESCE("initialStatus",status)='ACTIVE' AND id<>$2`,[target.merchantId,target.id]);
-      await manager.query(`UPDATE public.merchants SET "initialStatus"=$2,status=$2,"updatedDate"=now() WHERE id=$1`,[target.id,body.initialStatus]);
+      targetMerchantId = target.merchantId;
+      if (body.status === 'ACTIVE') {
+        await manager.query(
+          `UPDATE public.merchants m SET status='INACTIVE'
+           WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
+             AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
+             AND m.id <> $2`,
+          [target.merchantId, target.id],
+        );
+      }
+      await manager.query(`UPDATE public.merchants SET status=$2 WHERE id=$1`, [target.id, body.status]);
     });
-    return {success:true,id:targetRowId,merchantId:targetMerchantId,initialStatus:body.initialStatus};
+    return { success: true, id: targetRowId, merchantId: targetMerchantId, status: body.status };
   }
 
   @Delete(':id')
   async remove(@Param('id') id: string) {
     try {
-      await this.db.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now() WHERE "merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1`, [id]);
-      await this.db.query(`UPDATE public.subscriptions SET status='INACTIVE',updated_at=now() WHERE "merchantId"=$1`, [id]);
+      await this.db.query(
+        `UPDATE public.merchants m SET status='INACTIVE'
+         WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
+            OR m.id::text = $1`,
+        [id],
+      );
+      await this.db.query(
+        `UPDATE public.subscriptions s SET status='INACTIVE'
+         WHERE COALESCE(to_jsonb(s)->>'merchantId', to_jsonb(s)->>'merchant_id') = $1`,
+        [id],
+      );
       return { success: true, merchantId: id };
     } catch (error: any) {
       if ((error.driverError?.code || error.code) === '23503') throw new ConflictException('Merchant is referenced by other records');
