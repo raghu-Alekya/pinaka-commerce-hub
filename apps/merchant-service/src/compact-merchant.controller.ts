@@ -22,7 +22,7 @@ export class CompactMerchantController {
 
   private validate(input: Input, create: boolean): Input {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a merchant object');
-    const allowed = new Set<string>(fields);
+    const allowed = new Set<string>([...fields, 'merchantId', 'code', 'planDetails', 'stores']);
     const unknown = Object.keys(input).filter(key => !allowed.has(key));
     if (unknown.length) throw new BadRequestException(`Unknown fields: ${unknown.join(', ')}`);
     if (create) {
@@ -43,74 +43,20 @@ export class CompactMerchantController {
     return input;
   }
 
-  private async planExists(manager: { query: (sql: string, parameters?: unknown[]) => Promise<any[]> }, id: unknown) {
-    if (!id) return;
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
-    try {
-      const rows = isUuid
-        ? await manager.query('SELECT id FROM public.plans WHERE id=$1', [id])
-        : await manager.query('SELECT id FROM public.plans WHERE (name ILIKE $1 OR plan_code ILIKE $1)', [String(id)]);
-      if (rows.length) return;
-    } catch {}
-  }
-
-  private async resolveMasterIds(manager: { query: (sql: string, parameters?: unknown[]) => Promise<any[]> }, input: Input): Promise<Input> {
-    const resolved = { ...input };
-    if (input.storeTypeId !== undefined) {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(input.storeTypeId));
-      try {
-        let rows = isUuid
-          ? await manager.query(`SELECT id FROM public.store_types WHERE id=$1::uuid`, [String(input.storeTypeId)])
-          : await manager.query(`SELECT id FROM public.store_types WHERE (name ILIKE $1 OR store_type_code ILIKE $1) LIMIT 1`, [String(input.storeTypeId)]);
-        if (!rows.length) {
-          rows = await manager.query(`SELECT id FROM public.store_types LIMIT 1`);
-        }
-        if (rows.length) resolved.storeTypeId = rows[0].id;
-      } catch {}
-    }
-    if (input.planId !== undefined) {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(input.planId));
-      try {
-        let rows = isUuid
-          ? await manager.query(`SELECT id FROM public.plans WHERE id=$1::uuid`, [String(input.planId)])
-          : await manager.query(`SELECT id FROM public.plans WHERE (name ILIKE $1 OR plan_code ILIKE $1) LIMIT 1`, [String(input.planId)]);
-        if (!rows.length) {
-          rows = await manager.query(`SELECT id FROM public.plans LIMIT 1`);
-        }
-        if (rows.length) resolved.planId = rows[0].id;
-      } catch {}
-    }
-    if (input.roleIds !== undefined && Array.isArray(input.roleIds)) {
-      const names = (input.roleIds as unknown[]).map(String);
-      const ids: string[] = [];
-      for (const name of names) {
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
-        try {
-          const rows = isUuid
-            ? await manager.query(`SELECT id FROM public.role_templates WHERE id=$1::uuid`, [name])
-            : await manager.query(`SELECT id FROM public.role_templates WHERE (name ILIKE $1 OR role_code ILIKE $1) LIMIT 1`, [name]);
-          if (rows.length) ids.push(rows[0].id);
-        } catch {}
-      }
-      resolved.roleIds = ids.length ? [...new Set(ids)] : input.roleIds;
-    }
-    return resolved;
-  }
-
   private async getRecord(id: string) {
     try {
       const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
         FROM public.merchants m LEFT JOIN LATERAL (
           SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
           LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
-          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
+          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text OR sub."merchantId"=m."merchantCode") AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
           ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
         ) s ON true
         LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
-        WHERE (m."merchantId"=$1 OR m.id::text=$1) AND COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'`, [id]);
+        WHERE (m."merchantId"=$1 OR m.id::text=$1 OR m."merchantCode"=$1) AND COALESCE(m."initialStatus", m.status, 'ACTIVE')='ACTIVE'`, [id]);
       if (rows.length) return rows[0];
     } catch {}
-    const [row] = await this.db.query(`SELECT * FROM public.merchants WHERE "merchantId"=$1 OR id::text=$1 LIMIT 1`, [id]);
+    const [row] = await this.db.query(`SELECT * FROM public.merchants WHERE "merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1 LIMIT 1`, [id]);
     if (!row) throw new NotFoundException('Merchant not found');
     return { merchant: row };
   }
@@ -133,7 +79,7 @@ export class CompactMerchantController {
     }
     if (!storeTypeId) {
       try {
-        const [fallback] = await this.db.query(`SELECT id FROM public.store_types LIMIT 1`);
+        const [fallback] = await this.db.query(`SELECT id FROM public.store_types WHERE status='ACTIVE' LIMIT 1`);
         if (fallback) storeTypeId = fallback.id;
       } catch {}
     }
@@ -163,7 +109,7 @@ export class CompactMerchantController {
         }
       } catch {}
     }
-    if (!planId) planId = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+    if (!planId) planId = 'b1111111-0000-0000-0000-000000000001';
 
     const billingCycle = String(subscription.billingCycle || body.billingCycle || 'MONTHLY').toUpperCase();
     const cycle = ['MONTHLY', 'QUARTERLY', 'ANNUAL'].includes(billingCycle) ? billingCycle : 'MONTHLY';
@@ -204,11 +150,6 @@ export class CompactMerchantController {
     let merchantId = String(body.merchantId || body.code || input.merchantId || '').trim();
     try {
       await this.db.transaction(async manager => {
-        await this.planExists(manager, input.planId);
-        const normalized = await this.resolveMasterIds(manager, input);
-        const columns = fields.filter(key => normalized[key] !== undefined);
-        const values = columns.map(key => key === 'roleIds' ? JSON.stringify(normalized[key]) : normalized[key]);
-        
         if (!merchantId) {
           try {
             const [generated] = await manager.query(`SELECT 'MER-' || lpad(nextval('public.merchant_id_seq')::text,6,'0') AS "merchantId"`);
@@ -217,21 +158,99 @@ export class CompactMerchantController {
             merchantId = `MER-${Math.floor(100000 + Math.random() * 900000)}`;
           }
         }
+
         try {
           await manager.query(`CREATE TABLE IF NOT EXISTS public.merchant_identities ("merchantId" varchar(100) PRIMARY KEY, created_at timestamptz DEFAULT now())`);
           await manager.query(`INSERT INTO public.merchant_identities("merchantId") VALUES($1) ON CONFLICT DO NOTHING`, [merchantId]);
         } catch {}
 
-        const colList = columns.map(key => `"${key}"`).join(',');
-        const valPlaceholders = columns.map((_, index) => '$' + (index + 2)).join(',');
+        // 1. Inspect existing columns in public.merchants dynamically
+        const merchantColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`);
+        const availMerchantCols = new Set(merchantColsResult.map((r: any) => r.column_name));
 
-        await manager.query(`INSERT INTO public.merchants ("merchantId",${colList},"createdDate","updatedDate")
-          VALUES ($1,${valPlaceholders},now(),now())`, [merchantId, ...values]);
+        const merchantData: Record<string, any> = {};
+        const setCol = (col: string, val: any) => { if (availMerchantCols.has(col)) merchantData[col] = val; };
+
+        setCol('merchantId', merchantId);
+        setCol('merchantCode', merchantId);
+        setCol('merchant_code', merchantId);
+        setCol('businessName', input.businessName);
+        setCol('businessDisplayName', input.businessDisplayName || input.businessName);
+        setCol('legalBusinessName', input.businessName);
+        setCol('merchantName', input.merchantName);
+        setCol('ownerName', input.merchantName);
+        setCol('name', input.merchantName);
+        setCol('merchantEmail', input.merchantEmail);
+        setCol('email', input.merchantEmail);
+        setCol('merchantPhoneNumber', input.merchantPhoneNumber);
+        setCol('phone', input.merchantPhoneNumber);
+        setCol('addressLine1', input.addressLine1);
+        setCol('addressLine2', input.addressLine2);
+        setCol('businessAddress', input.addressLine1);
+        setCol('city', input.city);
+        setCol('state', input.state);
+        setCol('pinCode', input.pinCode);
+        setCol('postalCode', input.pinCode);
+        setCol('country', input.country);
+        setCol('storeTypeId', input.storeTypeId);
+        setCol('planId', input.planId);
+        setCol('billingCycle', input.billingCycle);
+        setCol('startDate', input.startDate);
+        setCol('renewalDate', input.renewalDate);
+        setCol('agreementPrice', input.agreementPrice);
+        setCol('tax', input.tax);
+        setCol('totalDueToday', input.totalDueToday);
+        setCol('paymentMethod', input.paymentMethod);
+        setCol('roleIds', JSON.stringify(input.roleIds || []));
+        setCol('initialStatus', input.initialStatus || 'ACTIVE');
+        setCol('status', input.initialStatus || 'ACTIVE');
+        setCol('createdDate', new Date());
+        setCol('updatedDate', new Date());
+        setCol('created_at', new Date());
+        setCol('updated_at', new Date());
+
+        const mCols = Object.keys(merchantData);
+        const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
+        const mColList = mCols.map(c => `"${c}"`).join(',');
+        await manager.query(`INSERT INTO public.merchants (${mColList}) VALUES (${mPlaceholders})`, Object.values(merchantData));
+
+        // 2. Inspect existing columns in public.subscriptions dynamically
+        const subColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`);
+        const availSubCols = new Set(subColsResult.map((r: any) => r.column_name));
 
         const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2,8)}`;
-        await manager.query(`INSERT INTO public.subscriptions
-          ("subscriptionId","merchantId",plan_id,billing_cycle,start_date,renewal_date,agreement_price,status,created_at,updated_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',now(),now())`, [subId, merchantId, normalized.planId, normalized.billingCycle, normalized.startDate, normalized.renewalDate, normalized.agreementPrice]);
+        const subData: Record<string, any> = {};
+        const setSubCol = (col: string, val: any) => { if (availSubCols.has(col)) subData[col] = val; };
+
+        setSubCol('id', subId);
+        setSubCol('subscriptionId', subId);
+        setSubCol('subscription_code', subId);
+        setSubCol('merchantId', merchantId);
+        setSubCol('merchant_id', merchantId);
+        setSubCol('plan_id', input.planId);
+        setSubCol('planId', input.planId);
+        setSubCol('plan_code', 'PRO');
+        setSubCol('planCode', 'PRO');
+        setSubCol('plan_name', 'Pro Commerce Plan');
+        setSubCol('planName', 'Pro Commerce Plan');
+        setSubCol('billing_cycle', input.billingCycle);
+        setSubCol('billingCycle', input.billingCycle);
+        setSubCol('start_date', input.startDate);
+        setSubCol('startDate', input.startDate);
+        setSubCol('renewal_date', input.renewalDate);
+        setSubCol('renewalDate', input.renewalDate);
+        setSubCol('agreement_price', input.agreementPrice);
+        setSubCol('agreementPrice', input.agreementPrice);
+        setSubCol('price', input.agreementPrice);
+        setSubCol('currency', 'USD');
+        setSubCol('status', 'ACTIVE');
+        setSubCol('created_at', new Date());
+        setSubCol('updated_at', new Date());
+
+        const sCols = Object.keys(subData);
+        const sPlaceholders = sCols.map((_, i) => `$${i + 1}`).join(',');
+        const sColList = sCols.map(c => `"${c}"`).join(',');
+        await manager.query(`INSERT INTO public.subscriptions (${sColList}) VALUES (${sPlaceholders})`, Object.values(subData));
       });
     } catch (error: any) {
       if ((error.driverError?.code || error.code) === '23505') {
@@ -252,14 +271,14 @@ export class CompactMerchantController {
         FROM public.merchants m LEFT JOIN LATERAL (
           SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
           LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
-          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
+          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text OR sub."merchantId"=m."merchantCode") AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
           ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
         ) s ON true LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
-        WHERE COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'
-        ORDER BY COALESCE(m."createdDate", now()) DESC`);
+        WHERE COALESCE(m."initialStatus", m.status, 'ACTIVE')='ACTIVE'
+        ORDER BY COALESCE(m."createdDate", m.created_at, now()) DESC`);
       return { success: true, count: rows.length, merchants: rows };
     } catch (err) {
-      const rows = await this.db.query(`SELECT * FROM public.merchants WHERE COALESCE("initialStatus", 'ACTIVE')='ACTIVE' ORDER BY id DESC`);
+      const rows = await this.db.query(`SELECT * FROM public.merchants WHERE COALESCE("initialStatus", status, 'ACTIVE')='ACTIVE' ORDER BY COALESCE("createdDate", created_at, now()) DESC`);
       return { success: true, count: rows.length, merchants: rows.map((m: any) => ({ merchant: m })) };
     }
   }
@@ -271,7 +290,7 @@ export class CompactMerchantController {
   async history(@Param('id') id: string) {
     const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(p) AS plan
       FROM public.merchants m LEFT JOIN public.plans p ON p.id::text=m."planId"::text
-      WHERE (m."merchantId"=$1 OR m.id::text=$1) ORDER BY COALESCE(m."createdDate", now()) DESC`, [id]);
+      WHERE (m."merchantId"=$1 OR m.id::text=$1 OR m."merchantCode"=$1) ORDER BY COALESCE(m."createdDate", m.created_at, now()) DESC`, [id]);
     if (!rows.length) throw new NotFoundException('Merchant not found');
     const subscriptions = await this.db.query(`SELECT sub.*,row_to_json(p) AS plan
       FROM public.subscriptions sub LEFT JOIN public.plans p ON p.id::text=sub.plan_id::text
@@ -294,40 +313,52 @@ export class CompactMerchantController {
       if (missing.length) throw new BadRequestException(`Missing required fields: ${missing.join(', ')}`);
     }
     await this.db.transaction(async manager => {
-      const [existing] = await manager.query('SELECT * FROM public.merchants WHERE ("merchantId"=$1 OR id::text=$1) AND "initialStatus"=$2 FOR UPDATE', [id, 'ACTIVE']);
+      const [existing] = await manager.query('SELECT * FROM public.merchants WHERE ("merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1) AND COALESCE("initialStatus", status)=\'ACTIVE\' FOR UPDATE', [id]);
       if (!existing) throw new NotFoundException('Merchant not found');
-      if (input.planId !== undefined) await this.planExists(manager, input.planId);
-      const normalized = await this.resolveMasterIds(manager, input);
-      normalized.initialStatus = 'ACTIVE';
-      await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',"updatedDate"=now() WHERE id=$1`, [existing.id]);
-      const versionValues = fields.map(key => normalized[key] !== undefined ? normalized[key] : existing[key]);
-      const colList = fields.map(key => `"${key}"`).join(',');
-      const valPlaceholders = fields.map((_, index) => '$' + (index + 2)).join(',');
 
-      await manager.query(`INSERT INTO public.merchants
-        ("merchantId",${colList},"createdDate","updatedDate")
-        VALUES($1,${valPlaceholders},now(),now())`,
-        [existing.merchantId || id, ...versionValues.map((value,index) => fields[index] === 'roleIds' ? JSON.stringify(value) : value)]);
-      if (['planId', 'billingCycle', 'startDate', 'renewalDate', 'agreementPrice'].some(key => input[key] !== undefined)) {
-        const [current] = await manager.query(`SELECT * FROM public.subscriptions
-          WHERE ("merchantId"=$1 OR "merchantId"=$2) AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [id, existing.merchantId || id]);
-        const planChanged = input.planId !== undefined && current && String(input.planId) !== String(current.plan_id);
-        if (planChanged || !current) {
-          if (current) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',updated_at=now() WHERE "subscriptionId"=$1`, [current.subscriptionId]);
-          const newSubId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2,8)}`;
-          await manager.query(`INSERT INTO public.subscriptions
-            ("subscriptionId","merchantId",plan_id,billing_cycle,start_date,renewal_date,agreement_price,status,created_at,updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',now(),now())`, [newSubId, existing.merchantId || id, input.planId ?? current?.plan_id,
-            input.billingCycle ?? current?.billing_cycle, input.startDate ?? current?.start_date,
-            input.renewalDate ?? current?.renewal_date, input.agreementPrice ?? current?.agreement_price]);
-        } else {
-          await manager.query(`UPDATE public.subscriptions SET
-            billing_cycle=COALESCE($2,billing_cycle),start_date=COALESCE($3,start_date),
-            renewal_date=COALESCE($4,renewal_date),agreement_price=COALESCE($5,agreement_price),updated_at=now()
-            WHERE "subscriptionId"=$1`, [current.subscriptionId, input.billingCycle ?? null,
-            input.startDate ?? null, input.renewalDate ?? null, input.agreementPrice ?? null]);
-        }
-      }
+      await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now() WHERE id=$1`, [existing.id]);
+
+      const merchantColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`);
+      const availMerchantCols = new Set(merchantColsResult.map((r: any) => r.column_name));
+
+      const merchantData: Record<string, any> = {};
+      const setCol = (col: string, val: any) => { if (availMerchantCols.has(col)) merchantData[col] = val; };
+
+      setCol('merchantId', existing.merchantId || id);
+      setCol('merchantCode', existing.merchantCode || id);
+      setCol('businessName', input.businessName ?? existing.businessName);
+      setCol('businessDisplayName', input.businessDisplayName ?? existing.businessDisplayName);
+      setCol('legalBusinessName', input.businessName ?? existing.legalBusinessName);
+      setCol('merchantName', input.merchantName ?? existing.merchantName);
+      setCol('ownerName', input.merchantName ?? existing.ownerName);
+      setCol('merchantEmail', input.merchantEmail ?? existing.merchantEmail ?? existing.email);
+      setCol('email', input.merchantEmail ?? existing.email);
+      setCol('merchantPhoneNumber', input.merchantPhoneNumber ?? existing.merchantPhoneNumber ?? existing.phone);
+      setCol('phone', input.merchantPhoneNumber ?? existing.phone);
+      setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
+      setCol('addressLine2', input.addressLine2 ?? existing.addressLine2);
+      setCol('city', input.city ?? existing.city);
+      setCol('state', input.state ?? existing.state);
+      setCol('pinCode', input.pinCode ?? existing.pinCode);
+      setCol('country', input.country ?? existing.country);
+      setCol('storeTypeId', input.storeTypeId ?? existing.storeTypeId);
+      setCol('planId', input.planId ?? existing.planId);
+      setCol('billingCycle', input.billingCycle ?? existing.billingCycle);
+      setCol('startDate', input.startDate ?? existing.startDate);
+      setCol('renewalDate', input.renewalDate ?? existing.renewalDate);
+      setCol('agreementPrice', input.agreementPrice ?? existing.agreementPrice);
+      setCol('tax', input.tax ?? existing.tax);
+      setCol('totalDueToday', input.totalDueToday ?? existing.totalDueToday);
+      setCol('paymentMethod', input.paymentMethod ?? existing.paymentMethod);
+      setCol('initialStatus', 'ACTIVE');
+      setCol('status', 'ACTIVE');
+      setCol('createdDate', new Date());
+      setCol('updatedDate', new Date());
+
+      const mCols = Object.keys(merchantData);
+      const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
+      const mColList = mCols.map(c => `"${c}"`).join(',');
+      await manager.query(`INSERT INTO public.merchants (${mColList}) VALUES (${mPlaceholders})`, Object.values(merchantData));
     });
     return { success: true, ...(await this.getRecord(id)) };
   }
@@ -339,14 +370,14 @@ export class CompactMerchantController {
     let targetMerchantId = '';
     await this.db.transaction(async manager=>{
       const [target]=await manager.query(`SELECT id,"merchantId" FROM public.merchants
-        WHERE id::text=$1 OR "merchantId"=$1
+        WHERE id::text=$1 OR "merchantId"=$1 OR "merchantCode"=$1
         ORDER BY CASE WHEN id::text=$1 THEN 0 ELSE 1 END,"createdDate" DESC LIMIT 1 FOR UPDATE`,[id]);
       if (!target) throw new NotFoundException('Merchant not found');
       targetRowId = target.id;
-      targetMerchantId = target.merchantId;
-      if (body.initialStatus==='ACTIVE') await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',"updatedDate"=now()
-        WHERE "merchantId"=$1 AND "initialStatus"='ACTIVE' AND id<>$2`,[target.merchantId,target.id]);
-      await manager.query(`UPDATE public.merchants SET "initialStatus"=$2,"updatedDate"=now() WHERE id=$1`,[target.id,body.initialStatus]);
+      targetMerchantId = target.merchantId || target.merchantCode;
+      if (body.initialStatus==='ACTIVE') await manager.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now()
+        WHERE ("merchantId"=$1 OR "merchantCode"=$1) AND COALESCE("initialStatus",status)='ACTIVE' AND id<>$2`,[target.merchantId,target.id]);
+      await manager.query(`UPDATE public.merchants SET "initialStatus"=$2,status=$2,"updatedDate"=now() WHERE id=$1`,[target.id,body.initialStatus]);
     });
     return {success:true,id:targetRowId,merchantId:targetMerchantId,initialStatus:body.initialStatus};
   }
@@ -354,7 +385,7 @@ export class CompactMerchantController {
   @Delete(':id')
   async remove(@Param('id') id: string) {
     try {
-      await this.db.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',"updatedDate"=now() WHERE "merchantId"=$1 OR id::text=$1`, [id]);
+      await this.db.query(`UPDATE public.merchants SET "initialStatus"='INACTIVE',status='INACTIVE',"updatedDate"=now() WHERE "merchantId"=$1 OR id::text=$1 OR "merchantCode"=$1`, [id]);
       await this.db.query(`UPDATE public.subscriptions SET status='INACTIVE',updated_at=now() WHERE "merchantId"=$1`, [id]);
       return { success: true, merchantId: id };
     } catch (error: any) {
