@@ -41,7 +41,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS "businessDisplayName" varchar(255),
           ADD COLUMN IF NOT EXISTS "legalBusinessName" varchar(255),
           ADD COLUMN IF NOT EXISTS "storeTypeId" uuid,
-          ADD COLUMN IF NOT EXISTS "initialStatus" varchar(50) DEFAULT 'ACTIVE',
           ADD COLUMN IF NOT EXISTS "addressLine1" text,
           ADD COLUMN IF NOT EXISTS "addressLine2" text,
           ADD COLUMN IF NOT EXISTS "businessAddress" text,
@@ -69,7 +68,7 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
         UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", merchant_code, 'MER-' || id::text) WHERE "merchantCode" IS NULL;
         UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", merchant_code, 'MER-' || id::text) WHERE "merchantId" IS NULL;
         UPDATE public.merchants SET merchant_code = COALESCE(merchant_code, "merchantCode", "merchantId") WHERE merchant_code IS NULL;
-        UPDATE public.merchants SET "initialStatus" = COALESCE("initialStatus", status, 'ACTIVE') WHERE "initialStatus" IS NULL;
+        UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);
 
       await runner.query(`

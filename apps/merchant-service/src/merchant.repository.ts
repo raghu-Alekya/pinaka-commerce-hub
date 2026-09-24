@@ -1,6 +1,7 @@
 import { ensureOnboardingSchema } from './onboarding.schema';
 import { ensureMerchantCrudSchema } from './merchant-crud.schema';
 import { ensureMerchantIdentitySchema } from './merchant-identity.schema';
+import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
 import * as crypto from 'crypto';
@@ -209,6 +210,7 @@ export class MerchantRepository implements OnModuleInit {
     // Repository-managed foreign keys depend on indexes unknown to TypeORM.
     // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
     await ensureMerchantIdentitySchema(this.dataSource);
+    await ensureCompactMerchantSchema(this.dataSource);
     await ensureEmployeeAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureOnboardingSchema(this.dataSource);
