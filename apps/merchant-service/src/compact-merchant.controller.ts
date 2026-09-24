@@ -230,19 +230,101 @@ export class CompactMerchantController {
   @Get()
   async list() {
     try {
-      const rows = await this.db.query(`SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
-        FROM public.merchants m LEFT JOIN LATERAL (
-          SELECT sub.*, row_to_json(sp) AS plan FROM public.subscriptions sub
-          LEFT JOIN public.plans sp ON sp.id::text=sub.plan_id::text
-          WHERE (sub."merchantId"=m."merchantId" OR sub."merchantId"=m.id::text) AND COALESCE(sub.status, 'ACTIVE')='ACTIVE'
-          ORDER BY COALESCE(sub.created_at, now()) DESC LIMIT 1
-        ) s ON true LEFT JOIN public.plans mp ON mp.id::text=m."planId"::text
-        WHERE COALESCE(m."initialStatus", 'ACTIVE')='ACTIVE'
-        ORDER BY COALESCE(m."createdDate", now()) DESC`);
+      const merchantColumns: string[] = (
+        await this.db.query(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'merchants'`,
+        )
+      ).map((row: { column_name: string }) => row.column_name);
+      const subColumns: string[] = (
+        await this.db.query(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'subscriptions'`,
+        )
+      ).map((row: { column_name: string }) => row.column_name);
+
+      const hasM = (name: string) => merchantColumns.includes(name);
+      const hasS = (name: string) => subColumns.includes(name);
+
+      const merchantKey = hasM('merchantId')
+        ? 'm."merchantId"'
+        : hasM('merchantCode')
+          ? 'm."merchantCode"'
+          : hasM('merchant_code')
+            ? 'm.merchant_code'
+            : 'm.id::text';
+      const statusCol = hasM('initialStatus')
+        ? 'm."initialStatus"'
+        : hasM('status')
+          ? 'm.status'
+          : `'ACTIVE'`;
+      const createdCol = hasM('createdDate')
+        ? 'm."createdDate"'
+        : hasM('createdAt')
+          ? 'm."createdAt"'
+          : hasM('created_at')
+            ? 'm.created_at'
+            : 'now()';
+      const planCol = hasM('planId') ? 'm."planId"' : hasM('plan_id') ? 'm.plan_id' : null;
+
+      const subMerchantCol = hasS('merchantId')
+        ? 'sub."merchantId"'
+        : hasS('merchant_id')
+          ? 'sub.merchant_id'
+          : null;
+      const subPlanCol = hasS('plan_id') ? 'sub.plan_id' : hasS('planId') ? 'sub."planId"' : null;
+      const subStatusCol = hasS('status') ? 'sub.status' : null;
+      const subCreatedCol = hasS('created_at')
+        ? 'sub.created_at'
+        : hasS('createdAt')
+          ? 'sub."createdAt"'
+          : 'now()';
+
+      if (subMerchantCol && subPlanCol && subStatusCol) {
+        const merchantPlanJoin = planCol
+          ? `LEFT JOIN public.plans mp ON mp.id::text = ${planCol}::text`
+          : `LEFT JOIN public.plans mp ON false`;
+        const rows = await this.db.query(
+          `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+           FROM public.merchants m
+           LEFT JOIN LATERAL (
+             SELECT sub.*, row_to_json(sp) AS plan
+             FROM public.subscriptions sub
+             LEFT JOIN public.plans sp ON sp.id::text = ${subPlanCol}::text
+             WHERE (${subMerchantCol}::text = ${merchantKey}::text OR ${subMerchantCol}::text = m.id::text)
+               AND COALESCE(${subStatusCol}, 'ACTIVE') = 'ACTIVE'
+             ORDER BY COALESCE(${subCreatedCol}, now()) DESC
+             LIMIT 1
+           ) s ON true
+           ${merchantPlanJoin}
+           WHERE COALESCE(${statusCol}, 'ACTIVE') = 'ACTIVE'
+           ORDER BY COALESCE(${createdCol}, now()) DESC`,
+        );
+        return { success: true, count: rows.length, merchants: rows };
+      }
+
+      const rows = await this.db.query(
+        `SELECT row_to_json(m) AS merchant
+         FROM public.merchants m
+         WHERE COALESCE(${statusCol}, 'ACTIVE') = 'ACTIVE'
+         ORDER BY COALESCE(${createdCol}, now()) DESC`,
+      );
       return { success: true, count: rows.length, merchants: rows };
-    } catch (err) {
-      const rows = await this.db.query(`SELECT * FROM public.merchants WHERE COALESCE("initialStatus", 'ACTIVE')='ACTIVE' ORDER BY id DESC`);
-      return { success: true, count: rows.length, merchants: rows.map((m: any) => ({ merchant: m })) };
+    } catch (error: unknown) {
+      console.error(
+        '[CompactMerchantController.list]',
+        error instanceof Error ? error.message : String(error),
+      );
+      try {
+        const rows = await this.db.query(`SELECT row_to_json(m) AS merchant FROM public.merchants m`);
+        return { success: true, count: rows.length, merchants: rows };
+      } catch (fallbackError: unknown) {
+        console.error(
+          '[CompactMerchantController.list.fallback]',
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        );
+        throw error;
+      }
     }
   }
 
