@@ -90,6 +90,7 @@ export class AppController {
     }));
   }
 
+
   async createMerchantFromWizard(@Body() body: any) {
     this.validateWizardPayload(body);
     await this.requireMasterPlan(body.plan);
@@ -106,6 +107,7 @@ export class AppController {
     await this.merchantRepository.recordAuditLog('MERCHANT_ONBOARDING_COMPLETED', merchant.id, undefined, merchant.email, { storeCount: stores.length, plan: subscription.planCode });
     return { success: true, message: 'Merchant created successfully', merchant, stores, subscription };
   }
+
 
   async updateMerchantFromWizard(@Param('id') id: string, @Body() body: any) {
     this.validateWizardPayload({ ...body, merchantId: id });
