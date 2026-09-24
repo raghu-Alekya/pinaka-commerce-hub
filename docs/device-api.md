@@ -3,9 +3,10 @@
 Served by merchant-service on port 3003. React uses the existing `/api/v1` proxy.
 
 - `POST /api/v1/devices`: creates a device; returns HTTP 201 with `{ success, device }`.
-- `GET /api/v1/devices`: returns `{ count, devices }`, newest first, with merchant/store names. Image data is excluded from the list.
+- `GET /api/v1/devices`: returns `{ count, devices }`, newest first, with merchant names.
+- `GET /api/v1/devices/merchant/:merchantId`: returns all devices for one merchant, newest first.
 - `GET /api/v1/devices/:deviceId`: returns one device.
-- `PUT` or `PATCH /api/v1/devices/:deviceId`: updates a device. `storeId` may be omitted.
+- `PUT` or `PATCH /api/v1/devices/:deviceId`: updates a device.
 - `DELETE /api/v1/devices/:deviceId`: deletes a device.
 
 Example create body:
@@ -16,18 +17,16 @@ Example create body:
   "deviceType": "POS Terminal",
   "serialNumber": "SN1234567890",
   "merchantId": "MCH-1001",
-  "status": "Active",
-  "timeZone": "Asia/Kolkata",
-  "enableImmediately": true
+  "status": "Active"
 }
 ```
 
-Use an existing merchant ID. Required fields are deviceName, deviceType, serialNumber and merchantId. A device can be created without a store; if `storeId` is supplied, it must identify a store belonging to the selected merchant. Updates do not require `storeId` and preserve any existing store association unless a store ID is explicitly supplied. Supported types: POS Terminal, Kitchen Display, Barcode Scanner, Receipt Printer, Customer Display.
+Use an existing merchant ID. Required fields are deviceName, deviceType, serialNumber and merchantId. Devices are associated with a merchant and do not use stores. Supported types: POS Terminal, Kitchen Display, Barcode Scanner, Receipt Printer, Customer Display.
 
-Optional fields: macAddress, model, manufacturer, status (Active/Inactive), timeZone (IANA identifier), location, floor, notes (500 characters), enableImmediately and image (JPG/PNG data URL, maximum decoded size 2MB). Serial numbers are trimmed, uppercased and globally unique. Inactive status or enableImmediately=false disables the device. New enabled devices are Offline with no last-seen timestamp; heartbeat tracking is outside these endpoints.
+The `devices` table contains exactly these columns: `deviceName`, `deviceType`, `status`, `id`, `deviceCode`, `merchantId`, `merchantName`, `serialNumber` and `createdAt`. Store and details columns are removed. On create, `id`, `merchantName` and `createdAt` are set by the service; `deviceCode` is generated and status defaults to Active when omitted. Serial numbers are trimmed, uppercased and globally unique. New active devices are Offline with no last-seen timestamp; heartbeat tracking is outside these endpoints.
 
-Validation/assignment failures return 400, missing merchant or explicitly supplied store 404, duplicate serial 409 and unavailable database 503. Devices require PostgreSQL and are never saved to the merchant service's temporary memory fallback.
+Validation failures return 400, missing merchant 404, duplicate serial 409 and unavailable database 503. Devices require PostgreSQL and are never saved to the merchant service's temporary memory fallback.
 
-Apply schema with `node scripts/setup-merchant-db.cjs`, then restart merchant-service. React `/devices/add` creates devices; `/devices` lists, searches, filters and paginates them.
+Apply the Device schema with `psql -h localhost -U pdh_user -d pinaka_commerce_hub -f docs/devices.sql`, then restart merchant-service. React `/devices/add` creates devices; `/devices` lists, searches, filters and paginates them.
 
 Tests: `node --import tsx scripts/device-routes.test.ts` and `node --import tsx scripts/device-db.test.ts`. The database test rolls back all test records.
