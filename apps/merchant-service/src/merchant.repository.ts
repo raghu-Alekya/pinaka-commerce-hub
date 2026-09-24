@@ -637,31 +637,22 @@ export class MerchantRepository implements OnModuleInit {
     deviceType?: string;
     merchantId: string;
     merchantName?: string;
-    storeId?: string | null;
-    storeName?: string | null;
     serialNumber: string;
     status?: string;
-    details: Record<string, unknown>;
     createdAt?: Date;
   }): Promise<DeviceEntity> {
     if (!this.deviceRepo) {
       throw new ServiceUnavailableException('Database not connected');
     }
-    const cleanDetails = { ...data.details };
-    delete cleanDetails.image;
-
     const entity = this.deviceRepo.create({
       id: data.id,
-      deviceName: data.deviceName || String(data.details.deviceName || 'Unnamed device'),
+      deviceName: data.deviceName || 'Unnamed device',
       deviceCode: data.deviceCode || `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
-      deviceType: data.deviceType || String(data.details.deviceType || 'Other'),
+      deviceType: data.deviceType || 'Other',
       merchantId: data.merchantId,
       merchantName: data.merchantName || data.merchantId,
-      storeId: data.storeId || null,
-      storeName: data.storeName || data.storeId || null,
       serialNumber: data.serialNumber,
-      status: data.status || String(data.details.status || 'Active'),
-      details: cleanDetails,
+      status: data.status || 'Active',
       createdAt: data.createdAt || new Date(),
     });
 
@@ -703,14 +694,13 @@ export class MerchantRepository implements OnModuleInit {
 
   async queryDevices(filters: {
     page: number; limit: number; search?: string; merchantId?: string;
-    storeId?: string; deviceType?: string; status?: string; from?: Date; to?: Date;
+    deviceType?: string; status?: string; from?: Date; to?: Date;
   }): Promise<{ devices: DeviceEntity[]; total: number; summary: Record<string, number> }> {
     if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
     if (typeof (this.deviceRepo as any).createQueryBuilder !== 'function') {
       const all = await this.deviceRepo.find({ order: { createdAt: 'DESC' } });
       const filtered = all.filter(device =>
         (!filters.merchantId || device.merchantId === filters.merchantId) &&
-        (!filters.storeId || device.storeId === filters.storeId) &&
         (!filters.deviceType || device.deviceType === filters.deviceType) &&
         (!filters.search || [device.deviceName, device.deviceCode, device.serialNumber].some(value => value.toLowerCase().includes(filters.search!.toLowerCase()))) &&
         (!filters.from || device.createdAt >= filters.from) && (!filters.to || device.createdAt < filters.to));
@@ -720,7 +710,6 @@ export class MerchantRepository implements OnModuleInit {
     const query = this.deviceRepo.createQueryBuilder('device');
     if (filters.search) query.andWhere(`(device."deviceName" ILIKE :search OR device."deviceCode" ILIKE :search OR device."serialNumber" ILIKE :search)`, { search: `%${filters.search}%` });
     if (filters.merchantId) query.andWhere('device."merchantId" = :merchantId', { merchantId: filters.merchantId });
-    if (filters.storeId) query.andWhere('device."storeId" = :storeId', { storeId: filters.storeId });
     if (filters.deviceType) query.andWhere('device."deviceType" = :deviceType', { deviceType: filters.deviceType });
     if (filters.status?.toLowerCase() === 'active') query.andWhere(`device.status = 'Active'`);
     if (filters.status?.toLowerCase() === 'inactive') query.andWhere(`device.status = 'Inactive'`);
@@ -740,6 +729,11 @@ export class MerchantRepository implements OnModuleInit {
   async listDevices(): Promise<DeviceEntity[]> {
     if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
     return this.deviceRepo.find({ order: { createdAt: 'DESC' } });
+  }
+
+  async listDevicesByMerchantId(merchantId: string): Promise<DeviceEntity[]> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    return this.deviceRepo.find({ where: { merchantId }, order: { createdAt: 'DESC' } });
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
