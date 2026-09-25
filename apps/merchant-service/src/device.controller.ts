@@ -20,7 +20,7 @@ import { CreateDeviceDto, UpdateDeviceDto } from "./device.dto";
 import { MerchantEntity } from "./entities/merchant.entity";
 import { DeviceEntity } from "./entities/device.entity";
 
-@Controller("api/v1/devices")
+@Controller(["api/v1/devices", "connector/api/v1/devices", "devices"])
 export class DeviceController {
   constructor(
     @Inject(MerchantRepository) private readonly repository: MerchantRepository,

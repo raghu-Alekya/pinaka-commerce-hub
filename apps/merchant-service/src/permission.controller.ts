@@ -5,7 +5,7 @@ import { MerchantRepository } from './merchant.repository';
 import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller('api/v1/permissions')
+@Controller(['api/v1/permissions', 'connector/api/v1/permissions', 'permissions'])
 export class PermissionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 

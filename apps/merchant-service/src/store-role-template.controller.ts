@@ -27,6 +27,8 @@ const storeTypeRoleTemplates = RELATIONSHIPS.find(config => config.name === 'Sto
 @Controller([
   'api/v1/store-types/:storeTypeId/role-templates',
   'api/v1/store_types/:storeTypeId/role-templates',
+  'connector/api/v1/store-types/:storeTypeId/role-templates',
+  'connector/api/v1/store_types/:storeTypeId/role-templates',
 ])
 @UseGuards(RelationshipOwnerGuard)
 export class StoreTypeAssignedRoleTemplatesController {
@@ -88,7 +90,7 @@ export class StoreTypeAssignedRoleTemplatesController {
 }
 
 /** Tenant layer: which role templates are enabled for a merchant store. */
-@Controller('api/v1/merchants/:merchantId/stores/:storeId/role-templates')
+@Controller(['api/v1/merchants/:merchantId/stores/:storeId/role-templates', 'connector/api/v1/merchants/:merchantId/stores/:storeId/role-templates'])
 @UseGuards(RelationshipOwnerGuard)
 export class StoreRoleTemplateController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}

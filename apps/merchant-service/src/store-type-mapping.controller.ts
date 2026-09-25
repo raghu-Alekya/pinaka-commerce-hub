@@ -15,6 +15,8 @@ const storeTypeRoleTemplates = RELATIONSHIPS.find(config => config.name === 'Sto
 @Controller([
   'api/v1/store-types/:storeTypeId/features/by-category',
   'api/v1/store_types/:storeTypeId/features/by-category',
+  'connector/api/v1/store-types/:storeTypeId/features/by-category',
+  'connector/api/v1/store_types/:storeTypeId/features/by-category',
 ])
 @UseGuards(RelationshipOwnerGuard)
 export class StoreTypeFeatureCatalogController {
@@ -42,6 +44,8 @@ export class StoreTypeFeatureCatalogController {
 @Controller([
   'api/v1/features/:featureId/store-types/available',
   'api/v1/features/:featureId/store_types/available',
+  'connector/api/v1/features/:featureId/store-types/available',
+  'connector/api/v1/features/:featureId/store_types/available',
 ])
 @UseGuards(RelationshipOwnerGuard)
 export class FeatureStoreTypeCatalogController {
