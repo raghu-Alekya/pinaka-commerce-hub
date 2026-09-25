@@ -59,7 +59,7 @@ export class CompactMerchantController {
              ON sp.id::text = COALESCE(to_jsonb(sub)->>'plan_id', to_jsonb(sub)->>'planId')
            WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
                    IN (
-                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text),
+                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text),
                      m.id::text
                    )
              AND COALESCE(to_jsonb(sub)->>'status', 'ACTIVE') = 'ACTIVE'
@@ -73,7 +73,7 @@ export class CompactMerchantController {
          LEFT JOIN public.plans mp
            ON mp.id::text = COALESCE(to_jsonb(m)->>'planId', to_jsonb(m)->>'plan_id')
          WHERE (
-             COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text) = $1
+             COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
              OR m.id::text = $1
            )
            AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'`,
@@ -88,7 +88,7 @@ export class CompactMerchantController {
     }
     const [row] = await this.db.query(
       `SELECT row_to_json(m) AS merchant FROM public.merchants m
-       WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text) = $1
+       WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
           OR m.id::text = $1
        LIMIT 1`,
       [id],
@@ -118,27 +118,7 @@ export class CompactMerchantController {
     return merchant;
   }
 
-  private subscriptionView(row: Input | undefined, plan: Input | undefined) {
-    if (!row) return null;
-    const planName = row.planName || row.plan_name || plan?.name || null;
-    return {
-      id: row.id || row.subscriptionId,
-      planId: row.planId || row.plan_id || null,
-      planName,
-      billingCycle: row.billingCycle || row.billing_cycle || null,
-      startDate: this.dateOnly(row.startDate || row.start_date),
-      renewalDate: this.dateOnly(row.renewalDate || row.renewal_date),
-      status: row.status || 'ACTIVE',
-      price: row.price == null ? null : Number(row.price),
-      agreementPrice: row.agreementPrice == null && row.agreement_price == null ? null : Number(row.agreementPrice ?? row.agreement_price),
-      storeTypeName: row.storeTypeName || row.store_type_name || null,
-    };
-  }
-
-  private async columns(table: string): Promise<Set<string>> {
-    const rows = await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [table]);
-    return new Set(rows.map((row: { column_name: string }) => row.column_name));
-  }
+  
 
   @Post('create-merchant')
   async createFromOnboarding(@Body() body: Record<string, any>) {
@@ -221,7 +201,7 @@ export class CompactMerchantController {
         setCol('created_at', new Date());
         setCol('updated_at', new Date());
         if (availMerchantCols.has('merchantCode') && !merchantData.merchantCode) setCol('merchantCode', rowId);
-        if (availMerchantCols.has('merchant_code') && !merchantData.merchant_code) setCol('merchant_code', rowId);
+        
         const mCols = Object.keys(merchantData);
         const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
         const mColList = mCols.map(c => `"${c}"`).join(',');
@@ -297,7 +277,7 @@ export class CompactMerchantController {
              ON sp.id::text = COALESCE(to_jsonb(sub)->>'plan_id', to_jsonb(sub)->>'planId')
            WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
                    IN (
-                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text),
+                     COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text),
                      m.id::text
                    )
              AND COALESCE(to_jsonb(sub)->>'status', 'ACTIVE') = 'ACTIVE'

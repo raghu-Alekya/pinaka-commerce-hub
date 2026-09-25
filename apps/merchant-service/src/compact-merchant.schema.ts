@@ -20,7 +20,7 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           "merchantId" varchar(100),
           "merchantCode" varchar(100),
-          merchant_code varchar(100),
+          
           "businessName" varchar(255),
           "createdDate" timestamptz DEFAULT now()
         );
@@ -29,7 +29,7 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
           ADD COLUMN IF NOT EXISTS "merchantId" varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100),
-          ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
+          ADD COLUMN IF NOT EXISTS 
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
           ADD COLUMN IF NOT EXISTS name varchar(255),
@@ -67,7 +67,7 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
         UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", merchant_code, 'MER-' || id::text) WHERE "merchantCode" IS NULL;
         UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", merchant_code, 'MER-' || id::text) WHERE "merchantId" IS NULL;
-        UPDATE public.merchants SET merchant_code = COALESCE(merchant_code, "merchantCode", "merchantId") WHERE merchant_code IS NULL;
+        
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);
 
