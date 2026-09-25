@@ -44,6 +44,20 @@ import { VendorEntity } from './entities/vendor.entity';
 import { TendorEntity } from './entities/tendor.entity';
 import { ensureVendorTendorSchema } from './vendor-tendor.schema';
 import { ensureDeviceSchema } from './device.schema';
+import { ensurePosCurrencyTaxSchema } from './pos-currency-tax.schema';
+import { PosCurrencyTaxEntity } from './entities/pos-currency-tax.entity';
+import { PosTaxClassEntity } from './entities/pos-tax-class.entity';
+import { ensurePosServiceChargeSchema } from './pos-service-charge.schema';
+import { PosServiceChargeEntity } from './entities/pos-service-charge.entity';
+import { PosServiceChargeTierEntity } from './entities/pos-service-charge-tier.entity';
+import { ensurePosCashbackSchema } from './pos-cashback.schema';
+import { PosCashbackEntity } from './entities/pos-cashback.entity';
+import { PosCashbackTierEntity } from './entities/pos-cashback-tier.entity';
+import { ensurePosOpeningBalanceSchema } from './pos-opening-balance.schema';
+import { PosOpeningBalanceEntity } from './entities/pos-opening-balance.entity';
+import { ensurePosCashDenominationSchema } from './pos-cash-denomination.schema';
+import { PosCashDenominationEntity } from './entities/pos-cash-denomination.entity';
+import { PosCashDenominationItemEntity } from './entities/pos-cash-denomination-item.entity';
 
 interface WordPressProductNode {
   id?: number;
@@ -175,6 +189,15 @@ export class MerchantRepository implements OnModuleInit {
       CategoryEntity,
       ProductEntity,
       DeviceEntity,
+      PosCurrencyTaxEntity,
+      PosTaxClassEntity,
+      PosServiceChargeEntity,
+      PosServiceChargeTierEntity,
+      PosCashbackEntity,
+      PosCashbackTierEntity,
+      PosOpeningBalanceEntity,
+      PosCashDenominationEntity,
+      PosCashDenominationItemEntity,
       SessionEntity,
       VendorEntity,
       TendorEntity,
@@ -218,6 +241,11 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
     await ensureDeviceSchema(this.dataSource);
+    await ensurePosCurrencyTaxSchema(this.dataSource);
+    await ensurePosServiceChargeSchema(this.dataSource);
+    await ensurePosCashbackSchema(this.dataSource);
+    await ensurePosOpeningBalanceSchema(this.dataSource);
+    await ensurePosCashDenominationSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
