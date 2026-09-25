@@ -3,6 +3,7 @@ import { BadRequestException, Body, ConflictException, Controller, Delete, Get, 
 import { Public } from '@pinaka-delivery-hub/auth';
 import { COUNTRIES, nationalPhone } from './countries';
 import { MerchantCrudService } from './merchant-crud.service';
+import { SubscriptionPlanChangeController } from './subscription-plan-change.controller';
 import { MerchantRepository } from './merchant.repository';
 
 const fields = [
@@ -181,6 +182,7 @@ export class CompactMerchantController {
       pinCode: flat.pinCode ?? merchant.pinCode ?? merchant.postal,
       country: flat.country ?? merchant.country,
       planId: flat.planId ?? subscription.planId,
+      storeTypeId: flat.storeTypeId ?? merchant.storeTypeId ?? subscription.storeTypeId,
       billingCycle: flat.billingCycle ?? subscription.billingCycle,
       startDate: flat.startDate ?? subscription.startDate,
       renewalDate: flat.renewalDate ?? subscription.renewalDate,
@@ -195,6 +197,7 @@ export class CompactMerchantController {
 
   @Post()
   async create(@Body() body: Input) {
+    const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, true);
     let savedId = '';
     try {
@@ -227,6 +230,7 @@ export class CompactMerchantController {
         setCol('postalCode', input.pinCode);
         setCol('country', input.country);
         setCol('planId', input.planId);
+        setCol('storeTypeId', requestedStoreTypeId);
         setCol('billingCycle', input.billingCycle);
         setCol('startDate', input.startDate);
         setCol('renewalDate', input.renewalDate);
@@ -268,6 +272,7 @@ export class CompactMerchantController {
         setSubCol('planId', input.planId);
         setSubCol('planName', planName);
         setSubCol('plan_name', planName);
+        setSubCol('storeTypeId', await storeTypeIdForPlan(manager, String(input.planId)) || requestedStoreTypeId);
         setSubCol('storeTypeName', storeTypeName);
         setSubCol('store_type_name', storeTypeName);
         setSubCol('entitlements', entitlements);
@@ -381,6 +386,11 @@ export class CompactMerchantController {
     return new MerchantCrudService(this.db).getSubscription(subscriptionId);
   }
 
+  @Post('subscriptions/subscription-plan-changes')
+  subscriptionPlanChange(@Body() body: Input) {
+    return new SubscriptionPlanChangeController(this.repository).change(body);
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     const record = await this.getRecord(id);
@@ -406,6 +416,7 @@ export class CompactMerchantController {
   async patch(@Param('id') id: string, @Body() body: Input) { return this.update(id, body, false); }
 
   private async update(id: string, body: Input, replace: boolean) {
+    const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, false);
     if (!Object.keys(input).length) throw new BadRequestException('Provide at least one field');
     if (replace) {
@@ -451,6 +462,7 @@ export class CompactMerchantController {
       setCol('postalCode', input.pinCode ?? existing.postalCode ?? existing.pinCode);
       setCol('country', input.country ?? existing.country);
       setCol('planId', input.planId ?? existing.planId);
+      if (requestedStoreTypeId) setCol('storeTypeId', requestedStoreTypeId);
       setCol('billingCycle', input.billingCycle ?? existing.billingCycle);
       setCol('startDate', input.startDate ?? existing.startDate);
       setCol('renewalDate', input.renewalDate ?? existing.renewalDate);
@@ -468,6 +480,7 @@ export class CompactMerchantController {
         values,
       );
       if (input.planId !== undefined) {
+        if (requestedStoreTypeId) input.storeTypeId = requestedStoreTypeId;
         await this.saveSubscription(manager, String(existing.merchantId || existing.id), input);
       }
     });
@@ -505,19 +518,21 @@ export class CompactMerchantController {
 
     const [plan] = await manager.query(`SELECT * FROM public.plans WHERE id::text=$1`, [planId]);
     if (!plan) throw new BadRequestException('Select an active planId');
-    if (current?.id) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE' WHERE id=$1`, [current.id]);
-
     const subCols = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: { column_name: string }) => row.column_name));
-    const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const merchantKey = String(current?.merchantId || current?.merchant_id || existing.merchantId || existing.merchant_code || id);
     const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
     const storeTypeName = await storeTypeNameForPlan(manager, planId);
     const subData: Record<string, unknown> = {};
     const setSubCol = (col: string, val: unknown) => { if (subCols.has(col)) subData[col] = val; };
-    setSubCol('id', subId);
-    setSubCol('subscriptionId', subId);
-    setSubCol('subscription_code', subId);
-    setSubCol('subscriptionCode', subId);
+    if (!current?.id) {
+      const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      setSubCol('id', subId);
+      setSubCol('subscriptionId', subId);
+      setSubCol('subscription_code', subId);
+      setSubCol('subscriptionCode', subId);
+      setSubCol('createdAt', new Date());
+      setSubCol('created_at', new Date());
+    }
     setSubCol('merchantId', merchantKey);
     setSubCol('merchant_id', merchantKey);
     setSubCol('plan_id', planId);
@@ -533,6 +548,7 @@ export class CompactMerchantController {
     setSubCol('trialDays', plan.trialDays ?? plan.trial_days ?? 0);
     setSubCol('createdAt', new Date());
     setSubCol('updatedAt', new Date());
+    setSubCol('storeTypeId', await storeTypeIdForPlan(manager, planId) || storeTypeIdFromPlan(input));
     setSubCol('storeTypeName', storeTypeName);
     setSubCol('store_type_name', storeTypeName);
     setSubCol('entitlements', JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []));
@@ -547,9 +563,17 @@ export class CompactMerchantController {
     setSubCol('price', nextPrice);
     setSubCol('currency', 'USD');
     setSubCol('status', 'ACTIVE');
-    setSubCol('created_at', new Date());
+    setSubCol('updatedAt', new Date());
     setSubCol('updated_at', new Date());
     const columns = Object.keys(subData);
+    if (current?.id) {
+      const keys = columns.filter(column => !['id', 'subscriptionId', 'subscription_code', 'subscriptionCode', 'createdAt', 'created_at'].includes(column));
+      await manager.query(
+        `UPDATE public.subscriptions SET ${keys.map((column, index) => `"${column}"=$${index + 2}`).join(',')} WHERE id=$1`,
+        [current.id, ...keys.map(column => subData[column])],
+      );
+      return;
+    }
     await manager.query(
       `INSERT INTO public.subscriptions (${columns.map(column => `"${column}"`).join(',')}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(',')})`,
       Object.values(subData),
@@ -630,6 +654,7 @@ export class CompactMerchantController {
       startDate: input.startDate ?? null,
       renewalDate: input.renewalDate ?? null,
       price,
+      storeTypeId: await storeTypeIdForPlan(manager, String(input.planId)) || storeTypeIdFromPlan(input) || null,
       currency: plan.currency || 'USD',
       status: 'ACTIVE',
       entitlements: JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []),
@@ -642,7 +667,7 @@ export class CompactMerchantController {
       [merchantId],
     );
     if (current?.id) {
-      const keys = Object.keys(fields).filter(key => columns.has(key));
+      const keys = Object.keys(fields).filter(key => columns.has(key) && fields[key] != null);
       await manager.query(
         `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
         [current.id, ...keys.map(key => fields[key])],
@@ -657,6 +682,24 @@ export class CompactMerchantController {
       keys.map(key => insert[key as keyof typeof insert]),
     );
   }
+}
+
+function storeTypeIdFromPlan(plan: Input | null | undefined): string | null {
+  const value = String(plan?.storeTypeId || plan?.store_type_id || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null;
+}
+
+async function storeTypeIdForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {
+  const [plan] = await manager.query(`SELECT to_jsonb(p) AS plan FROM public.plans p WHERE p.id::text=$1`, [planId]);
+  const body = plan?.plan || {};
+  const direct = storeTypeIdFromPlan(body);
+  const ref = String(direct || body.store_type || body.storeType || '').trim();
+  if (!ref) return null;
+  const [storeType] = await manager.query(`SELECT id FROM public.store_types
+    WHERE id::text=$1 OR name ILIKE $1
+      OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
+    LIMIT 1`, [ref]);
+  return storeType?.id || direct;
 }
 
 async function storeTypeNameForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {

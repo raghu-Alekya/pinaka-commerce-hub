@@ -64,8 +64,8 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS "updatedDate" timestamptz DEFAULT now();
 
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
-        UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", merchant_code, 'MER-' || id::text) WHERE "merchantCode" IS NULL;
-        UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", merchant_code, 'MER-' || id::text) WHERE "merchantId" IS NULL;
+        UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", 'MER-' || id::text) WHERE "merchantCode" IS NULL;
+        UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", 'MER-' || id::text) WHERE "merchantId" IS NULL;
         
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);

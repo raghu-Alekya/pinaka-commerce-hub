@@ -217,6 +217,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
+    await this.ensureSubscriptionStoreTypeColumn();
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -263,6 +264,17 @@ export class MerchantRepository implements OnModuleInit {
       console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
+
+  private async ensureSubscriptionStoreTypeColumn() {
+    const column = this.dataSource.getMetadata(SubscriptionEntity).findColumnWithPropertyName('storeTypeId');
+    if (!column) return;
+    const [existing] = await this.dataSource.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name=$1`,
+      [column.databaseName],
+    );
+    if (existing) return;
+    await this.dataSource.query(`ALTER TABLE public.subscriptions ADD COLUMN "${column.databaseName}" uuid`);
   }
 
   private async seedDefaultPlans() {

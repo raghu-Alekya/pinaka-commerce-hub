@@ -40,15 +40,20 @@ function dialForCountry(country?: unknown): string | undefined {
   return COUNTRIES.find(item => item.code === code || item.name.toUpperCase() === token)?.dialCode;
 }
 
-/** National subscriber number, with the leading calling code removed. */
+/** Digits only, without a calling code or a leading 0. */
 export function nationalPhone(phone: unknown, country?: unknown): unknown {
   if (typeof phone !== 'string' || !phone.trim()) return phone;
-  const compact = phone.replace(/[^\d+]/g, '');
+  let digits = phone.replace(/\D/g, '');
+  if (!digits) return phone;
   const preferred = dialForCountry(country);
   const dials = [...new Set([preferred, ...COUNTRIES.map(item => item.dialCode)].filter(Boolean) as string[])]
     .sort((left, right) => right.length - left.length);
+  const marked = phone.trim().startsWith('+') || phone.replace(/[^\d+]/g, '').startsWith('+');
   for (const dial of dials) {
-    if (compact.startsWith(`+${dial}`) && compact.length > dial.length + 1) return compact.slice(dial.length + 1);
+    if ((marked || dial === preferred) && digits.startsWith(dial) && digits.length - dial.length >= 6) {
+      digits = digits.slice(dial.length);
+      break;
+    }
   }
-  return compact.startsWith('+') ? compact.slice(1) : phone;
+  return digits.replace(/^0+/, '');
 }

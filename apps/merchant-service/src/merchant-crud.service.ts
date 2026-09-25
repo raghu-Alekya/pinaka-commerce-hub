@@ -8,6 +8,10 @@ const merchantFields = ['merchantId','ownerName','email','phone','businessName',
 const subscriptionFields = ['planId','billingCycle','startDate','renewalDate','price','status'];
 const quote = (key: string) => `"${key}"`;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function storeTypeIdFromPlan(plan: Input | null | undefined): string | null {
+  const value = String(plan?.storeTypeId || plan?.store_type_id || '').trim();
+  return uuid.test(value) ? value : null;
+}
 
 /** SQL uses the installed schema, never a schema inferred from request names. */
 export class MerchantCrudService {
@@ -147,6 +151,17 @@ export class MerchantCrudService {
     return storeType?.name || (/^[0-9a-f-]{36}$/i.test(value) ? null : value);
   }
 
+  private async storeTypeIdForPlan(manager: EntityManager, plan: Input): Promise<string | null> {
+    const direct = storeTypeIdFromPlan(plan);
+    const ref = String(direct || plan.store_type || plan.storeType || '').trim();
+    if (!ref) return null;
+    const [storeType] = await manager.query(`SELECT id FROM public.store_types
+      WHERE id::text=$1 OR name ILIKE $1
+        OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
+      LIMIT 1`, [ref]);
+    return storeType?.id || direct;
+  }
+
   private async writeSubscription(manager: EntityManager, code: string, input: Input, current?: Input, forceNew=false) {
     const merged = {...current,...input};
     this.required(merged,['planId']);
@@ -165,19 +180,21 @@ export class MerchantCrudService {
     const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
     const basePrice = plan.basePrice ?? plan.base_price ?? 0;
     const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
-    const fields = {planId:plan.id,planCode,planName,storeTypeName:await this.storeTypeName(manager, plan),
+    const [merchantRow] = await manager.query(`SELECT "storeTypeId" FROM public.merchants WHERE "merchantId"=$1 LIMIT 1`, [code]);
+    const fromPlan = await this.storeTypeIdForPlan(manager, plan);
+    const requestedStoreTypeId = uuid.test(String(input.storeTypeId || '')) ? String(input.storeTypeId) : null;
+    const fields = {planId:plan.id,planCode,planName,storeTypeId:fromPlan || requestedStoreTypeId || merchantRow?.storeTypeId || null,storeTypeName:await this.storeTypeName(manager, plan),
       billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(basePrice),
       currency:planChanged ? (plan.currency || 'USD') : current?.currency || plan.currency || 'USD',
       entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
       maxStoresAllowed:planChanged ? plan.included_stores ?? plan.includedStores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? plan.includedStores ?? 0,
       status:input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE')};
-    const isNew = forceNew || !current || current.planId !== fields.planId;
-    if (isNew && current) fields.status = 'ACTIVE';
+    const isNew = !current;
     if (fields.status === 'ACTIVE') await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
       WHERE "merchantId"=$1 AND status='ACTIVE' AND id<>$2`,[code,isNew ? '' : current!.id]);
     const id = isNew ? `SUB-${randomUUID()}` : current!.id;
     const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
-    const keys = Object.keys(fields).filter(key => columns.has(key));
+    const keys = Object.keys(fields).filter(key => columns.has(key) && (fields as Record<string, unknown>)[key] != null);
     const values = keys.map(key => (fields as Record<string, unknown>)[key]);
     if (isNew) await manager.query(`INSERT INTO public.subscriptions (id,"merchantId","subscriptionCode",${keys.map(quote).join(',')})
       VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
@@ -281,7 +298,14 @@ export class MerchantCrudService {
       merchantColumn ? `($1::text IS NULL OR s.${merchantColumn}=$1)` : '$1::text IS NULL',
       columns.has('status') ? `($2::text IS NULL OR s.status=$2)` : '$2::text IS NULL',
     ];
-    const subscriptions = await this.db.query(`SELECT s.* FROM public.subscriptions s WHERE ${filters.join(' AND ')}`,[merchantId || null,status || null]);
+    const merchantKey = merchantColumn === '"merchantId"' ? 's."merchantId"' : merchantColumn ? `s.${merchantColumn}::text` : 'NULL';
+    const subscriptions = await this.db.query(`SELECT s.*, COALESCE((
+        SELECT m."merchantId" FROM public.merchants m
+        WHERE m."merchantId" = ${merchantKey} OR m."merchantCode" = ${merchantKey} OR m.id::text = ${merchantKey}
+        LIMIT 1
+      ), ${merchantKey}) AS merchant_code
+      FROM public.subscriptions s WHERE ${filters.join(' AND ')}
+      ORDER BY s."createdAt" DESC NULLS LAST`,[merchantId || null,status || null]);
     for (const row of subscriptions) {
       for (const key of ['startDate','renewalDate','start_date','renewal_date']) {
         const value = row[key];
@@ -291,6 +315,7 @@ export class MerchantCrudService {
           row[key] = `${value.getFullYear()}-${month}-${day}`;
         }
       }
+      row.storeTypeId = row.storeTypeId ?? null;
     }
     return {success:true,count:subscriptions.length,subscriptions};
   }
@@ -310,9 +335,11 @@ export class MerchantCrudService {
       const [found] = id ? await manager.query('SELECT "merchantId" FROM public.subscriptions WHERE id=$1',[id]) : [{merchantId:input.merchantId}];
       if (!found) throw new NotFoundException('Subscription not found');
       const {merchant,root} = await this.lockMerchant(manager,found.merchantId);
-      const [current] = id ? await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE id=$1 FOR UPDATE`,[id]) : [];
-      if (id && !current) throw new NotFoundException('Subscription not found');
-      const result = await this.writeSubscription(manager,root,input,current,!id);
+    const [current] = id
+      ? await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE id=$1 FOR UPDATE`,[id])
+      : await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1 FOR UPDATE`,[found.merchantId]);
+    if (id && !current) throw new NotFoundException('Subscription not found');
+    const result = await this.writeSubscription(manager,root,input,current,!current);
       const sub = await this.subscriptionRow(manager,result);
       if (sub.status==='ACTIVE') {
         const changed=merchant.planId!==sub.planId;
