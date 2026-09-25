@@ -136,7 +136,7 @@ export class CompactMerchantController {
 
   
 
-  private async nextMerchantId(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }) {
+  protected async nextMerchantId(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }) {
     await manager.query(`SELECT pg_advisory_xact_lock(842001)`);
     const numbered = await manager.query(`SELECT "merchantId" AS code FROM public.merchants WHERE "merchantId" ~ '^MER-[0-9]+$'`);
     let max = 0;
@@ -478,7 +478,7 @@ export class CompactMerchantController {
     return { success: true, ...(await this.getRecord(id)) };
   }
 
-  private async saveSubscriptionVersion(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, id: string, existing: Input, input: Input, planId: string) {
+  protected async saveSubscriptionVersion(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, id: string, existing: Input, input: Input, planId: string) {
     const merchantKeys = [...new Set([id, existing.id, existing.merchantId, existing.merchantCode, existing.merchant_code].filter(value => value != null && value !== '').map(String))];
     const [current] = await manager.query(
       `SELECT * FROM public.subscriptions s

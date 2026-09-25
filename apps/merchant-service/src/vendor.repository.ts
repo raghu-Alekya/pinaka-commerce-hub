@@ -117,4 +117,91 @@ export class VendorRepository {
       throw error;
     }
   }
+
+  async resolveMerchantUuid(merchantId: string): Promise<string | null> {
+    const ds = this.merchants.requireDataSource();
+    const rows = await ds.query(
+      'SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1 LIMIT 1',
+      [merchantId]
+    );
+    return rows[0]?.id || null;
+  }
+
+  async listMerchantVendors(merchantId: string, query: { search?: string; vendorType?: string; status?: string } = {}): Promise<any[]> {
+    const ds = this.merchants.requireDataSource();
+    const mUuid = await this.resolveMerchantUuid(merchantId);
+    if (!mUuid) return [];
+
+    let sql = 'SELECT v.*, mv.status AS "merchantVendorStatus", true AS assigned FROM public.vendors v JOIN public.merchant_vendors mv ON mv.vendor_id = v.id WHERE mv.merchant_id = $1 AND mv.status = \'ACTIVE\' AND v."deletedAt" IS NULL';
+    const params = [mUuid];
+    let pIndex = 2;
+
+    if (query.status) {
+      sql += ' AND v.status = $' + (pIndex++);
+      params.push(query.status);
+    }
+    if (query.vendorType) {
+      sql += ' AND v."vendorType" = $' + (pIndex++);
+      params.push(query.vendorType);
+    }
+    if (query.search && query.search.trim()) {
+      sql += ' AND (v."vendorName" ILIKE $' + pIndex + ' OR v."vendorCode" ILIKE $' + pIndex + ' OR v."contactPerson" ILIKE $' + pIndex + ' OR v."productCategory" ILIKE $' + pIndex + ')';
+      params.push('%' + query.search.trim() + '%');
+      pIndex++;
+    }
+
+    sql += ' ORDER BY v."vendorName" ASC, v.id ASC';
+    return ds.query(sql, params);
+  }
+
+  async listAllVendorsWithAssignment(merchantId: string, query: { search?: string; vendorType?: string; status?: string } = {}): Promise<any[]> {
+    const ds = this.merchants.requireDataSource();
+    const mUuid = await this.resolveMerchantUuid(merchantId);
+
+    let sql = 'SELECT v.*, (mv.id IS NOT NULL AND mv.status = \'ACTIVE\') AS assigned FROM public.vendors v LEFT JOIN public.merchant_vendors mv ON mv.vendor_id = v.id AND mv.merchant_id = $1 AND mv.status = \'ACTIVE\' WHERE v."deletedAt" IS NULL';
+    const params = [mUuid || '00000000-0000-0000-0000-000000000000'];
+    let pIndex = 2;
+
+    if (query.status) {
+      sql += ' AND v.status = $' + (pIndex++);
+      params.push(query.status);
+    }
+    if (query.vendorType) {
+      sql += ' AND v."vendorType" = $' + (pIndex++);
+      params.push(query.vendorType);
+    }
+    if (query.search && query.search.trim()) {
+      sql += ' AND (v."vendorName" ILIKE $' + pIndex + ' OR v."vendorCode" ILIKE $' + pIndex + ' OR v."contactPerson" ILIKE $' + pIndex + ' OR v."productCategory" ILIKE $' + pIndex + ')';
+      params.push('%' + query.search.trim() + '%');
+      pIndex++;
+    }
+
+    sql += ' ORDER BY v."vendorName" ASC, v.id ASC';
+    return ds.query(sql, params);
+  }
+
+  async addMerchantVendors(merchantId: string, vendorIds: string[]): Promise<{ count: number }> {
+    const ds = this.merchants.requireDataSource();
+    const mUuid = await this.resolveMerchantUuid(merchantId);
+    if (!mUuid) throw new NotFoundException('Merchant ' + merchantId + ' not found');
+
+    for (const vId of vendorIds) {
+      await ds.query(
+        'INSERT INTO public.merchant_vendors (merchant_id, vendor_id, status, created_at, updated_at) VALUES ($1, $2, \'ACTIVE\', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT (merchant_id, vendor_id) DO UPDATE SET status = \'ACTIVE\', updated_at = CURRENT_TIMESTAMP',
+        [mUuid, vId]
+      );
+    }
+    return { count: vendorIds.length };
+  }
+
+  async removeMerchantVendor(merchantId: string, vendorId: string): Promise<void> {
+    const ds = this.merchants.requireDataSource();
+    const mUuid = await this.resolveMerchantUuid(merchantId);
+    if (!mUuid) throw new NotFoundException('Merchant ' + merchantId + ' not found');
+
+    await ds.query(
+      'UPDATE public.merchant_vendors SET status = \'INACTIVE\', updated_at = CURRENT_TIMESTAMP WHERE merchant_id = $1 AND vendor_id = $2',
+      [mUuid, vendorId]
+    );
+  }
 }
