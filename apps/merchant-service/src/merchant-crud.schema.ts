@@ -12,7 +12,6 @@ export async function ensureMerchantCrudSchema(db: DataSource): Promise<void> {
       await manager.query(`ALTER TABLE public.merchants
         ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100),
         ADD COLUMN IF NOT EXISTS "merchantId" varchar(100),
-        ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
         ADD COLUMN IF NOT EXISTS "merchantName" varchar(150),
         ADD COLUMN IF NOT EXISTS "businessDisplayName" varchar(255),
         ADD COLUMN IF NOT EXISTS "addressLine1" text,
@@ -41,7 +40,6 @@ export async function ensureMerchantCrudSchema(db: DataSource): Promise<void> {
       try {
         await manager.query(`CREATE TABLE IF NOT EXISTS public.merchant_record_versions (
           record_code varchar(100) PRIMARY KEY,
-          merchant_code varchar(100) NOT NULL,
           version bigint GENERATED ALWAYS AS IDENTITY UNIQUE
         )`);
       } catch {}

@@ -1,10 +1,14 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, ParseUUIDPipe, Post, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, Post, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { AddMerchantVendorsDto } from './merchant-vendor.dto';
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { VendorRepository } from './vendor.repository';
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller(['api/v1/merchants/:merchantId/vendors', 'connector/api/v1/merchants/:merchantId/vendors'])
+@Controller([
+  'api/v1/merchants/:merchantId/vendors',
+  'connector/api/v1/merchants/:merchantId/vendors',
+  'merchants/:merchantId/vendors'
+])
 export class MerchantVendorController {
   constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
 

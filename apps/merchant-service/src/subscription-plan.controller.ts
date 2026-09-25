@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch,
 import { MerchantRepository } from './merchant.repository';
 import { CreateSubscriptionPlanDto, SubscriptionPlanFieldsDto } from './subscription-plan.dto';
 
-@Controller('api/v1/subscription-plans')
+@Controller(['api/v1/subscription-plans', 'connector/api/v1/subscription-plans', 'subscription-plans'])
 export class SubscriptionPlanController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 

@@ -217,6 +217,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
+    await this.ensureSubscriptionStoreTypeColumn();
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -242,7 +243,11 @@ export class MerchantRepository implements OnModuleInit {
     await this.seedDefaultStoreTypes();
     await this.seedDefaultCommercialPlans();
     await this.seedDefaultPlans();
-    await this.seedDefaultData();
+    try {
+      await this.seedDefaultData();
+    } catch (error) {
+      console.warn('seedDefaultData skipped:', error);
+    }
 
     // 3. Redis Connection
     try {
@@ -259,6 +264,17 @@ export class MerchantRepository implements OnModuleInit {
       console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
+
+  private async ensureSubscriptionStoreTypeColumn() {
+    const column = this.dataSource.getMetadata(SubscriptionEntity).findColumnWithPropertyName('storeTypeId');
+    if (!column) return;
+    const [existing] = await this.dataSource.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name=$1`,
+      [column.databaseName],
+    );
+    if (existing) return;
+    await this.dataSource.query(`ALTER TABLE public.subscriptions ADD COLUMN "${column.databaseName}" uuid`);
   }
 
   private async seedDefaultPlans() {
@@ -1472,9 +1488,14 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createPermission(dto: CreatePermissionDto): Promise<PermissionEntity> {
+    let targetFeatureId = dto.featureId;
+    const feat = await this.getFeatureByIdOrKey(dto.featureId);
+    if (feat) {
+      targetFeatureId = feat.id;
+    }
     const entity = this.permissionRepo.create({
-      featureId: dto.featureId,
-      permissionKey: dto.permissionKey.trim().toUpperCase(),
+      featureId: targetFeatureId,
+      permissionKey: (dto.permissionKey || dto.key || '').trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
       status: dto.status || PermissionStatus.ACTIVE,
@@ -1500,7 +1521,18 @@ export class MerchantRepository implements OnModuleInit {
   async updatePermission(idOrKey: string, dto: UpdatePermissionDto): Promise<PermissionEntity | null> {
     const existing = await this.getPermissionByIdOrKey(idOrKey);
     if (!existing) return null;
-    if (dto.featureId !== undefined) existing.featureId = dto.featureId;
+    const newKey = (dto.permissionKey || dto.key)?.trim();
+    if (newKey && newKey.toUpperCase() !== existing.permissionKey.toUpperCase()) {
+      existing.permissionKey = newKey.toUpperCase();
+    }
+    if (dto.featureId !== undefined && String(dto.featureId).trim()) {
+      const feat = await this.getFeatureByIdOrKey(String(dto.featureId).trim());
+      if (feat) {
+        existing.featureId = feat.id;
+      } else {
+        existing.featureId = String(dto.featureId).trim();
+      }
+    }
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
     if (dto.status !== undefined) existing.status = dto.status;

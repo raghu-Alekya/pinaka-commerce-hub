@@ -1,3 +1,4 @@
+import { MerchantVendorController } from './merchant-vendor.controller';
 import { OnboardingController } from './onboarding.controller';
 import { VendorController } from './vendor.controller';
 import { MerchantVendorController } from './merchant-vendor.controller';
@@ -19,7 +20,9 @@ import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalo
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CompactMerchantController } from './compact-merchant.controller';
+import { CountriesController } from './countries.controller';
 import { CompactSubscriptionController } from './compact-subscription.controller';
+import { SubscriptionPlanChangeController } from './subscription-plan-change.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
@@ -37,8 +40,11 @@ import { RelationshipsRepository } from './relationships.repository';
 @Module({
   imports: [],
   controllers: [
+    MerchantVendorController,
     CompactMerchantController,
+    CountriesController,
     CompactSubscriptionController,
+    SubscriptionPlanChangeController,
     StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,
     StoreTypeRoleTemplateCatalogController,

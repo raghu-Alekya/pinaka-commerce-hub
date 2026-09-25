@@ -1,6 +1,6 @@
 import { WorkforceValidationPipe } from './workforce-validation.pipe';
 import { IsIn } from 'class-validator';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CreateFeaturePermissionDto, UpdateFeaturePermissionDto } from './permission.dto';
@@ -27,7 +27,7 @@ function matchesSearch(permission: { permissionKey?: string; name?: string; desc
 }
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller('api/v1/features/:featureId/permissions')
+@Controller(['api/v1/features/:featureId/permissions', 'connector/api/v1/features/:featureId/permissions', 'features/:featureId/permissions'])
 export class FeaturePermissionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
@@ -36,9 +36,8 @@ export class FeaturePermissionController {
   }
 
   private async scoped(featureId: string, idOrKey: string) {
-    await this.feature(featureId);
     const permission = await this.repository.getPermissionByIdOrKey(idOrKey);
-    if (!permission || permission.featureId.toLowerCase() !== featureId.toLowerCase()) {
+    if (!permission) {
       throw new NotFoundException(`Permission '${idOrKey}' not found`);
     }
     return permission;
@@ -46,7 +45,7 @@ export class FeaturePermissionController {
 
   @Get()
   async list(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
   ) {
@@ -64,28 +63,28 @@ export class FeaturePermissionController {
   }
 
   @Get(':idOrKey')
-  async get(@Param('featureId', new ParseUUIDPipe()) featureId: string, @Param('idOrKey') idOrKey: string) {
+  async get(@Param('featureId') featureId: string, @Param('idOrKey') idOrKey: string) {
     return { success: true, permission: await this.scoped(featureId, idOrKey) };
   }
 
   @Post('bulk')
-  createBulk(@Param('featureId', new ParseUUIDPipe()) featureId: string, @Body() body: unknown) {
+  createBulk(@Param('featureId') featureId: string, @Body() body: unknown) {
     return this.repository.createFeaturePermissions(featureId, body);
   }
 
   @Patch('bulk')
-  saveBulk(@Param('featureId', new ParseUUIDPipe()) featureId: string, @Body() body: unknown) {
+  saveBulk(@Param('featureId') featureId: string, @Body() body: unknown) {
     return this.repository.updateFeaturePermissions(featureId, body);
   }
 
   @Put('bulk')
-  replaceBulk(@Param('featureId', new ParseUUIDPipe()) featureId: string, @Body() body: unknown) {
+  replaceBulk(@Param('featureId') featureId: string, @Body() body: unknown) {
     return this.saveBulk(featureId, body);
   }
 
   @Post()
   async create(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Body(new WorkforceValidationPipe({ expectedType: CreateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateFeaturePermissionDto,
   ) {
     if (body.featureId && body.featureId.toLowerCase() !== featureId.toLowerCase()) {
@@ -100,18 +99,24 @@ export class FeaturePermissionController {
 
   @Put(':idOrKey')
   async update(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Param('idOrKey') idOrKey: string,
     @Body(new WorkforceValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
   ) {
-    await this.scoped(featureId, idOrKey);
-    const permission = await this.repository.updatePermission(idOrKey, body);
+    const targetFeatureId = body.featureId || featureId;
+    const permission = await this.repository.updatePermission(idOrKey, {
+      ...body,
+      featureId: targetFeatureId,
+    });
+    if (!permission) {
+      throw new NotFoundException(`Permission '${idOrKey}' not found`);
+    }
     return { success: true, message: 'Permission updated successfully', permission };
   }
 
   @Patch(':idOrKey')
   patch(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Param('idOrKey') idOrKey: string,
     @Body(new WorkforceValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
   ) {
@@ -120,7 +125,7 @@ export class FeaturePermissionController {
 
   @Put(':idOrKey/status')
   replaceStatus(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Param('idOrKey') idOrKey: string,
     @Body(statusValidation) body: PermissionStatusDto,
   ) {
@@ -129,7 +134,7 @@ export class FeaturePermissionController {
 
   @Patch(':idOrKey/status')
   async updateStatus(
-    @Param('featureId', new ParseUUIDPipe()) featureId: string,
+    @Param('featureId') featureId: string,
     @Param('idOrKey') idOrKey: string,
     @Body(statusValidation) body: PermissionStatusDto,
   ) {
@@ -139,7 +144,7 @@ export class FeaturePermissionController {
   }
 
   @Delete(':idOrKey')
-  async delete(@Param('featureId', new ParseUUIDPipe()) featureId: string, @Param('idOrKey') idOrKey: string) {
+  async delete(@Param('featureId') featureId: string, @Param('idOrKey') idOrKey: string) {
     await this.scoped(featureId, idOrKey);
     await this.repository.deletePermission(idOrKey);
     return { success: true, message: 'Permission deactivated successfully' };

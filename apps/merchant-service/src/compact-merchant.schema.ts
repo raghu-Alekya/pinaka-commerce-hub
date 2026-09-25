@@ -20,7 +20,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           "merchantId" varchar(100),
           "merchantCode" varchar(100),
-          merchant_code varchar(100),
           "businessName" varchar(255),
           "createdDate" timestamptz DEFAULT now()
         );
@@ -29,7 +28,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
           ADD COLUMN IF NOT EXISTS "merchantId" varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100),
-          ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
           ADD COLUMN IF NOT EXISTS name varchar(255),
@@ -65,10 +63,11 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS "updatedDate" timestamptz DEFAULT now();
 
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
-        UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", merchant_code, 'MER-' || id::text) WHERE "merchantCode" IS NULL;
-        UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", merchant_code, 'MER-' || id::text) WHERE "merchantId" IS NULL;
-        UPDATE public.merchants SET merchant_code = COALESCE(merchant_code, "merchantCode", "merchantId") WHERE merchant_code IS NULL;
+        UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", 'MER-' || id::text) WHERE "merchantCode" IS NULL;
+        UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", 'MER-' || id::text) WHERE "merchantId" IS NULL;
+        
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
+        ALTER TABLE public.merchants DROP COLUMN IF EXISTS merchant_code CASCADE;
       `);
 
       await runner.query(`
@@ -100,28 +99,30 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS licensed_store_count integer,
           ADD COLUMN IF NOT EXISTS licensed_device_count integer,
           ADD COLUMN IF NOT EXISTS entitlements jsonb DEFAULT '["POS","BARCODE_SCANNING","UBER_EATS","DOORDASH","PAYROLL","LOYALTY"]'::jsonb,
-          ADD COLUMN IF NOT EXISTS start_date date,
-          ADD COLUMN IF NOT EXISTS "startDate" date,
-          ADD COLUMN IF NOT EXISTS renewal_date date,
-          ADD COLUMN IF NOT EXISTS "renewalDate" date,
-          ADD COLUMN IF NOT EXISTS agreement_price numeric(10,2) DEFAULT 99.00,
-          ADD COLUMN IF NOT EXISTS "agreementPrice" numeric(10,2) DEFAULT 99.00,
-          ADD COLUMN IF NOT EXISTS trial_end_date date,
+          ADD COLUMN IF NOT EXISTS auto_renew boolean DEFAULT true,
+          ADD COLUMN IF NOT EXISTS current_period_start date DEFAULT CURRENT_DATE,
+          ADD COLUMN IF NOT EXISTS current_period_end date DEFAULT (CURRENT_DATE + interval '30 days'),
           ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
-          ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+          ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now(),
+          ADD COLUMN IF NOT EXISTS "createdAt" timestamptz DEFAULT now(),
+          ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz DEFAULT now(),
+          ADD COLUMN IF NOT EXISTS "createdDate" timestamptz DEFAULT now(),
+          ADD COLUMN IF NOT EXISTS "updatedDate" timestamptz DEFAULT now();
 
-        UPDATE public.subscriptions SET "subscriptionId" = COALESCE("subscriptionId", id, 'SUB-' || gen_random_uuid()::text) WHERE "subscriptionId" IS NULL;
-        UPDATE public.subscriptions SET id = COALESCE(id, "subscriptionId") WHERE id IS NULL;
-        UPDATE public.subscriptions SET "merchantId" = COALESCE("merchantId", merchant_id, merchant_uuid::text) WHERE "merchantId" IS NULL;
+        UPDATE public.subscriptions SET id = "subscriptionId" WHERE id IS NULL;
+        UPDATE public.subscriptions SET "merchantId" = merchant_id WHERE "merchantId" IS NULL AND merchant_id IS NOT NULL;
+        UPDATE public.subscriptions SET "planId" = plan_id WHERE "planId" IS NULL AND plan_id IS NOT NULL;
+        UPDATE public.subscriptions SET "billingCycle" = billing_cycle WHERE "billingCycle" IS NULL AND billing_cycle IS NOT NULL;
       `);
 
       await runner.commitTransaction();
-    } catch (error) {
+    } catch (e) {
       await runner.rollbackTransaction();
-      console.warn('ensureCompactMerchantSchema notice:', error);
+      console.warn('ensureCompactMerchantSchema notice:', e);
+    } finally {
+      await runner.query('SELECT pg_advisory_unlock(724621, 12)');
     }
   } finally {
-    await runner.query('SELECT pg_advisory_unlock(724621, 12)').catch(() => undefined);
     await runner.release();
   }
 }

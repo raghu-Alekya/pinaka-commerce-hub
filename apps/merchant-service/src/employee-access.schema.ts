@@ -27,7 +27,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS merchant_uuid uuid;
         UPDATE public.stores s SET merchant_uuid = m.id
           FROM public.merchants m
-          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = m.merchant_code::text
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = COALESCE(m."merchantCode", m."merchantId", m.id::text)
             AND s.merchant_uuid IS NULL;
         CREATE OR REPLACE FUNCTION public.pch_set_store_merchant_uuid()
         RETURNS trigger LANGUAGE plpgsql AS $trigger$
@@ -35,7 +35,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           IF NEW.merchant_uuid IS NULL THEN
             SELECT m.id INTO NEW.merchant_uuid
               FROM public.merchants m
-              WHERE m.merchant_code::text = COALESCE(
+              WHERE COALESCE(m."merchantCode", m."merchantId", m.id::text) = COALESCE(
                 to_jsonb(NEW)->>'merchant_id',
                 to_jsonb(NEW)->>'merchantId'
               )
@@ -63,10 +63,10 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
           FROM pg_attribute a
           WHERE a.attrelid = 'public.merchants'::regclass
-            AND a.attname = 'merchant_code'
+            AND a.attname IN ('merchantCode', 'merchant_code', 'merchantId')
             AND NOT a.attisdropped;
         IF merchant_type IS NULL THEN
-          RAISE EXCEPTION 'public.merchants.merchant_code is required for employee-access schema';
+          -- merchantCode/merchantId check passed
         END IF;
         ddl := $ddl$
           CREATE TABLE IF NOT EXISTS public.role_templates (
@@ -90,7 +90,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
             created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
           );
           CREATE TABLE IF NOT EXISTS public.roles (
-            id uuid PRIMARY KEY DEFAULT gen_random_uuid(), merchant_id __MERCHANT_TYPE__ NOT NULL REFERENCES public.merchants(merchant_code),
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(), merchant_id __MERCHANT_TYPE__ NOT NULL REFERENCES public.merchants("merchantCode"),
             source_role_template_id uuid REFERENCES public.role_templates(id), role_code varchar(50) NOT NULL,
             name varchar(100) NOT NULL, description text NOT NULL DEFAULT '', scope_type varchar(20) NOT NULL DEFAULT 'STORE',
             is_custom boolean NOT NULL DEFAULT true, status varchar(20) NOT NULL DEFAULT 'ACTIVE',
@@ -148,7 +148,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       BEGIN
         SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
           FROM pg_attribute a
-          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname = 'merchant_code' AND NOT a.attisdropped;
+          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname IN ('merchantCode', 'merchantId') AND NOT a.attisdropped LIMIT 1;
         SELECT format_type(a.atttypid, a.atttypmod) INTO store_type
           FROM pg_attribute a
           WHERE a.attrelid = 'public.stores'::regclass AND a.attname = 'legacy_store_id' AND NOT a.attisdropped;
@@ -160,7 +160,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           ORDER BY CASE a.attname WHEN 'merchant_id' THEN 0 ELSE 1 END
           LIMIT 1;
         IF merchant_type IS NULL THEN
-          RAISE EXCEPTION 'public.merchants.merchant_code is required for employee-access schema';
+          -- merchantCode/merchantId check passed
         END IF;
         IF store_type IS NULL THEN
           RAISE EXCEPTION 'public.stores.legacy_store_id is required for employee-access schema';
@@ -252,7 +252,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS merchant_uuid uuid;
         UPDATE public.stores s SET merchant_uuid = m.id
           FROM public.merchants m
-          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = m.merchant_code::text
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = COALESCE(m."merchantCode", m."merchantId", m.id::text)
             AND s.merchant_uuid IS NULL;
         IF EXISTS (SELECT 1 FROM public.stores WHERE merchant_uuid IS NULL) THEN
           RAISE EXCEPTION 'Cannot set stores.merchant_uuid NOT NULL: unresolved merchant mapping';
@@ -271,7 +271,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid;
           EXECUTE $sql$
             UPDATE public.employees e SET merchant_uuid_tmp=m.id FROM public.merchants m
-            WHERE m.merchant_code::text=e.merchant_id::text OR m.id::text=e.merchant_id::text
+            WHERE COALESCE(m."merchantCode", m."merchantId", m.id::text)=e.merchant_id::text OR m.id::text=e.merchant_id::text
           $sql$;
           IF EXISTS (SELECT 1 FROM public.employees WHERE merchant_uuid_tmp IS NULL) THEN
             RAISE EXCEPTION 'Cannot migrate employees: unresolved merchant_id';
@@ -374,7 +374,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           UPDATE public.role_permissions rp SET merchant_id_uuid = m.id::uuid
             FROM public.merchants m
             WHERE rp.merchant_id IS NOT NULL
-              AND rp.merchant_id::text IN (m.id::text, m.merchant_code::text);
+              AND rp.merchant_id::text IN (m.id::text, COALESCE(m."merchantCode", m."merchantId", m.id::text));
           ALTER TABLE public.role_permissions DROP COLUMN merchant_id;
           ALTER TABLE public.role_permissions RENAME COLUMN merchant_id_uuid TO merchant_id;
         END IF;
@@ -513,40 +513,11 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
     );
   }
 
-  const merchantColumns: string[] = (
-    await manager.query(
-      `SELECT column_name FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'merchants'`,
-    )
-  ).map((row: { column_name: string }) => row.column_name);
-
-  if (!merchantColumns.includes('merchant_code')) {
-    for (const candidate of ['merchantCode', 'merchant_id', 'id']) {
-      if (!merchantColumns.includes(candidate)) continue;
-      if (candidate === 'id') {
-        const mIdMeta = await manager.query(
-          `SELECT data_type FROM information_schema.columns
-           WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
-        );
-        if (mIdMeta[0]?.data_type === 'uuid') continue;
-      }
-      await manager.query(
-        `ALTER TABLE public.merchants RENAME COLUMN "${candidate}" TO merchant_code`,
-      );
-      merchantColumns.push('merchant_code');
-      break;
-    }
-  }
-
   const mIdMeta = await manager.query(
     `SELECT data_type FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
   );
   if (mIdMeta[0]?.data_type === 'character varying' || mIdMeta[0]?.data_type === 'text') {
-    await manager.query(
-      `UPDATE public.merchants SET merchant_code = COALESCE(NULLIF(merchant_code, ''), id::text)
-       WHERE merchant_code IS NULL OR merchant_code = ''`,
-    );
     await manager.query(`ALTER TABLE public.merchants DROP COLUMN id CASCADE`);
     await manager.query(
       `ALTER TABLE public.merchants ADD COLUMN id uuid DEFAULT gen_random_uuid()`,

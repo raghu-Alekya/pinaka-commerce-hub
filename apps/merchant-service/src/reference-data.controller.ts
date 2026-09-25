@@ -8,7 +8,7 @@ import { MerchantRepository } from './merchant.repository';
 const labels = (values: string[]) => values.map(value => value.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
 
 @Public()
-@Controller('api/v1/reference-data')
+@Controller(['api/v1/reference-data', 'connector/api/v1/reference-data', 'reference-data'])
 export class ReferenceDataController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 

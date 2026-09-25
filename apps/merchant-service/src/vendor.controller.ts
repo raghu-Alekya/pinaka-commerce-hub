@@ -18,7 +18,7 @@ const patchValidation = new VendorFormValidationPipe({
   skipUndefinedProperties: true,
 });
 
-@Controller('api/v1/vendors')
+@Controller(['api/v1/vendors', 'connector/api/v1/vendors', 'vendors'])
 export class VendorController {
   constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
 
