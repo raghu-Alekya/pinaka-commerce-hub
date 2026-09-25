@@ -117,4 +117,125 @@ export class VendorRepository {
       throw error;
     }
   }
+
+  private async requireMerchantUuid(merchantId: string): Promise<string> {
+    const uuid = await this.merchants.resolveMerchantUuid(merchantId);
+    if (!uuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    return uuid;
+  }
+
+  async listMerchantVendors(
+    merchantId: string,
+    query: { search?: string; vendorType?: string; status?: string } = {},
+  ): Promise<any[]> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const db = this.merchants.requireDataSource();
+    const params: unknown[] = [merchantUuid];
+    let sql = `
+      SELECT v.*, mv.status AS "assignmentStatus", mv.id AS "assignmentId", true AS assigned
+      FROM public.merchant_vendors mv
+      JOIN public.vendors v ON v.id = mv.vendor_id
+      WHERE mv.merchant_id = $1
+        AND mv.status = 'ACTIVE'
+        AND v."deletedAt" IS NULL
+    `;
+    if (query.status) {
+      params.push(query.status);
+      sql += ` AND v.status = $${params.length}`;
+    }
+    if (query.vendorType) {
+      params.push(query.vendorType);
+      sql += ` AND v."vendorType" = $${params.length}`;
+    }
+    if (query.search?.trim()) {
+      params.push(`%${query.search.trim()}%`);
+      const i = params.length;
+      sql += ` AND (
+        v."vendorName" ILIKE $${i}
+        OR COALESCE(v."vendorCode", '') ILIKE $${i}
+        OR COALESCE(v."contactPerson", '') ILIKE $${i}
+        OR COALESCE(v."productCategory", '') ILIKE $${i}
+      )`;
+    }
+    sql += ` ORDER BY v."vendorName" ASC, v.id ASC`;
+    return db.query(sql, params);
+  }
+
+  async listAllVendorsWithAssignment(
+    merchantId: string,
+    query: { search?: string; vendorType?: string; status?: string } = {},
+  ): Promise<any[]> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const db = this.merchants.requireDataSource();
+    const params: unknown[] = [merchantUuid];
+    let sql = `
+      SELECT v.*,
+             CASE WHEN mv.id IS NOT NULL AND mv.status = 'ACTIVE' THEN true ELSE false END AS assigned,
+             mv.status AS "assignmentStatus",
+             mv.id AS "assignmentId"
+      FROM public.vendors v
+      LEFT JOIN public.merchant_vendors mv
+        ON mv.vendor_id = v.id AND mv.merchant_id = $1
+      WHERE v."deletedAt" IS NULL
+    `;
+    if (query.status) {
+      params.push(query.status);
+      sql += ` AND v.status = $${params.length}`;
+    } else {
+      sql += ` AND v.status = 'ACTIVE'`;
+    }
+    if (query.vendorType) {
+      params.push(query.vendorType);
+      sql += ` AND v."vendorType" = $${params.length}`;
+    }
+    if (query.search?.trim()) {
+      params.push(`%${query.search.trim()}%`);
+      const i = params.length;
+      sql += ` AND (
+        v."vendorName" ILIKE $${i}
+        OR COALESCE(v."vendorCode", '') ILIKE $${i}
+        OR COALESCE(v."contactPerson", '') ILIKE $${i}
+        OR COALESCE(v."productCategory", '') ILIKE $${i}
+      )`;
+    }
+    sql += ` ORDER BY assigned DESC, v."vendorName" ASC, v.id ASC`;
+    return db.query(sql, params);
+  }
+
+  async addMerchantVendors(merchantId: string, vendorIds: string[]): Promise<{ count: number; vendorIds: string[] }> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const db = this.merchants.requireDataSource();
+    const uniqueIds = [...new Set(vendorIds.map(String))];
+    if (!uniqueIds.length) throw new BadRequestException('vendorIds is required');
+
+    const found = await db.query(
+      `SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND "deletedAt" IS NULL`,
+      [uniqueIds],
+    );
+    if (found.length !== uniqueIds.length) {
+      throw new NotFoundException('One or more vendors were not found');
+    }
+
+    await db.query(
+      `INSERT INTO public.merchant_vendors (merchant_id, vendor_id, status)
+       SELECT $1::uuid, x.vendor_id, 'ACTIVE'
+       FROM unnest($2::uuid[]) AS x(vendor_id)
+       ON CONFLICT (merchant_id, vendor_id) DO UPDATE
+         SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP`,
+      [merchantUuid, uniqueIds],
+    );
+    return { count: uniqueIds.length, vendorIds: uniqueIds };
+  }
+
+  async removeMerchantVendor(merchantId: string, vendorId: string): Promise<void> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const db = this.merchants.requireDataSource();
+    const result = await db.query(
+      `DELETE FROM public.merchant_vendors
+       WHERE merchant_id = $1::uuid AND vendor_id = $2::uuid
+       RETURNING id`,
+      [merchantUuid, vendorId],
+    );
+    if (!result.length) throw new NotFoundException('Merchant vendor mapping not found');
+  }
 }

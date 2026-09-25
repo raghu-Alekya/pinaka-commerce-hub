@@ -92,4 +92,18 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
     ON public.tendors (LOWER(BTRIM("tendorCode")))
     WHERE "deletedAt" IS NULL AND "tendorCode" IS NOT NULL AND BTRIM("tendorCode") <> ''
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS public.merchant_vendors (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      merchant_id UUID NOT NULL,
+      vendor_id UUID NOT NULL REFERENCES public.vendors(id) ON DELETE RESTRICT,
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT merchant_vendors_status_valid CHECK (status IN ('ACTIVE', 'INACTIVE')),
+      CONSTRAINT merchant_vendors_merchant_vendor_uidx UNIQUE (merchant_id, vendor_id)
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS pch_merchant_vendors_vendor ON public.merchant_vendors(vendor_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS pch_merchant_vendors_merchant ON public.merchant_vendors(merchant_id)`);
 }
