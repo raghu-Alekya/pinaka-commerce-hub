@@ -36,9 +36,8 @@ export class FeaturePermissionController {
   }
 
   private async scoped(featureId: string, idOrKey: string) {
-    await this.feature(featureId);
     const permission = await this.repository.getPermissionByIdOrKey(idOrKey);
-    if (!permission || permission.featureId.toLowerCase() !== featureId.toLowerCase()) {
+    if (!permission) {
       throw new NotFoundException(`Permission '${idOrKey}' not found`);
     }
     return permission;
@@ -104,8 +103,14 @@ export class FeaturePermissionController {
     @Param('idOrKey') idOrKey: string,
     @Body(new WorkforceValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
   ) {
-    await this.scoped(featureId, idOrKey);
-    const permission = await this.repository.updatePermission(idOrKey, body);
+    const targetFeatureId = body.featureId || featureId;
+    const permission = await this.repository.updatePermission(idOrKey, {
+      ...body,
+      featureId: targetFeatureId,
+    });
+    if (!permission) {
+      throw new NotFoundException(`Permission '${idOrKey}' not found`);
+    }
     return { success: true, message: 'Permission updated successfully', permission };
   }
 

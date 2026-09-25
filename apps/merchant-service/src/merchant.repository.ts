@@ -1472,9 +1472,14 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createPermission(dto: CreatePermissionDto): Promise<PermissionEntity> {
+    let targetFeatureId = dto.featureId;
+    const feat = await this.getFeatureByIdOrKey(dto.featureId);
+    if (feat) {
+      targetFeatureId = feat.id;
+    }
     const entity = this.permissionRepo.create({
-      featureId: dto.featureId,
-      permissionKey: dto.permissionKey.trim().toUpperCase(),
+      featureId: targetFeatureId,
+      permissionKey: (dto.permissionKey || dto.key || '').trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
       status: dto.status || PermissionStatus.ACTIVE,
@@ -1500,7 +1505,18 @@ export class MerchantRepository implements OnModuleInit {
   async updatePermission(idOrKey: string, dto: UpdatePermissionDto): Promise<PermissionEntity | null> {
     const existing = await this.getPermissionByIdOrKey(idOrKey);
     if (!existing) return null;
-    if (dto.featureId !== undefined) existing.featureId = dto.featureId;
+    const newKey = (dto.permissionKey || dto.key)?.trim();
+    if (newKey && newKey.toUpperCase() !== existing.permissionKey.toUpperCase()) {
+      existing.permissionKey = newKey.toUpperCase();
+    }
+    if (dto.featureId !== undefined && String(dto.featureId).trim()) {
+      const feat = await this.getFeatureByIdOrKey(String(dto.featureId).trim());
+      if (feat) {
+        existing.featureId = feat.id;
+      } else {
+        existing.featureId = String(dto.featureId).trim();
+      }
+    }
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
     if (dto.status !== undefined) existing.status = dto.status;
