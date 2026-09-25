@@ -148,7 +148,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       BEGIN
         SELECT format_type(a.atttypid, a.atttypmod) INTO merchant_type
           FROM pg_attribute a
-          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname IN ('merchantCode', 'merchant_code', 'merchantId') AND NOT a.attisdropped;
+          WHERE a.attrelid = 'public.merchants'::regclass AND a.attname IN ('merchantCode', 'merchantId') AND NOT a.attisdropped LIMIT 1;
         SELECT format_type(a.atttypid, a.atttypmod) INTO store_type
           FROM pg_attribute a
           WHERE a.attrelid = 'public.stores'::regclass AND a.attname = 'legacy_store_id' AND NOT a.attisdropped;
@@ -513,40 +513,11 @@ async function ensureStoreIdentityColumns(manager: EntityManager): Promise<void>
     );
   }
 
-  const merchantColumns: string[] = (
-    await manager.query(
-      `SELECT column_name FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'merchants'`,
-    )
-  ).map((row: { column_name: string }) => row.column_name);
-
-  if (!merchantColumns.includes('merchantCode') && !merchantColumns.includes('merchant_code')) {
-    for (const candidate of ['merchantCode', 'merchant_id', 'id']) {
-      if (!merchantColumns.includes(candidate)) continue;
-      if (candidate === 'id') {
-        const mIdMeta = await manager.query(
-          `SELECT data_type FROM information_schema.columns
-           WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
-        );
-        if (mIdMeta[0]?.data_type === 'uuid') continue;
-      }
-      await manager.query(
-        `ALTER TABLE public.merchants RENAME COLUMN "${candidate}" TO merchant_code`,
-      );
-      merchantColumns.push('merchant_code');
-      break;
-    }
-  }
-
   const mIdMeta = await manager.query(
     `SELECT data_type FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'id'`,
   );
   if (mIdMeta[0]?.data_type === 'character varying' || mIdMeta[0]?.data_type === 'text') {
-    await manager.query(
-      `UPDATE public.merchants SET merchant_code = COALESCE(NULLIF(merchant_code, ''), id::text)
-       WHERE merchant_code IS NULL OR merchant_code = ''`,
-    );
     await manager.query(`ALTER TABLE public.merchants DROP COLUMN id CASCADE`);
     await manager.query(
       `ALTER TABLE public.merchants ADD COLUMN id uuid DEFAULT gen_random_uuid()`,

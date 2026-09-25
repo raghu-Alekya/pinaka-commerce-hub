@@ -1,3 +1,4 @@
+import { MerchantVendorController } from './merchant-vendor.controller';
 import { OnboardingController } from './onboarding.controller';
 import { VendorController } from './vendor.controller';
 import { TendorController } from './tendor.controller';
@@ -38,6 +39,7 @@ import { RelationshipsRepository } from './relationships.repository';
 @Module({
   imports: [],
   controllers: [
+    MerchantVendorController,
     CompactMerchantController,
     CountriesController,
     CompactSubscriptionController,

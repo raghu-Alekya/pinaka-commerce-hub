@@ -1,16 +1,20 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, ParseUUIDPipe, Post, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, Post, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { AddMerchantVendorsDto } from './merchant-vendor.dto';
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { VendorRepository } from './vendor.repository';
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller(['api/v1/merchants/:merchantId/vendors', 'connector/api/v1/merchants/:merchantId/vendors'])
+@Controller([
+  'api/v1/merchants/:merchantId/vendors',
+  'connector/api/v1/merchants/:merchantId/vendors',
+  'merchants/:merchantId/vendors'
+])
 export class MerchantVendorController {
   constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
 
   @Get()
   async list(@Param('merchantId') merchantId: string, @Query() query: Record<string, string>) {
-    const vendors = (await (this.repository as any).listMerchantVendors?.(merchantId, {
+    const vendors = (await this.repository.listMerchantVendors(merchantId, {
       search: query.search,
       vendorType: query.vendorType || query.type,
       status: query.status,
@@ -25,7 +29,7 @@ export class MerchantVendorController {
 
   @Get('available')
   async available(@Param('merchantId') merchantId: string, @Query() query: Record<string, string>) {
-    const vendors = (await (this.repository as any).listAllVendorsWithAssignment?.(merchantId, {
+    const vendors = (await this.repository.listAllVendorsWithAssignment(merchantId, {
       search: query.search,
       vendorType: query.vendorType || query.type,
       status: query.status,
@@ -44,13 +48,13 @@ export class MerchantVendorController {
   @HttpCode(HttpStatus.CREATED)
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   async add(@Param('merchantId') merchantId: string, @Body() body: AddMerchantVendorsDto) {
-    const result = await (this.repository as any).addMerchantVendors?.(merchantId, body.vendorIds) || { count: body.vendorIds.length };
+    const result = await this.repository.addMerchantVendors(merchantId, body.vendorIds) || { count: body.vendorIds.length };
     return { success: true, message: 'Vendors mapped to merchant', ...result };
   }
 
   @Delete(':vendorId')
-  async remove(@Param('merchantId') merchantId: string, @Param('vendorId', new ParseUUIDPipe()) vendorId: string) {
-    await (this.repository as any).removeMerchantVendor?.(merchantId, vendorId);
+  async remove(@Param('merchantId') merchantId: string, @Param('vendorId') vendorId: string) {
+    await this.repository.removeMerchantVendor(merchantId, vendorId);
     return { success: true, message: 'Vendor unmapped from merchant' };
   }
 }

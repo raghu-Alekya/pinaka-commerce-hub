@@ -132,7 +132,7 @@ export class MerchantCrudService {
       const next = {...current,...changes,status:'ACTIVE',merchantCode:`MRC-${randomUUID()}`};
       const keys=Object.keys(next).filter(key=>!['id','createdAt','updatedAt'].includes(key));
       await manager.query(`INSERT INTO public.merchants (${keys.map(quote).join(',')}) VALUES (${keys.map((_,i)=>`$${i+1}`).join(',')})`,this.values(next,keys));
-      const anchor = await this.anchor(manager,root);
+      await this.anchor(manager,root);
       await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[next.merchantCode]);
     } else {
       const keys=merchantFields.filter(key=>changes[key]!==undefined);
