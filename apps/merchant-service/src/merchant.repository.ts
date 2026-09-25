@@ -58,6 +58,18 @@ import { PosOpeningBalanceEntity } from './entities/pos-opening-balance.entity';
 import { ensurePosCashDenominationSchema } from './pos-cash-denomination.schema';
 import { PosCashDenominationEntity } from './entities/pos-cash-denomination.entity';
 import { PosCashDenominationItemEntity } from './entities/pos-cash-denomination-item.entity';
+import { ensurePosCashRegisterSchema } from './pos-cash-register.schema';
+import { PosCashRegisterSettingsEntity } from './entities/pos-cash-register-settings.entity';
+import { PosCashRegisterEntity } from './entities/pos-cash-register.entity';
+import { ensurePosSafeDropSchema } from './pos-safe-drop.schema';
+import { PosSafeDropEntity } from './entities/pos-safe-drop.entity';
+import { PosSafeDropTubeEntity } from './entities/pos-safe-drop-tube.entity';
+import { PosSafeDropDenominationEntity } from './entities/pos-safe-drop-denomination.entity';
+import { ensurePosCardPaymentSchema } from './pos-card-payment.schema';
+import { PosCardPaymentEntity } from './entities/pos-card-payment.entity';
+import { ensurePosTerminalMappingSchema } from './pos-terminal-mapping.schema';
+import { PosTerminalMappingSettingsEntity } from './entities/pos-terminal-mapping-settings.entity';
+import { PosTerminalMappingEntity } from './entities/pos-terminal-mapping.entity';
 
 interface WordPressProductNode {
   id?: number;
@@ -198,6 +210,14 @@ export class MerchantRepository implements OnModuleInit {
       PosOpeningBalanceEntity,
       PosCashDenominationEntity,
       PosCashDenominationItemEntity,
+      PosCashRegisterSettingsEntity,
+      PosCashRegisterEntity,
+      PosSafeDropEntity,
+      PosSafeDropTubeEntity,
+      PosSafeDropDenominationEntity,
+      PosCardPaymentEntity,
+      PosTerminalMappingSettingsEntity,
+      PosTerminalMappingEntity,
       SessionEntity,
       VendorEntity,
       TendorEntity,
@@ -246,6 +266,10 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePosCashbackSchema(this.dataSource);
     await ensurePosOpeningBalanceSchema(this.dataSource);
     await ensurePosCashDenominationSchema(this.dataSource);
+    await ensurePosCashRegisterSchema(this.dataSource);
+    await ensurePosSafeDropSchema(this.dataSource);
+    await ensurePosCardPaymentSchema(this.dataSource);
+    await ensurePosTerminalMappingSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);

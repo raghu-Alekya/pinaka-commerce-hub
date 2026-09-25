@@ -36,6 +36,14 @@ import { PosOpeningBalanceController } from './pos-opening-balance.controller';
 import { PosOpeningBalanceService } from './pos-opening-balance.service';
 import { PosCashDenominationController } from './pos-cash-denomination.controller';
 import { PosCashDenominationService } from './pos-cash-denomination.service';
+import { PosCashRegisterController } from './pos-cash-register.controller';
+import { PosCashRegisterService } from './pos-cash-register.service';
+import { PosSafeDropController } from './pos-safe-drop.controller';
+import { PosSafeDropService } from './pos-safe-drop.service';
+import { PosCardPaymentController } from './pos-card-payment.controller';
+import { PosCardPaymentService } from './pos-card-payment.service';
+import { PosTerminalMappingController } from './pos-terminal-mapping.controller';
+import { PosTerminalMappingService } from './pos-terminal-mapping.service';
 import { StoreTypeController } from './store-type.controller';
 import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
 import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
@@ -83,6 +91,10 @@ import { RelationshipsRepository } from './relationships.repository';
     PosCashbackController,
     PosOpeningBalanceController,
     PosCashDenominationController,
+    PosCashRegisterController,
+    PosSafeDropController,
+    PosCardPaymentController,
+    PosTerminalMappingController,
     StoreTypeController,
     OnboardingController,
     VendorController,
@@ -103,6 +115,10 @@ import { RelationshipsRepository } from './relationships.repository';
     PosCashbackService,
     PosOpeningBalanceService,
     PosCashDenominationService,
+    PosCashRegisterService,
+    PosSafeDropService,
+    PosCardPaymentService,
+    PosTerminalMappingService,
     VendorRepository,
     TendorRepository,
     SessionAuthGuard,
