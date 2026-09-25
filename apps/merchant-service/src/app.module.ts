@@ -18,6 +18,7 @@ import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalo
 import { AppController } from './app.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CompactMerchantController } from './compact-merchant.controller';
+import { CountriesController } from './countries.controller';
 import { CompactSubscriptionController } from './compact-subscription.controller';
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
@@ -37,6 +38,7 @@ import { RelationshipsRepository } from './relationships.repository';
   imports: [],
   controllers: [
     CompactMerchantController,
+    CountriesController,
     CompactSubscriptionController,
     StoreTypeFeatureCatalogController,
     FeatureStoreTypeCatalogController,

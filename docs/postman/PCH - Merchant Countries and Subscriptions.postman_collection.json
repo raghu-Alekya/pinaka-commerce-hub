@@ -1,0 +1,120 @@
+{
+  "info": {
+    "name": "PCH - Merchant Countries and Subscriptions",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Login, country list, subscription list, and merchant get/update. Country routes are public. Other merchant routes use the bearer token saved by Login."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3003" },
+    { "key": "authBaseUrl", "value": "http://localhost:3010" },
+    { "key": "accessToken", "value": "" },
+    { "key": "email", "value": "admin@alektasolutions.com" },
+    { "key": "password", "value": "admin@123" },
+    { "key": "merchantId", "value": "2c160969-79b7-4562-be63-02cf504e2bca" },
+    { "key": "planId", "value": "2a8ac621-fd00-4b7f-aa88-6e03124b22ee" }
+  ],
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{authBaseUrl}}/api/v1/auth/login",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const data = pm.response.json();",
+              "if (data.accessToken) pm.collectionVariables.set('accessToken', data.accessToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "List countries",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/v1/countries"
+      }
+    },
+    {
+      "name": "List countries under merchants",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/v1/merchants/countries"
+      }
+    },
+    {
+      "name": "List subscriptions",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/subscriptions?merchantId=&status=",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "subscriptions"],
+          "query": [
+            { "key": "merchantId", "value": "", "description": "Optional. Filters by merchantId." },
+            { "key": "status", "value": "", "description": "Optional. Example: ACTIVE" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "List subscriptions under merchants",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/merchants/subscriptions?merchantId=&status=",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "merchants", "subscriptions"],
+          "query": [
+            { "key": "merchantId", "value": "", "description": "Optional. Filters by merchantId." },
+            { "key": "status", "value": "", "description": "Optional. Example: ACTIVE" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get merchant by id",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}",
+        "description": "phone is the national number. merchant_code is the merchantId column value."
+      }
+    },
+    {
+      "name": "Update merchant",
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/api/v1/merchants/{{merchantId}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"merchantName\": \"Alex rrrJohnson\",\n  \"merchantEmail\": \"alexteeeett@example.com\",\n  \"merchantPhoneNumber\": \"+15552345678\",\n  \"businessName\": \"Fresh Mart LLC\",\n  \"businessDisplayName\": \"Fresh Mart\",\n  \"addressLine1\": \"123 Main St\",\n  \"addressLine2\": \"Suite 2\",\n  \"city\": \"Austin\",\n  \"state\": \"TX\",\n  \"pinCode\": \"78701\",\n  \"country\": \"USA\",\n  \"planId\": \"{{planId}}\",\n  \"billingCycle\": \"MONTHLY\",\n  \"startDate\": \"2026-09-22\",\n  \"renewalDate\": \"2026-10-22\",\n  \"agreementPrice\": 99,\n  \"tax\": 8.25,\n  \"totalDueToday\": 107.25,\n  \"paymentMethod\": \"CARD\"\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    }
+  ]
+}
