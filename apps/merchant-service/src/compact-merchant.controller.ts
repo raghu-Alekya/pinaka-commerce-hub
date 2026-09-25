@@ -79,7 +79,7 @@ export class CompactMerchantController {
            AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'`,
         [id],
       );
-      if (rows.length) return rows[0];
+      if (rows.length) return this.showMerchantCode(rows[0]);
     } catch (error: unknown) {
       console.error(
         '[CompactMerchantController.getRecord]',
@@ -94,7 +94,7 @@ export class CompactMerchantController {
       [id],
     );
     if (!row) throw new NotFoundException('Merchant not found');
-    return row;
+    return this.showMerchantCode(row);
   }
 
   private dateOnly(value: unknown) {
@@ -108,8 +108,21 @@ export class CompactMerchantController {
     return value;
   }
 
+  private merchantCodeValue(row: Input) {
+    return [row?.merchantId, row?.merchantCode, row?.merchant_code].find(value => /^MER-\d+$/i.test(String(value || ''))) || null;
+  }
+
+  private showMerchantCode<T extends Input>(record: T): T {
+    const merchant = record?.merchant;
+    if (merchant && typeof merchant === 'object' && !Array.isArray(merchant)) {
+      const code = this.merchantCodeValue(merchant as Input);
+      if (code) (merchant as Input).merchant_code = code;
+    }
+    return record;
+  }
+
   private present(row: Input) {
-    const merchant: Input = { id: row.id, status: row.status || 'ACTIVE', createdAt: row.createdAt || row.createdDate || row.created_at || null };
+    const merchant: Input = { id: row.id, merchant_code: this.merchantCodeValue(row), merchantId: row.merchantId || null, status: row.status || 'ACTIVE', createdAt: row.createdAt || row.createdDate || row.created_at || null };
     for (const key of fields) {
       let value = row[key] ?? (key === 'merchantEmail' ? row.email : undefined) ?? (key === 'merchantPhoneNumber' ? row.phone : undefined) ?? (key === 'pinCode' ? row.postalCode : undefined);
       if (key === 'startDate' || key === 'renewalDate') value = this.dateOnly(value);
@@ -138,6 +151,28 @@ export class CompactMerchantController {
   private async columns(table: string): Promise<Set<string>> {
     const rows = await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [table]);
     return new Set(rows.map((row: { column_name: string }) => row.column_name));
+  }
+
+  private async nextMerchantId(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }) {
+    await manager.query(`SELECT pg_advisory_xact_lock(842001)`);
+    const numbered = await manager.query(`SELECT "merchantId" AS code FROM public.merchants WHERE "merchantId" ~ '^MER-[0-9]+$'`);
+    let max = 0;
+    for (const row of numbered) {
+      const value = Number(String(row.code).slice(4));
+      if (Number.isFinite(value) && value > max) max = value;
+    }
+    const pending = await manager.query(
+      `SELECT id::text AS id FROM public.merchants
+       WHERE COALESCE("merchantId", '') !~ '^MER-[0-9]+$'
+       ORDER BY COALESCE((to_jsonb(merchants)->>'createdDate')::timestamptz, (to_jsonb(merchants)->>'created_at')::timestamptz, (to_jsonb(merchants)->>'createdAt')::timestamptz, now()), id`,
+    );
+    for (const row of pending) {
+      max += 1;
+      const code = `MER-${String(max).padStart(4, '0')}`;
+      await manager.query(`UPDATE public.merchants SET "merchantId"=$1, merchant_code=$1, "merchantCode"=CASE WHEN "merchantCode" IS NULL OR "merchantCode" !~ '^MER-[0-9]+$' THEN $1 ELSE "merchantCode" END WHERE id::text=$2`, [code, row.id]);
+    }
+    max += 1;
+    return `MER-${String(max).padStart(4, '0')}`;
   }
 
   @Post('create-merchant')
@@ -220,8 +255,10 @@ export class CompactMerchantController {
         setCol('updatedDate', new Date());
         setCol('created_at', new Date());
         setCol('updated_at', new Date());
-        if (availMerchantCols.has('merchantCode') && !merchantData.merchantCode) setCol('merchantCode', rowId);
-        if (availMerchantCols.has('merchant_code') && !merchantData.merchant_code) setCol('merchant_code', rowId);
+        const merchantId = await this.nextMerchantId(manager);
+        setCol('merchantId', merchantId);
+        setCol('merchantCode', merchantId);
+        setCol('merchant_code', merchantId);
         const mCols = Object.keys(merchantData);
         const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
         const mColList = mCols.map(c => `"${c}"`).join(',');
@@ -318,7 +355,7 @@ export class CompactMerchantController {
            now()
          ) DESC`,
       );
-      return { success: true, count: rows.length, merchants: rows };
+      return { success: true, count: rows.length, merchants: rows.map((row: Input) => this.showMerchantCode(row)) };
     } catch (error: unknown) {
       console.error(
         '[CompactMerchantController.list]',
@@ -335,14 +372,14 @@ export class CompactMerchantController {
              now()
            ) DESC`,
         );
-        return { success: true, count: rows.length, merchants: rows };
+        return { success: true, count: rows.length, merchants: rows.map((row: Input) => this.showMerchantCode(row)) };
       } catch (fallbackError: unknown) {
         console.error(
           '[CompactMerchantController.list.fallback]',
           fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
         );
         const rows = await this.db.query(`SELECT row_to_json(m) AS merchant FROM public.merchants m`);
-        return { success: true, count: rows.length, merchants: rows };
+        return { success: true, count: rows.length, merchants: rows.map((row: Input) => this.showMerchantCode(row)) };
       }
     }
   }
@@ -370,6 +407,7 @@ export class CompactMerchantController {
       const missing = required.filter(key => input[key] === undefined);
       if (missing.length) throw new BadRequestException(`Missing required fields: ${missing.join(', ')}`);
     }
+    try {
     await this.db.transaction(async manager => {
       const [existing] = await manager.query(
         `SELECT * FROM public.merchants m
@@ -380,19 +418,16 @@ export class CompactMerchantController {
       );
       if (!existing) throw new NotFoundException('Merchant not found');
 
-      await manager.query(
-        `UPDATE public.merchants SET status='INACTIVE' WHERE id=$1`,
-        [existing.id],
-      );
-
       const merchantColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`);
       const availMerchantCols = new Set(merchantColsResult.map((r: any) => r.column_name));
+      const assignments: string[] = [];
+      const values: unknown[] = [];
+      const setCol = (col: string, val: unknown) => {
+        if (!availMerchantCols.has(col)) return;
+        values.push(val);
+        assignments.push(`"${col}" = $${values.length}`);
+      };
 
-      const merchantData: Record<string, any> = {};
-      const setCol = (col: string, val: any) => { if (availMerchantCols.has(col)) merchantData[col] = val; };
-
-      setCol('merchantId', existing.merchantId || id);
-      setCol('merchantCode', existing.merchantCode || id);
       setCol('businessName', input.businessName ?? existing.businessName);
       setCol('businessDisplayName', input.businessDisplayName ?? existing.businessDisplayName);
       setCol('legalBusinessName', input.businessName ?? existing.legalBusinessName);
@@ -408,7 +443,6 @@ export class CompactMerchantController {
       setCol('state', input.state ?? existing.state);
       setCol('pinCode', input.pinCode ?? existing.pinCode);
       setCol('country', input.country ?? existing.country);
-      setCol('storeTypeId', input.storeTypeId ?? existing.storeTypeId);
       setCol('planId', input.planId ?? existing.planId);
       setCol('billingCycle', input.billingCycle ?? existing.billingCycle);
       setCol('startDate', input.startDate ?? existing.startDate);
@@ -418,15 +452,102 @@ export class CompactMerchantController {
       setCol('totalDueToday', input.totalDueToday ?? existing.totalDueToday);
       setCol('paymentMethod', input.paymentMethod ?? existing.paymentMethod);
       setCol('status', 'ACTIVE');
-      setCol('createdDate', new Date());
       setCol('updatedDate', new Date());
+      setCol('updated_at', new Date());
+      if (!assignments.length) throw new BadRequestException('No merchant columns available to update');
+      values.push(existing.id ?? existing.merchant_code ?? id);
+      await manager.query(
+        `UPDATE public.merchants SET ${assignments.join(', ')} WHERE id::text = $${values.length} OR merchant_code = $${values.length}`,
+        values,
+      );
 
-      const mCols = Object.keys(merchantData);
-      const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
-      const mColList = mCols.map(c => `"${c}"`).join(',');
-      await manager.query(`INSERT INTO public.merchants (${mColList}) VALUES (${mPlaceholders})`, Object.values(merchantData));
+      const nextPlanId = String(input.planId ?? existing.planId ?? '');
+      if (nextPlanId) await this.saveSubscriptionVersion(manager, id, existing, input, nextPlanId);
     });
+    } catch (error: any) {
+      if ((error.driverError?.code || error.code) === '23505') throw new ConflictException('Merchant email already exists');
+      throw error;
+    }
     return { success: true, ...(await this.getRecord(id)) };
+  }
+
+  private async saveSubscriptionVersion(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, id: string, existing: Input, input: Input, planId: string) {
+    await manager.query(`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150)`);
+    const merchantKeys = [...new Set([id, existing.id, existing.merchantId, existing.merchantCode, existing.merchant_code].filter(value => value != null && value !== '').map(String))];
+    const [current] = await manager.query(
+      `SELECT * FROM public.subscriptions s
+       WHERE (
+         COALESCE(to_jsonb(s)->>'merchantId', '') = ANY($1::text[])
+         OR COALESCE(to_jsonb(s)->>'merchant_id', '') = ANY($1::text[])
+       )
+         AND COALESCE(to_jsonb(s)->>'status', 'ACTIVE') = 'ACTIVE'
+       ORDER BY COALESCE((to_jsonb(s)->>'created_at')::timestamptz, (to_jsonb(s)->>'createdAt')::timestamptz, now()) DESC
+       LIMIT 1`,
+      [merchantKeys],
+    );
+    const nextCycle = String(input.billingCycle ?? existing.billingCycle ?? current?.billingCycle ?? current?.billing_cycle ?? '');
+    const nextStart = String(input.startDate ?? this.dateOnly(existing.startDate) ?? '');
+    const nextRenewal = String(input.renewalDate ?? this.dateOnly(existing.renewalDate) ?? '');
+    const nextPrice = Number(input.agreementPrice ?? existing.agreementPrice ?? current?.price ?? 0);
+    const unchanged = current
+      && String(current.planId || current.plan_id || '') === planId
+      && String(current.billingCycle || current.billing_cycle || '') === nextCycle
+      && String(this.dateOnly(current.startDate || current.start_date) || '') === nextStart
+      && String(this.dateOnly(current.renewalDate || current.renewal_date) || '') === nextRenewal
+      && Number(current.price ?? current.agreementPrice ?? 0) === nextPrice;
+    if (unchanged) return;
+
+    const [plan] = await manager.query(`SELECT * FROM public.plans WHERE id::text=$1`, [planId]);
+    if (!plan) throw new BadRequestException('Select an active planId');
+    if (current?.id) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE' WHERE id=$1`, [current.id]);
+
+    const subCols = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: { column_name: string }) => row.column_name));
+    const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const merchantKey = String(current?.merchantId || current?.merchant_id || existing.merchantId || existing.merchant_code || id);
+    const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
+    const storeTypeName = await storeTypeNameForPlan(manager, planId);
+    const subData: Record<string, unknown> = {};
+    const setSubCol = (col: string, val: unknown) => { if (subCols.has(col)) subData[col] = val; };
+    setSubCol('id', subId);
+    setSubCol('subscriptionId', subId);
+    setSubCol('subscription_code', subId);
+    setSubCol('subscriptionCode', subId);
+    setSubCol('merchantId', merchantKey);
+    setSubCol('merchant_id', merchantKey);
+    setSubCol('plan_id', planId);
+    setSubCol('planId', planId);
+    setSubCol('planName', planName);
+    setSubCol('plan_name', planName);
+    const planCode = plan.planCode || plan.plan_code || plan.code;
+    if (planCode) {
+      setSubCol('planCode', planCode);
+      setSubCol('plan_code', planCode);
+    }
+    setSubCol('maxStoresAllowed', plan.included_stores ?? plan.maxStoresAllowed ?? 0);
+    setSubCol('trialDays', plan.trialDays ?? plan.trial_days ?? 0);
+    setSubCol('createdAt', new Date());
+    setSubCol('updatedAt', new Date());
+    setSubCol('storeTypeName', storeTypeName);
+    setSubCol('store_type_name', storeTypeName);
+    setSubCol('entitlements', JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []));
+    setSubCol('billing_cycle', nextCycle);
+    setSubCol('billingCycle', nextCycle);
+    setSubCol('start_date', nextStart);
+    setSubCol('startDate', nextStart);
+    setSubCol('renewal_date', nextRenewal);
+    setSubCol('renewalDate', nextRenewal);
+    setSubCol('agreement_price', nextPrice);
+    setSubCol('agreementPrice', nextPrice);
+    setSubCol('price', nextPrice);
+    setSubCol('currency', 'USD');
+    setSubCol('status', 'ACTIVE');
+    setSubCol('created_at', new Date());
+    setSubCol('updated_at', new Date());
+    const columns = Object.keys(subData);
+    await manager.query(
+      `INSERT INTO public.subscriptions (${columns.map(column => `"${column}"`).join(',')}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(',')})`,
+      Object.values(subData),
+    );
   }
 
   @Patch(':id/status')
