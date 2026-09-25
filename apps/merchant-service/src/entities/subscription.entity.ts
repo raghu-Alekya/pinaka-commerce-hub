@@ -57,6 +57,9 @@ export class SubscriptionEntity {
   @Column({ type: 'varchar', length: 100 })
   planName!: string;
 
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  storeTypeName?: string | null;
+
   @Column({ type: 'integer', default: 3 })
   maxStoresAllowed!: number;
 

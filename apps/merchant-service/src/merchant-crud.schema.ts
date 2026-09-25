@@ -27,6 +27,7 @@ export async function ensureMerchantCrudSchema(db: DataSource): Promise<void> {
         ADD COLUMN IF NOT EXISTS "paymentMethod" varchar(50),
         ADD COLUMN IF NOT EXISTS "storeTypeId" uuid,
         ADD COLUMN IF NOT EXISTS "roleIds" jsonb NOT NULL DEFAULT '[]'::jsonb`);
+      await manager.query(`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150)`);
 
       if (columns.has('ownerName')) {
         await manager.query('UPDATE public.merchants SET "merchantName"=COALESCE("merchantName", "ownerName") WHERE "merchantName" IS NULL');

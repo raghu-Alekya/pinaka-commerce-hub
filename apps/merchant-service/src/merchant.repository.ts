@@ -240,7 +240,11 @@ export class MerchantRepository implements OnModuleInit {
     await this.seedDefaultStoreTypes();
     await this.seedDefaultCommercialPlans();
     await this.seedDefaultPlans();
-    await this.seedDefaultData();
+    try {
+      await this.seedDefaultData();
+    } catch (error) {
+      console.warn('seedDefaultData skipped:', error);
+    }
 
     // 3. Redis Connection
     try {
