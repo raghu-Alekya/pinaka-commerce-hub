@@ -189,15 +189,19 @@ export class MerchantCrudService {
       entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
       maxStoresAllowed:planChanged ? plan.included_stores ?? plan.includedStores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? plan.includedStores ?? 0,
       status:input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE')};
-    const isNew = !current;
-    if (fields.status === 'ACTIVE') await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
-      WHERE "merchantId"=$1 AND status='ACTIVE' AND id<>$2`,[code,isNew ? '' : current!.id]);
+    const isNew = !current || forceNew;
+    if (fields.status === 'ACTIVE' && isNew) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
+      WHERE "merchantId"=$1 AND status='ACTIVE'`,[code]);
     const id = isNew ? `SUB-${randomUUID()}` : current!.id;
     const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
     const keys = Object.keys(fields).filter(key => columns.has(key) && (fields as Record<string, unknown>)[key] != null);
     const values = keys.map(key => (fields as Record<string, unknown>)[key]);
-    if (isNew) await manager.query(`INSERT INTO public.subscriptions (id,"merchantId","subscriptionCode",${keys.map(quote).join(',')})
-      VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
+    if (isNew) {
+      if (columns.has('createdAt')) { keys.push('createdAt'); values.push(new Date()); }
+      if (columns.has('created_at')) { keys.push('created_at'); values.push(new Date()); }
+      await manager.query(`INSERT INTO public.subscriptions (id,"merchantId","subscriptionCode",${keys.map(quote).join(',')})
+        VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
+    }
     else await manager.query(`UPDATE public.subscriptions SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=now() WHERE id=$1`,[id,...values]);
     return id;
   }

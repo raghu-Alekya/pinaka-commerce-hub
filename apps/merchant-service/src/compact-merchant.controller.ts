@@ -663,23 +663,43 @@ export class CompactMerchantController {
     };
     const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
     const [current] = await manager.query(
-      `SELECT id FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
+      `SELECT id, "planId" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
       [merchantId],
     );
-    if (current?.id) {
-      const keys = Object.keys(fields).filter(key => columns.has(key) && fields[key] != null);
+    const planChanged = !current?.id || String(current.planId || '') !== String(input.planId);
+    if (current?.id && planChanged) {
       await manager.query(
-        `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
-        [current.id, ...keys.map(key => fields[key])],
+        `UPDATE public.subscriptions SET status='INACTIVE', "updatedAt"=now() WHERE "merchantId"=$1 AND status='ACTIVE'`,
+        [merchantId],
+      );
+    }
+    if (!current?.id || planChanged) {
+      const subId = `SUB-${randomUUID()}`;
+      const now = new Date();
+      const insert = {
+        id: subId,
+        subscriptionCode: subId,
+        subscriptionId: subId,
+        ...fields,
+        plan_id: input.planId,
+        plan_name: planName,
+        plan_code: planCode,
+        billing_cycle: fields.billingCycle,
+        createdAt: now,
+        created_at: now,
+        updated_at: now,
+      };
+      const keys = Object.keys(insert).filter(key => columns.has(key) && insert[key as keyof typeof insert] != null);
+      await manager.query(
+        `INSERT INTO public.subscriptions (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
+        keys.map(key => insert[key as keyof typeof insert]),
       );
       return;
     }
-    const subId = `SUB-${randomUUID()}`;
-    const insert = { id: subId, subscriptionCode: subId, ...fields, createdAt: new Date() };
-    const keys = Object.keys(insert).filter(key => columns.has(key));
+    const keys = Object.keys(fields).filter(key => columns.has(key) && fields[key] != null);
     await manager.query(
-      `INSERT INTO public.subscriptions (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
-      keys.map(key => insert[key as keyof typeof insert]),
+      `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
+      [current.id, ...keys.map(key => fields[key])],
     );
   }
 }
