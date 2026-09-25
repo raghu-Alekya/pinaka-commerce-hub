@@ -29,7 +29,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
           ADD COLUMN IF NOT EXISTS "merchantId" varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100),
-          ADD COLUMN IF NOT EXISTS 
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
           ADD COLUMN IF NOT EXISTS name varchar(255),

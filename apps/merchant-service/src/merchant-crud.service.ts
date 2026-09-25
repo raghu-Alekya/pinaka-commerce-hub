@@ -68,7 +68,7 @@ export class MerchantCrudService {
     await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('merchant:' || $1,0))",[root]);
     const anchor = await this.anchor(manager,root);
     await manager.query('SELECT 1 FROM public.merchants WHERE id=$1 FOR UPDATE',[anchor.id]);
-    await manager.query('INSERT INTO public.merchant_record_versions(record_code,merchant_code) VALUES ($1,$1) ON CONFLICT(record_code) DO NOTHING',[anchor.merchantCode]);
+    await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1) ON CONFLICT(record_code) DO NOTHING',[anchor.merchantCode]);
     const [merchant] = await manager.query(`SELECT m.*,to_char(m."startDate",'YYYY-MM-DD') AS "startDate",
       to_char(m."renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.merchants m
       LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode"
@@ -129,7 +129,7 @@ export class MerchantCrudService {
       const keys=Object.keys(next).filter(key=>!['id','createdAt','updatedAt'].includes(key));
       await manager.query(`INSERT INTO public.merchants (${keys.map(quote).join(',')}) VALUES (${keys.map((_,i)=>`$${i+1}`).join(',')})`,this.values(next,keys));
       const anchor = await this.anchor(manager,root);
-      await manager.query('INSERT INTO public.merchant_record_versions(record_code,merchant_code) VALUES ($1,$2)',[next.merchantCode,anchor.merchantCode]);
+      await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[next.merchantCode]);
     } else {
       const keys=merchantFields.filter(key=>changes[key]!==undefined);
       if (keys.length) await manager.query(`UPDATE public.merchants SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=clock_timestamp() WHERE "merchantCode"=$1`,[current.merchantCode,...this.values(changes,keys)]);
@@ -161,21 +161,27 @@ export class MerchantCrudService {
     end.setUTCDate(Math.min(date.getUTCDate(),new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate()));
     const renewal = merged.renewalDate || end.toISOString().slice(0,10);
     if (renewal <= start) throw new BadRequestException('renewalDate must be after startDate');
-    await manager.query(`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150)`);
-    const fields = {planId:plan.id,planCode:plan.planCode,planName:plan.name,storeTypeName:await this.storeTypeName(manager, plan),
-      billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(plan.basePrice),
-      currency:planChanged ? plan.currency : current?.currency || plan.currency,entitlements:JSON.stringify(planChanged ? plan.included_features || [] : current?.entitlements || plan.included_features || []),
-      maxStoresAllowed:planChanged ? plan.included_stores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? 0,
+    const planCode = plan.planCode || plan.plan_code || 'PRO';
+    const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
+    const basePrice = plan.basePrice ?? plan.base_price ?? 0;
+    const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
+    const fields = {planId:plan.id,planCode,planName,storeTypeName:await this.storeTypeName(manager, plan),
+      billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(basePrice),
+      currency:planChanged ? (plan.currency || 'USD') : current?.currency || plan.currency || 'USD',
+      entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
+      maxStoresAllowed:planChanged ? plan.included_stores ?? plan.includedStores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? plan.includedStores ?? 0,
       status:input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE')};
     const isNew = forceNew || !current || current.planId !== fields.planId;
     if (isNew && current) fields.status = 'ACTIVE';
     if (fields.status === 'ACTIVE') await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
       WHERE "merchantId"=$1 AND status='ACTIVE' AND id<>$2`,[code,isNew ? '' : current!.id]);
     const id = isNew ? `SUB-${randomUUID()}` : current!.id;
-    const keys = Object.keys(fields);
+    const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
+    const keys = Object.keys(fields).filter(key => columns.has(key));
+    const values = keys.map(key => (fields as Record<string, unknown>)[key]);
     if (isNew) await manager.query(`INSERT INTO public.subscriptions (id,"merchantId","subscriptionCode",${keys.map(quote).join(',')})
-      VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...Object.values(fields)]);
-    else await manager.query(`UPDATE public.subscriptions SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=now() WHERE id=$1`,[id,...Object.values(fields)]);
+      VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
+    else await manager.query(`UPDATE public.subscriptions SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=now() WHERE id=$1`,[id,...values]);
     return id;
   }
 
@@ -194,7 +200,7 @@ export class MerchantCrudService {
       const [merchant] = await manager.query(`INSERT INTO public.merchants ("merchantCode",${fields.map(quote).join(',')})
         VALUES ($1,${fields.map((_,i)=>`$${i+2}`).join(',')}) RETURNING *`,[code,...this.values(input,fields)]);
       if (input.status === undefined) await manager.query(`UPDATE public.merchants SET status='ACTIVE' WHERE "merchantCode"=$1`,[code]);
-      await manager.query('INSERT INTO public.merchant_record_versions(record_code,merchant_code) VALUES ($1,$1)',[code]);
+      await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[code]);
       const sub = await this.writeSubscription(manager,input.merchantId,{...input,price:input.agreementPrice,status:'ACTIVE'});
       await this.saveMerchantRecord(manager,input.merchantId,merchant,this.subscriptionSnapshot(await this.subscriptionRow(manager,sub)),false);
       await this.extras(manager,input.merchantId,input);

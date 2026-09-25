@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
+import { COUNTRIES, nationalPhone } from './countries';
+import { MerchantCrudService } from './merchant-crud.service';
 import { MerchantRepository } from './merchant.repository';
 
 const fields = [
@@ -167,7 +170,9 @@ export class CompactMerchantController {
         const setCol = (col: string, val: any) => { if (availMerchantCols.has(col)) merchantData[col] = val; };
         const rowId = randomUUID();
         savedId = rowId;
+        const merchantKey = `MCH-${rowId.slice(0, 8).toUpperCase()}`;
         setCol('id', rowId);
+        setCol('merchantId', merchantKey);
         setCol('businessName', input.businessName);
         setCol('businessDisplayName', input.businessDisplayName || input.businessName);
         setCol('legalBusinessName', input.businessName);
@@ -208,8 +213,6 @@ export class CompactMerchantController {
         const inserted = await manager.query(`INSERT INTO public.merchants (${mColList}) VALUES (${mPlaceholders}) RETURNING *`, Object.values(merchantData));
         savedId = String(inserted[0]?.id || inserted[0]?.merchantId || rowId);
 
-        // 2. Inspect existing columns in public.subscriptions dynamically
-        await manager.query(`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150)`);
         const subColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`);
         const availSubCols = new Set(subColsResult.map((r: any) => r.column_name));
 
@@ -224,8 +227,8 @@ export class CompactMerchantController {
         setSubCol('id', subId);
         setSubCol('subscriptionId', subId);
         setSubCol('subscription_code', subId);
-        setSubCol('merchantId', savedId);
-        setSubCol('merchant_id', savedId);
+        setSubCol('merchantId', merchantKey);
+        setSubCol('merchant_id', merchantKey);
         setSubCol('plan_id', input.planId);
         setSubCol('planId', input.planId);
         setSubCol('planName', planName);
@@ -327,8 +330,32 @@ export class CompactMerchantController {
     }
   }
 
+  @Public()
+  @Get('countries')
+  countries() {
+    return { success: true, count: COUNTRIES.length, countries: COUNTRIES };
+  }
+
+  @Get('subscriptions')
+  subscriptions(@Query('merchantId') merchantId?: string, @Query('status') status?: string) {
+    return new MerchantCrudService(this.db).listSubscriptions(merchantId, status);
+  }
+
+  @Get('subscriptions/:subscriptionId')
+  subscription(@Param('subscriptionId') subscriptionId: string) {
+    return new MerchantCrudService(this.db).getSubscription(subscriptionId);
+  }
+
   @Get(':id')
-  async get(@Param('id') id: string) { return { success: true, ...(await this.getRecord(id)) }; }
+  async get(@Param('id') id: string) {
+    const record = await this.getRecord(id);
+    const merchant = record.merchant;
+    if (merchant && typeof merchant === 'object') {
+      merchant.phone = nationalPhone(merchant.phone, merchant.country);
+      merchant.merchantPhoneNumber = nationalPhone(merchant.merchantPhoneNumber ?? merchant.phone, merchant.country);
+    }
+    return { success: true, ...record };
+  }
 
   @Get(':id/history')
   async history(@Param('id') id: string) {
@@ -360,35 +387,30 @@ export class CompactMerchantController {
       );
       if (!existing) throw new NotFoundException('Merchant not found');
 
-      await manager.query(
-        `UPDATE public.merchants SET status='INACTIVE' WHERE id=$1`,
-        [existing.id],
-      );
-
       const merchantColsResult = await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`);
       const availMerchantCols = new Set(merchantColsResult.map((r: any) => r.column_name));
 
       const merchantData: Record<string, any> = {};
-      const setCol = (col: string, val: any) => { if (availMerchantCols.has(col)) merchantData[col] = val; };
+      const setCol = (col: string, val: any) => { if (availMerchantCols.has(col) && col !== 'id' && col !== 'merchantCode') merchantData[col] = val; };
 
       setCol('merchantId', existing.merchantId || id);
-      setCol('merchantCode', existing.merchantCode || id);
       setCol('businessName', input.businessName ?? existing.businessName);
       setCol('businessDisplayName', input.businessDisplayName ?? existing.businessDisplayName);
-      setCol('legalBusinessName', input.businessName ?? existing.legalBusinessName);
+      setCol('legalBusinessName', input.businessName ?? existing.legalBusinessName ?? existing.businessName);
       setCol('merchantName', input.merchantName ?? existing.merchantName);
-      setCol('ownerName', input.merchantName ?? existing.ownerName);
+      setCol('ownerName', input.merchantName ?? existing.ownerName ?? existing.merchantName);
       setCol('merchantEmail', input.merchantEmail ?? existing.merchantEmail ?? existing.email);
-      setCol('email', input.merchantEmail ?? existing.email);
+      setCol('email', input.merchantEmail ?? existing.email ?? existing.merchantEmail);
       setCol('merchantPhoneNumber', input.merchantPhoneNumber ?? existing.merchantPhoneNumber ?? existing.phone);
-      setCol('phone', input.merchantPhoneNumber ?? existing.phone);
+      setCol('phone', input.merchantPhoneNumber ?? existing.phone ?? existing.merchantPhoneNumber);
       setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
       setCol('addressLine2', input.addressLine2 ?? existing.addressLine2);
+      setCol('businessAddress', [input.addressLine1 ?? existing.addressLine1, input.addressLine2 ?? existing.addressLine2].filter(Boolean).join(', ') || existing.businessAddress);
       setCol('city', input.city ?? existing.city);
       setCol('state', input.state ?? existing.state);
       setCol('pinCode', input.pinCode ?? existing.pinCode);
+      setCol('postalCode', input.pinCode ?? existing.postalCode ?? existing.pinCode);
       setCol('country', input.country ?? existing.country);
-      setCol('storeTypeId', input.storeTypeId ?? existing.storeTypeId);
       setCol('planId', input.planId ?? existing.planId);
       setCol('billingCycle', input.billingCycle ?? existing.billingCycle);
       setCol('startDate', input.startDate ?? existing.startDate);
@@ -398,13 +420,19 @@ export class CompactMerchantController {
       setCol('totalDueToday', input.totalDueToday ?? existing.totalDueToday);
       setCol('paymentMethod', input.paymentMethod ?? existing.paymentMethod);
       setCol('status', 'ACTIVE');
-      setCol('createdDate', new Date());
       setCol('updatedDate', new Date());
+      setCol('updatedAt', new Date());
 
       const mCols = Object.keys(merchantData);
-      const mPlaceholders = mCols.map((_, i) => `$${i + 1}`).join(',');
-      const mColList = mCols.map(c => `"${c}"`).join(',');
-      await manager.query(`INSERT INTO public.merchants (${mColList}) VALUES (${mPlaceholders})`, Object.values(merchantData));
+      const assignments = mCols.map((col, index) => `"${col}"=$${index + 1}`).join(',');
+      await manager.query(
+        `UPDATE public.merchants SET ${assignments} WHERE id=$` + (mCols.length + 1),
+        [...Object.values(merchantData), existing.id],
+      );
+
+      if (input.planId !== undefined) {
+        await this.saveSubscription(manager, String(existing.merchantId || existing.id), input);
+      }
     });
     return { success: true, ...(await this.getRecord(id)) };
   }
@@ -466,6 +494,49 @@ export class CompactMerchantController {
       if ((error.driverError?.code || error.code) === '23503') throw new ConflictException('Merchant is referenced by other records');
       throw error;
     }
+  }
+
+  private async saveSubscription(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, merchantId: string, input: Input) {
+    const [planRow] = await manager.query(`SELECT to_jsonb(p) AS plan FROM public.plans p WHERE p.id::text=$1`, [String(input.planId)]);
+    const plan = planRow?.plan || {};
+    const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
+    const planCode = plan.planCode || plan.plan_code || 'PRO';
+    const price = input.agreementPrice ?? plan.basePrice ?? plan.base_price ?? 0;
+    const fields: Record<string, unknown> = {
+      merchantId,
+      planId: input.planId,
+      planCode,
+      planName,
+      billingCycle: input.billingCycle ?? plan.billingCycle ?? 'MONTHLY',
+      startDate: input.startDate ?? null,
+      renewalDate: input.renewalDate ?? null,
+      price,
+      currency: plan.currency || 'USD',
+      status: 'ACTIVE',
+      entitlements: JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []),
+      storeTypeName: await storeTypeNameForPlan(manager, String(input.planId)),
+      updatedAt: new Date(),
+    };
+    const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
+    const [current] = await manager.query(
+      `SELECT id FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
+      [merchantId],
+    );
+    if (current?.id) {
+      const keys = Object.keys(fields).filter(key => columns.has(key));
+      await manager.query(
+        `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
+        [current.id, ...keys.map(key => fields[key])],
+      );
+      return;
+    }
+    const subId = `SUB-${randomUUID()}`;
+    const insert = { id: subId, subscriptionCode: subId, ...fields, createdAt: new Date() };
+    const keys = Object.keys(insert).filter(key => columns.has(key));
+    await manager.query(
+      `INSERT INTO public.subscriptions (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
+      keys.map(key => insert[key as keyof typeof insert]),
+    );
   }
 }
 
