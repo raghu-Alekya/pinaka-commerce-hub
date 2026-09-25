@@ -272,7 +272,6 @@ export class CompactMerchantController {
         setSubCol('planId', input.planId);
         setSubCol('planName', planName);
         setSubCol('plan_name', planName);
-        setSubCol('storeTypeId', await storeTypeIdForPlan(manager, String(input.planId)) || requestedStoreTypeId);
         setSubCol('storeTypeName', storeTypeName);
         setSubCol('store_type_name', storeTypeName);
         setSubCol('entitlements', entitlements);
@@ -548,7 +547,6 @@ export class CompactMerchantController {
     setSubCol('trialDays', plan.trialDays ?? plan.trial_days ?? 0);
     setSubCol('createdAt', new Date());
     setSubCol('updatedAt', new Date());
-    setSubCol('storeTypeId', await storeTypeIdForPlan(manager, planId) || storeTypeIdFromPlan(input));
     setSubCol('storeTypeName', storeTypeName);
     setSubCol('store_type_name', storeTypeName);
     setSubCol('entitlements', JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []));
@@ -654,7 +652,6 @@ export class CompactMerchantController {
       startDate: input.startDate ?? null,
       renewalDate: input.renewalDate ?? null,
       price,
-      storeTypeId: await storeTypeIdForPlan(manager, String(input.planId)) || storeTypeIdFromPlan(input) || null,
       currency: plan.currency || 'USD',
       status: 'ACTIVE',
       entitlements: JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []),
@@ -707,19 +704,6 @@ export class CompactMerchantController {
 function storeTypeIdFromPlan(plan: Input | null | undefined): string | null {
   const value = String(plan?.storeTypeId || plan?.store_type_id || '').trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null;
-}
-
-async function storeTypeIdForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {
-  const [plan] = await manager.query(`SELECT to_jsonb(p) AS plan FROM public.plans p WHERE p.id::text=$1`, [planId]);
-  const body = plan?.plan || {};
-  const direct = storeTypeIdFromPlan(body);
-  const ref = String(direct || body.store_type || body.storeType || '').trim();
-  if (!ref) return null;
-  const [storeType] = await manager.query(`SELECT id FROM public.store_types
-    WHERE id::text=$1 OR name ILIKE $1
-      OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
-    LIMIT 1`, [ref]);
-  return storeType?.id || direct;
 }
 
 async function storeTypeNameForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {

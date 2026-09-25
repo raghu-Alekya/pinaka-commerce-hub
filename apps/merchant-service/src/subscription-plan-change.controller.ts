@@ -48,12 +48,6 @@ export class SubscriptionPlanChangeController {
     const merchantKey = String(merchant.merchantId || merchantId);
     const merchantKeys = [...new Set([merchantKey, merchantId, merchant.id, merchant.merchantCode].filter(value => value != null && value !== '').map(String))];
     const subColumns = await this.columnSet('subscriptions');
-    const [storeType] = await this.db.query(`SELECT id FROM public.store_types
-      WHERE id::text=$1 OR name ILIKE $1
-        OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
-      LIMIT 1`, [String(plan.storeTypeId || plan.store_type_id || plan.store_type || plan.storeType || '').trim() || '']);
-    const storeTypeId = storeType?.id || (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.storeTypeId || merchant.storeTypeId || '')) ? String(body.storeTypeId || merchant.storeTypeId) : undefined);
-
     const id = `SUB-${randomUUID()}`;
     const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
     const planCode = plan.planCode || plan.plan_code || 'PRO';
@@ -86,7 +80,6 @@ export class SubscriptionPlanChangeController {
         start_date: startDate,
         renewalDate: renewalDate || null,
         renewal_date: renewalDate || null,
-        storeTypeId,
         status: 'ACTIVE',
         currency: plan.currency || 'USD',
         entitlements: JSON.stringify(features),

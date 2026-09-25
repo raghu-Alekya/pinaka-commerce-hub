@@ -8,10 +8,6 @@ const merchantFields = ['merchantId','ownerName','email','phone','businessName',
 const subscriptionFields = ['planId','billingCycle','startDate','renewalDate','price','status'];
 const quote = (key: string) => `"${key}"`;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function storeTypeIdFromPlan(plan: Input | null | undefined): string | null {
-  const value = String(plan?.storeTypeId || plan?.store_type_id || '').trim();
-  return uuid.test(value) ? value : null;
-}
 
 /** SQL uses the installed schema, never a schema inferred from request names. */
 export class MerchantCrudService {
@@ -151,17 +147,6 @@ export class MerchantCrudService {
     return storeType?.name || (/^[0-9a-f-]{36}$/i.test(value) ? null : value);
   }
 
-  private async storeTypeIdForPlan(manager: EntityManager, plan: Input): Promise<string | null> {
-    const direct = storeTypeIdFromPlan(plan);
-    const ref = String(direct || plan.store_type || plan.storeType || '').trim();
-    if (!ref) return null;
-    const [storeType] = await manager.query(`SELECT id FROM public.store_types
-      WHERE id::text=$1 OR name ILIKE $1
-        OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
-      LIMIT 1`, [ref]);
-    return storeType?.id || direct;
-  }
-
   private async writeSubscription(manager: EntityManager, code: string, input: Input, current?: Input, forceNew=false) {
     const merged = {...current,...input};
     this.required(merged,['planId']);
@@ -180,10 +165,7 @@ export class MerchantCrudService {
     const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
     const basePrice = plan.basePrice ?? plan.base_price ?? 0;
     const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
-    const [merchantRow] = await manager.query(`SELECT "storeTypeId" FROM public.merchants WHERE "merchantId"=$1 LIMIT 1`, [code]);
-    const fromPlan = await this.storeTypeIdForPlan(manager, plan);
-    const requestedStoreTypeId = uuid.test(String(input.storeTypeId || '')) ? String(input.storeTypeId) : null;
-    const fields = {planId:plan.id,planCode,planName,storeTypeId:fromPlan || requestedStoreTypeId || merchantRow?.storeTypeId || null,storeTypeName:await this.storeTypeName(manager, plan),
+    const fields = {planId:plan.id,planCode,planName,storeTypeName:await this.storeTypeName(manager, plan),
       billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(basePrice),
       currency:planChanged ? (plan.currency || 'USD') : current?.currency || plan.currency || 'USD',
       entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
@@ -319,7 +301,6 @@ export class MerchantCrudService {
           row[key] = `${value.getFullYear()}-${month}-${day}`;
         }
       }
-      row.storeTypeId = row.storeTypeId ?? null;
       for (const [source, target] of [['planId', 'plan_id'], ['planName', 'plan_name'], ['planCode', 'plan_code'], ['billingCycle', 'billing_cycle'], ['storeTypeName', 'store_type_name']] as const) {
         if (row[source] != null && row[source] !== '') row[target] = row[source];
       }
