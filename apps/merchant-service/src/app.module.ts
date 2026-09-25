@@ -26,6 +26,16 @@ import { SubscriptionPlanChangeController } from './subscription-plan-change.con
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
+import { PosCurrencyTaxController } from './pos-currency-tax.controller';
+import { PosCurrencyTaxService } from './pos-currency-tax.service';
+import { PosServiceChargeController } from './pos-service-charge.controller';
+import { PosServiceChargeService } from './pos-service-charge.service';
+import { PosCashbackController } from './pos-cashback.controller';
+import { PosCashbackService } from './pos-cashback.service';
+import { PosOpeningBalanceController } from './pos-opening-balance.controller';
+import { PosOpeningBalanceService } from './pos-opening-balance.service';
+import { PosCashDenominationController } from './pos-cash-denomination.controller';
+import { PosCashDenominationService } from './pos-cash-denomination.service';
 import { StoreTypeController } from './store-type.controller';
 import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
 import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
@@ -68,6 +78,11 @@ import { RelationshipsRepository } from './relationships.repository';
     SubscriptionPlanController,
     ReferenceDataController,
     DeviceController,
+    PosCurrencyTaxController,
+    PosServiceChargeController,
+    PosCashbackController,
+    PosOpeningBalanceController,
+    PosCashDenominationController,
     StoreTypeController,
     OnboardingController,
     VendorController,
@@ -83,6 +98,11 @@ import { RelationshipsRepository } from './relationships.repository';
     EmployeeAccessRepository,
     RelationshipOwnerGuard,
     MerchantRepository,
+    PosCurrencyTaxService,
+    PosServiceChargeService,
+    PosCashbackService,
+    PosOpeningBalanceService,
+    PosCashDenominationService,
     VendorRepository,
     TendorRepository,
     SessionAuthGuard,
