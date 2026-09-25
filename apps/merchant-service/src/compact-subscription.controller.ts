@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { MerchantRepository } from './merchant.repository';
 import { MerchantCrudService } from './merchant-crud.service';
-@Controller('api/v1/subscriptions')
+@Controller(['api/v1/subscriptions', 'connector/api/v1/subscriptions'])
 export class CompactSubscriptionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
   private get service() { return new MerchantCrudService(this.repository.requireDataSource()); }

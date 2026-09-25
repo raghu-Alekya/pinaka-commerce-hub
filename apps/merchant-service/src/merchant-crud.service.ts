@@ -4,7 +4,7 @@ import { DataSource, EntityManager } from 'typeorm';
 
 type Input = Record<string, any>;
 const merchantFields = ['merchantId','ownerName','email','phone','businessName','legalBusinessName','businessType','retailSubCategory','firstName','lastName','alternatePhone','jobTitle','billingContact','taxId','country','state','city','postalCode','businessAddress','status',
-  'merchantName','businessDisplayName','addressLine1','addressLine2','planId','billingCycle','startDate','renewalDate','agreementPrice','tax','totalDueToday','paymentMethod','storeTypeId','roleIds'];
+  'merchantName','businessDisplayName','addressLine1','addressLine2','planId','billingCycle','startDate','renewalDate','agreementPrice','tax','totalDueToday','paymentMethod','roleIds'];
 const subscriptionFields = ['planId','billingCycle','startDate','renewalDate','price','status'];
 const quote = (key: string) => `"${key}"`;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,7 +19,7 @@ export class MerchantCrudService {
     if (unknown.length) throw new BadRequestException(`Unknown fields: ${unknown.join(', ')}`);
     if (!Object.keys(input).length) throw new BadRequestException('Provide at least one field');
     if (input.merchantId !== undefined && (typeof input.merchantId!=='string' || !input.merchantId.trim() || input.merchantId.length>100 || input.merchantId!==input.merchantId.trim())) throw new BadRequestException('merchantId must be a non-empty identifier of at most 100 characters without surrounding whitespace');
-    for (const key of ['planId','storeTypeId']) if (input[key] !== undefined && !uuid.test(String(input[key]))) throw new BadRequestException(`Invalid ${key}`);
+    for (const key of ['planId']) if (input[key] !== undefined && !uuid.test(String(input[key]))) throw new BadRequestException(`Invalid ${key}`);
     if (input.roleIds !== undefined && (!Array.isArray(input.roleIds) || input.roleIds.some((id: unknown) => !uuid.test(String(id))))) throw new BadRequestException('roleIds must be UUIDs');
     if (input.email !== undefined && (typeof input.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email))) throw new BadRequestException('Invalid email');
     for (const key of ['merchantName','businessDisplayName','ownerName','phone','businessName']) if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key].trim())) throw new BadRequestException(`${key} must be non-empty`);
@@ -83,9 +83,6 @@ export class MerchantCrudService {
   }
 
   private async extras(manager: EntityManager, root: string, input: Input) {
-    if (input.storeTypeId !== undefined) {
-      if (!(await manager.query(`SELECT 1 FROM public.store_types WHERE id=$1 AND status='ACTIVE'`,[input.storeTypeId])).length) throw new BadRequestException('Select an active storeTypeId');
-    }
     if (input.roleIds !== undefined) {
       const merchant = await this.anchor(manager,root);
       const ids = [...new Set(input.roleIds)] as string[];
@@ -139,6 +136,17 @@ export class MerchantCrudService {
     }
   }
 
+  private async storeTypeName(manager: EntityManager, plan: Input): Promise<string | null> {
+    const ref = plan.store_type_id || plan.storeTypeId || plan.store_type || plan.storeType;
+    const value = ref == null ? '' : String(ref).trim();
+    if (!value) return null;
+    const [storeType] = await manager.query(`SELECT name FROM public.store_types
+      WHERE id::text=$1 OR name ILIKE $1
+        OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
+      LIMIT 1`, [value]);
+    return storeType?.name || (/^[0-9a-f-]{36}$/i.test(value) ? null : value);
+  }
+
   private async writeSubscription(manager: EntityManager, code: string, input: Input, current?: Input, forceNew=false) {
     const merged = {...current,...input};
     this.required(merged,['planId']);
@@ -153,7 +161,8 @@ export class MerchantCrudService {
     end.setUTCDate(Math.min(date.getUTCDate(),new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate()));
     const renewal = merged.renewalDate || end.toISOString().slice(0,10);
     if (renewal <= start) throw new BadRequestException('renewalDate must be after startDate');
-    const fields = {planId:plan.id,planCode:plan.planCode,planName:plan.name,
+    await manager.query(`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150)`);
+    const fields = {planId:plan.id,planCode:plan.planCode,planName:plan.name,storeTypeName:await this.storeTypeName(manager, plan),
       billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(plan.basePrice),
       currency:planChanged ? plan.currency : current?.currency || plan.currency,entitlements:JSON.stringify(planChanged ? plan.included_features || [] : current?.entitlements || plan.included_features || []),
       maxStoresAllowed:planChanged ? plan.included_stores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? 0,
@@ -173,7 +182,8 @@ export class MerchantCrudService {
   async createMerchant(input: Input) {
     this.validate(input,merchantFields);
     if (input.status !== undefined && !['ACTIVE','INACTIVE','PENDING','SUSPENDED'].includes(input.status)) throw new BadRequestException('Invalid merchant status');
-    this.required(input,['merchantName','businessDisplayName','email','phone','businessName','planId','storeTypeId']);
+    delete input.storeTypeId;
+    this.required(input,['merchantName','businessDisplayName','email','phone','businessName','planId']);
     input=this.merchantInput(input);
     const code = `MRC-${randomUUID()}`;
     input.merchantId ??= `MER-${randomUUID()}`;
@@ -213,7 +223,8 @@ export class MerchantCrudService {
   async updateMerchant(code: string, input: Input, replace=false) {
     this.validate(input,merchantFields);
     if (input.status !== undefined && !['ACTIVE','INACTIVE','PENDING','SUSPENDED'].includes(input.status)) throw new BadRequestException('Invalid merchant status');
-    if (replace) this.required(input,['merchantName','businessDisplayName','email','phone','businessName','planId','storeTypeId']);
+    delete input.storeTypeId;
+    if (replace) this.required(input,['merchantName','businessDisplayName','email','phone','businessName','planId']);
     await this.transaction(async manager=>{
       const {merchant,root} = await this.lockMerchant(manager,code);
       if (input.merchantId!==undefined && input.merchantId!==merchant.merchantId) throw new BadRequestException('merchantId cannot be changed');
@@ -258,10 +269,23 @@ export class MerchantCrudService {
   async listSubscriptions(merchantId?: string, status?: string) {
     if (status) this.validate({status},['status']);
     if (merchantId) merchantId=await this.identity(this.db,merchantId);
-    const subscriptions = await this.db.query(`SELECT s.*,to_char(s."startDate",'YYYY-MM-DD') AS "startDate",to_char(s."renewalDate",'YYYY-MM-DD') AS "renewalDate",
-      row_to_json(p) AS plan FROM public.subscriptions s
-      LEFT JOIN public.plans p ON p.id=s."planId"
-      WHERE ($1::text IS NULL OR s."merchantId"=$1) AND ($2::text IS NULL OR s.status=$2) ORDER BY s."createdAt" DESC`,[merchantId || null,status || null]);
+    const columns = new Set((await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
+    const merchantColumn = columns.has('merchantId') ? '"merchantId"' : columns.has('merchant_id') ? 'merchant_id' : '';
+    const filters = [
+      merchantColumn ? `($1::text IS NULL OR s.${merchantColumn}=$1)` : '$1::text IS NULL',
+      columns.has('status') ? `($2::text IS NULL OR s.status=$2)` : '$2::text IS NULL',
+    ];
+    const subscriptions = await this.db.query(`SELECT s.* FROM public.subscriptions s WHERE ${filters.join(' AND ')}`,[merchantId || null,status || null]);
+    for (const row of subscriptions) {
+      for (const key of ['startDate','renewalDate','start_date','renewal_date']) {
+        const value = row[key];
+        if (value instanceof Date && Number.isFinite(value.getTime())) {
+          const month = String(value.getMonth() + 1).padStart(2, '0');
+          const day = String(value.getDate()).padStart(2, '0');
+          row[key] = `${value.getFullYear()}-${month}-${day}`;
+        }
+      }
+    }
     return {success:true,count:subscriptions.length,subscriptions};
   }
 

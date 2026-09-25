@@ -106,6 +106,8 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS "renewalDate" date,
           ADD COLUMN IF NOT EXISTS agreement_price numeric(10,2) DEFAULT 99.00,
           ADD COLUMN IF NOT EXISTS "agreementPrice" numeric(10,2) DEFAULT 99.00,
+          ADD COLUMN IF NOT EXISTS "storeTypeName" varchar(150),
+          ADD COLUMN IF NOT EXISTS store_type_name varchar(150),
           ADD COLUMN IF NOT EXISTS trial_end_date date,
           ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
           ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
