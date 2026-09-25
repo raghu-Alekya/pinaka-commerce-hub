@@ -51,8 +51,10 @@ export class MerchantResponseRelations {
             CROSS JOIN LATERAL (
               SELECT mer.*
               FROM public.merchants mer
-              WHERE mer."merchantId"=requested.ref OR mer.id::text=requested.ref
-              ORDER BY COALESCE(mer."createdDate", now()) DESC LIMIT 1
+              WHERE mer."merchantId"=requested.ref OR mer.id::text=requested.ref OR mer."merchantCode"=requested.ref
+              ORDER BY CASE WHEN COALESCE(mer.status,'ACTIVE')='ACTIVE' THEN 0 ELSE 1 END,
+                COALESCE(mer."createdDate", now()) DESC
+              LIMIT 1
             ) m`,[[...wanted.merchant]]);
           for (const {lookup,...row} of rows) {records.merchant.set(key(lookup),row);collectRow(row,['plan','storeType']);}
         } catch {}

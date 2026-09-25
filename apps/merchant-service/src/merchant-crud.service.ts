@@ -316,6 +316,9 @@ export class MerchantCrudService {
         }
       }
       row.storeTypeId = row.storeTypeId ?? null;
+      for (const [source, target] of [['planId', 'plan_id'], ['planName', 'plan_name'], ['planCode', 'plan_code'], ['billingCycle', 'billing_cycle'], ['storeTypeName', 'store_type_name']] as const) {
+        if (row[source] != null && row[source] !== '') row[target] = row[source];
+      }
     }
     return {success:true,count:subscriptions.length,subscriptions};
   }
