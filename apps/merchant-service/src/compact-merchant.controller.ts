@@ -272,7 +272,6 @@ export class CompactMerchantController {
         setSubCol('planId', input.planId);
         setSubCol('planName', planName);
         setSubCol('plan_name', planName);
-        setSubCol('storeTypeId', await storeTypeIdForPlan(manager, String(input.planId)) || requestedStoreTypeId);
         setSubCol('storeTypeName', storeTypeName);
         setSubCol('store_type_name', storeTypeName);
         setSubCol('entitlements', entitlements);
@@ -548,7 +547,6 @@ export class CompactMerchantController {
     setSubCol('trialDays', plan.trialDays ?? plan.trial_days ?? 0);
     setSubCol('createdAt', new Date());
     setSubCol('updatedAt', new Date());
-    setSubCol('storeTypeId', await storeTypeIdForPlan(manager, planId) || storeTypeIdFromPlan(input));
     setSubCol('storeTypeName', storeTypeName);
     setSubCol('store_type_name', storeTypeName);
     setSubCol('entitlements', JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []));
@@ -654,7 +652,6 @@ export class CompactMerchantController {
       startDate: input.startDate ?? null,
       renewalDate: input.renewalDate ?? null,
       price,
-      storeTypeId: await storeTypeIdForPlan(manager, String(input.planId)) || storeTypeIdFromPlan(input) || null,
       currency: plan.currency || 'USD',
       status: 'ACTIVE',
       entitlements: JSON.stringify(plan.included_features || plan.includedFeatures || plan.entitlements || []),
@@ -663,23 +660,43 @@ export class CompactMerchantController {
     };
     const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
     const [current] = await manager.query(
-      `SELECT id FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
+      `SELECT id, "planId" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
       [merchantId],
     );
-    if (current?.id) {
-      const keys = Object.keys(fields).filter(key => columns.has(key) && fields[key] != null);
+    const planChanged = !current?.id || String(current.planId || '') !== String(input.planId);
+    if (current?.id && planChanged) {
       await manager.query(
-        `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
-        [current.id, ...keys.map(key => fields[key])],
+        `UPDATE public.subscriptions SET status='INACTIVE', "updatedAt"=now() WHERE "merchantId"=$1 AND status='ACTIVE'`,
+        [merchantId],
+      );
+    }
+    if (!current?.id || planChanged) {
+      const subId = `SUB-${randomUUID()}`;
+      const now = new Date();
+      const insert = {
+        id: subId,
+        subscriptionCode: subId,
+        subscriptionId: subId,
+        ...fields,
+        plan_id: input.planId,
+        plan_name: planName,
+        plan_code: planCode,
+        billing_cycle: fields.billingCycle,
+        createdAt: now,
+        created_at: now,
+        updated_at: now,
+      };
+      const keys = Object.keys(insert).filter(key => columns.has(key) && insert[key as keyof typeof insert] != null);
+      await manager.query(
+        `INSERT INTO public.subscriptions (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
+        keys.map(key => insert[key as keyof typeof insert]),
       );
       return;
     }
-    const subId = `SUB-${randomUUID()}`;
-    const insert = { id: subId, subscriptionCode: subId, ...fields, createdAt: new Date() };
-    const keys = Object.keys(insert).filter(key => columns.has(key));
+    const keys = Object.keys(fields).filter(key => columns.has(key) && fields[key] != null);
     await manager.query(
-      `INSERT INTO public.subscriptions (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
-      keys.map(key => insert[key as keyof typeof insert]),
+      `UPDATE public.subscriptions SET ${keys.map((key, index) => `"${key}"=$${index + 2}`).join(',')} WHERE id=$1`,
+      [current.id, ...keys.map(key => fields[key])],
     );
   }
 }
@@ -687,19 +704,6 @@ export class CompactMerchantController {
 function storeTypeIdFromPlan(plan: Input | null | undefined): string | null {
   const value = String(plan?.storeTypeId || plan?.store_type_id || '').trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null;
-}
-
-async function storeTypeIdForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {
-  const [plan] = await manager.query(`SELECT to_jsonb(p) AS plan FROM public.plans p WHERE p.id::text=$1`, [planId]);
-  const body = plan?.plan || {};
-  const direct = storeTypeIdFromPlan(body);
-  const ref = String(direct || body.store_type || body.storeType || '').trim();
-  if (!ref) return null;
-  const [storeType] = await manager.query(`SELECT id FROM public.store_types
-    WHERE id::text=$1 OR name ILIKE $1
-      OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
-    LIMIT 1`, [ref]);
-  return storeType?.id || direct;
 }
 
 async function storeTypeNameForPlan(manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> }, planId: string): Promise<string | null> {

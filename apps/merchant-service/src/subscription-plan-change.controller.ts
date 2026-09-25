@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Inject, NotFoundException, Post } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from './merchant.repository';
 
 type Input = Record<string, unknown>;
@@ -7,6 +8,7 @@ type Input = Record<string, unknown>;
   'api/v1/subscriptions/subscription-plan-changes',
   'connector/api/v1/subscriptions/subscription-plan-changes',
   'api/v1/subscription-plan-changes',
+  'api/v1/api/v1/subscription-plan-changes',
   'connector/api/v1/subscription-plan-changes',
 ])
 export class SubscriptionPlanChangeController {
@@ -44,46 +46,67 @@ export class SubscriptionPlanChangeController {
     const tax = body.tax == null || body.tax === '' ? null : Number(body.tax);
     const totalDueToday = body.totalDueToday == null || body.totalDueToday === '' ? null : Number(body.totalDueToday);
     const merchantKey = String(merchant.merchantId || merchantId);
-
-    const [subscription] = await this.db.query(
-      `SELECT * FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
-      [merchantKey],
-    );
-    if (!subscription) throw new NotFoundException('Active subscription not found');
-
-    const [storeType] = await this.db.query(`SELECT id FROM public.store_types
-      WHERE id::text=$1 OR name ILIKE $1
-        OR COALESCE(to_jsonb(store_types)->>'storeTypeCode', to_jsonb(store_types)->>'store_type_code', '') ILIKE $1
-      LIMIT 1`, [String(plan.storeTypeId || plan.store_type_id || plan.store_type || plan.storeType || '').trim() || '']);
-    const storeTypeId = storeType?.id || (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.storeTypeId || merchant.storeTypeId || '')) ? String(body.storeTypeId || merchant.storeTypeId) : undefined);
+    const merchantKeys = [...new Set([merchantKey, merchantId, merchant.id, merchant.merchantCode].filter(value => value != null && value !== '').map(String))];
     const subColumns = await this.columnSet('subscriptions');
-    await this.assign('subscriptions', subColumns, {
-      planId: plan.id,
-      planCode: plan.planCode || plan.plan_code || subscription.planCode,
-      planName: plan.name || plan.planName || subscription.planName,
-      billingCycle,
-      price,
-      startDate,
-      renewalDate: renewalDate || subscription.renewalDate,
-      storeTypeId,
-      updatedAt: new Date(),
-    }, subscription.id);
-
+    const id = `SUB-${randomUUID()}`;
+    const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
+    const planCode = plan.planCode || plan.plan_code || 'PRO';
+    const planName = plan.name || plan.planName || 'Plan';
+    const now = new Date();
     const merchantColumns = await this.columnSet('merchants');
-    await this.assign('merchants', merchantColumns, {
-      planId: plan.id,
-      billingCycle,
-      startDate,
-      renewalDate: renewalDate || merchant.renewalDate,
-      agreementPrice: price,
-      tax,
-      totalDueToday,
-      paymentMethod: body.paymentMethod || merchant.paymentMethod || 'CARD',
-      updatedAt: new Date(),
-    }, merchant.id);
+    await this.db.transaction(async manager => {
+      await manager.query(
+        `UPDATE public.subscriptions SET status='INACTIVE', "updatedAt"=now()
+         WHERE status='ACTIVE'
+           AND ("merchantId"=ANY($1::text[]) OR merchant_id=ANY($1::text[]))`,
+        [merchantKeys],
+      );
+      await this.insert(manager, 'subscriptions', subColumns, {
+        id,
+        subscriptionCode: id,
+        subscriptionId: id,
+        merchantId: merchantKey,
+        merchant_id: merchantKey,
+        planId: plan.id,
+        plan_id: plan.id,
+        planCode,
+        plan_code: planCode,
+        planName,
+        plan_name: planName,
+        billingCycle,
+        billing_cycle: billingCycle,
+        price,
+        startDate,
+        start_date: startDate,
+        renewalDate: renewalDate || null,
+        renewal_date: renewalDate || null,
+        status: 'ACTIVE',
+        currency: plan.currency || 'USD',
+        entitlements: JSON.stringify(features),
+        createdAt: now,
+        created_at: now,
+        updatedAt: now,
+        updated_at: now,
+      });
+      await this.assign(manager, 'merchants', merchantColumns, {
+        planId: plan.id,
+        plan_id: plan.id,
+        planName,
+        plan_name: planName,
+        billingCycle,
+        billing_cycle: billingCycle,
+        startDate,
+        renewalDate: renewalDate || merchant.renewalDate,
+        agreementPrice: price,
+        tax,
+        totalDueToday,
+        paymentMethod: body.paymentMethod || merchant.paymentMethod || 'CARD',
+        updatedAt: now,
+      }, merchant.id);
+    });
 
-    const [updated] = await this.db.query(`SELECT * FROM public.subscriptions WHERE id=$1`, [subscription.id]);
-    return { success: true, merchantId: merchantKey, subscription: updated };
+    const [created] = await this.db.query(`SELECT * FROM public.subscriptions WHERE id=$1`, [id]);
+    return { success: true, merchantId: merchantKey, subscription: created };
   }
 
   private async columnSet(table: string) {
@@ -94,11 +117,20 @@ export class SubscriptionPlanChangeController {
     return new Set(rows.map((row: { column_name: string }) => row.column_name));
   }
 
-  private async assign(table: string, columns: Set<string>, values: Record<string, unknown>, id: string) {
+  private async insert(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: string, columns: Set<string>, values: Record<string, unknown>) {
+    const keys = Object.keys(values).filter(key => columns.has(key) && values[key] != null);
+    if (!keys.length) return;
+    await db.query(
+      `INSERT INTO public.${table} (${keys.map(key => `"${key}"`).join(',')}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(',')})`,
+      keys.map(key => values[key]),
+    );
+  }
+
+  private async assign(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: string, columns: Set<string>, values: Record<string, unknown>, id: string) {
     const keys = Object.keys(values).filter(key => columns.has(key) && values[key] != null);
     if (!keys.length) return;
     const params = keys.map(key => values[key]);
     const assignments = keys.map((key, index) => `"${key}"=$${index + 1}`).join(',');
-    await this.db.query(`UPDATE public.${table} SET ${assignments} WHERE id=$${keys.length + 1}`, [...params, id]);
+    await db.query(`UPDATE public.${table} SET ${assignments} WHERE id=$${keys.length + 1}`, [...params, id]);
   }
 }
