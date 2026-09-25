@@ -19,7 +19,7 @@ const patchValidation = new TendorFormValidationPipe({
   skipUndefinedProperties: true,
 });
 
-@Controller(['api/v1/tendors', 'api/v1/tenders'])
+@Controller(['api/v1/tendors', 'api/v1/tenders', 'connector/api/v1/tendors', 'connector/api/v1/tenders', 'tendors', 'tenders'])
 export class TendorController {
   constructor(@Inject(TendorRepository) private readonly repository: TendorRepository) {}
 

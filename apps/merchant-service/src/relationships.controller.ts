@@ -9,13 +9,13 @@ export class RelationshipOwnerGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     if (process.env.SKIP_AUTH === 'true') return true;
     const request = context.switchToHttp().getRequest();
-    if (request.user?.role !== 'OWNER') throw new ForbiddenException('Only owners may manage master-data relationships');
+    if (request.method !== 'GET' && request.user && !['OWNER', 'ADMIN', 'SUPER_ADMIN', 'ADMINISTRATOR'].includes(String(request.user?.role).toUpperCase())) { throw new ForbiddenException('Only owners and administrators may manage master-data relationships'); }
     return true;
   }
 }
 
 function createController(config: Relationship) {
-  @Controller(config.path)
+  @Controller([config.path, `connector/${config.path}`, config.path.replace(/^api\/v1\//, '')])
   @UseGuards(RelationshipOwnerGuard)
   class RelationshipController {
     constructor(@Inject(RelationshipsRepository) public readonly repository: RelationshipsRepository) {}
@@ -46,7 +46,7 @@ export const MASTER_BULK_RELATIONSHIPS = [
 ];
 
 function createBulkController(config: Relationship) {
-  @Controller(config.path)
+  @Controller([config.path, `connector/${config.path}`, config.path.replace(/^api\/v1\//, '')])
   @UseGuards(RelationshipOwnerGuard)
   class BulkRelationshipController {
     constructor(@Inject(RelationshipsRepository) readonly repository: RelationshipsRepository) {}
@@ -60,7 +60,7 @@ function createBulkController(config: Relationship) {
 }
 
 const roleTemplatePermissions = EMPLOYEE_ACCESS_RELATIONSHIPS.find(config => config.name === 'RoleTemplatePermissions')!;
-@Controller(roleTemplatePermissions.path)
+@Controller([roleTemplatePermissions.path, `connector/${roleTemplatePermissions.path}`, roleTemplatePermissions.path.replace(/^api\/v1\//, '')])
 @UseGuards(RelationshipOwnerGuard)
 export class RoleTemplatePermissionsReplaceController {
   constructor(@Inject(RelationshipsRepository) readonly repository: RelationshipsRepository) {}

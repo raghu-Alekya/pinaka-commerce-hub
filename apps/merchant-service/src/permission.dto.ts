@@ -1,8 +1,8 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsUUID, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
 import { PermissionStatus } from './entities/permission.entity';
 
 export class CreatePermissionDto {
-  @IsUUID()
+  @IsString()
   @IsNotEmpty()
   featureId!: string;
 
@@ -10,6 +10,11 @@ export class CreatePermissionDto {
   @IsNotEmpty()
   @MaxLength(100)
   permissionKey!: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  key?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -26,7 +31,7 @@ export class CreatePermissionDto {
 }
 
 export class CreateFeaturePermissionDto {
-  @IsUUID()
+  @IsString()
   @IsOptional()
   featureId?: string;
 
@@ -34,6 +39,11 @@ export class CreateFeaturePermissionDto {
   @IsNotEmpty()
   @MaxLength(100)
   permissionKey!: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  key?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -51,6 +61,20 @@ export class CreateFeaturePermissionDto {
 
 export class UpdateFeaturePermissionDto {
   @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  permissionKey?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  key?: string;
+
+  @IsString()
+  @IsOptional()
+  featureId?: string;
+
+  @IsString()
   @IsNotEmpty()
   @IsOptional()
   @MaxLength(150)
@@ -66,7 +90,17 @@ export class UpdateFeaturePermissionDto {
 }
 
 export class UpdatePermissionDto {
-  @IsUUID()
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  permissionKey?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  key?: string;
+
+  @IsString()
   @IsOptional()
   featureId?: string;
 

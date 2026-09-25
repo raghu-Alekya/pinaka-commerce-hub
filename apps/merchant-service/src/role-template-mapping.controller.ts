@@ -11,6 +11,8 @@ const roleTemplateStoreTypes = RELATIONSHIPS.find(config => config.name === 'Rol
 @Controller([
   'api/v1/role-templates/:roleTemplateId/store-types/available',
   'api/v1/role_templates/:roleTemplateId/store-types/available',
+  'connector/api/v1/role-templates/:roleTemplateId/store-types/available',
+  'connector/api/v1/role_templates/:roleTemplateId/store-types/available',
 ])
 @UseGuards(RelationshipOwnerGuard)
 export class RoleTemplateStoreTypeCatalogController {
@@ -61,7 +63,12 @@ export class RoleTemplateStoreTypeBulkController {
   }
 }
 
-@Controller(['api/v1/role-templates/:roleTemplateId/features', 'api/v1/role_templates/:roleTemplateId/features'])
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/features',
+  'api/v1/role_templates/:roleTemplateId/features',
+  'connector/api/v1/role-templates/:roleTemplateId/features',
+  'connector/api/v1/role_templates/:roleTemplateId/features',
+])
 @UseGuards(RelationshipOwnerGuard)
 export class RoleTemplateFeatureAccessController {
   constructor(@Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository) {}

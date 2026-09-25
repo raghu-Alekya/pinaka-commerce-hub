@@ -33,7 +33,7 @@ const patchValidation = new MasterFormValidationPipe({
   expectedType: UpdateStoreTypeDto,
 });
 
-@Controller(['api/v1/store-types', 'api/v1/store_types'])
+@Controller(['api/v1/store-types', 'api/v1/store_types', 'connector/api/v1/store-types', 'connector/api/v1/store_types', 'store-types', 'store_types'])
 export class StoreTypeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
