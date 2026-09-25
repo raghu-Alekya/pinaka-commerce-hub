@@ -65,6 +65,7 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
         UPDATE public.merchants SET "merchantCode" = COALESCE("merchantCode", "merchantId", 'MER-' || id::text) WHERE "merchantCode" IS NULL;
         UPDATE public.merchants SET "merchantId" = COALESCE("merchantId", "merchantCode", 'MER-' || id::text) WHERE "merchantId" IS NULL;
+        
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
         ALTER TABLE public.merchants DROP COLUMN IF EXISTS merchant_code CASCADE;
       `);
