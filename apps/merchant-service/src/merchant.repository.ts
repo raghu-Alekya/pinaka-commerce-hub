@@ -43,6 +43,7 @@ import { DeviceEntity } from './entities/device.entity';
 import { VendorEntity } from './entities/vendor.entity';
 import { TendorEntity } from './entities/tendor.entity';
 import { ensureVendorTendorSchema } from './vendor-tendor.schema';
+import { ensureDeviceSchema } from './device.schema';
 
 interface WordPressProductNode {
   id?: number;
@@ -216,6 +217,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureOnboardingSchema(this.dataSource);
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
+    await ensureDeviceSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
