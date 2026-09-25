@@ -10,7 +10,7 @@ const fields = [
 ] as const;
 const required = [
   'merchantName', 'merchantEmail', 'merchantPhoneNumber', 'businessName',
-  'businessDisplayName', 'storeTypeId', 'addressLine1', 'city', 'state',
+  'businessDisplayName', 'addressLine1', 'city', 'state',
   'pinCode', 'country', 'planId', 'billingCycle', 'startDate', 'renewalDate', 'agreementPrice',
 ] as const;
 const removed = ['initialStatus', 'roleIds', 'merchantCode', 'merchantId'] as const;
@@ -97,27 +97,13 @@ export class CompactMerchantController {
     return row;
   }
 
-  @Post('create-merchant')
-  async createFromOnboarding(@Body() body: Record<string, any>) {
-    const merchant = body?.merchant || body || {};
-    const subscription = body?.subscription || body || {};
-
-    let storeTypeId: string | undefined;
-    const requestedStoreType = merchant.storeTypeId || body.storeTypeId;
-    if (requestedStoreType) {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(requestedStoreType));
-      try {
-        const [found] = isUuid
-          ? await this.db.query(`SELECT id FROM public.store_types WHERE id=$1::uuid`, [String(requestedStoreType)])
-          : await this.db.query(`SELECT id FROM public.store_types WHERE (name ILIKE $1 OR store_type_code ILIKE $1) LIMIT 1`, [String(requestedStoreType)]);
-        if (found) storeTypeId = found.id;
-      } catch {}
-    }
-    if (!storeTypeId) {
-      try {
-        const [fallback] = await this.db.query(`SELECT id FROM public.store_types WHERE status='ACTIVE' LIMIT 1`);
-        if (fallback) storeTypeId = fallback.id;
-      } catch {}
+  private dateOnly(value: unknown) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'string') return value.slice(0, 10);
+    if (value instanceof Date && Number.isFinite(value.getTime())) {
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${value.getFullYear()}-${month}-${day}`;
     }
     return value;
   }
@@ -149,43 +135,9 @@ export class CompactMerchantController {
     };
   }
 
-    return this.create({
-      merchantName: merchant.name || merchant.merchantName || merchant.display || merchant.business || body.businessName || 'Demo Merchant',
-      merchantEmail: merchant.email || merchant.merchantEmail || body.email || `merchant-${Date.now()}@example.com`,
-      merchantPhoneNumber: merchant.phone || merchant.merchantPhoneNumber || body.phone || '+15551234567',
-      businessName: merchant.business || merchant.businessName || body.businessName || 'Business LLC',
-      businessDisplayName: merchant.display || merchant.businessDisplayName || merchant.business || body.businessDisplayName || 'Business',
-      storeTypeId,
-      addressLine1: merchant.addressLine1 || body.addressLine1 || '100 Main St',
-      addressLine2: merchant.addressLine2 || body.addressLine2 || '',
-      city: merchant.city || body.city || 'City',
-      state: merchant.state || body.state || 'State',
-      pinCode: merchant.postal || merchant.pinCode || body.pinCode || '10001',
-      country: merchant.country || body.country || 'USA',
-      planId,
-      billingCycle: cycle,
-      startDate,
-      renewalDate,
-      agreementPrice,
-      roleIds: body.roleIds || merchant.roleIds || [],
-      tax,
-      totalDueToday: merchant.totalDueToday ?? body.totalDueToday ?? (Number(agreementPrice) + Number(tax)),
-      paymentMethod: merchant.paymentMethod || body.paymentMethod || 'CARD',
-    });
-  }
-
   private async columns(table: string): Promise<Set<string>> {
     const rows = await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [table]);
     return new Set(rows.map((row: { column_name: string }) => row.column_name));
-  }
-
-  private async getRecord(id: string) {
-    const cols = await this.columns('merchants');
-    const active = cols.has('status') ? ` AND COALESCE(status,'ACTIVE')='ACTIVE'` : '';
-    const [row] = await this.db.query(`SELECT * FROM public.merchants WHERE (id::text=$1 OR "merchantId"=$1 OR "merchantCode"=$1)${active} LIMIT 1`, [id]);
-    if (!row) throw new NotFoundException('Merchant not found');
-    const [merchant] = await this.decorate([row]);
-    return { merchant, subscription: merchant.subscription, plan: merchant.plan };
   }
 
   @Post('create-merchant')
