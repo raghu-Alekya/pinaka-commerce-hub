@@ -69,11 +69,73 @@ export class MerchantResponseRelations {
         } catch {}
       }));
 
+      const storeTypeByText = new Map<string, Row>();
+      const rememberStoreType = (row: Row) => {
+        records.storeType.set(key(String(row.id)), row);
+        for (const name of ['storeTypeCode', 'store_type_code', 'name']) {
+          const value = row[name];
+          if (typeof value === 'string' && value.trim()) storeTypeByText.set(value.trim().toLowerCase(), row);
+        }
+      };
+      for (const row of records.storeType.values()) rememberStoreType(row);
+      const textRefs = new Set<string>();
+      const collectTextRef = (row: Row) => {
+        for (const name of ['store_type', 'storeType', 'storeTypeName', 'store_type_name', 'storeTypeCode', 'store_type_code']) {
+          const value = row[name];
+          if (typeof value === 'string' && value.trim() && !uuid.test(value.trim())) textRefs.add(value.trim().toLowerCase());
+        }
+      };
+      const collectTextRefs = (value: unknown) => {
+        if (Array.isArray(value)) { value.forEach(collectTextRefs); return; }
+        if (!isRecord(value)) return;
+        collectTextRef(value);
+        Object.values(value).forEach(collectTextRefs);
+      };
+      collectTextRefs(payload);
+      for (const row of records.plan.values()) collectTextRef(row);
+      if (textRefs.size) {
+        try {
+          const rows = await this.db.query(`SELECT * FROM public.store_types st
+            WHERE lower(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')) = ANY($1::text[])
+               OR lower(COALESCE(st.name, '')) = ANY($1::text[])`, [[...textRefs]]);
+          for (const row of rows) rememberStoreType(row);
+        } catch {}
+      }
+      const storeTypeFrom = (...rows: Array<Row | null | undefined>): Row | null => {
+        for (const row of rows) {
+          if (!row) continue;
+          for (const name of ['storeTypeId', 'store_type_id', 'store_type', 'storeType', 'storeTypeName', 'store_type_name', 'storeTypeCode', 'store_type_code']) {
+            const value = row[name];
+            if (typeof value !== 'string' || !value.trim()) continue;
+            const match = records.storeType.get(key(value)) || storeTypeByText.get(value.trim().toLowerCase());
+            if (match) return match;
+          }
+        }
+        return null;
+      };
+
       const lookup = (kind: Kind, value: unknown): Row | null => typeof value==='string' ? records[kind].get(key(value)) || null : null;
-      const merchantDetails = (row: Row | null): Row | null => row && ({...row,
-        plan:lookup('plan',reference(row,'plan')),storeType:lookup('storeType',reference(row,'storeType'))});
-      const subscriptionDetails = (row: Row | null): Row | null => row && ({...row,
-        plan:lookup('plan',reference(row,'plan')),merchant:merchantDetails(lookup('merchant',reference(row,'merchant')))});
+      const withStoreType = (row: Row, plan: Row | null): Row => {
+        const storeType = isRecord(row.storeType) ? row.storeType : storeTypeFrom(row, plan);
+        const nextPlan = plan && storeType && !isRecord(plan.storeType)
+          ? { ...plan, storeType, storeTypeId: plan.storeTypeId || storeType.id }
+          : plan;
+        return {
+          ...row,
+          plan: nextPlan,
+          storeType: storeType || row.storeType || null,
+          storeTypeId: row.storeTypeId || storeType?.id || null,
+        };
+      };
+      const merchantDetails = (row: Row | null): Row | null => {
+        if (!row) return row;
+        return withStoreType(row, lookup('plan', reference(row, 'plan')));
+      };
+      const subscriptionDetails = (row: Row | null): Row | null => {
+        if (!row) return row;
+        const plan = lookup('plan', reference(row, 'plan'));
+        return { ...withStoreType(row, plan), merchant: merchantDetails(lookup('merchant', reference(row, 'merchant'))) };
+      };
       const visit = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(visit);
         if (!isRecord(value)) return value;
@@ -87,6 +149,13 @@ export class MerchantResponseRelations {
           const name=kind==='storeType' && result.storeType!==undefined && result.storeType!==null && !isRecord(result.storeType)
             ? 'storeTypeDetails' : kind;
           result[name]=isRecord(result[name]) ? {...details,...result[name]} : details;
+        }
+        const plan = isRecord(result.plan) ? result.plan : null;
+        const storeType = isRecord(result.storeType) ? result.storeType : storeTypeFrom(result, plan);
+        if (storeType) {
+          result.storeType = storeType;
+          if (!result.storeTypeId) result.storeTypeId = storeType.id;
+          if (plan && !isRecord(plan.storeType)) result.plan = { ...plan, storeType, storeTypeId: plan.storeTypeId || storeType.id };
         }
         return result;
       };

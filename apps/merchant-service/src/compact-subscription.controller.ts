@@ -7,6 +7,8 @@ export class CompactSubscriptionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
   private get service() { return new MerchantCrudService(this.repository.requireDataSource()); }
   @Get() list(@Query('merchantId') merchantId?: string,@Query('status') status?: string) { return this.service.listSubscriptions(merchantId,status); }
+  @Get('active')
+  active(@Query('merchantId') merchantId?: string) { return this.service.listSubscriptions(merchantId, 'ACTIVE'); }
   @Post('subscription-plan-changes')
   planChange(@Body() body: Record<string, unknown>) { return new SubscriptionPlanChangeController(this.repository).change(body); }
   @Get(':id') get(@Param('id') id: string) { return this.service.getSubscription(id); }
