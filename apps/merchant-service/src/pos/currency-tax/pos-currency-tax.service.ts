@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from './merchant.repository';
-import { PosCurrencyTaxEntity } from './entities/pos-currency-tax.entity';
-import { PosTaxClassEntity } from './entities/pos-tax-class.entity';
+import { MerchantRepository } from '../../merchant.repository';
+import { PosCurrencyTaxEntity } from './pos-currency-tax.entity';
+import { PosTaxClassEntity } from './pos-tax-class.entity';
 import { SavePosCurrencyTaxDto } from './pos-currency-tax.dto';
 
 export interface PosCurrencyTaxRecord {

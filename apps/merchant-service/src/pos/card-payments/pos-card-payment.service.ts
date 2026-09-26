@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { MerchantRepository } from './merchant.repository';
-import { PosCardPaymentEntity } from './entities/pos-card-payment.entity';
+import { MerchantRepository } from '../../merchant.repository';
+import { PosCardPaymentEntity } from './pos-card-payment.entity';
 import { SavePosCardPaymentDto } from './pos-card-payment.dto';
 
 export interface PosCardPaymentRecord {
