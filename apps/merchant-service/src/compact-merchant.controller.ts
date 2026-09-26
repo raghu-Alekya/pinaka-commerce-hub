@@ -380,6 +380,11 @@ export class CompactMerchantController {
     return new MerchantCrudService(this.db).listSubscriptions(merchantId, status);
   }
 
+  @Get('subscriptions/active')
+  activeSubscriptions(@Query('merchantId') merchantId?: string) {
+    return new MerchantCrudService(this.db).listSubscriptions(merchantId, 'ACTIVE');
+  }
+
   @Get('subscriptions/:subscriptionId')
   subscription(@Param('subscriptionId') subscriptionId: string) {
     return new MerchantCrudService(this.db).getSubscription(subscriptionId);
