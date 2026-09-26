@@ -1,3 +1,4 @@
+import { groupFeaturesByCategory } from './master-list';
 import { ensureOnboardingSchema } from './onboarding.schema';
 import { ensureMerchantCrudSchema } from './merchant-crud.schema';
 import { ensureMerchantIdentitySchema } from './merchant-identity.schema';
@@ -96,6 +97,107 @@ interface WordPressCategoryNode {
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
+  async getSubscribedFeatures(merchantId: string, storeTypeId: string) {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Merchant features require PostgreSQL');
+    const [merchant] = await this.dataSource.query(
+      `SELECT id, "merchantId", "merchantCode" FROM public.merchants
+       WHERE id::text=$1 OR "merchantId"=$1 OR "merchantCode"=$1 LIMIT 1`, [merchantId]);
+    if (!merchant) throw new NotFoundException('Merchant not found');
+    const [storeType] = await this.dataSource.query(
+      `SELECT id, "storeTypeCode", name FROM public.store_types WHERE id::text=$1 LIMIT 1`, [storeTypeId]);
+    if (!storeType) throw new NotFoundException('Store type not found');
+    const [subscription] = await this.dataSource.query(
+      `SELECT to_jsonb(s) AS data FROM public.subscriptions s
+       WHERE (COALESCE(to_jsonb(s)->>'merchant_uuid', '')=$1
+          OR COALESCE(to_jsonb(s)->>'merchantId', to_jsonb(s)->>'merchant_id')=ANY($2::text[]))
+         AND s.status IN ('ACTIVE','TRIAL','TRIALING')
+       ORDER BY COALESCE(to_jsonb(s)->>'createdAt', to_jsonb(s)->>'created_at') DESC NULLS LAST`,
+      [merchant.id, [merchant.id, merchant.merchantId, merchant.merchantCode].filter(Boolean)]);
+    const active = subscription?.data;
+    const subscriptionActive = Boolean(active && ['ACTIVE', 'TRIAL', 'TRIALING'].includes(active.status) &&
+        !(active.startDate && Date.parse(active.startDate) > Date.now()) &&
+        !(active.currentPeriodEnd && Date.parse(active.currentPeriodEnd) <= Date.now()) &&
+        !(active.cancelledAt && Date.parse(active.cancelledAt) <= Date.now()));
+    const planId = subscriptionActive ? (active.planId || active.plan_id) : null;
+    const [plan] = planId ? await this.dataSource.query(
+      `SELECT id, status, included_features FROM public.plans WHERE id=$1`, [planId]) : [];
+    const activePlan = plan?.status === 'ACTIVE' ? plan : null;
+    const tables = await this.dataSource.query(
+      `SELECT to_regclass('public.store_type_features') AS store_type_features,
+              to_regclass('public.plan_entitlements') AS plan_entitlements,
+              to_regclass('public.subscription_entitlements') AS subscription_entitlements`);
+    const mapped = tables[0]?.store_type_features
+      ? await this.dataSource.query(
+        `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+                stf.default_enabled AS "defaultEnabled", stf.required, stf.display_order AS "displayOrder"
+         FROM public.store_type_features stf JOIN public.features f ON f.id=stf.feature_id
+         WHERE stf.store_type_id=$1 AND f.status='ACTIVE'
+         ORDER BY stf.display_order NULLS LAST, f.category NULLS LAST, f.name`, [storeType.id])
+      : [];
+    const catalog = mapped.length ? mapped : await this.dataSource.query(
+      `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+              NULL::boolean AS "defaultEnabled", NULL::boolean AS required, NULL::integer AS "displayOrder"
+       FROM public.features f
+       WHERE f.status='ACTIVE'
+       ORDER BY f.category NULLS LAST, f.name`);
+    const enabled = new Map<string, boolean>();
+    const grant = (item: unknown, value = true) => {
+      if (item && typeof item === 'object') {
+        const row = item as { featureId?: string; feature_id?: string; featureKey?: string; id?: string; enabled?: boolean };
+        const key = row.featureId || row.feature_id || row.featureKey || row.id;
+        if (key) enabled.set(String(key).toLowerCase(), row.enabled !== false && value);
+        return;
+      }
+      if (item !== undefined && item !== null && item !== '') enabled.set(String(item).toLowerCase(), value);
+    };
+    if (activePlan) {
+      for (const item of activePlan.included_features || []) grant(item);
+      if (tables[0].plan_entitlements) {
+        const rows = await this.dataSource.query(
+          `SELECT to_jsonb(e) AS data FROM public.plan_entitlements e WHERE COALESCE(to_jsonb(e)->>'planId',to_jsonb(e)->>'plan_id')=$1`, [activePlan.id]);
+        for (const { data } of rows) grant(data, data.enabled === true);
+      }
+    }
+    if (subscriptionActive) {
+      const rawEntitlements = active.entitlements;
+      const subscriptionFeatures = typeof rawEntitlements === 'string' ? JSON.parse(rawEntitlements) : rawEntitlements;
+      if (Array.isArray(subscriptionFeatures)) for (const item of subscriptionFeatures) grant(item);
+    }
+    if (subscriptionActive && tables[0].subscription_entitlements) {
+      const rows = await this.dataSource.query(
+        `SELECT to_jsonb(e) AS data FROM public.subscription_entitlements e WHERE COALESCE(to_jsonb(e)->>'subscriptionId',to_jsonb(e)->>'subscription_id')=$1`, [active.id]);
+      const now = Date.now();
+      for (const { data } of rows) {
+        if ((data.effectiveFrom || data.effective_from) && Date.parse(data.effectiveFrom || data.effective_from) > now) continue;
+        if ((data.effectiveUntil || data.effective_until) && Date.parse(data.effectiveUntil || data.effective_until) <= now) continue;
+        enabled.set(String(data.featureId || data.feature_id).toLowerCase(), data.enabled === true);
+      }
+    }
+    const features = catalog.map((feature: { id: string; featureKey: string; defaultEnabled?: boolean | null }) => {
+      const id = feature.id.toLowerCase();
+      const included = (enabled.has(id) ? enabled.get(id) : enabled.get(feature.featureKey.toLowerCase())) === true;
+      return {
+        ...feature,
+        included,
+        planAccess: included ? 'INCLUDED' : 'NOT_INCLUDED',
+        enabledForStore: included && feature.defaultEnabled !== false,
+      };
+    });
+    const categories = groupFeaturesByCategory(features);
+    const includedCount = features.filter((feature: { included: boolean }) => feature.included).length;
+    return {
+      success: true,
+      merchantId: merchant.id,
+      storeTypeId: storeType.id,
+      subscriptionId: subscriptionActive ? active.id : null,
+      planId: activePlan?.id || null,
+      count: features.length,
+      includedCount,
+      notIncludedCount: features.length - includedCount,
+      all: { category: 'All', count: features.length, features },
+      categories,
+    };
+  }
   async masterData(table: 'store_types' | 'features' | 'role_templates' | 'plans', operation: 'list' | 'get' | 'create' | 'update' | 'delete', id?: string, fields: Record<string, unknown> = {}): Promise<any> {
     if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
     const columns: Record<string, string> = {
