@@ -390,6 +390,78 @@ export class CompactMerchantController {
     return new SubscriptionPlanChangeController(this.repository).change(body);
   }
 
+  @Get(':id/store-types')
+  async storeTypes(@Param('id') id: string) {
+    const [merchant] = await this.db.query(
+      `SELECT m.id::text AS id FROM public.merchants m WHERE m.id::text = $1 LIMIT 1`,
+      [id],
+    );
+    if (!merchant) throw new NotFoundException('Merchant not found');
+
+    const storeTypes = await this.db.query(
+      `SELECT DISTINCT
+         resolved.id,
+         resolved.name,
+         resolved."storeTypeCode"
+       FROM public.merchants m
+       JOIN public.subscriptions s
+         ON COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId')
+            IN (
+              m.id::text,
+              COALESCE(NULLIF(to_jsonb(m)->>'merchantId', ''), m.id::text),
+              COALESCE(NULLIF(to_jsonb(m)->>'merchantCode', ''), m.id::text)
+            )
+       LEFT JOIN public.plans p
+         ON p.id::text = NULLIF(COALESCE(to_jsonb(s)->>'plan_id', to_jsonb(s)->>'planId'), '')
+       JOIN LATERAL (
+         SELECT
+           st.id::text AS id,
+           st.name,
+           COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '') AS "storeTypeCode"
+         FROM public.store_types st
+         WHERE st.id::text = NULLIF(COALESCE(
+                 to_jsonb(p)->>'store_type_id',
+                 to_jsonb(p)->>'storeTypeId',
+                 to_jsonb(s)->>'store_type_id',
+                 to_jsonb(s)->>'storeTypeId',
+                 CASE
+                   WHEN COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                   THEN COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType')
+                 END
+               ), '')
+            OR NULLIF(lower(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')), '')
+               = NULLIF(lower(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')), '')
+            OR NULLIF(lower(st.name), '')
+               = NULLIF(lower(COALESCE(
+                   to_jsonb(s)->>'storeTypeName',
+                   to_jsonb(s)->>'store_type_name',
+                   to_jsonb(p)->>'store_type',
+                   to_jsonb(p)->>'storeType',
+                   ''
+                 )), '')
+         ORDER BY
+           CASE
+             WHEN st.id::text = NULLIF(COALESCE(
+               to_jsonb(p)->>'store_type_id',
+               to_jsonb(p)->>'storeTypeId',
+               to_jsonb(s)->>'store_type_id',
+               to_jsonb(s)->>'storeTypeId'
+             ), '') THEN 0
+             WHEN NULLIF(lower(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')), '')
+                  = NULLIF(lower(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')), '') THEN 1
+             ELSE 2
+           END,
+           st.name
+         LIMIT 1
+       ) resolved ON true
+       WHERE m.id::text = $1
+         AND upper(btrim(COALESCE(to_jsonb(s)->>'status', ''))) = 'ACTIVE'
+       ORDER BY resolved.name ASC`,
+      [id],
+    );
+    return { success: true, count: storeTypes.length, storeTypes };
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     const record = await this.getRecord(id);
