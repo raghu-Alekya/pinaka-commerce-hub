@@ -56,12 +56,13 @@ import { RelationshipsRepository } from './relationships.repository';
 import { DynamicQueryController } from './dynamic-query/dynamic-query.controller';
 import { DynamicQueryService } from './dynamic-query/dynamic-query.service';
 import { DynamicQueryRepository } from './dynamic-query/dynamic-query.repository';
-
+import { MerchantPlanFeaturesController } from './merchant-plan-features.controller';
 
 @Module({
   imports: [],
   controllers: [
     MerchantVendorController,
+    MerchantPlanFeaturesController,
     CompactMerchantController,
     CountriesController,
     CompactSubscriptionController,
