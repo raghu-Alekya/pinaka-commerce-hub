@@ -15,6 +15,19 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
     CREATE INDEX IF NOT EXISTS pch_merchant_vendors_merchant ON public.merchant_vendors(merchant_id);
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS public.merchant_tendors (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      merchant_id UUID NOT NULL,
+      tendor_id UUID NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT merchant_tendors_merchant_tendor_uidx UNIQUE (merchant_id, tendor_id)
+    );
+    CREATE INDEX IF NOT EXISTS pch_merchant_tendors_tendor ON public.merchant_tendors(tendor_id);
+    CREATE INDEX IF NOT EXISTS pch_merchant_tendors_merchant ON public.merchant_tendors(merchant_id);
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS public.vendors (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       "vendorName" VARCHAR(150) NOT NULL,
@@ -119,4 +132,11 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS pch_merchant_vendors_vendor ON public.merchant_vendors(vendor_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS pch_merchant_vendors_merchant ON public.merchant_vendors(merchant_id)`);
+  await db.query(`ALTER TABLE public.merchant_tendors ADD COLUMN IF NOT EXISTS tendor_code VARCHAR(50)`);
+  await db.query(`
+    UPDATE public.merchant_tendors mt
+    SET tendor_code = t."tendorCode"
+    FROM public.tendors t
+    WHERE mt.tendor_id = t.id AND mt.tendor_code IS DISTINCT FROM t."tendorCode"
+  `);
 }

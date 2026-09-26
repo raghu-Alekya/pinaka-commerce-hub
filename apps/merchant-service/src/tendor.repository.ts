@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ILike, IsNull, Repository } from 'typeorm';
 import { MerchantRepository } from './merchant.repository';
 import { TendorEntity, TendorStatus } from './entities/tendor.entity';
@@ -54,6 +54,94 @@ export class TendorRepository {
     if (conflicts.length) {
       throw new ConflictException({ message: conflicts, error: 'Conflict', statusCode: 409 });
     }
+  }
+
+  private async requireMerchantUuid(merchantId: string): Promise<string> {
+    const uuid = await this.merchants.resolveMerchantUuid(merchantId);
+    if (!uuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    return uuid;
+  }
+
+  async listMerchantTendors(merchantId: string, query: { search?: string; status?: string } = {}): Promise<any[]> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const params: unknown[] = [merchantUuid];
+    let sql = `
+      SELECT t.*, mt.status AS "assignmentStatus", mt.id AS "assignmentId", true AS assigned
+      FROM public.merchant_tendors mt
+      JOIN public.tendors t ON t.id = mt.tendor_id
+      WHERE mt.merchant_id = $1 AND mt.status = 'ACTIVE' AND t."deletedAt" IS NULL
+    `;
+    if (query.status) {
+      params.push(query.status);
+      sql += ` AND t.status = $${params.length}`;
+    }
+    if (query.search?.trim()) {
+      params.push(`%${query.search.trim()}%`);
+      const i = params.length;
+      sql += ` AND (t."tendorName" ILIKE $${i} OR t."tendorCode" ILIKE $${i})`;
+    }
+    sql += ` ORDER BY t."tendorName" ASC, t.id ASC`;
+    return this.merchants.requireDataSource().query(sql, params);
+  }
+
+  async listAllTendorsWithAssignment(
+    merchantId: string,
+    query: { search?: string; status?: string } = {},
+  ): Promise<any[]> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const params: unknown[] = [merchantUuid];
+    let sql = `
+      SELECT t.*,
+             CASE WHEN mt.id IS NOT NULL AND mt.status = 'ACTIVE' THEN true ELSE false END AS assigned,
+             mt.status AS "assignmentStatus", mt.id AS "assignmentId"
+      FROM public.tendors t
+      LEFT JOIN public.merchant_tendors mt ON mt.tendor_id = t.id AND mt.merchant_id = $1
+      WHERE t."deletedAt" IS NULL
+    `;
+    if (query.status) {
+      params.push(query.status);
+      sql += ` AND t.status = $${params.length}`;
+    } else {
+      sql += ` AND t.status = 'ACTIVE'`;
+    }
+    if (query.search?.trim()) {
+      params.push(`%${query.search.trim()}%`);
+      const i = params.length;
+      sql += ` AND (t."tendorName" ILIKE $${i} OR t."tendorCode" ILIKE $${i})`;
+    }
+    sql += ` ORDER BY assigned DESC, t."tendorName" ASC, t.id ASC`;
+    return this.merchants.requireDataSource().query(sql, params);
+  }
+
+  async addMerchantTendors(merchantId: string, tendorIds: string[]): Promise<{ count: number; tendorIds: string[] }> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const uniqueIds = [...new Set(tendorIds.map(String))];
+    if (!uniqueIds.length) throw new BadRequestException('tendorIds is required');
+    const db = this.merchants.requireDataSource();
+    const found = await db.query(
+      `SELECT id FROM public.tendors WHERE id = ANY($1::uuid[]) AND "deletedAt" IS NULL`,
+      [uniqueIds],
+    );
+    if (found.length !== uniqueIds.length) throw new NotFoundException('One or more tendors were not found');
+    await db.query(
+      `INSERT INTO public.merchant_tendors (merchant_id, tendor_id, tendor_code, status)
+       SELECT $1::uuid, t.id, t."tendorCode", 'ACTIVE'
+       FROM unnest($2::uuid[]) AS x(tendor_id)
+       JOIN public.tendors t ON t.id = x.tendor_id
+       ON CONFLICT (merchant_id, tendor_id) DO UPDATE
+         SET tendor_code = EXCLUDED.tendor_code, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP`,
+      [merchantUuid, uniqueIds],
+    );
+    return { count: uniqueIds.length, tendorIds: uniqueIds };
+  }
+
+  async removeMerchantTendor(merchantId: string, tendorId: string): Promise<void> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const result = await this.merchants.requireDataSource().query(
+      `DELETE FROM public.merchant_tendors WHERE merchant_id = $1::uuid AND tendor_id = $2::uuid RETURNING id`,
+      [merchantUuid, tendorId],
+    );
+    if (!result.length) throw new NotFoundException('Merchant tendor mapping not found');
   }
 
   async list(query: { status?: string; search?: string } = {}): Promise<TendorEntity[]> {
