@@ -26,24 +26,24 @@ import { SubscriptionPlanChangeController } from './subscription-plan-change.con
 import { SubscriptionPlanController } from './subscription-plan.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { DeviceController } from './device.controller';
-import { PosCurrencyTaxController } from './pos-currency-tax.controller';
-import { PosCurrencyTaxService } from './pos-currency-tax.service';
-import { PosServiceChargeController } from './pos-service-charge.controller';
-import { PosServiceChargeService } from './pos-service-charge.service';
-import { PosCashbackController } from './pos-cashback.controller';
-import { PosCashbackService } from './pos-cashback.service';
-import { PosOpeningBalanceController } from './pos-opening-balance.controller';
-import { PosOpeningBalanceService } from './pos-opening-balance.service';
-import { PosCashDenominationController } from './pos-cash-denomination.controller';
-import { PosCashDenominationService } from './pos-cash-denomination.service';
-import { PosCashRegisterController } from './pos-cash-register.controller';
-import { PosCashRegisterService } from './pos-cash-register.service';
-import { PosSafeDropController } from './pos-safe-drop.controller';
-import { PosSafeDropService } from './pos-safe-drop.service';
-import { PosCardPaymentController } from './pos-card-payment.controller';
-import { PosCardPaymentService } from './pos-card-payment.service';
-import { PosTerminalMappingController } from './pos-terminal-mapping.controller';
-import { PosTerminalMappingService } from './pos-terminal-mapping.service';
+import { PosCurrencyTaxController } from './pos/currency-tax/pos-currency-tax.controller';
+import { PosCurrencyTaxService } from './pos/currency-tax/pos-currency-tax.service';
+import { PosServiceChargeController } from './pos/service-charges/pos-service-charge.controller';
+import { PosServiceChargeService } from './pos/service-charges/pos-service-charge.service';
+import { PosCashbackController } from './pos/cashback/pos-cashback.controller';
+import { PosCashbackService } from './pos/cashback/pos-cashback.service';
+import { PosOpeningBalanceController } from './pos/opening-balance/pos-opening-balance.controller';
+import { PosOpeningBalanceService } from './pos/opening-balance/pos-opening-balance.service';
+import { PosCashDenominationController } from './pos/cash-denominations/pos-cash-denomination.controller';
+import { PosCashDenominationService } from './pos/cash-denominations/pos-cash-denomination.service';
+import { PosCashRegisterController } from './pos/cash-registers/pos-cash-register.controller';
+import { PosCashRegisterService } from './pos/cash-registers/pos-cash-register.service';
+import { PosSafeDropController } from './pos/safe-drop/pos-safe-drop.controller';
+import { PosSafeDropService } from './pos/safe-drop/pos-safe-drop.service';
+import { PosCardPaymentController } from './pos/card-payments/pos-card-payment.controller';
+import { PosCardPaymentService } from './pos/card-payments/pos-card-payment.service';
+import { PosTerminalMappingController } from './pos/terminal-mappings/pos-terminal-mapping.controller';
+import { PosTerminalMappingService } from './pos/terminal-mappings/pos-terminal-mapping.service';
 import { StoreTypeController } from './store-type.controller';
 import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
 import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
@@ -53,6 +53,9 @@ import { FeatureController, RoleTemplateController, PlanController } from './mas
 import { SessionAuthGuard } from './session-auth.guard';
 import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard, RoleTemplatePermissionsReplaceController } from './relationships.controller';
 import { RelationshipsRepository } from './relationships.repository';
+import { DynamicQueryController } from './dynamic-query/dynamic-query.controller';
+import { DynamicQueryService } from './dynamic-query/dynamic-query.service';
+import { DynamicQueryRepository } from './dynamic-query/dynamic-query.repository';
 
 
 @Module({
@@ -103,6 +106,7 @@ import { RelationshipsRepository } from './relationships.repository';
     FeatureController,
     RoleTemplateController,
     PlanController,
+    DynamicQueryController,
   ],
   exports: [MerchantRepository],
   providers: [
@@ -121,6 +125,8 @@ import { RelationshipsRepository } from './relationships.repository';
     PosTerminalMappingService,
     VendorRepository,
     TendorRepository,
+    DynamicQueryRepository,
+    DynamicQueryService,
     SessionAuthGuard,
     { provide: APP_GUARD, useExisting: SessionAuthGuard },
     { provide: APP_INTERCEPTOR, useClass: MerchantResponseRelationsInterceptor },

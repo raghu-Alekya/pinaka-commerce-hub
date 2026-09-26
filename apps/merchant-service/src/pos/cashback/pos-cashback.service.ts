@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from './merchant.repository';
-import { PosCashbackEntity } from './entities/pos-cashback.entity';
-import { PosCashbackTierEntity } from './entities/pos-cashback-tier.entity';
+import { MerchantRepository } from '../../merchant.repository';
+import { PosCashbackEntity } from './pos-cashback.entity';
+import { PosCashbackTierEntity } from './pos-cashback-tier.entity';
 import { SavePosCashbackDto } from './pos-cashback.dto';
 
 export interface PosCashbackRecord {

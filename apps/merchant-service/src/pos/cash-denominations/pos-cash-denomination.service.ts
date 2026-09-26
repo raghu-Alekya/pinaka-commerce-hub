@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from './merchant.repository';
-import { PosCashDenominationEntity } from './entities/pos-cash-denomination.entity';
-import { PosCashDenominationItemEntity } from './entities/pos-cash-denomination-item.entity';
+import { MerchantRepository } from '../../merchant.repository';
+import { PosCashDenominationEntity } from './pos-cash-denomination.entity';
+import { PosCashDenominationItemEntity } from './pos-cash-denomination-item.entity';
 import { PosCashDenominationItemDto, SavePosCashDenominationDto } from './pos-cash-denomination.dto';
 
 const imagePattern = /^data:image\/(png|jpeg|jpg|webp);base64,/i;

@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from './merchant.repository';
-import { PosTerminalMappingSettingsEntity } from './entities/pos-terminal-mapping-settings.entity';
-import { PosTerminalMappingEntity } from './entities/pos-terminal-mapping.entity';
+import { MerchantRepository } from '../../merchant.repository';
+import { PosTerminalMappingSettingsEntity } from './pos-terminal-mapping-settings.entity';
+import { PosTerminalMappingEntity } from './pos-terminal-mapping.entity';
 import { PosTerminalMappingDto, SavePosTerminalMappingDto } from './pos-terminal-mapping.dto';
 
 export interface PosTerminalMappingItem {
