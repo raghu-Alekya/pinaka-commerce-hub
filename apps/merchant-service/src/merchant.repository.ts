@@ -609,6 +609,7 @@ export class MerchantRepository implements OnModuleInit {
     return {
       id,
       merchantId,
+      merchantUuid: data.merchantUuid,
       storeName: data.storeName || 'Store Branch',
       storeCode,
       storeType: data.storeType || 'RETAIL',
@@ -630,8 +631,10 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+    const merchantUuid = data.merchantUuid || await this.resolveMerchantUuid(merchantId);
+    if (!merchantUuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
     const generatedId = data.id || await this.allocateId('store');
-    const store = this.buildStore(merchantId, { ...data, id: generatedId, storeCode: data.storeCode || generatedId });
+    const store = this.buildStore(merchantId, { ...data, merchantUuid, id: generatedId, storeCode: data.storeCode || generatedId });
     const { activationPin } = store;
     const entity = this.storeRepo.create(store);
     try {
@@ -648,7 +651,9 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
-    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(merchantId, { ...item, id, storeCode: item.storeCode || id }); }));
+    const merchantUuid = await this.resolveMerchantUuid(merchantId);
+    if (!merchantUuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(merchantId, { ...item, merchantUuid, id, storeCode: item.storeCode || id }); }));
     if (new Set(stores.map(s => s.id)).size !== stores.length ||
         new Set(stores.map(s => s.storeCode)).size !== stores.length) {
       throw new ConflictException('Each store must have a unique Store ID.');
@@ -1956,6 +1961,253 @@ export class MerchantRepository implements OnModuleInit {
     return this.merchantRoleTemplateRepo.find({ where, order: { name: 'ASC' } });
   }
 
+  /** Resolve active subscription store type(s) for a merchant (id / merchantId / merchantCode). */
+  async resolveMerchantSubscriptionStoreTypes(merchantId: string): Promise<Array<{ id: string; name: string; storeTypeCode: string }>> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    const { merchantUuid } = await this.requireMerchantRecord(merchantId);
+    return this.dataSource.query(
+      `SELECT DISTINCT
+         resolved.id,
+         resolved.name,
+         resolved."storeTypeCode"
+       FROM public.merchants m
+       JOIN public.subscriptions s
+         ON COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId')
+            IN (
+              m.id::text,
+              COALESCE(NULLIF(to_jsonb(m)->>'merchantId', ''), m.id::text),
+              COALESCE(NULLIF(to_jsonb(m)->>'merchantCode', ''), m.id::text)
+            )
+       LEFT JOIN public.plans p
+         ON p.id::text = NULLIF(COALESCE(to_jsonb(s)->>'plan_id', to_jsonb(s)->>'planId'), '')
+       JOIN LATERAL (
+         SELECT
+           st.id::text AS id,
+           st.name,
+           COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '') AS "storeTypeCode"
+         FROM public.store_types st
+         WHERE st.id::text = NULLIF(COALESCE(
+                 to_jsonb(p)->>'store_type_id',
+                 to_jsonb(p)->>'storeTypeId',
+                 to_jsonb(s)->>'store_type_id',
+                 to_jsonb(s)->>'storeTypeId',
+                 CASE
+                   WHEN COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                   THEN COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType')
+                 END
+               ), '')
+            OR NULLIF(lower(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')), '')
+               = NULLIF(lower(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')), '')
+            OR NULLIF(lower(st.name), '')
+               = NULLIF(lower(COALESCE(
+                   to_jsonb(s)->>'storeTypeName',
+                   to_jsonb(s)->>'store_type_name',
+                   to_jsonb(p)->>'store_type',
+                   to_jsonb(p)->>'storeType',
+                   ''
+                 )), '')
+         ORDER BY
+           CASE
+             WHEN st.id::text = NULLIF(COALESCE(
+               to_jsonb(p)->>'store_type_id',
+               to_jsonb(p)->>'storeTypeId',
+               to_jsonb(s)->>'store_type_id',
+               to_jsonb(s)->>'storeTypeId'
+             ), '') THEN 0
+             WHEN NULLIF(lower(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')), '')
+                  = NULLIF(lower(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')), '') THEN 1
+             ELSE 2
+           END,
+           st.name
+         LIMIT 1
+       ) resolved ON true
+       WHERE m.id::text = $1
+         AND upper(btrim(COALESCE(to_jsonb(s)->>'status', ''))) = 'ACTIVE'
+       ORDER BY resolved.name ASC`,
+      [merchantUuid],
+    );
+  }
+
+  /**
+   * Checkbox catalog for merchant Roles tab:
+   * templates mapped to the subscription store type, plus whether each is already saved.
+   */
+  async listAvailableMerchantRoleTemplates(merchantId: string): Promise<{
+    storeTypes: Array<{ id: string; name: string; storeTypeCode: string }>;
+    count: number;
+    roleTemplates: Record<string, unknown>[];
+  }> {
+    const storeTypes = await this.resolveMerchantSubscriptionStoreTypes(merchantId);
+    if (!storeTypes.length) {
+      return { storeTypes: [], count: 0, roleTemplates: [] };
+    }
+
+    const selected = await this.listMerchantRoleTemplates(merchantId, 'ACTIVE');
+    const selectedIds = new Set(
+      selected
+        .map(row => row.sourceRoleTemplateId)
+        .filter((id): id is string => Boolean(id))
+        .map(id => id.toLowerCase()),
+    );
+
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const storeType of storeTypes) {
+      const templates = await this.listRoleTemplatesForStoreType(storeType.id, { status: 'ACTIVE' });
+      for (const template of templates) {
+        const id = String(template.id).toLowerCase();
+        if (byId.has(id)) continue;
+        byId.set(id, {
+          ...template,
+          selected: selectedIds.has(id),
+          required: Boolean(template.required),
+          defaultEnabled: Boolean(template.defaultEnabled),
+          storeTypeId: storeType.id,
+          storeTypeName: storeType.name,
+        });
+      }
+    }
+
+    const roleTemplates = [...byId.values()].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || '')),
+    );
+    return { storeTypes, count: roleTemplates.length, roleTemplates };
+  }
+
+  /**
+   * Replace merchant role-template selections (checkbox save).
+   * Validates against subscription store-type mappings, writes merchant_role_templates,
+   * updates merchants.roleIds, and ensures workforce `roles` rows exist.
+   */
+  async saveMerchantRoleTemplates(
+    merchantId: string,
+    body: { roleTemplateIds: string[] },
+  ): Promise<MerchantRoleTemplateEntity[]> {
+    if (!this.isDbConnected || !this.dataSource?.isInitialized) {
+      throw new ServiceUnavailableException('PostgreSQL is unavailable');
+    }
+    const { merchantCode, merchantUuid } = await this.requireMerchantRecord(merchantId);
+    const ids = [...new Set((body.roleTemplateIds || []).map(id => id.trim().toLowerCase()).filter(Boolean))];
+
+    const storeTypes = await this.resolveMerchantSubscriptionStoreTypes(merchantId);
+    if (!storeTypes.length) {
+      throw new BadRequestException('Merchant has no active subscription store type');
+    }
+
+    if (ids.length) {
+      const storeTypeIds = storeTypes.map(row => row.id);
+      const allowed = await this.dataSource.query(
+        `SELECT DISTINCT role_template_id::text AS id
+         FROM public.store_type_role_templates
+         WHERE store_type_id = ANY($1::uuid[]) AND role_template_id = ANY($2::uuid[])`,
+        [storeTypeIds, ids],
+      );
+      const allowedSet = new Set(allowed.map((row: { id: string }) => row.id.toLowerCase()));
+      const invalid = ids.filter(id => !allowedSet.has(id));
+      if (invalid.length) {
+        throw new BadRequestException(
+          `Role template(s) not mapped to this merchant's subscription store type: ${invalid.join(', ')}`,
+        );
+      }
+    }
+
+    await this.dataSource.transaction(async manager => {
+      await manager.query(
+        `UPDATE public.merchant_role_templates
+         SET status = 'INACTIVE', updated_at = now()
+         WHERE merchant_id = $1::uuid AND source_role_template_id IS NOT NULL`,
+        [merchantUuid],
+      );
+
+      for (const roleTemplateId of ids) {
+        const templates = await manager.query(
+          `SELECT id, role_code AS "roleCode", name, description, scope_type AS "scopeType", status
+           FROM public.role_templates WHERE id = $1::uuid LIMIT 1`,
+          [roleTemplateId],
+        );
+        if (!templates[0] || String(templates[0].status).toUpperCase() !== 'ACTIVE') {
+          throw new BadRequestException(`Role template '${roleTemplateId}' is missing or inactive`);
+        }
+
+        const [existing] = await manager.query(
+          `SELECT id FROM public.merchant_role_templates
+           WHERE merchant_id = $1::uuid AND source_role_template_id = $2::uuid LIMIT 1`,
+          [merchantUuid, roleTemplateId],
+        );
+        if (existing) {
+          await manager.query(
+            `UPDATE public.merchant_role_templates
+             SET status = 'ACTIVE', role_code = $2, name = $3, description = $4, scope_type = $5, updated_at = now()
+             WHERE id = $1`,
+            [
+              existing.id,
+              templates[0].roleCode,
+              templates[0].name,
+              templates[0].description || '',
+              templates[0].scopeType || 'STORE',
+            ],
+          );
+        } else {
+          await manager.query(
+            `INSERT INTO public.merchant_role_templates
+               (id, merchant_id, source_role_template_id, role_code, name, description, scope_type, status)
+             VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'ACTIVE')`,
+            [
+              crypto.randomUUID(),
+              merchantUuid,
+              roleTemplateId,
+              templates[0].roleCode,
+              templates[0].name,
+              templates[0].description || '',
+              templates[0].scopeType || 'STORE',
+            ],
+          );
+        }
+
+        const existingRole = await manager.query(
+          `SELECT id FROM public.roles
+           WHERE merchant_id = $1 AND source_role_template_id = $2::uuid LIMIT 1`,
+          [merchantCode, roleTemplateId],
+        );
+        if (!existingRole[0]) {
+          await manager.query(
+            `INSERT INTO public.roles
+               (merchant_id, source_role_template_id, role_code, name, description, scope_type, is_custom, status)
+             VALUES ($1, $2::uuid, $3, $4, $5, $6, false, 'ACTIVE')
+             ON CONFLICT (merchant_id, role_code) DO UPDATE
+               SET source_role_template_id = EXCLUDED.source_role_template_id,
+                   name = EXCLUDED.name,
+                   description = EXCLUDED.description,
+                   status = 'ACTIVE',
+                   updated_at = now()`,
+            [
+              merchantCode,
+              roleTemplateId,
+              templates[0].roleCode,
+              templates[0].name,
+              templates[0].description || '',
+              templates[0].scopeType || 'STORE',
+            ],
+          );
+        } else {
+          await manager.query(
+            `UPDATE public.roles SET status = 'ACTIVE', updated_at = now() WHERE id = $1`,
+            [existingRole[0].id],
+          );
+        }
+      }
+
+      await manager.query(
+        `UPDATE public.merchants SET "roleIds" = $2::jsonb, "updatedAt" = clock_timestamp()
+         WHERE id = $1::uuid`,
+        [merchantUuid, JSON.stringify(ids)],
+      );
+    });
+
+    return this.listMerchantRoleTemplates(merchantId, 'ACTIVE');
+  }
+
   /** Master: role templates linked to a store type via store_type_role_templates. */
   async listRoleTemplatesForStoreType(
     storeTypeIdOrCode: string,
@@ -1968,6 +2220,7 @@ export class MerchantRepository implements OnModuleInit {
       `SELECT st.id FROM public.store_types st
        WHERE st.id::text=$1
           OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1)
+          OR lower(st.name)=lower($1)
        LIMIT 1`,
       [storeTypeIdOrCode],
     );
@@ -2048,6 +2301,7 @@ export class MerchantRepository implements OnModuleInit {
       `SELECT st.id FROM public.store_types st
        WHERE st.id::text=$1
           OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1)
+          OR lower(st.name)=lower($1)
        LIMIT 1`,
       [String(storeTypeValue)],
     );
@@ -2431,7 +2685,7 @@ export class MerchantRepository implements OnModuleInit {
     if (!storeTypeValue) throw new BadRequestException('Store does not have a store type');
     const storeTypes = await this.dataSource.query(
       `SELECT st.id FROM public.store_types st
-       WHERE st.id::text=$1 OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1)
+       WHERE st.id::text=$1 OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($1) OR lower(st.name)=lower($1)
        LIMIT 1`,
       [String(storeTypeValue)],
     );
