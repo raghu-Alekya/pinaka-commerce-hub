@@ -50,8 +50,8 @@ export class DynamicQueryService {
   }
 
   /**
-   * Loads the merchant, then reuses the same filter methods so every related
-   * list stays in one place.
+   * Loads the merchant, then reuses the same filter methods. Role templates and
+   * features come from that merchant's subscription plan.
    */
   async getMerchantAggregatedData(merchantId: string): Promise<ApiResponse<MerchantAggregatedData>> {
     const merchant = await this.repository.findMerchant(merchantId);

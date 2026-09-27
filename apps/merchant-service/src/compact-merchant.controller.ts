@@ -398,7 +398,11 @@ export class CompactMerchantController {
   @Get(':id/store-types')
   async storeTypes(@Param('id') id: string) {
     const [merchant] = await this.db.query(
-      `SELECT m.id::text AS id FROM public.merchants m WHERE m.id::text = $1 LIMIT 1`,
+      `SELECT m.id::text AS id FROM public.merchants m
+       LEFT JOIN public.merchant_record_versions v ON v.record_code = m."merchantCode"
+       WHERE m.id::text = $1 OR m."merchantId" = $1 OR m."merchantCode" = $1
+       ORDER BY v.version ASC NULLS LAST, m."createdAt"
+       LIMIT 1`,
       [id],
     );
     if (!merchant) throw new NotFoundException('Merchant not found');
@@ -462,7 +466,7 @@ export class CompactMerchantController {
        WHERE m.id::text = $1
          AND upper(btrim(COALESCE(to_jsonb(s)->>'status', ''))) = 'ACTIVE'
        ORDER BY resolved.name ASC`,
-      [id],
+      [merchant.id],
     );
     return { success: true, count: storeTypes.length, storeTypes };
   }

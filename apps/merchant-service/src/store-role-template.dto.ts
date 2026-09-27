@@ -11,3 +11,6 @@ export class SaveStoreRoleTemplatesDto {
   @IsBoolean()
   enabled?: boolean;
 }
+
+/** Same checkbox payload as store save; applies at merchant (subscription store-type) scope. */
+export class SaveMerchantRoleTemplatesDto extends SaveStoreRoleTemplatesDto {}

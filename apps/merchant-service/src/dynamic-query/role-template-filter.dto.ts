@@ -6,6 +6,12 @@ export class RoleTemplateFilterDTO {
   @MaxLength(100)
   merchantId?: string;
 
+  /** Subscription id or subscription code. Limits templates to that subscription's plan store type. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  subscriptionId?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(100)

@@ -45,6 +45,7 @@ import { VendorEntity } from './entities/vendor.entity';
 import { TendorEntity } from './entities/tendor.entity';
 import { ensureVendorTendorSchema } from './vendor-tendor.schema';
 import { ensureDeviceSchema } from './device.schema';
+import { ensureStoreAccessSchema } from './store-access.schema';
 import { ensurePosCurrencyTaxSchema } from './pos/currency-tax/pos-currency-tax.schema';
 import { PosCurrencyTaxEntity } from './pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from './pos/currency-tax/pos-tax-class.entity';
@@ -363,6 +364,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePlanSchema(this.dataSource);
     await ensureVendorTendorSchema(this.dataSource);
     await ensureDeviceSchema(this.dataSource);
+    await ensureStoreAccessSchema(this.dataSource);
     await ensurePosCurrencyTaxSchema(this.dataSource);
     await ensurePosServiceChargeSchema(this.dataSource);
     await ensurePosCashbackSchema(this.dataSource);
@@ -917,6 +919,170 @@ export class MerchantRepository implements OnModuleInit {
     await this.cacheStorePin(updated.activationPin, updated);
     await this.recordAuditLog('STORE_UPDATED', store.merchantId, id, 'merchant', { storeName: updated.storeName });
     return updated;
+  }
+
+  /**
+   * Persist wizard feature selections and the role permission matrix.
+   * Features previously lived only inside stores.onboardingSetup JSON.
+   * Role permissions were omitted from the create payload entirely.
+   */
+  async saveStoreFeaturesAndRolePermissions(
+    store: Pick<StoreEntity, 'id' | 'uuid' | 'merchantUuid'>,
+    features: string[] = [],
+    rolePermissions: Array<Record<string, unknown>> = [],
+  ): Promise<void> {
+    const legacyStoreId = store.id;
+    let storeUuid = store.uuid;
+    let merchantUuid = store.merchantUuid;
+    if (!storeUuid || !merchantUuid) {
+      const [row] = await this.dataSource.query(
+        `SELECT id AS uuid, merchant_uuid AS "merchantUuid" FROM public.stores WHERE legacy_store_id = $1 LIMIT 1`,
+        [legacyStoreId],
+      );
+      storeUuid = storeUuid || row?.uuid;
+      merchantUuid = merchantUuid || row?.merchantUuid;
+    }
+    if (!storeUuid || !merchantUuid) return;
+
+    const featureNames = [...new Set(features.map(name => String(name || '').trim()).filter(Boolean))];
+    await this.dataSource.query(`DELETE FROM public.store_features WHERE store_id = $1::uuid`, [storeUuid]);
+    for (const featureName of featureNames) {
+      const [feature] = await this.dataSource.query(
+        `SELECT id FROM public.features
+         WHERE lower(name) = lower($1)
+            OR lower(COALESCE(to_jsonb(features)->>'featureKey', to_jsonb(features)->>'feature_key', '')) = lower($1)
+         LIMIT 1`,
+        [featureName],
+      );
+      await this.dataSource.query(
+        `INSERT INTO public.store_features
+           (merchant_uuid, store_id, legacy_store_id, feature_id, feature_name, enabled)
+         VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, true)`,
+        [merchantUuid, storeUuid, legacyStoreId, feature?.id || null, featureName],
+      );
+    }
+
+    await this.dataSource.query(`DELETE FROM public.store_roles_permission WHERE store_id = $1::uuid`, [storeUuid]);
+    const actions = ['View', 'Create', 'Edit', 'Delete'];
+    for (const role of rolePermissions) {
+      const roleName = String(role.name || role.roleName || '').trim();
+      const roleTemplateId = String(role.roleTemplateId || role.id || '').trim();
+      if (!roleName) continue;
+      const templateId = /^[0-9a-f-]{36}$/i.test(roleTemplateId) ? roleTemplateId : null;
+      const matrix = role.permissions && typeof role.permissions === 'object' ? role.permissions as Record<string, Record<string, boolean>> : {};
+      const featureKeys = Object.keys(matrix);
+      if (!featureKeys.length) {
+        await this.dataSource.query(
+          `INSERT INTO public.store_roles_permission
+             (merchant_uuid, store_id, legacy_store_id, role_template_id, role_name, feature_name, permission_action, allowed)
+           VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, '', 'SELECTED', true)`,
+          [merchantUuid, storeUuid, legacyStoreId, templateId, roleName],
+        );
+        continue;
+      }
+      for (const featureName of featureKeys) {
+        const grants = matrix[featureName] || {};
+        for (const action of actions) {
+          if (grants[action] === undefined) continue;
+          await this.dataSource.query(
+            `INSERT INTO public.store_roles_permission
+               (merchant_uuid, store_id, legacy_store_id, role_template_id, role_name, feature_name, permission_action, allowed)
+             VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8)`,
+            [merchantUuid, storeUuid, legacyStoreId, templateId, roleName, featureName, action, Boolean(grants[action])],
+          );
+        }
+      }
+    }
+  }
+
+  async listStoreEmployees(merchantId: string, storeId: string): Promise<Array<Record<string, unknown>>> {
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    return this.dataSource.query(
+      `SELECT e.id AS "employeeId",
+              e.employee_code AS "employeeCode",
+              e.first_name AS "firstName",
+              e.last_name AS "lastName",
+              (es.login_pin_hash IS NOT NULL) AS "pinSet",
+              (
+                SELECT r.source_role_template_id
+                FROM public.employee_store_roles esr
+                JOIN public.roles r ON r.id = esr.role_id
+                WHERE esr.employee_store_id = es.id AND esr.status = 'ACTIVE'
+                ORDER BY esr.created_at ASC
+                LIMIT 1
+              ) AS "roleTemplateId"
+       FROM public.employee_stores es
+       JOIN public.employees e ON e.id = es.employee_id
+       WHERE es.merchant_id = $1 AND es.store_id = $2 AND es.status = 'ACTIVE'
+       ORDER BY e.first_name ASC, e.last_name ASC`,
+      [merchantUuid, storeUuid],
+    );
+  }
+
+  async saveStoreEmployees(
+    merchantId: string,
+    storeId: string,
+    employees: Array<{ employeeId: string; roleTemplateId?: string; loginPin?: string }> = [],
+  ): Promise<void> {
+    const { merchantCode, merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const keepIds: string[] = [];
+    for (const item of employees) {
+      const [employee] = await this.dataSource.query(
+        `SELECT id FROM public.employees WHERE id = $1::uuid AND merchant_id = $2::uuid LIMIT 1`,
+        [item.employeeId, merchantUuid],
+      );
+      if (!employee) throw new BadRequestException(`Employee '${item.employeeId}' does not belong to this merchant`);
+      keepIds.push(employee.id);
+      const [existing] = await this.dataSource.query(
+        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
+         WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3 LIMIT 1`,
+        [merchantUuid, employee.id, storeUuid],
+      );
+      const pinHash = item.loginPin ? this.hashEmployeePin(item.loginPin) : existing?.loginPinHash || null;
+      const [assignment] = existing
+        ? await this.dataSource.query(
+          `UPDATE public.employee_stores
+           SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+           WHERE id = $1 RETURNING id`,
+          [existing.id, pinHash],
+        )
+        : await this.dataSource.query(
+          `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
+           VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
+          [merchantUuid, employee.id, storeUuid, pinHash],
+        );
+      await this.dataSource.query(
+        `DELETE FROM public.employee_store_roles WHERE employee_store_id = $1`,
+        [assignment.id],
+      );
+      if (!item.roleTemplateId) continue;
+      const [role] = await this.dataSource.query(
+        `SELECT id FROM public.roles
+         WHERE source_role_template_id = $1::uuid AND status = 'ACTIVE' AND merchant_id::text = $2
+         LIMIT 1`,
+        [item.roleTemplateId, merchantCode],
+      );
+      if (!role) throw new BadRequestException(`Role template '${item.roleTemplateId}' is not available for this merchant`);
+      await this.dataSource.query(
+        `INSERT INTO public.employee_store_roles (merchant_id, store_id, employee_store_id, role_id, status)
+         VALUES ($1, $2, $3::uuid, $4::uuid, 'ACTIVE')`,
+        [merchantUuid, storeUuid, assignment.id, role.id],
+      );
+    }
+    const removeRoles = keepIds.length
+      ? `DELETE FROM public.employee_store_roles WHERE employee_store_id IN (
+           SELECT id FROM public.employee_stores
+           WHERE merchant_id = $1 AND store_id = $2 AND employee_id <> ALL($3::uuid[])
+         )`
+      : `DELETE FROM public.employee_store_roles WHERE employee_store_id IN (
+           SELECT id FROM public.employee_stores WHERE merchant_id = $1 AND store_id = $2
+         )`;
+    const removeStores = keepIds.length
+      ? `DELETE FROM public.employee_stores
+         WHERE merchant_id = $1 AND store_id = $2 AND employee_id <> ALL($3::uuid[])`
+      : `DELETE FROM public.employee_stores WHERE merchant_id = $1 AND store_id = $2`;
+    await this.dataSource.query(removeRoles, keepIds.length ? [merchantUuid, storeUuid, keepIds] : [merchantUuid, storeUuid]);
+    await this.dataSource.query(removeStores, keepIds.length ? [merchantUuid, storeUuid, keepIds] : [merchantUuid, storeUuid]);
   }
 
   async saveWebsiteConnector(

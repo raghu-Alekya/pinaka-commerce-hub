@@ -6,6 +6,7 @@ import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
+import { SaveStoreEmployeesDto } from './store-setup.dto';
 import { WebsiteConnectionEntity } from './entities/website-connection.entity';
 
 
@@ -396,6 +397,7 @@ export class AppController {
       throw new ConflictException(`Store ID '${body.storeId}' already exists. Choose a different Store ID.`);
     }
     const store = await this.merchantRepository.createStore(ownerId, this.storeCreationFields(body, merchant.country));
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
     return { success: true, store };
   }
 
@@ -437,7 +439,12 @@ export class AppController {
       this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
     ]);
-    const names = new Map(merchants.map(m => [m.id, m.businessName]));
+    const names = new Map<string, string>();
+    for (const merchant of merchants) {
+      const label = merchant.businessName || merchant.merchantId || merchant.id;
+      names.set(merchant.id, label);
+      if (merchant.merchantId) names.set(merchant.merchantId, label);
+    }
     if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
@@ -448,6 +455,23 @@ export class AppController {
       deviceCount: null, lastSyncAt: null,
     }));
     return { success: true, count: rows.length, stores: rows };
+  }
+
+  @Get('merchants/:merchantId/stores/:storeId/employees')
+  async listStoreEmployees(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string) {
+    const employees = await this.merchantRepository.listStoreEmployees(merchantId, storeId);
+    return { success: true, count: employees.length, employees };
+  }
+
+  @Put('merchants/:merchantId/stores/:storeId/employees')
+  async saveStoreEmployees(
+    @Param('merchantId') merchantId: string,
+    @Param('storeId') storeId: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: SaveStoreEmployeesDto })) body: SaveStoreEmployeesDto,
+  ) {
+    await this.merchantRepository.saveStoreEmployees(merchantId, storeId, body.employees || []);
+    const employees = await this.merchantRepository.listStoreEmployees(merchantId, storeId);
+    return { success: true, count: employees.length, employees };
   }
 
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
@@ -481,6 +505,7 @@ export class AppController {
         state: body.state.trim(), zipCode: body.zip.trim(), country: body.country ?? existing.address.country },
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
     return { success: true, store };
   }
 

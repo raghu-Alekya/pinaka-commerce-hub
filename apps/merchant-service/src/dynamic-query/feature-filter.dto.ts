@@ -6,6 +6,12 @@ export class FeatureFilterDTO {
   @MaxLength(100)
   merchantId?: string;
 
+  /** Subscription id or subscription code. Limits features to that subscription's plan. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  subscriptionId?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(100)

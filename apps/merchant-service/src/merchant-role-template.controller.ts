@@ -3,9 +3,13 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundExcepti
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CreateMerchantRoleTemplateDto, UpdateMerchantRoleTemplateDto } from './merchant-role-template.dto';
+import { SaveMerchantRoleTemplatesDto } from './store-role-template.dto';
 
 @UseGuards(RelationshipOwnerGuard)
-@Controller('api/v1/merchants/:merchantId/role-templates')
+@Controller([
+  'api/v1/merchants/:merchantId/role-templates',
+  'connector/api/v1/merchants/:merchantId/role-templates',
+])
 export class MerchantRoleTemplateController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
@@ -13,6 +17,13 @@ export class MerchantRoleTemplateController {
   async list(@Param('merchantId') merchantId: string, @Query('status') status?: string) {
     const roleTemplates = await this.repository.listMerchantRoleTemplates(merchantId, status);
     return { success: true, count: roleTemplates.length, roleTemplates };
+  }
+
+  /** Role templates available from the merchant's subscription store type, with selection state. */
+  @Get('available')
+  async available(@Param('merchantId') merchantId: string) {
+    const result = await this.repository.listAvailableMerchantRoleTemplates(merchantId);
+    return { success: true, ...result };
   }
 
   @Get(':idOrCode')
@@ -29,6 +40,29 @@ export class MerchantRoleTemplateController {
   ) {
     const roleTemplate = await this.repository.createMerchantRoleTemplate(merchantId, body);
     return { success: true, message: 'Merchant role template created successfully', roleTemplate };
+  }
+
+  /** Checkbox replace: only templates mapped to the subscription store type are allowed. */
+  @Put()
+  async save(
+    @Param('merchantId') merchantId: string,
+    @Body(
+      new WorkforceValidationPipe({
+        expectedType: SaveMerchantRoleTemplatesDto,
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    body: SaveMerchantRoleTemplatesDto,
+  ) {
+    const roleTemplates = await this.repository.saveMerchantRoleTemplates(merchantId, body);
+    return {
+      success: true,
+      message: 'Merchant role templates saved',
+      count: roleTemplates.length,
+      roleTemplates,
+    };
   }
 
   @Put(':idOrCode')

@@ -1,11 +1,13 @@
 import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { DataSource, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
+import { Brackets, DataSource, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { EmployeeEntity } from '../entities/employee.entity';
 import { FeatureEntity } from '../entities/feature.entity';
 import { MerchantEntity } from '../entities/merchant.entity';
 import { MerchantRoleTemplateEntity } from '../entities/merchant-role-template.entity';
+import { PlanEntity } from '../entities/plan.entity';
 import { RoleTemplateEntity } from '../entities/role-template.entity';
 import { StoreEntity } from '../entities/store.entity';
+import { StoreTypeEntity } from '../entities/store-type.entity';
 import { SubscriptionEntity } from '../entities/subscription.entity';
 import { VendorEntity } from '../entities/vendor.entity';
 import { MerchantRepository } from '../merchant.repository';
@@ -173,97 +175,77 @@ export class DynamicQueryRepository {
   }
 
   /**
-   * merchantId returns that merchant's copies. storeId keeps only templates
-   * assigned to the store. With neither, this is the master catalog.
+   * A merchant or subscription id limits templates to the store type on that
+   * subscription's plan. With neither, this is the master catalog.
    */
   async getRoleTemplates(filter: RoleTemplateFilterDTO): Promise<RoleTemplateRecord[]> {
-    const merchantUuid = await this.optionalMerchantUuid(filter.merchantId);
-    if (filter.merchantId && !merchantUuid) return [];
+    const scope = await this.subscriptionScope(filter);
+    if (scope === 'missing') return [];
     const store = filter.storeId?.trim() ? await this.resolveStore(filter.storeId) : null;
     if (filter.storeId?.trim() && !store) return [];
-    if (store?.merchantUuid && merchantUuid && store.merchantUuid !== merchantUuid) return [];
-    const ownerUuid = merchantUuid ?? store?.merchantUuid ?? null;
 
-    if (ownerUuid) {
-      const qb = this.repo(MerchantRoleTemplateEntity).createQueryBuilder('roleTemplate');
-      this.whereEqual(qb, 'merchantId', ownerUuid);
+    if (scope === 'catalog') {
+      const merchantUuid = store?.merchantUuid ?? null;
+      const qb = this.repo(RoleTemplateEntity).createQueryBuilder('roleTemplate');
       if (filter.status?.trim()) this.whereEqual(qb, 'status', filter.status.trim().toUpperCase());
       if (filter.scopeType?.trim()) this.whereEqual(qb, 'scopeType', filter.scopeType.trim().toUpperCase());
-      if (store) await this.joinStoreRoleTemplates(qb, store, ownerUuid, 'sourceRoleTemplateId');
+      if (store) await this.joinStoreRoleTemplates(qb, store, merchantUuid, 'id');
       const rows = await qb.orderBy('roleTemplate.name', 'ASC').getMany();
-      return rows.map(row => ({
-        id: row.id,
-        merchantId: row.merchantId,
-        sourceRoleTemplateId: row.sourceRoleTemplateId ?? null,
-        roleCode: row.roleCode,
-        name: row.name,
-        description: row.description,
-        scopeType: row.scopeType,
-        status: row.status,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      }));
+      return rows.map(row => this.masterRoleTemplate(row));
     }
 
-    const qb = this.repo(RoleTemplateEntity).createQueryBuilder('roleTemplate');
-    if (filter.status?.trim()) this.whereEqual(qb, 'status', filter.status.trim().toUpperCase());
-    if (filter.scopeType?.trim()) this.whereEqual(qb, 'scopeType', filter.scopeType.trim().toUpperCase());
-    if (store) await this.joinStoreRoleTemplates(qb, store, store.merchantUuid, 'id');
-    const rows = await qb.orderBy('roleTemplate.name', 'ASC').getMany();
-    return rows.map(row => ({
-      id: row.id,
-      merchantId: null,
-      sourceRoleTemplateId: null,
-      roleCode: row.roleCode,
-      name: row.name,
-      description: row.description,
-      scopeType: row.scopeType,
-      status: row.status,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    }));
+    const templateIds = await this.roleTemplateIdsForPlans(scope.plans, scope.subscriptions);
+    if (!templateIds.length) return [];
+    const assignedIds = store ? await this.storeRoleTemplateIds(store) : null;
+    if (assignedIds && !assignedIds.length) return [];
+    const allowed = new Set(assignedIds ? templateIds.filter(id => assignedIds.includes(id)) : templateIds);
+    if (!allowed.size) return [];
+
+    const masters = await this.repo(RoleTemplateEntity).createQueryBuilder('roleTemplate')
+      .where('roleTemplate.id IN (:...templateIds)', { templateIds: [...allowed] })
+      .orderBy('roleTemplate.name', 'ASC')
+      .getMany();
+    const copies = scope.merchantUuid
+      ? await this.repo(MerchantRoleTemplateEntity).createQueryBuilder('roleTemplate')
+        .where('roleTemplate.merchantId = :roleTemplateMerchantId', { roleTemplateMerchantId: scope.merchantUuid })
+        .andWhere('roleTemplate.sourceRoleTemplateId IN (:...templateIds)', { templateIds: [...allowed] })
+        .getMany()
+      : [];
+    const copyBySource = new Map(copies.map(copy => [copy.sourceRoleTemplateId, copy]));
+    return masters
+      .map(master => {
+        const copy = copyBySource.get(master.id);
+        return copy ? this.merchantRoleTemplate(copy) : this.masterRoleTemplate(master);
+      })
+      .filter(row => this.matchesRoleTemplate(row, filter));
   }
 
   /**
-   * merchantId keeps features enabled on that merchant's subscription plans.
-   * storeId keeps features enabled for that store. planId targets one plan.
+   * A merchant or subscription id returns the features on that subscription:
+   * plan entitlements, the plan's included features, and the subscription entitlement list.
    */
   async getFeatures(filter: FeatureFilterDTO): Promise<FeatureEntity[]> {
+    const scope = await this.subscriptionScope(filter);
+    if (scope === 'missing') return [];
     const qb = this.repo(FeatureEntity).createQueryBuilder('feature');
-    const merchantId = await this.optionalMerchantBusinessId(filter.merchantId);
-    if (filter.merchantId && !merchantId) return [];
-    const store = filter.storeId?.trim() ? await this.resolveStore(filter.storeId) : null;
-    if (filter.storeId?.trim() && !store) return [];
     if (filter.status?.trim()) this.whereEqual(qb, 'status', filter.status.trim().toUpperCase());
     if (filter.category?.trim()) this.whereEqual(qb, 'category', filter.category.trim().toUpperCase());
 
-    if (merchantId || filter.planId?.trim()) {
-      const entitlementFeature = await this.requireColumn('plan_entitlements', 'feature_id', 'featureId');
-      const entitlementPlan = await this.requireColumn('plan_entitlements', 'plan_id', 'planId');
-      const enabled = await this.enabledColumn('plan_entitlements');
-      const enabledSql = enabled ? ` AND ${this.ref('planEntitlement', enabled)} = true` : '';
-      qb.innerJoin(
-        'plan_entitlements',
-        'planEntitlement',
-        `${this.ref('planEntitlement', entitlementFeature.name)} = feature.id${enabledSql}`,
-      );
-      if (filter.planId?.trim()) {
-        qb.andWhere(`${this.ref('planEntitlement', entitlementPlan.name)} = :featurePlanId`, {
-          featurePlanId: filter.planId.trim(),
-        });
-      }
-      if (merchantId) {
-        const subscriptionMerchant = this.columnName(SubscriptionEntity, 'merchantId');
-        const subscriptionPlan = this.columnName(SubscriptionEntity, 'planId');
-        qb.innerJoin(
-          'subscriptions',
-          'merchantSubscription',
-          `${this.ref('merchantSubscription', subscriptionPlan)} = ${this.ref('planEntitlement', entitlementPlan.name)} AND ${this.ref('merchantSubscription', subscriptionMerchant)} = :featureMerchantId`,
-          { featureMerchantId: merchantId },
-        );
-      }
+    if (scope !== 'catalog') {
+      const matched = await this.featureIdsForSubscriptions(scope.subscriptions, scope.plans);
+      if (!matched.ids.length && !matched.keys.length) return [];
+      qb.andWhere(new Brackets(clause => {
+        if (matched.ids.length) clause.where('feature.id IN (:...featureIds)', { featureIds: matched.ids });
+        if (matched.keys.length) {
+          const keyMatch = 'UPPER(feature.featureKey) IN (:...featureKeys)';
+          if (matched.ids.length) clause.orWhere(keyMatch, { featureKeys: matched.keys });
+          else clause.where(keyMatch, { featureKeys: matched.keys });
+        }
+      }));
     }
 
+    const store = filter.storeId?.trim() ? await this.resolveStore(filter.storeId) : null;
+    if (filter.storeId?.trim() && !store) return [];
     if (store) {
       const storeFeature = await this.requireColumn('store_entitlements', 'feature_id', 'featureId');
       const storeColumn = await this.requireColumn('store_entitlements', 'store_id', 'storeId');
@@ -289,6 +271,173 @@ export class DynamicQueryRepository {
       where: { merchantId: businessId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  private async subscriptionScope(filter: { merchantId?: string; subscriptionId?: string; planId?: string }): Promise<'catalog' | 'missing' | {
+    subscriptions: SubscriptionEntity[];
+    plans: PlanEntity[];
+    merchantUuid: string | null;
+  }> {
+    const subscriptionId = filter.subscriptionId?.trim();
+    const merchantInput = filter.merchantId?.trim();
+    const planInput = filter.planId?.trim();
+    if (!subscriptionId && !merchantInput && !planInput) return 'catalog';
+
+    const qb = this.repo(SubscriptionEntity).createQueryBuilder('subscription');
+    let constrained = false;
+    if (subscriptionId) {
+      qb.andWhere('(subscription.id = :subscriptionLookup OR subscription.subscriptionCode = :subscriptionLookup)', {
+        subscriptionLookup: subscriptionId,
+      });
+      constrained = true;
+    }
+    if (merchantInput) {
+      const merchantId = await this.optionalMerchantBusinessId(merchantInput);
+      if (!merchantId) return 'missing';
+      this.whereEqual(qb, 'merchantId', merchantId);
+      constrained = true;
+    }
+    let subscriptions = constrained ? await qb.getMany() : [];
+    if (planInput) {
+      const planCode = planInput.toUpperCase();
+      subscriptions = subscriptions.filter(row => row.planId === planInput || row.planCode === planCode);
+    }
+    if (constrained && !subscriptions.length) return 'missing';
+
+    const planIds = [...new Set(subscriptions.map(row => row.planId).filter((id): id is string => Boolean(id)))];
+    let plans: PlanEntity[] = [];
+    if (planIds.length) {
+      plans = await this.repo(PlanEntity).createQueryBuilder('plan')
+        .where('plan.id IN (:...planIds)', { planIds })
+        .getMany();
+    } else if (planInput) {
+      const plan = await this.repo(PlanEntity).createQueryBuilder('plan')
+        .where('plan.id = :planLookup OR plan.planCode = :planCodeLookup', {
+          planLookup: planInput,
+          planCodeLookup: planInput.toUpperCase(),
+        })
+        .getOne();
+      if (!plan) return 'missing';
+      plans = [plan];
+    }
+    if (!subscriptions.length && !plans.length) return 'missing';
+    const merchantKey = merchantInput || subscriptions[0]?.merchantId;
+    const merchantUuid = merchantKey ? await this.merchants.resolveMerchantUuid(merchantKey) : null;
+    return { subscriptions, plans, merchantUuid };
+  }
+
+  private async roleTemplateIdsForPlans(plans: PlanEntity[], subscriptions: SubscriptionEntity[]): Promise<string[]> {
+    const keys = new Set<string>();
+    for (const plan of plans) if (plan.storeType?.trim()) keys.add(plan.storeType.trim().toUpperCase());
+    for (const subscription of subscriptions) if (subscription.storeTypeName?.trim()) keys.add(subscription.storeTypeName.trim().toUpperCase());
+    if (!keys.size) return [];
+    const storeTypes = await this.repo(StoreTypeEntity).createQueryBuilder('storeType')
+      .where('UPPER(storeType.storeTypeCode) IN (:...storeTypeKeys) OR UPPER(storeType.name) IN (:...storeTypeKeys)', {
+        storeTypeKeys: [...keys],
+      })
+      .getMany();
+    if (!storeTypes.length) return [];
+    const typeColumn = await this.requireColumn('store_type_role_templates', 'store_type_id', 'storeTypeId');
+    const roleColumn = await this.requireColumn('store_type_role_templates', 'role_template_id', 'roleTemplateId');
+    const rows = await this.db().createQueryBuilder()
+      .select(this.ref('storeTypeRole', roleColumn.name), 'roleTemplateId')
+      .from('store_type_role_templates', 'storeTypeRole')
+      .where(`${this.ref('storeTypeRole', typeColumn.name)} IN (:...storeTypeIds)`, { storeTypeIds: storeTypes.map(row => row.id) })
+      .getRawMany<Record<string, string>>();
+    return [...new Set(rows.map(row => this.rawId(row, 'roleTemplateId')).filter(Boolean))];
+  }
+
+  private async featureIdsForSubscriptions(subscriptions: SubscriptionEntity[], plans: PlanEntity[]): Promise<{ ids: string[]; keys: string[] }> {
+    const tokens = new Set<string>();
+    for (const subscription of subscriptions) {
+      for (const item of subscription.entitlements || []) if (item) tokens.add(String(item).trim());
+    }
+    for (const plan of plans) {
+      for (const item of plan.includedFeatures || []) if (item) tokens.add(String(item).trim());
+    }
+    const ids = new Set<string>();
+    for (const token of tokens) if (this.isUuid(token)) ids.add(token);
+    const planIds = [...new Set([
+      ...plans.map(plan => plan.id),
+      ...subscriptions.map(subscription => subscription.planId).filter((id): id is string => Boolean(id)),
+    ])];
+    if (planIds.length) {
+      const featureColumn = await this.pickColumn('plan_entitlements', 'feature_id', 'featureId');
+      const planColumn = await this.pickColumn('plan_entitlements', 'plan_id', 'planId');
+      if (featureColumn && planColumn) {
+        const enabled = await this.enabledColumn('plan_entitlements');
+        const query = this.db().createQueryBuilder()
+          .select(this.ref('planEntitlement', featureColumn.name), 'featureId')
+          .from('plan_entitlements', 'planEntitlement')
+          .where(`${this.ref('planEntitlement', planColumn.name)} IN (:...planIds)`, { planIds });
+        if (enabled) query.andWhere(`${this.ref('planEntitlement', enabled)} = true`);
+        const rows = await query.getRawMany<Record<string, string>>();
+        for (const row of rows) {
+          const id = this.rawId(row, 'featureId');
+          if (id) ids.add(id);
+        }
+      }
+    }
+    const keys = [...new Set([...tokens].filter(token => !this.isUuid(token)).map(token => token.toUpperCase()))];
+    return { ids: [...ids], keys };
+  }
+
+  private async storeRoleTemplateIds(store: ResolvedStore): Promise<string[]> {
+    const roleColumn = await this.requireColumn('store_role_templates', 'role_template_id', 'roleTemplateId');
+    const storeColumn = await this.requireColumn('store_role_templates', 'store_id', 'storeId');
+    const storeKey = this.storeKey(store, storeColumn);
+    if (!storeKey) return [];
+    const rows = await this.db().createQueryBuilder()
+      .select(this.ref('storeRoleTemplate', roleColumn.name), 'roleTemplateId')
+      .from('store_role_templates', 'storeRoleTemplate')
+      .where(`${this.ref('storeRoleTemplate', storeColumn.name)} = :assignedStoreId`, { assignedStoreId: storeKey })
+      .andWhere(`${this.ref('storeRoleTemplate', await this.statusColumn('store_role_templates'))} = :assignedStoreStatus`, { assignedStoreStatus: 'ACTIVE' })
+      .getRawMany<Record<string, string>>();
+    return rows.map(row => this.rawId(row, 'roleTemplateId')).filter(Boolean);
+  }
+
+  private matchesRoleTemplate(row: RoleTemplateRecord, filter: RoleTemplateFilterDTO): boolean {
+    if (filter.status?.trim() && row.status !== filter.status.trim().toUpperCase()) return false;
+    if (filter.scopeType?.trim() && row.scopeType !== filter.scopeType.trim().toUpperCase()) return false;
+    return true;
+  }
+
+  private masterRoleTemplate(row: RoleTemplateEntity): RoleTemplateRecord {
+    return {
+      id: row.id,
+      merchantId: null,
+      sourceRoleTemplateId: null,
+      roleCode: row.roleCode,
+      name: row.name,
+      description: row.description,
+      scopeType: row.scopeType,
+      status: row.status,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private merchantRoleTemplate(row: MerchantRoleTemplateEntity): RoleTemplateRecord {
+    return {
+      id: row.id,
+      merchantId: row.merchantId,
+      sourceRoleTemplateId: row.sourceRoleTemplateId ?? null,
+      roleCode: row.roleCode,
+      name: row.name,
+      description: row.description,
+      scopeType: row.scopeType,
+      status: row.status,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private rawId(row: Record<string, string>, name: string): string {
+    return String(row[name] || row[name.toLowerCase()] || '');
+  }
+
+  private isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   }
 
   private async joinStoreRoleTemplates(
