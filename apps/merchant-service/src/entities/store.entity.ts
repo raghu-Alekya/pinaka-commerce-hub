@@ -47,6 +47,9 @@ export class StoreEntity {
   @Column({ type: 'varchar', length: 100 })
   merchantId!: string;
 
+  @Column({ name: 'merchant_uuid', type: 'uuid' })
+  merchantUuid!: string;
+
   @Column({ type: 'varchar', length: 50, default: 'RETAIL' })
   storeType!: string; // e.g. 'RETAIL' | 'GROCERY' | 'RESTAURANT'
 
