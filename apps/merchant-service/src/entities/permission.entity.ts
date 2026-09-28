@@ -13,7 +13,7 @@ export class PermissionEntity {
   @Column({ name: 'feature_id', type: 'uuid' })
   featureId!: string;
 
-  @Column({ name: 'permission_key', type: 'varchar', length: 100, unique: true })
+  @Column({ name: 'permission_key', type: 'varchar', length: 100 })
   permissionKey!: string;
 
   @Column({ type: 'varchar', length: 150 })

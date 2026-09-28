@@ -1,5 +1,5 @@
 import { WorkforceValidationPipe } from './workforce-validation.pipe';
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, ConflictException, Inject, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, Inject, Patch, UseGuards } from '@nestjs/common';
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
@@ -24,8 +24,6 @@ export class PermissionController {
 
   @Post()
   async create(@Body(new WorkforceValidationPipe({ expectedType: CreatePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreatePermissionDto) {
-    const existing = await this.repository.getPermissionByIdOrKey(body.permissionKey);
-    if (existing) throw new ConflictException(`Permission key '${body.permissionKey}' already exists`);
     const permission = await this.repository.createPermission(body);
     return { success: true, message: 'Permission created successfully', permission };
   }

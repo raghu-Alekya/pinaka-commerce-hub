@@ -39,8 +39,7 @@ export class StoreTypeController {
 
   @Get()
   async listStoreTypes(@Query() query: Record<string, string>) {
-    const status = query.status?.trim() || 'ACTIVE';
-    const storeTypes = filterMasterList(await this.repository.listStoreTypes(), { ...query, status });
+    const storeTypes = filterMasterList(await this.repository.listStoreTypes(), query);
     return { success: true, count: storeTypes.length, storeTypes };
   }
 

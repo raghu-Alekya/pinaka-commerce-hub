@@ -5,6 +5,7 @@ import { ensureMerchantIdentitySchema } from './merchant-identity.schema';
 import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
+import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
@@ -149,35 +150,63 @@ export class MerchantRepository implements OnModuleInit {
          WHERE stf.store_type_id=$1 AND f.status='ACTIVE'
          ORDER BY stf.display_order NULLS LAST, f.category NULLS LAST, f.name`, [featureStoreType.id])
       : [];
-    const catalog = mapped.length ? mapped : await this.dataSource.query(
+    const catalog: Array<Record<string, any>> = mapped.length ? mapped : await this.dataSource.query(
       `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
               NULL::boolean AS "defaultEnabled", NULL::boolean AS required, NULL::integer AS "displayOrder"
        FROM public.features f
        WHERE f.status='ACTIVE'
        ORDER BY f.category NULLS LAST, f.name`);
-    const enabled = new Map<string, boolean>();
-    const grant = (item: unknown, value = true) => {
-      if (Array.isArray(item)) { item.forEach(entry => grant(entry, value)); return; }
+    const tokens: string[] = [];
+    const collect = (item: unknown) => {
+      if (Array.isArray(item)) { item.forEach(collect); return; }
       if (typeof item === 'string' && item.startsWith('{') && item.endsWith('}')) {
-        item.slice(1, -1).split(',').forEach(entry => grant(entry.trim().replace(/^"|"$/g, ''), value));
+        item.slice(1, -1).split(',').forEach(entry => collect(entry.trim().replace(/^"|"$/g, '')));
         return;
       }
       if (item && typeof item === 'object') {
         const row = item as { featureId?: string; feature_id?: string; featureKey?: string; feature_key?: string; name?: string; id?: string; enabled?: boolean };
-        const key = row.featureId || row.feature_id || row.featureKey || row.feature_key || row.name || row.id;
-        if (key) enabled.set(String(key).toLowerCase(), row.enabled !== false && value);
+        if (row.enabled === false) return;
+        collect(row.featureId || row.feature_id || row.featureKey || row.feature_key || row.name || row.id);
         return;
       }
-      if (item !== undefined && item !== null && item !== '') enabled.set(String(item).toLowerCase(), value);
+      const value = String(item ?? '').trim();
+      if (value) tokens.push(value);
     };
-    if (activePlan) grant(activePlan.included_features);
+    if (activePlan) collect(activePlan.included_features);
+    const uniqueTokens = [...new Set(tokens)];
+    const resolved = uniqueTokens.length ? await this.dataSource.query(
+      `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+              NULL::boolean AS "defaultEnabled", NULL::boolean AS required, NULL::integer AS "displayOrder"
+       FROM public.features f
+       WHERE f.status='ACTIVE'
+         AND (
+           f.id::text = ANY($1::text[])
+           OR lower(f."featureKey") = ANY($2::text[])
+           OR lower(btrim(f.name)) = ANY($2::text[])
+         )`,
+      [uniqueTokens, uniqueTokens.map(token => token.toLowerCase())],
+    ) : [];
+    const includedKeys = new Set<string>();
+    for (const row of resolved) {
+      for (const value of [row.id, row.featureKey, row.name]) {
+        if (value) includedKeys.add(String(value).trim().toLowerCase());
+      }
+    }
+    for (const token of uniqueTokens) includedKeys.add(token.toLowerCase());
+    const byId = new Map(catalog.map(feature => [String(feature.id).toLowerCase(), feature]));
+    for (const row of resolved) {
+      const id = String(row.id).toLowerCase();
+      if (!byId.has(id)) {
+        catalog.push(row);
+        byId.set(id, row);
+      }
+    }
+    catalog.sort((left, right) =>
+      String(left.category || '').localeCompare(String(right.category || ''))
+      || String(left.name || '').localeCompare(String(right.name || '')));
     const features = catalog.map((feature: { id: string; featureKey?: string; name?: string }) => {
-      const id = String(feature.id).toLowerCase();
-      const featureKey = String(feature.featureKey || '').toLowerCase();
-      const name = String(feature.name || '').toLowerCase();
-      const included = enabled.has(id) ? enabled.get(id) === true
-        : enabled.has(featureKey) ? enabled.get(featureKey) === true
-        : enabled.get(name) === true;
+      const included = [feature.id, feature.featureKey, feature.name]
+        .some(value => value && includedKeys.has(String(value).trim().toLowerCase()));
       return {
         ...feature,
         included,
@@ -1267,7 +1296,20 @@ export class MerchantRepository implements OnModuleInit {
   async listSubscriptions(merchantId?: string): Promise<SubscriptionEntity[]> {
     const rows = await this.subRepo.find({ where: merchantId ? { merchantId } : {}, order: { createdAt: 'DESC', id: 'DESC' } });
     const current = (row: SubscriptionEntity) => [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL, SubscriptionStatus.PAST_DUE].includes(row.status);
-    return rows.sort((a,b) => Number(current(b))-Number(current(a)));
+    const sorted = rows.sort((a,b) => Number(current(b))-Number(current(a)));
+    const planIds = [...new Set(sorted.map(row => row.planId).filter((id): id is string => Boolean(id)))];
+    if (planIds.length && this.dataSource?.isInitialized) {
+      const plans = await this.dataSource.query(
+        `SELECT id::text AS id, included_stores, included_terminals FROM public.plans WHERE id::text = ANY($1::text[])`,
+        [planIds],
+      );
+      const byId = new Map(plans.map((plan: { id: string; included_stores: number; included_terminals: number }) => [plan.id, plan]));
+      for (const row of sorted) {
+        const plan = row.planId ? byId.get(row.planId) : undefined;
+        withPlanLicenseCounts(row as Record<string, any>, plan as Record<string, any> | undefined);
+      }
+    }
+    return sorted;
   }
 
   async getSubscription(id: string): Promise<SubscriptionEntity | null> {
@@ -1326,17 +1368,24 @@ export class MerchantRepository implements OnModuleInit {
     if (changingPlan) {
       const plan = await this.getPlanByIdOrCode(selected);
       if (!plan || plan.status !== 'ACTIVE') throw new BadRequestException('Select an active commercial plan from plans');
+      if (existing?.planId) await this.assertSameStoreTypePlan(existing.planId, plan.id);
       if (input.planId && input.planCode && input.planCode !== plan.planCode) throw new BadRequestException('planId and planCode refer to different plans');
       fields.planId=plan.id; fields.planCode=plan.planCode; fields.planName=plan.name;
       fields.billingCycle=input.billingCycle ?? plan.billingCycle;
       fields.price=input.price ?? Number(plan.basePrice); fields.currency=input.currency ?? plan.currency;
       const entitlements = await this.dataSource.query('SELECT f.feature_key, e.enabled, e.limit_value FROM public.plan_entitlements e JOIN public.features f ON f.id=e.feature_id WHERE e.plan_id=$1',[plan.id]);
       fields.entitlements=entitlements.filter((row: any)=>row.enabled).map((row: any)=>row.feature_key);
-      for (const [key,feature] of [['licensedStoreCount','MAX_STORES'],['licensedDeviceCount','MAX_DEVICES']]) {
-        if (input[key] === undefined) {
-          const value=entitlements.find((row:any)=>row.feature_key===feature && row.enabled)?.limit_value;
-          fields[key]=value != null && /^\d+$/.test(value) && Number(value)<=2147483647 ? Number(value) : null;
-        }
+      const entitlementLimit = (feature: string) => {
+        const value=entitlements.find((row:any)=>row.feature_key===feature && row.enabled)?.limit_value;
+        return value != null && /^\d+$/.test(value) && Number(value)<=2147483647 ? Number(value) : null;
+      };
+      if (input.licensedStoreCount === undefined) {
+        const fromPlan = plan.includedStores ?? (plan as any).included_stores;
+        fields.licensedStoreCount = fromPlan != null ? Number(fromPlan) : entitlementLimit('MAX_STORES');
+      }
+      if (input.licensedDeviceCount === undefined) {
+        const fromPlan = plan.includedTerminals ?? (plan as any).included_terminals;
+        fields.licensedDeviceCount = fromPlan != null ? Number(fromPlan) : entitlementLimit('MAX_DEVICES');
       }
     }
     if (input.maxStoresAllowed !== undefined) {
@@ -1846,14 +1895,43 @@ export class MerchantRepository implements OnModuleInit {
     return this.permissionRepo.find({ where, order: { name: 'ASC' } });
   }
 
-  async getPermissionByIdOrKey(idOrKey: string): Promise<PermissionEntity | null> {
+  async getPermissionByIdOrKey(idOrKey: string, featureId?: string): Promise<PermissionEntity | null> {
     if (!this.permissionRepo || !idOrKey) return null;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrKey.trim());
     if (isUuid) {
       const byId = await this.permissionRepo.findOneBy({ id: idOrKey.trim() });
+      if (byId && featureId && byId.featureId.toLowerCase() !== featureId.toLowerCase()) return null;
       if (byId) return byId;
     }
-    return this.permissionRepo.findOneBy({ permissionKey: idOrKey.trim().toUpperCase() });
+    const key = idOrKey.trim().toUpperCase();
+    if (featureId) {
+      return this.permissionRepo.findOneBy({ permissionKey: key, featureId });
+    }
+    const matches = await this.permissionRepo.find({ where: { permissionKey: key }, take: 2 });
+    if (matches.length > 1) throw new ConflictException(`Permission key '${key}' exists on more than one feature; use the permission UUID`);
+    return matches[0] || null;
+  }
+
+  private async assertUniquePermissionInFeature(
+    featureId: string,
+    permissionKey: string,
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const keyRows = await this.dataSource.query(
+      `SELECT id FROM public.permissions
+       WHERE feature_id = $1 AND permission_key = $2 AND ($3::uuid IS NULL OR id <> $3)
+       LIMIT 1`,
+      [featureId, permissionKey, excludeId || null],
+    );
+    if (keyRows.length) throw new ConflictException(`Permission key '${permissionKey}' already exists for this feature`);
+    const nameRows = await this.dataSource.query(
+      `SELECT id FROM public.permissions
+       WHERE feature_id = $1 AND lower(btrim(name)) = lower(btrim($2)) AND ($3::uuid IS NULL OR id <> $3)
+       LIMIT 1`,
+      [featureId, name, excludeId || null],
+    );
+    if (nameRows.length) throw new ConflictException(`Permission name '${name}' already exists for this feature`);
   }
 
   async createPermission(dto: CreatePermissionDto): Promise<PermissionEntity> {
@@ -1862,10 +1940,13 @@ export class MerchantRepository implements OnModuleInit {
     if (feat) {
       targetFeatureId = feat.id;
     }
+    const permissionKey = (dto.permissionKey || dto.key || '').trim().toUpperCase();
+    const name = dto.name.trim();
+    await this.assertUniquePermissionInFeature(targetFeatureId, permissionKey, name);
     const entity = this.permissionRepo.create({
       featureId: targetFeatureId,
-      permissionKey: (dto.permissionKey || dto.key || '').trim().toUpperCase(),
-      name: dto.name.trim(),
+      permissionKey,
+      name,
       description: dto.description?.trim() || '',
       status: dto.status || PermissionStatus.ACTIVE,
     });
@@ -1881,7 +1962,11 @@ export class MerchantRepository implements OnModuleInit {
         throw new BadRequestException(`Feature '${entity.featureId}' does not exist. Use an existing featureId.`);
       }
       if (databaseError?.code === '23505') {
-        throw new ConflictException(`Permission key '${entity.permissionKey}' already exists`);
+        const constraint = String(databaseError.constraint || '');
+        if (constraint.includes('feature_name')) {
+          throw new ConflictException(`Permission name '${entity.name}' already exists for this feature`);
+        }
+        throw new ConflictException(`Permission key '${entity.permissionKey}' already exists for this feature`);
       }
       throw error;
     }
@@ -1906,6 +1991,7 @@ export class MerchantRepository implements OnModuleInit {
     if (dto.description !== undefined) existing.description = dto.description.trim();
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();
+    await this.assertUniquePermissionInFeature(existing.featureId, existing.permissionKey, existing.name, existing.id);
     return this.savePermission(existing);
   }
 
@@ -1986,18 +2072,23 @@ export class MerchantRepository implements OnModuleInit {
         const repo = manager.getRepository(PermissionEntity);
         const permissions: PermissionEntity[] = [];
         for (const item of prepared) {
-          const existing = await repo.findOneBy({ permissionKey: item.permissionKey });
+          const existing = await repo.findOneBy({ permissionKey: item.permissionKey, featureId });
           if (existing) {
-            if (skipExisting && existing.featureId.toLowerCase() === featureId.toLowerCase()) continue;
-            throw new ConflictException(`Permission key '${item.permissionKey}' already exists`);
+            if (skipExisting) continue;
+            throw new ConflictException(`Permission key '${item.permissionKey}' already exists for this feature`);
           }
+          const nameClash = await repo.createQueryBuilder('permission')
+            .where('permission.featureId = :featureId', { featureId })
+            .andWhere('lower(btrim(permission.name)) = lower(btrim(:name))', { name: item.name })
+            .getOne();
+          if (nameClash) throw new ConflictException(`Permission name '${item.name}' already exists for this feature`);
           permissions.push(await repo.save(repo.create({ ...item, featureId })));
         }
         return { success: true as const, count: permissions.length, permissions };
       });
     } catch (error: any) {
       const code = error.driverError?.code || error.code;
-      if (code === '23505') throw new ConflictException('Permission key already exists');
+      if (code === '23505') throw new ConflictException('Permission key or name already exists for this feature');
       if (code === '23503') throw new BadRequestException(`Feature '${featureId}' does not exist. Use an existing featureId.`);
       throw error;
     }
@@ -2032,7 +2123,7 @@ export class MerchantRepository implements OnModuleInit {
       for (const item of prepared) {
         const existing = item.id
           ? await repo.findOneBy({ id: item.id })
-          : await repo.findOneBy({ permissionKey: item.permissionKey });
+          : await repo.findOneBy({ permissionKey: item.permissionKey, featureId });
         if (!existing || existing.featureId.toLowerCase() !== featureId.toLowerCase()) {
           throw new NotFoundException(`Permission '${item.id || item.permissionKey}' not found`);
         }
@@ -2112,6 +2203,83 @@ export class MerchantRepository implements OnModuleInit {
       if (byId) return byId;
     }
     return this.planMasterRepo.findOneBy({ planCode: idOrCode.trim().toUpperCase() });
+  }
+
+  async resolvePlanStoreType(planId: string): Promise<{ id: string; storeTypeCode: string; name: string } | null> {
+    if (!this.dataSource?.isInitialized || !planId) return null;
+    const [row] = await this.dataSource.query(
+      `SELECT st.id::text AS id,
+              upper(btrim(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', ''))) AS "storeTypeCode",
+              st.name
+       FROM public.plans p
+       LEFT JOIN public.store_types st
+         ON st.id::text = NULLIF(btrim(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', to_jsonb(p)->>'storeTypeId', '')), '')
+         OR upper(btrim(COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', '')))
+            = upper(btrim(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')))
+         OR lower(btrim(st.name)) = lower(btrim(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')))
+       WHERE p.id::text = $1
+       LIMIT 1`,
+      [String(planId).trim()],
+    );
+    if (row?.id || row?.storeTypeCode || row?.name) return row;
+    const [plan] = await this.dataSource.query(
+      `SELECT btrim(COALESCE(to_jsonb(p)->>'store_type', to_jsonb(p)->>'storeType', '')) AS ref
+       FROM public.plans p WHERE p.id::text = $1`,
+      [String(planId).trim()],
+    );
+    const ref = String(plan?.ref || '').trim();
+    return ref ? { id: '', storeTypeCode: ref.toUpperCase(), name: ref } : null;
+  }
+
+  async merchantActivePlanId(merchantId: string): Promise<string | null> {
+    if (!this.dataSource?.isInitialized || !merchantId) return null;
+    const [row] = await this.dataSource.query(
+      `SELECT COALESCE(
+         NULLIF(to_jsonb(s)->>'plan_id', ''),
+         NULLIF(to_jsonb(s)->>'planId', ''),
+         NULLIF(to_jsonb(m)->>'planId', ''),
+         NULLIF(to_jsonb(m)->>'plan_id', '')
+       ) AS "planId"
+       FROM public.merchants m
+       LEFT JOIN LATERAL (
+         SELECT sub.*
+         FROM public.subscriptions sub
+         WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
+               IN (
+                 COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text),
+                 m.id::text
+               )
+           AND upper(btrim(COALESCE(to_jsonb(sub)->>'status', 'ACTIVE'))) = 'ACTIVE'
+         ORDER BY COALESCE(
+           (to_jsonb(sub)->>'created_at')::timestamptz,
+           (to_jsonb(sub)->>'createdAt')::timestamptz,
+           now()
+         ) DESC
+         LIMIT 1
+       ) s ON true
+       WHERE m.id::text = $1 OR m."merchantId" = $1 OR m."merchantCode" = $1
+       LIMIT 1`,
+      [merchantId],
+    );
+    return row?.planId ? String(row.planId) : null;
+  }
+
+  async assertSameStoreTypePlan(currentPlanId: string | null | undefined, nextPlanId: string | null | undefined): Promise<void> {
+    const currentId = String(currentPlanId || '').trim();
+    const nextId = String(nextPlanId || '').trim();
+    if (!currentId || !nextId || currentId === nextId) return;
+    const current = await this.resolvePlanStoreType(currentId);
+    const next = await this.resolvePlanStoreType(nextId);
+    const currentCode = String(current?.storeTypeCode || current?.name || '').trim().toUpperCase();
+    const nextCode = String(next?.storeTypeCode || next?.name || '').trim().toUpperCase();
+    if (!currentCode || !nextCode || currentCode === 'BOTH' || nextCode === 'BOTH') return;
+    const sameId = Boolean(current?.id && next?.id && current.id === next.id);
+    const sameCode = Boolean(current?.storeTypeCode && next?.storeTypeCode && current.storeTypeCode === next.storeTypeCode);
+    const sameName = Boolean(current?.name && next?.name && current.name.trim().toLowerCase() === next.name.trim().toLowerCase());
+    if (sameId || sameCode || sameName) return;
+    throw new BadRequestException(
+      `Plan must stay on the same store type (${current?.name || current?.storeTypeCode}). Other store types cannot be selected.`,
+    );
   }
 
   async createPlan(dto: CreatePlanDto): Promise<PlanEntity> {

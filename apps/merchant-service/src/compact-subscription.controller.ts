@@ -6,7 +6,7 @@ import { SubscriptionPlanChangeController } from './subscription-plan-change.con
 export class CompactSubscriptionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
   private get service() { return new MerchantCrudService(this.repository.requireDataSource()); }
-  @Get() list(@Query('merchantId') merchantId?: string,@Query('status') status?: string) { return this.service.listSubscriptions(merchantId,status); }
+  @Get() list(@Query('merchantId') merchantId?: string,@Query('status') status?: string) { return this.service.listSubscriptions(merchantId, status?.trim() || 'ACTIVE'); }
   @Get('active')
   active(@Query('merchantId') merchantId?: string) { return this.service.listSubscriptions(merchantId, 'ACTIVE'); }
   @Post('subscription-plan-changes')

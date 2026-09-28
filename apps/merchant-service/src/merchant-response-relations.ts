@@ -1,4 +1,5 @@
 import { DataSource } from 'typeorm';
+import { withPlanLicenseCounts } from './merchant-crud.service';
 
 type Row = Record<string, any>;
 type Kind = 'plan' | 'subscription' | 'merchant' | 'storeType';
@@ -115,6 +116,9 @@ export class MerchantResponseRelations {
       };
 
       const lookup = (kind: Kind, value: unknown): Row | null => typeof value==='string' ? records[kind].get(key(value)) || null : null;
+      const isSubscriptionRow = (row: Row) =>
+        ('billingCycle' in row || 'billing_cycle' in row || 'maxStoresAllowed' in row || 'licensedDeviceCount' in row || 'licensedStoreCount' in row)
+        && !('ownerName' in row && 'businessName' in row);
       const attachPlanStoreType = (plan: Row | null, fallback: Row | null) => {
         if (!plan || isRecord(plan.storeType)) return plan;
         const storeType = storeTypeFrom(plan) || fallback;
@@ -137,7 +141,8 @@ export class MerchantResponseRelations {
       const subscriptionDetails = (row: Row | null): Row | null => {
         if (!row) return row;
         const plan = lookup('plan', reference(row, 'plan'));
-        return { ...withStoreType(row, plan), merchant: merchantDetails(lookup('merchant', reference(row, 'merchant'))) };
+        const details = { ...withStoreType(row, plan), merchant: merchantDetails(lookup('merchant', reference(row, 'merchant'))) };
+        return withPlanLicenseCounts(details, isRecord(details.plan) ? details.plan : plan);
       };
       const visit = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(visit);
@@ -160,6 +165,7 @@ export class MerchantResponseRelations {
           if (!result.storeTypeId) result.storeTypeId = storeType.id;
           if (plan) result.plan = attachPlanStoreType(plan, null);
         }
+        if (isSubscriptionRow(result)) withPlanLicenseCounts(result, isRecord(result.plan) ? result.plan : plan);
         return result;
       };
       return visit(payload);

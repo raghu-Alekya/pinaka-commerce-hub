@@ -77,7 +77,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           );
           CREATE TABLE IF NOT EXISTS public.permissions (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(), feature_id uuid NOT NULL,
-            permission_key varchar(100) NOT NULL UNIQUE, name varchar(150) NOT NULL,
+            permission_key varchar(100) NOT NULL, name varchar(150) NOT NULL,
             description text NOT NULL DEFAULT '', status varchar(20) NOT NULL DEFAULT 'ACTIVE',
             created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
             CONSTRAINT permissions_feature_fk FOREIGN KEY (feature_id) REFERENCES public.features(id)
@@ -429,6 +429,15 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
             FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(merchant_uuid, id);
         END IF;
       END $schema$;
+    `);
+    await manager.query(`
+      ALTER TABLE public.permissions DROP CONSTRAINT IF EXISTS "UQ_3e3b7dd3ed2cf02975cd963bcd3";
+      ALTER TABLE public.permissions DROP CONSTRAINT IF EXISTS permissions_permission_key_key;
+      DROP INDEX IF EXISTS public."UQ_3e3b7dd3ed2cf02975cd963bcd3";
+      CREATE UNIQUE INDEX IF NOT EXISTS pch_permissions_feature_key
+        ON public.permissions(feature_id, permission_key);
+      CREATE UNIQUE INDEX IF NOT EXISTS pch_permissions_feature_name
+        ON public.permissions(feature_id, lower(btrim(name)));
     `);
     for (const index of [
       'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary',
