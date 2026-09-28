@@ -1,16 +1,16 @@
 import { storeSetup } from './store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from './entities/merchant.entity';
 import { PlanCode } from './entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
-import { SaveStoreEmployeesDto } from './store-setup.dto';
+import { SaveStoreEmployeesDto, AssignStoreEmployeeLoginPinDto, StoreEmployeeAssignmentDto } from './store-setup.dto';
 import { WebsiteConnectionEntity } from './entities/website-connection.entity';
 
 
-@Controller('api/v1')
+@Controller(['api/v1', 'connector/api/v1'])
 export class AppController {
   constructor(@Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository) {}
   private toBusinessType(value?: string): BusinessType {
@@ -85,10 +85,18 @@ export class AppController {
       status: store.status?.trim().toUpperCase() || 'ACTIVE',
     };
       const existing = editing ? await this.merchantRepository.getStoreById(fields.id) : null;
-      return existing
-        ? this.merchantRepository.updateStore(fields.id, fields)
-        : this.merchantRepository.createStore(merchantId, fields);
+      const saved = existing
+        ? await this.merchantRepository.updateStore(fields.id, fields)
+        : await this.merchantRepository.createStore(merchantId, fields);
+      if (saved && store.employees) await this.attachStoreEmployees(merchantId, saved.id, store.employees);
+      return saved;
     }));
+  }
+
+  private async attachStoreEmployees(merchantId: string, storeId: string, employees?: StoreEmployeeAssignmentDto[]) {
+    if (!employees?.length) return null;
+    await this.merchantRepository.saveStoreEmployees(merchantId, storeId, employees);
+    return this.merchantRepository.listStoreEmployees(merchantId, storeId);
   }
 
 
@@ -398,7 +406,8 @@ export class AppController {
     }
     const store = await this.merchantRepository.createStore(ownerId, this.storeCreationFields(body, merchant.country));
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
-    return { success: true, store };
+    const employees = await this.attachStoreEmployees(ownerId, store.id, body.employees);
+    return { success: true, store, ...(employees ? { employees, count: employees.length } : {}) };
   }
 
   private storeCreationFields(body: CreateStoreDto, country?: string) {
@@ -428,6 +437,9 @@ export class AppController {
     if (!merchant) throw new NotFoundException('Merchant not found');
     const stores = await this.merchantRepository.createStoresBatch(merchantId,
       body.stores.map(s => this.storeCreationFields(s, merchant.country)));
+    for (const [index, store] of stores.entries()) {
+      await this.attachStoreEmployees(merchantId, store.id, body.stores[index].employees);
+    }
     return { success: true, count: stores.length, stores };
   }
 
@@ -474,6 +486,18 @@ export class AppController {
     return { success: true, count: employees.length, employees };
   }
 
+  @Put('merchants/:merchantId/stores/:storeId/employees/:employeeId/login-pin')
+  @Patch('merchants/:merchantId/stores/:storeId/employees/:employeeId/login-pin')
+  async assignStoreEmployeeLoginPin(
+    @Param('merchantId') merchantId: string,
+    @Param('storeId') storeId: string,
+    @Param('employeeId') employeeId: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: AssignStoreEmployeeLoginPinDto })) body: AssignStoreEmployeeLoginPinDto,
+  ) {
+    const employee = await this.merchantRepository.assignStoreEmployeeLoginPin(merchantId, storeId, employeeId, body.loginPin);
+    return { success: true, message: 'Employee login PIN assigned', employee };
+  }
+
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
   async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
     const store = await this.merchantRepository.getStoreById(storeId);
@@ -506,7 +530,8 @@ export class AppController {
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
-    return { success: true, store };
+    const employees = await this.attachStoreEmployees(body.merchantId, store.id, body.employees);
+    return { success: true, store, ...(employees ? { employees, count: employees.length } : {}) };
   }
 
   async getAllMerchants() {
