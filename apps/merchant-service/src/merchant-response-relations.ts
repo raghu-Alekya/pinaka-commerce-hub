@@ -115,11 +115,14 @@ export class MerchantResponseRelations {
       };
 
       const lookup = (kind: Kind, value: unknown): Row | null => typeof value==='string' ? records[kind].get(key(value)) || null : null;
+      const attachPlanStoreType = (plan: Row | null, fallback: Row | null) => {
+        if (!plan || isRecord(plan.storeType)) return plan;
+        const storeType = storeTypeFrom(plan) || fallback;
+        return storeType ? { ...plan, storeType, storeTypeId: plan.storeTypeId || storeType.id } : plan;
+      };
       const withStoreType = (row: Row, plan: Row | null): Row => {
         const storeType = isRecord(row.storeType) ? row.storeType : storeTypeFrom(row, plan);
-        const nextPlan = plan && storeType && !isRecord(plan.storeType)
-          ? { ...plan, storeType, storeTypeId: plan.storeTypeId || storeType.id }
-          : plan;
+        const nextPlan = attachPlanStoreType(plan, storeType);
         return {
           ...row,
           plan: nextPlan,
@@ -155,7 +158,7 @@ export class MerchantResponseRelations {
         if (storeType) {
           result.storeType = storeType;
           if (!result.storeTypeId) result.storeTypeId = storeType.id;
-          if (plan && !isRecord(plan.storeType)) result.plan = { ...plan, storeType, storeTypeId: plan.storeTypeId || storeType.id };
+          if (plan) result.plan = attachPlanStoreType(plan, null);
         }
         return result;
       };

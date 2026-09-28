@@ -121,19 +121,33 @@ export class MerchantRepository implements OnModuleInit {
         !(active.cancelledAt && Date.parse(active.cancelledAt) <= Date.now()));
     const planId = subscriptionActive ? (active.planId || active.plan_id) : null;
     const [plan] = planId ? await this.dataSource.query(
-      `SELECT id, status, included_features FROM public.plans WHERE id=$1`, [planId]) : [];
+      `SELECT id, status, included_features, store_type FROM public.plans WHERE id=$1`, [planId]) : [];
     const activePlan = plan?.status === 'ACTIVE' ? plan : null;
+    let featureStoreType = storeType;
+    const planStoreTypeRef = activePlan?.store_type ? String(activePlan.store_type).trim() : '';
+    if (planStoreTypeRef) {
+      const [planStoreType] = await this.dataSource.query(
+        `SELECT id, "storeTypeCode", name FROM public.store_types
+         WHERE id::text = $1
+            OR lower(COALESCE("storeTypeCode", '')) = lower($1)
+            OR lower(COALESCE(name, '')) = lower($1)
+         ORDER BY CASE
+           WHEN id::text = $1 THEN 0
+           WHEN lower(COALESCE("storeTypeCode", '')) = lower($1) THEN 1
+           WHEN lower(COALESCE(name, '')) = lower($1) THEN 2
+           ELSE 3 END
+         LIMIT 1`, [planStoreTypeRef]);
+      if (planStoreType) featureStoreType = planStoreType;
+    }
     const tables = await this.dataSource.query(
-      `SELECT to_regclass('public.store_type_features') AS store_type_features,
-              to_regclass('public.plan_entitlements') AS plan_entitlements,
-              to_regclass('public.subscription_entitlements') AS subscription_entitlements`);
+      `SELECT to_regclass('public.store_type_features') AS store_type_features`);
     const mapped = tables[0]?.store_type_features
       ? await this.dataSource.query(
         `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
                 stf.default_enabled AS "defaultEnabled", stf.required, stf.display_order AS "displayOrder"
          FROM public.store_type_features stf JOIN public.features f ON f.id=stf.feature_id
          WHERE stf.store_type_id=$1 AND f.status='ACTIVE'
-         ORDER BY stf.display_order NULLS LAST, f.category NULLS LAST, f.name`, [storeType.id])
+         ORDER BY stf.display_order NULLS LAST, f.category NULLS LAST, f.name`, [featureStoreType.id])
       : [];
     const catalog = mapped.length ? mapped : await this.dataSource.query(
       `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
@@ -143,45 +157,32 @@ export class MerchantRepository implements OnModuleInit {
        ORDER BY f.category NULLS LAST, f.name`);
     const enabled = new Map<string, boolean>();
     const grant = (item: unknown, value = true) => {
+      if (Array.isArray(item)) { item.forEach(entry => grant(entry, value)); return; }
+      if (typeof item === 'string' && item.startsWith('{') && item.endsWith('}')) {
+        item.slice(1, -1).split(',').forEach(entry => grant(entry.trim().replace(/^"|"$/g, ''), value));
+        return;
+      }
       if (item && typeof item === 'object') {
-        const row = item as { featureId?: string; feature_id?: string; featureKey?: string; id?: string; enabled?: boolean };
-        const key = row.featureId || row.feature_id || row.featureKey || row.id;
+        const row = item as { featureId?: string; feature_id?: string; featureKey?: string; feature_key?: string; name?: string; id?: string; enabled?: boolean };
+        const key = row.featureId || row.feature_id || row.featureKey || row.feature_key || row.name || row.id;
         if (key) enabled.set(String(key).toLowerCase(), row.enabled !== false && value);
         return;
       }
       if (item !== undefined && item !== null && item !== '') enabled.set(String(item).toLowerCase(), value);
     };
-    if (activePlan) {
-      for (const item of activePlan.included_features || []) grant(item);
-      if (tables[0].plan_entitlements) {
-        const rows = await this.dataSource.query(
-          `SELECT to_jsonb(e) AS data FROM public.plan_entitlements e WHERE COALESCE(to_jsonb(e)->>'planId',to_jsonb(e)->>'plan_id')=$1`, [activePlan.id]);
-        for (const { data } of rows) grant(data, data.enabled === true);
-      }
-    }
-    if (subscriptionActive) {
-      const rawEntitlements = active.entitlements;
-      const subscriptionFeatures = typeof rawEntitlements === 'string' ? JSON.parse(rawEntitlements) : rawEntitlements;
-      if (Array.isArray(subscriptionFeatures)) for (const item of subscriptionFeatures) grant(item);
-    }
-    if (subscriptionActive && tables[0].subscription_entitlements) {
-      const rows = await this.dataSource.query(
-        `SELECT to_jsonb(e) AS data FROM public.subscription_entitlements e WHERE COALESCE(to_jsonb(e)->>'subscriptionId',to_jsonb(e)->>'subscription_id')=$1`, [active.id]);
-      const now = Date.now();
-      for (const { data } of rows) {
-        if ((data.effectiveFrom || data.effective_from) && Date.parse(data.effectiveFrom || data.effective_from) > now) continue;
-        if ((data.effectiveUntil || data.effective_until) && Date.parse(data.effectiveUntil || data.effective_until) <= now) continue;
-        enabled.set(String(data.featureId || data.feature_id).toLowerCase(), data.enabled === true);
-      }
-    }
-    const features = catalog.map((feature: { id: string; featureKey: string; defaultEnabled?: boolean | null }) => {
-      const id = feature.id.toLowerCase();
-      const included = (enabled.has(id) ? enabled.get(id) : enabled.get(feature.featureKey.toLowerCase())) === true;
+    if (activePlan) grant(activePlan.included_features);
+    const features = catalog.map((feature: { id: string; featureKey?: string; name?: string }) => {
+      const id = String(feature.id).toLowerCase();
+      const featureKey = String(feature.featureKey || '').toLowerCase();
+      const name = String(feature.name || '').toLowerCase();
+      const included = enabled.has(id) ? enabled.get(id) === true
+        : enabled.has(featureKey) ? enabled.get(featureKey) === true
+        : enabled.get(name) === true;
       return {
         ...feature,
         included,
         planAccess: included ? 'INCLUDED' : 'NOT_INCLUDED',
-        enabledForStore: included && feature.defaultEnabled !== false,
+        enabledForStore: included,
       };
     });
     const categories = groupFeaturesByCategory(features);
@@ -189,7 +190,7 @@ export class MerchantRepository implements OnModuleInit {
     return {
       success: true,
       merchantId: merchant.id,
-      storeTypeId: storeType.id,
+      storeTypeId: featureStoreType.id,
       subscriptionId: subscriptionActive ? active.id : null,
       planId: activePlan?.id || null,
       count: features.length,
