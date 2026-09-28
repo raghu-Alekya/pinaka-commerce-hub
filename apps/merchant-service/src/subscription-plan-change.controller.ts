@@ -48,7 +48,9 @@ export class SubscriptionPlanChangeController {
     const tax = body.tax == null || body.tax === '' ? null : Number(body.tax);
     const totalDueToday = body.totalDueToday == null || body.totalDueToday === '' ? null : Number(body.totalDueToday);
     const merchantKey = String(merchant.merchantId || merchantId);
-    const merchantKeys = [...new Set([merchantKey, merchantId, merchant.id, merchant.merchantCode].filter(value => value != null && value !== '').map(String))];
+    const merchantKeys = [...new Set<string>([merchantKey, merchantId, merchant.id, merchant.merchantCode]
+      .filter(value => value != null && value !== '')
+      .map(value => String(value)))];
     const subColumns = await this.columnSet('subscriptions');
     const id = `SUB-${randomUUID()}`;
     const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
@@ -116,7 +118,7 @@ export class SubscriptionPlanChangeController {
       `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`,
       [table],
     );
-    return new Set(rows.map((row: { column_name: string }) => row.column_name));
+    return new Set<string>(rows.map((row: { column_name: string }) => String(row.column_name)));
   }
 
   private async insert(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: string, columns: Set<string>, values: Record<string, unknown>) {

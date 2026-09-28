@@ -23,7 +23,7 @@ export function storeSetup(body: StoreSetupDto, previous: Record<string, unknown
     throw new BadRequestException('Roles require a name and Store or Merchant scope');
   }
   const result = { ...previous };
-  for (const key of ['logo','licensed','hours','devices','features','roles'] as const) {
+  for (const key of ['logo','coverImage','defaultLanguage','taxRegion','licensed','hours','devices','features','roles'] as const) {
     if (body[key] !== undefined) result[key] = body[key];
   }
   return result;
