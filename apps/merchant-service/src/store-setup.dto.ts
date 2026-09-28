@@ -6,7 +6,7 @@ export class StoreHoursDto {
   @IsIn(['', 'Open', 'Closed', '24 hours']) status!: string;
   @IsOptional() @Matches(/^$|^([01]\d|2[0-3]):[0-5]\d$/) open?: string;
   @IsOptional() @Matches(/^$|^([01]\d|2[0-3]):[0-5]\d$/) close?: string;
-  @IsOptional() @Transform(({ value }) => value === '' ? undefined : Number(value)) @IsInt() @Min(1) @Max(100) shifts?: number;
+  @IsOptional() @Transform(({ value }) => value === '' || value === null || value === undefined ? 0 : Number(value)) @IsInt() @Min(0) @Max(100) shifts?: number;
 }
 
 export class StoreEmployeeAssignmentDto {

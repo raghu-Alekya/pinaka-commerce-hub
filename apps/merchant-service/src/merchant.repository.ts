@@ -1025,6 +1025,21 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+  async listStoreWizardRolePermissions(merchantId: string, storeId: string): Promise<Array<Record<string, unknown>>> {
+    const { storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    return this.dataSource.query(
+      `SELECT role_template_id AS "roleTemplateId",
+              role_name AS "roleName",
+              feature_name AS "featureName",
+              permission_action AS "permissionAction",
+              allowed
+       FROM public.store_roles_permission
+       WHERE store_id = $1::uuid
+       ORDER BY role_name, feature_name, permission_action`,
+      [storeUuid],
+    );
+  }
+
   async listStoreEmployees(merchantId: string, storeId: string): Promise<Array<Record<string, unknown>>> {
     const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
     return this.dataSource.query(
