@@ -6,7 +6,7 @@ import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from './store-setup';
 import * as crypto from 'crypto';
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 
 import { ensureEmployeeAccessSchema } from './employee-access.schema';
 import { ensureStoreRoleTemplateSchema } from './store-role-template.schema';
@@ -1003,17 +1003,28 @@ export class MerchantRepository implements OnModuleInit {
               e.employee_code AS "employeeCode",
               e.first_name AS "firstName",
               e.last_name AS "lastName",
+              e.email,
+              e.phone,
+              e.status,
+              e.profile_image_url AS "profileImageUrl",
+              e.username,
+              es.id AS "employeeStoreId",
+              es.store_id AS "storeId",
+              es.status AS "assignmentStatus",
               (es.login_pin_hash IS NOT NULL) AS "pinSet",
-              (
-                SELECT r.source_role_template_id
-                FROM public.employee_store_roles esr
-                JOIN public.roles r ON r.id = esr.role_id
-                WHERE esr.employee_store_id = es.id AND esr.status = 'ACTIVE'
-                ORDER BY esr.created_at ASC
-                LIMIT 1
-              ) AS "roleTemplateId"
+              r.id AS "roleId",
+              r.name AS "roleName",
+              r.source_role_template_id AS "roleTemplateId"
        FROM public.employee_stores es
        JOIN public.employees e ON e.id = es.employee_id
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.name, r.source_role_template_id
+         FROM public.employee_store_roles esr
+         JOIN public.roles r ON r.id = esr.role_id
+         WHERE esr.employee_store_id = es.id AND esr.status = 'ACTIVE'
+         ORDER BY esr.created_at ASC
+         LIMIT 1
+       ) r ON true
        WHERE es.merchant_id = $1 AND es.store_id = $2 AND es.status = 'ACTIVE'
        ORDER BY e.first_name ASC, e.last_name ASC`,
       [merchantUuid, storeUuid],
@@ -1026,35 +1037,44 @@ export class MerchantRepository implements OnModuleInit {
     employees: Array<{ employeeId: string; roleTemplateId?: string; loginPin?: string }> = [],
   ): Promise<void> {
     const { merchantCode, merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const pins = employees.map(item => item.loginPin).filter((pin): pin is string => Boolean(pin));
+    if (new Set(pins).size !== pins.length) throw new ConflictException('Each store employee login PIN must be unique');
     const keepIds: string[] = [];
     for (const item of employees) {
       const [employee] = await this.dataSource.query(
-        `SELECT id FROM public.employees WHERE id = $1::uuid AND merchant_id = $2::uuid LIMIT 1`,
+        `SELECT id FROM public.employees
+         WHERE merchant_id = $2::uuid AND (id::text = $1 OR employee_code = $1)
+         LIMIT 1`,
         [item.employeeId, merchantUuid],
       );
       if (!employee) throw new BadRequestException(`Employee '${item.employeeId}' does not belong to this merchant`);
       keepIds.push(employee.id);
+      if (item.loginPin) await this.assertUniqueStoreLoginPin(storeUuid, employee.id, item.loginPin);
       const [existing] = await this.dataSource.query(
         `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
          WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3 LIMIT 1`,
         [merchantUuid, employee.id, storeUuid],
       );
       const pinHash = item.loginPin ? this.hashEmployeePin(item.loginPin) : existing?.loginPinHash || null;
-      const [assignment] = existing
-        ? await this.dataSource.query(
+      let assignmentId = existing?.id as string | undefined;
+      if (existing) {
+        await this.dataSource.query(
           `UPDATE public.employee_stores
            SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
-           WHERE id = $1 RETURNING id`,
+           WHERE id = $1`,
           [existing.id, pinHash],
-        )
-        : await this.dataSource.query(
+        );
+      } else {
+        assignmentId = this.returningRow<{ id: string }>(await this.dataSource.query(
           `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
            VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
           [merchantUuid, employee.id, storeUuid, pinHash],
-        );
+        )).id;
+      }
+      if (!assignmentId) throw new InternalServerErrorException('Store employee assignment was not saved');
       await this.dataSource.query(
         `DELETE FROM public.employee_store_roles WHERE employee_store_id = $1`,
-        [assignment.id],
+        [assignmentId],
       );
       if (!item.roleTemplateId) continue;
       const [role] = await this.dataSource.query(
@@ -1067,7 +1087,7 @@ export class MerchantRepository implements OnModuleInit {
       await this.dataSource.query(
         `INSERT INTO public.employee_store_roles (merchant_id, store_id, employee_store_id, role_id, status)
          VALUES ($1, $2, $3::uuid, $4::uuid, 'ACTIVE')`,
-        [merchantUuid, storeUuid, assignment.id, role.id],
+        [merchantUuid, storeUuid, assignmentId, role.id],
       );
     }
     const removeRoles = keepIds.length
@@ -1084,6 +1104,39 @@ export class MerchantRepository implements OnModuleInit {
       : `DELETE FROM public.employee_stores WHERE merchant_id = $1 AND store_id = $2`;
     await this.dataSource.query(removeRoles, keepIds.length ? [merchantUuid, storeUuid, keepIds] : [merchantUuid, storeUuid]);
     await this.dataSource.query(removeStores, keepIds.length ? [merchantUuid, storeUuid, keepIds] : [merchantUuid, storeUuid]);
+  }
+
+  async assignStoreEmployeeLoginPin(merchantId: string, storeId: string, employeeId: string, loginPin: string) {
+    if (!/^\d{6}$/.test(loginPin)) throw new BadRequestException('loginPin must be a 6-digit string');
+    const { merchantUuid, storeUuid } = await this.requireStoreRecord(merchantId, storeId);
+    const [employee] = await this.dataSource.query(
+      `SELECT id FROM public.employees WHERE (id::text = $1 OR employee_code = $1) AND merchant_id = $2::uuid LIMIT 1`,
+      [employeeId, merchantUuid],
+    );
+    if (!employee) throw new NotFoundException(`Employee '${employeeId}' not found for merchant '${merchantId}'`);
+    await this.assertUniqueStoreLoginPin(storeUuid, employee.id, loginPin);
+    let assignment = (await this.dataSource.query(
+      `SELECT id FROM public.employee_stores
+       WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3
+       LIMIT 1`,
+      [merchantUuid, employee.id, storeUuid],
+    ))[0];
+    if (!assignment) {
+      assignment = this.returningRow(await this.dataSource.query(
+        `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
+         VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
+        [merchantUuid, employee.id, storeUuid, this.hashEmployeePin(loginPin)],
+      ));
+    } else {
+      await this.dataSource.query(
+        `UPDATE public.employee_stores
+         SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+         WHERE id = $1`,
+        [assignment.id, this.hashEmployeePin(loginPin)],
+      );
+    }
+    const employees = await this.listStoreEmployees(merchantId, storeId);
+    return employees.find(row => String(row.employeeId) === String(employee.id));
   }
 
   async saveWebsiteConnector(
@@ -2993,6 +3046,35 @@ export class MerchantRepository implements OnModuleInit {
   private hashEmployeePin(value: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
     return `${salt}:${crypto.scryptSync(value, salt, 32).toString('hex')}`;
+  }
+
+  private returningRow<T>(result: T[] | [T[], number]): T {
+    const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
+    const row = (rows as T[])[0];
+    if (!row || typeof row !== 'object') throw new InternalServerErrorException('Database write did not return a row');
+    return row;
+  }
+
+  private matchesEmployeePin(pin: string, stored: string): boolean {
+    const [salt, digest] = String(stored).split(':');
+    if (!salt || !digest) return false;
+    const actual = Buffer.from(crypto.scryptSync(pin, salt, 32).toString('hex'), 'hex');
+    const expected = Buffer.from(digest, 'hex');
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+
+  private async assertUniqueStoreLoginPin(storeUuid: string, employeeId: string, pin: string) {
+    const rows = await this.dataSource.query(
+      `SELECT employee_id AS "employeeId", login_pin_hash AS hash
+       FROM public.employee_stores
+       WHERE store_id = $1 AND login_pin_hash IS NOT NULL AND employee_id <> $2::uuid`,
+      [storeUuid, employeeId],
+    );
+    for (const row of rows) {
+      if (this.matchesEmployeePin(pin, row.hash)) {
+        throw new ConflictException('This login PIN is already assigned to another employee in this store');
+      }
+    }
   }
 
   private hashUserPassword(value: string): string {

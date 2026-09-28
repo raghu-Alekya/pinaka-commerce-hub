@@ -9,6 +9,20 @@ export class StoreHoursDto {
   @IsOptional() @Transform(({ value }) => value === '' ? undefined : Number(value)) @IsInt() @Min(1) @Max(100) shifts?: number;
 }
 
+export class StoreEmployeeAssignmentDto {
+  @IsString()
+  @MaxLength(100)
+  employeeId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  roleTemplateId?: string;
+
+  @IsOptional()
+  @Matches(/^\d{6}$/, { message: 'loginPin must be a 6-digit string' })
+  loginPin?: string;
+}
+
 // Setup selections are stored separately from effective permissions/entitlements.
 export class StoreSetupDto {
   @IsOptional() @IsString() @MaxLength(100) country?: string;
@@ -20,19 +34,12 @@ export class StoreSetupDto {
   @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) roles?: Record<string, unknown>[];
   /** Wizard matrix: { roleTemplateId, name, permissions: { [feature]: { View, Create, Edit, Delete } } } */
   @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) rolePermissions?: Record<string, unknown>[];
-}
-
-export class StoreEmployeeAssignmentDto {
-  @IsUUID()
-  employeeId!: string;
-
   @IsOptional()
-  @IsUUID()
-  roleTemplateId?: string;
-
-  @IsOptional()
-  @Matches(/^[1-9]\d{5}$/)
-  loginPin?: string;
+  @IsArray()
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => StoreEmployeeAssignmentDto)
+  employees?: StoreEmployeeAssignmentDto[];
 }
 
 export class SaveStoreEmployeesDto {
@@ -41,4 +48,9 @@ export class SaveStoreEmployeesDto {
   @ValidateNested({ each: true })
   @Type(() => StoreEmployeeAssignmentDto)
   employees: StoreEmployeeAssignmentDto[] = [];
+}
+
+export class AssignStoreEmployeeLoginPinDto {
+  @Matches(/^\d{6}$/, { message: 'loginPin must be a 6-digit string' })
+  loginPin!: string;
 }
