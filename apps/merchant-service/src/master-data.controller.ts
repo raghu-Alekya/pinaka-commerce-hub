@@ -87,7 +87,11 @@ export class RoleTemplateController {
 @Controller(['api/v1/plans', 'connector/api/v1/plans', 'plans'])
 export class PlanController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
-  @Get() async list(@Query() query: Record<string, string>) { const items = filterMasterList(await this.repository.masterData('plans', 'list'), query); return { success: true, count: items.length, plans: items }; }
+  @Get()
+  async list(@Query() query: Record<string, string>) {
+    const plans = filterMasterList(await this.repository.masterData('plans', 'list'), query);
+    return { success: true, count: plans.length, plans };
+  }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, plan: await this.repository.masterData('plans', 'get', id) }; }
   @Post() async create(@Body(validate(PlanDto)) body: PlanDto) { return { success: true, plan: await this.repository.masterData('plans', 'create', undefined, { description: '', status: 'ACTIVE', currency: 'INR', ...defined(body) }) }; }
   @Put(':id') async replace(@Param('id') id: string, @Body(validate(PlanDto)) body: PlanDto) { return { success: true, plan: await this.repository.masterData('plans', 'update', id, { description: '', status: 'ACTIVE', ...defined(body) }) }; }

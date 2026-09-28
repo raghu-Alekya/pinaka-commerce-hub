@@ -2,15 +2,16 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundExcepti
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
 import { CreatePlanDto, UpdatePlanDto } from './plan.dto';
+import { filterMasterList } from './master-list';
 
 @Public()
-@Controller('api/v1/plans')
+@Controller(['api/v1/plans', 'connector/api/v1/plans', 'plans'])
 export class PlanController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   @Get()
-  async list(@Query('status') status?: string) {
-    const plans = await this.repository.listPlans(status);
+  async list(@Query() query: Record<string, string>) {
+    const plans = filterMasterList(await this.repository.listPlans(), query);
     return { success: true, count: plans.length, plans };
   }
 
