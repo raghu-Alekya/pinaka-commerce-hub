@@ -9,6 +9,29 @@ const subscriptionFields = ['planId','billingCycle','startDate','renewalDate','p
 const quote = (key: string) => `"${key}"`;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const licenseCount = (value: unknown, fallback = 0): number => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+/** Overlay plan included_stores / included_terminals onto subscription list/detail rows. */
+export function withPlanLicenseCounts(row: Input, plan?: Input | null): Input {
+  const stores = licenseCount(plan?.includedStores ?? plan?.included_stores ?? row.includedStores ?? row.included_stores ?? row.maxStoresAllowed ?? row.licensedStoreCount);
+  const devices = licenseCount(plan?.includedTerminals ?? plan?.included_terminals ?? row.includedTerminals ?? row.included_terminals ?? row.licensedDeviceCount);
+  row.includedStores = stores;
+  row.includedTerminals = devices;
+  row.included_stores = stores;
+  row.included_terminals = devices;
+  row.storeCount = stores;
+  row.deviceCount = devices;
+  row.stores = stores;
+  row.devices = devices;
+  row.maxStoresAllowed = stores;
+  row.licensedStoreCount = stores;
+  row.licensedDeviceCount = devices;
+  return row;
+}
+
 /** SQL uses the installed schema, never a schema inferred from request names. */
 export class MerchantCrudService {
   constructor(private readonly db: DataSource) {}
@@ -153,6 +176,15 @@ export class MerchantCrudService {
     const planChanged = !current || current.planId !== merged.planId;
     const [plan] = await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[merged.planId]);
     if (!plan || ((planChanged || forceNew) && plan.status !== 'ACTIVE')) throw new BadRequestException('Select an active planId');
+    if (planChanged && current?.planId) {
+      const currentType = await this.storeTypeName(manager, (await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[current.planId]))[0] || {});
+      const nextType = await this.storeTypeName(manager, plan);
+      const currentKey = String(currentType || '').trim().toUpperCase();
+      const nextKey = String(nextType || '').trim().toUpperCase();
+      if (currentKey && nextKey && currentKey !== 'BOTH' && nextKey !== 'BOTH' && currentKey !== nextKey) {
+        throw new BadRequestException(`Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`);
+      }
+    }
     const start = merged.startDate || new Date().toISOString().slice(0,10);
     const cycle = merged.billingCycle || plan.billingCycle || 'MONTHLY';
     const date = new Date(`${start}T00:00:00Z`);
@@ -165,11 +197,15 @@ export class MerchantCrudService {
     const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
     const basePrice = plan.basePrice ?? plan.base_price ?? 0;
     const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
+    const includedStores = licenseCount(plan.included_stores ?? plan.includedStores);
+    const includedTerminals = licenseCount(plan.included_terminals ?? plan.includedTerminals);
     const fields = {planId:plan.id,planCode,planName,storeTypeName:await this.storeTypeName(manager, plan),
       billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(basePrice),
       currency:planChanged ? (plan.currency || 'USD') : current?.currency || plan.currency || 'USD',
       entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
-      maxStoresAllowed:planChanged ? plan.included_stores ?? plan.includedStores ?? 0 : current?.maxStoresAllowed ?? plan.included_stores ?? plan.includedStores ?? 0,
+      maxStoresAllowed:planChanged ? includedStores : licenseCount(current?.maxStoresAllowed ?? includedStores),
+      licensedStoreCount:planChanged ? includedStores : licenseCount(current?.licensedStoreCount ?? current?.maxStoresAllowed ?? includedStores),
+      licensedDeviceCount:planChanged ? includedTerminals : licenseCount(current?.licensedDeviceCount ?? includedTerminals),
       status:input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE')};
     const isNew = !current || forceNew;
     if (fields.status === 'ACTIVE' && isNew) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
@@ -285,12 +321,15 @@ export class MerchantCrudService {
       columns.has('status') ? `($2::text IS NULL OR s.status=$2)` : '$2::text IS NULL',
     ];
     const merchantKey = merchantColumn === '"merchantId"' ? 's."merchantId"' : merchantColumn ? `s.${merchantColumn}::text` : 'NULL';
+    const planIdCol = columns.has('planId') ? 's."planId"' : columns.has('plan_id') ? 's.plan_id' : '';
+    const planJoin = planIdCol ? `LEFT JOIN public.plans p ON p.id::text = ${planIdCol}::text` : '';
+    const planSelect = planJoin ? ', p.included_stores AS plan_included_stores, p.included_terminals AS plan_included_terminals' : '';
     const subscriptions = await this.db.query(`SELECT s.*, COALESCE((
         SELECT m."merchantId" FROM public.merchants m
         WHERE m."merchantId" = ${merchantKey} OR m."merchantCode" = ${merchantKey} OR m.id::text = ${merchantKey}
         LIMIT 1
-      ), ${merchantKey}) AS merchant_code
-      FROM public.subscriptions s WHERE ${filters.join(' AND ')}
+      ), ${merchantKey}) AS merchant_code${planSelect}
+      FROM public.subscriptions s ${planJoin} WHERE ${filters.join(' AND ')}
       ORDER BY s."createdAt" DESC NULLS LAST`,[merchantId || null,status || null]);
     for (const row of subscriptions) {
       for (const key of ['startDate','renewalDate','start_date','renewal_date']) {
@@ -304,6 +343,12 @@ export class MerchantCrudService {
       for (const [source, target] of [['planId', 'plan_id'], ['planName', 'plan_name'], ['planCode', 'plan_code'], ['billingCycle', 'billing_cycle'], ['storeTypeName', 'store_type_name']] as const) {
         if (row[source] != null && row[source] !== '') row[target] = row[source];
       }
+      const plan = row.plan_included_stores != null || row.plan_included_terminals != null
+        ? { included_stores: row.plan_included_stores, included_terminals: row.plan_included_terminals }
+        : null;
+      withPlanLicenseCounts(row, plan);
+      delete row.plan_included_stores;
+      delete row.plan_included_terminals;
     }
     return {success:true,count:subscriptions.length,subscriptions};
   }

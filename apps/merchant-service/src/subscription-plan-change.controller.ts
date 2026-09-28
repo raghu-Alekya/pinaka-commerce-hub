@@ -40,6 +40,8 @@ export class SubscriptionPlanChangeController {
 
     const [plan] = await this.db.query(`SELECT * FROM public.plans WHERE id::text=$1`, [planId]);
     if (!plan || String(plan.status || '').toUpperCase() !== 'ACTIVE') throw new BadRequestException('Select an active planId');
+    const currentPlanId = await this.repository.merchantActivePlanId(merchantId);
+    await this.repository.assertSameStoreTypePlan(currentPlanId, plan.id);
 
     const price = Number(body.agreementPrice ?? plan.basePrice ?? plan.base_price ?? plan.price ?? 0);
     if (!Number.isFinite(price) || price < 0) throw new BadRequestException('agreementPrice must be a non-negative number');

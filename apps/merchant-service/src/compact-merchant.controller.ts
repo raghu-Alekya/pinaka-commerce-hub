@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { COUNTRIES, nationalPhone } from './countries';
-import { MerchantCrudService } from './merchant-crud.service';
+import { MerchantCrudService, withPlanLicenseCounts } from './merchant-crud.service';
 import { SubscriptionPlanChangeController } from './subscription-plan-change.controller';
 import { MerchantRepository } from './merchant.repository';
 
@@ -121,6 +121,12 @@ export class CompactMerchantController {
     if (merchant && typeof merchant === 'object' && !Array.isArray(merchant)) {
       const code = this.merchantCodeValue(merchant as Input);
       if (code) (merchant as Input).merchant_code = code;
+    }
+    const subscription = record?.subscription;
+    if (subscription && typeof subscription === 'object' && !Array.isArray(subscription)) {
+      const nested = subscription as Input;
+      const plan = (nested.plan && typeof nested.plan === 'object' ? nested.plan : record?.plan) as Input | undefined;
+      withPlanLicenseCounts(nested, plan);
     }
     return record;
   }
@@ -377,7 +383,7 @@ export class CompactMerchantController {
 
   @Get('subscriptions')
   subscriptions(@Query('merchantId') merchantId?: string, @Query('status') status?: string) {
-    return new MerchantCrudService(this.db).listSubscriptions(merchantId, status);
+    return new MerchantCrudService(this.db).listSubscriptions(merchantId, status?.trim() || 'ACTIVE');
   }
 
   @Get('subscriptions/active')
@@ -541,6 +547,10 @@ export class CompactMerchantController {
       setCol('pinCode', input.pinCode ?? existing.pinCode);
       setCol('postalCode', input.pinCode ?? existing.postalCode ?? existing.pinCode);
       setCol('country', input.country ?? existing.country);
+      if (input.planId !== undefined) {
+        const currentPlanId = existing.planId || await this.repository.merchantActivePlanId(String(existing.merchantId || existing.id || id));
+        await this.repository.assertSameStoreTypePlan(currentPlanId, String(input.planId));
+      }
       setCol('planId', input.planId ?? existing.planId);
       if (requestedStoreTypeId) setCol('storeTypeId', requestedStoreTypeId);
       setCol('billingCycle', input.billingCycle ?? existing.billingCycle);
@@ -624,7 +634,9 @@ export class CompactMerchantController {
       setSubCol('planCode', planCode);
       setSubCol('plan_code', planCode);
     }
-    setSubCol('maxStoresAllowed', plan.included_stores ?? plan.maxStoresAllowed ?? 0);
+    setSubCol('maxStoresAllowed', plan.included_stores ?? plan.includedStores ?? plan.maxStoresAllowed ?? 0);
+    setSubCol('licensedStoreCount', plan.included_stores ?? plan.includedStores ?? 0);
+    setSubCol('licensedDeviceCount', plan.included_terminals ?? plan.includedTerminals ?? 0);
     setSubCol('trialDays', plan.trialDays ?? plan.trial_days ?? 0);
     setSubCol('createdAt', new Date());
     setSubCol('updatedAt', new Date());

@@ -9,7 +9,8 @@ export class SubscriptionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
   @Get()
   async list(@Query('merchantId') merchantId?: string) {
-    const subscriptions = await this.repository.listSubscriptions(merchantId);
+    const subscriptions = (await this.repository.listSubscriptions(merchantId))
+      .filter(row => String(row.status || '').toUpperCase() === 'ACTIVE');
     return { success:true, count:subscriptions.length, subscriptions };
   }
   @Get(':id')

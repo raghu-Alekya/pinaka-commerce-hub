@@ -1,6 +1,6 @@
 import { WorkforceValidationPipe } from './workforce-validation.pipe';
 import { IsIn } from 'class-validator';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { RelationshipOwnerGuard } from './relationships.controller';
 import { MerchantRepository } from './merchant.repository';
 import { CreateFeaturePermissionDto, UpdateFeaturePermissionDto } from './permission.dto';
@@ -36,7 +36,7 @@ export class FeaturePermissionController {
   }
 
   private async scoped(featureId: string, idOrKey: string) {
-    const permission = await this.repository.getPermissionByIdOrKey(idOrKey);
+    const permission = await this.repository.getPermissionByIdOrKey(idOrKey, featureId);
     if (!permission) {
       throw new NotFoundException(`Permission '${idOrKey}' not found`);
     }
@@ -91,8 +91,6 @@ export class FeaturePermissionController {
       throw new BadRequestException('featureId must match the feature in the URL');
     }
     await this.feature(featureId);
-    const existing = await this.repository.getPermissionByIdOrKey(body.permissionKey);
-    if (existing) throw new ConflictException(`Permission key '${body.permissionKey.trim().toUpperCase()}' already exists`);
     const permission = await this.repository.createPermission({ ...body, featureId });
     return { success: true, message: 'Permission created successfully', permission };
   }

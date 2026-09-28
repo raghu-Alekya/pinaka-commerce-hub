@@ -151,7 +151,7 @@ export class DynamicQueryRepository {
     if (filter.merchantId && !merchantId) return [];
     if (merchantId) this.whereEqual(qb, 'merchantId', merchantId);
     if (filter.planId?.trim()) this.whereEqual(qb, 'planId', filter.planId.trim());
-    if (filter.status?.trim()) this.whereEqual(qb, 'status', filter.status.trim().toUpperCase());
+    this.whereEqual(qb, 'status', (filter.status?.trim() || 'ACTIVE').toUpperCase());
 
     if (filter.storeId?.trim()) {
       const store = await this.resolveStore(filter.storeId);
