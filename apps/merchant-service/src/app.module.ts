@@ -1,6 +1,7 @@
 import { MerchantVendorController } from './merchant-vendor.controller';
 import { OnboardingController } from './onboarding.controller';
 import { VendorController } from './vendor.controller';
+import { MerchantVendorController } from './merchant-vendor.controller';
 import { TendorController } from './tendor.controller';
 import { VendorRepository } from './vendor.repository';
 import { TendorRepository } from './tendor.repository';

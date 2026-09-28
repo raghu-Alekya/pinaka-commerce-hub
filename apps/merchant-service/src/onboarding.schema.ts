@@ -3,7 +3,6 @@ import { DataSource } from 'typeorm';
 export async function ensureOnboardingSchema(db: DataSource): Promise<void> {
   await db.query(`ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS "onboardingSetup" jsonb NOT NULL DEFAULT '{}'::jsonb`);
   await db.query(`ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS "storeCode" varchar(50)`);
-  await db.query(`ALTER TABLE public.stores ADD COLUMN IF NOT EXISTS store_email varchar(255)`);
   await db.query(`
     UPDATE public.stores
     SET "storeCode" = COALESCE(

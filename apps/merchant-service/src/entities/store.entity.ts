@@ -15,7 +15,6 @@ export enum OperationalStatus {
 
 export interface StoreAddress {
   street: string;
-  addressLine2?: string;
   city: string;
   state: string;
   zipCode: string;
@@ -74,9 +73,6 @@ export class StoreEntity {
 
   @Column({ type: 'varchar', length: 2048, nullable: true })
   baseUrl?: string;
-
-  @Column({ name: 'store_email', type: 'varchar', length: 255, nullable: true })
-  email?: string | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   phone?: string;
