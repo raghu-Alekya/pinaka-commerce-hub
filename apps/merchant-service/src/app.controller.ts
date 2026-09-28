@@ -469,6 +469,12 @@ export class AppController {
     return { success: true, count: rows.length, stores: rows };
   }
 
+  @Get('merchants/:merchantId/stores/:storeId/role-permissions')
+  async listStoreRolePermissions(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string) {
+    const rolePermissions = await this.merchantRepository.listStoreWizardRolePermissions(merchantId, storeId);
+    return { success: true, count: rolePermissions.length, rolePermissions };
+  }
+
   @Get('merchants/:merchantId/stores/:storeId/employees')
   async listStoreEmployees(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string) {
     const employees = await this.merchantRepository.listStoreEmployees(merchantId, storeId);
@@ -503,7 +509,44 @@ export class AppController {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store || (merchantId && store.merchantId !== merchantId)) throw new NotFoundException(`Store '${storeId}' not found`);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
-    return { success: true, store, websiteConnection: this.toPublicConnector(connection) };
+    const setup = store.onboardingSetup || {};
+    let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+    try {
+      const rows = await this.merchantRepository.listStoreWizardRolePermissions(store.merchantId, store.id);
+      if (rows.length) rolePermissions = this.groupWizardRolePermissions(rows);
+    } catch {
+      rolePermissions = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+    }
+    return {
+      success: true,
+      store: {
+        ...store,
+        hours: Array.isArray(setup.hours) ? setup.hours : [],
+        features: Array.isArray(setup.features) ? setup.features : [],
+        rolePermissions,
+      },
+      websiteConnection: this.toPublicConnector(connection),
+    };
+  }
+
+  private groupWizardRolePermissions(rows: Array<Record<string, unknown>>) {
+    const actions = ['View', 'Create', 'Edit', 'Delete'];
+    const roles = new Map<string, { roleTemplateId: string | null; name: string; permissions: Record<string, Record<string, boolean>> }>();
+    for (const row of rows) {
+      const roleTemplateId = row.roleTemplateId ? String(row.roleTemplateId) : '';
+      const name = String(row.roleName || '');
+      const key = roleTemplateId || name;
+      if (!key) continue;
+      if (!roles.has(key)) roles.set(key, { roleTemplateId: roleTemplateId || null, name, permissions: {} });
+      const action = String(row.permissionAction || '');
+      const featureName = String(row.featureName || '');
+      if (!featureName || !actions.includes(action)) continue;
+      const role = roles.get(key)!;
+      if (!role.permissions[featureName]) role.permissions[featureName] = { View: false, Create: false, Edit: false, Delete: false };
+      const allowed = row.allowed;
+      role.permissions[featureName][action] = allowed === true || allowed === 'true' || allowed === 't';
+    }
+    return [...roles.values()];
   }
 
   @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])

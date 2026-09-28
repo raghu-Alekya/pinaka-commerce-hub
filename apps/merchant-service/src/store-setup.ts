@@ -7,8 +7,14 @@ export function storeSetup(body: StoreSetupDto, previous: Record<string, unknown
       throw new BadRequestException('hours must contain each day of the week exactly once');
     }
     for (const day of body.hours) {
-      if (day.status === 'Open' && (!day.open || !day.close || day.open === day.close)) {
-        throw new BadRequestException(`${day.day}: opening and closing times must be supplied and differ`);
+      if (day.status !== 'Open') continue;
+      const open = String(day.open || '');
+      const close = String(day.close || '');
+      if ((open && !close) || (!open && close)) {
+        throw new BadRequestException(`${day.day}: opening and closing times must both be supplied`);
+      }
+      if (open && close && open === close) {
+        throw new BadRequestException(`${day.day}: opening and closing times must differ`);
       }
     }
   }
@@ -23,7 +29,7 @@ export function storeSetup(body: StoreSetupDto, previous: Record<string, unknown
     throw new BadRequestException('Roles require a name and Store or Merchant scope');
   }
   const result = { ...previous };
-  for (const key of ['logo','licensed','hours','devices','features','roles'] as const) {
+  for (const key of ['logo','licensed','hours','devices','features','roles','rolePermissions'] as const) {
     if (body[key] !== undefined) result[key] = body[key];
   }
   return result;
