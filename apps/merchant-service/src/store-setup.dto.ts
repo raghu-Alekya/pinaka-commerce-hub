@@ -27,6 +27,8 @@ export class StoreEmployeeAssignmentDto {
 export class StoreSetupDto {
   @IsOptional() @IsString() @MaxLength(100) country?: string;
   @IsOptional() @IsString() @MaxLength(2800000) logo?: string;
+  @IsOptional() @IsString() @MaxLength(100) defaultLanguage?: string;
+  @IsOptional() @IsString() @MaxLength(100) taxRegion?: string;
   @IsOptional() @IsBoolean() licensed?: boolean;
   @IsOptional() @IsArray() @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => StoreHoursDto) hours?: StoreHoursDto[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) devices?: Record<string, unknown>[];

@@ -563,18 +563,24 @@ export class AppController {
       storeName: body.name.trim(),
       storeType: body.type?.trim().toUpperCase() ?? existing.storeType,
       phone: body.phone?.trim() ?? existing.phone,
+      email: body.email === undefined ? existing.email : (body.email.trim().toLowerCase() || null),
       baseUrl: body.url?.trim() ?? existing.baseUrl,
       currency: body.currency ?? existing.currency,
       status: body.status ?? existing.status,
       timezone: body.timezone ?? existing.timezone,
       onboardingSetup: storeSetup(body, existing.onboardingSetup),
       address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
+        addressLine2: body.addressLine2?.trim() ?? existing.address.addressLine2 ?? '',
         state: body.state.trim(), zipCode: body.zip.trim(), country: body.country ?? existing.address.country },
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
     const employees = await this.attachStoreEmployees(body.merchantId, store.id, body.employees);
-    return { success: true, store, ...(employees ? { employees, count: employees.length } : {}) };
+    return {
+      success: true,
+      store: { ...store, email: store.email ?? null },
+      ...(employees ? { employees, count: employees.length } : {}),
+    };
   }
 
   async getAllMerchants() {
