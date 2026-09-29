@@ -105,6 +105,12 @@ export class StoreEntity {
   @Column({ type: 'jsonb', default: {} })
   onboardingSetup!: Record<string, any>;
 
+  @Column({ name: 'Deleted_At', type: 'timestamptz', nullable: true })
+  deletedAt?: Date | null;
+
+  @Column({ name: 'Is_Deleted', type: 'integer', default: 0 })
+  isDeleted?: number;
+
   @CreateDateColumn()
   createdAt!: Date;
 

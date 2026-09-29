@@ -639,7 +639,7 @@ export class MerchantRepository implements OnModuleInit {
         }
         if (!subscription) throw new BadRequestException('Create a merchant subscription before adding stores');
         for (const item of incoming) {
-          const current = await stores.findOneBy({ id: item.storeId });
+          const current = await stores.findOneBy({ id: item.storeId, isDeleted: 0 });
           if (current && current.merchantId !== id) throw new ConflictException(`Store '${item.storeId}' belongs to another merchant`);
           const type = await this.getStoreTypeByIdOrCode(item.type || '');
           if (!type || type.status !== 'ACTIVE') throw new BadRequestException('Select an active store type master code');
@@ -652,7 +652,7 @@ export class MerchantRepository implements OnModuleInit {
           };
           await stores.save(current ? { ...current, ...fields } : this.buildStore(id, fields));
         }
-        const savedStores = await stores.find({ where: { merchantId: id } });
+        const savedStores = await stores.find({ where: { merchantId: id, isDeleted: 0 } });
         const licensed = savedStores.filter(store => store.onboardingSetup?.licensed === true);
         const devices = savedStores.flatMap(store => (store.onboardingSetup?.devices || []) as Array<Record<string, unknown>>);
         if (licensed.length > (subscription.licensedStoreCount ?? subscription.maxStoresAllowed)) throw new BadRequestException('Store license limit exceeded');
@@ -726,7 +726,7 @@ export class MerchantRepository implements OnModuleInit {
     const merchantId = await this.resolveMerchantId(id);
     const merchant = merchantId ? await this.merchantRepo.findOne({ where: { merchantId }, order: { createdAt: 'DESC' } }) : null;
     if (!merchant) return { merchant: null, stores: [], subscription: null };
-    const stores = await this.storeRepo.find({ where: { merchantId: merchant.merchantId } });
+    const stores = await this.storeRepo.find({ where: { merchantId: merchant.merchantId, isDeleted: 0 } });
     const subscription = (await this.listSubscriptions(merchant.merchantId!))[0] || null;
     return { merchant: { ...merchant, id: merchant.merchantId! }, stores, subscription };
   }
@@ -816,7 +816,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
     if (data.id) {
-      const existing = await this.storeRepo.findOne({ where: { id: data.id } });
+      const existing = await this.storeRepo.findOne({ where: { id: data.id, isDeleted: 0 } });
       if (existing) {
         if (existing.merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
         Object.assign(existing, data, { merchantId, updatedAt: new Date() });
@@ -829,7 +829,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
-    const rows = await this.dataSource.query('SELECT legacy_store_id FROM public.stores WHERE legacy_store_id=$1 OR id::text=$1 LIMIT 1', [id]);
+    const rows = await this.dataSource.query('SELECT legacy_store_id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1) AND COALESCE("Is_Deleted", 0)=0 LIMIT 1', [id]);
     return rows[0] ? this.storeRepo.findOneBy({ id: rows[0].legacy_store_id }) : null;
   }
 
@@ -943,7 +943,20 @@ export class MerchantRepository implements OnModuleInit {
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
     const resolved = merchantId ? await this.resolveMerchantId(merchantId) : undefined;
     if (merchantId && !resolved) return [];
-    return this.storeRepo.find({ where: resolved ? { merchantId: resolved } : {}, order: { createdAt: 'DESC' } });
+    return this.storeRepo.find({ where: resolved ? { merchantId: resolved, isDeleted: 0 } : { isDeleted: 0 }, order: { createdAt: 'DESC' } });
+  }
+
+  async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
+    const store = await this.getStoreById(id);
+    if (!store) return null;
+    const deletedAt = new Date();
+    const result = await this.storeRepo.update(
+      { id, isDeleted: 0 },
+      { deletedAt, isDeleted: 1, updatedAt: deletedAt },
+    );
+    if (!result.affected) return null;
+    await this.recordAuditLog('STORE_DELETED', store.merchantId, id, 'merchant', { storeName: store.storeName });
+    return { deletedAt, isDeleted: 1 };
   }
 
   async updateStore(id: string, fields: Partial<StoreEntity>): Promise<StoreEntity | null> {
@@ -1192,7 +1205,7 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
   ): Promise<StoreEntity | null> {
-    const store = await this.storeRepo.findOne({ where: { id: storeId } });
+    const store = await this.storeRepo.findOne({ where: { id: storeId, isDeleted: 0 } });
     if (!store) return null;
     store.websiteConnector = connector;
     store.updatedAt = new Date();
@@ -1270,17 +1283,21 @@ export class MerchantRepository implements OnModuleInit {
         const cached = await this.redisClient.get(`pin:${pin}`);
         if (cached) {
           const store = JSON.parse(cached) as StoreEntity;
-          const { subscription } = await this.getMerchantById(store.merchantId);
-          return {
-            success: true,
-            store,
-            entitlements: subscription?.entitlements || ['POS'],
-          };
+          const activeStore = await this.getStoreById(store.id);
+          if (activeStore) {
+            const { subscription } = await this.getMerchantById(activeStore.merchantId);
+            return {
+              success: true,
+              store: activeStore,
+              entitlements: subscription?.entitlements || ['POS'],
+            };
+          }
+          await this.redisClient.del(`pin:${pin}`);
         }
       } catch { }
     }
 
-    const store = await this.storeRepo.findOne({ where: { activationPin: pin } });
+    const store = await this.storeRepo.findOne({ where: { activationPin: pin, isDeleted: 0 } });
     if (!store) {
       return { success: false, message: 'Invalid 6-digit Activation PIN. Terminal pairing failed.' };
     }

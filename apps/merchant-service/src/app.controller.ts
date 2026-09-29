@@ -1,5 +1,5 @@
 import { storeSetup } from './store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
@@ -580,6 +580,23 @@ export class AppController {
       success: true,
       store: { ...store, email: store.email ?? null },
       ...(employees ? { employees, count: employees.length } : {}),
+    };
+  }
+
+  @Delete(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
+  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+    const existing = await this.merchantRepository.getStoreById(storeId);
+    if (!existing || (merchantId && existing.merchantId !== merchantId)) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    const deleted = await this.merchantRepository.deleteStore(storeId);
+    if (!deleted) throw new NotFoundException(`Store '${storeId}' not found`);
+    return {
+      success: true,
+      message: `Store '${storeId}' deleted successfully`,
+      storeId,
+      deletedAt: deleted.deletedAt,
+      isDeleted: deleted.isDeleted,
     };
   }
 
