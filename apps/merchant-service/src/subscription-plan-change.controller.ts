@@ -111,12 +111,12 @@ export class SubscriptionPlanChangeController {
     return { success: true, merchantId: merchantKey, subscription: created };
   }
 
-  private async columnSet(table: string) {
+  private async columnSet(table: string): Promise<Set<string>> {
     const rows = await this.db.query(
       `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`,
       [table],
     );
-    return new Set(rows.map((row: { column_name: string }) => row.column_name));
+    return new Set<string>(rows.map((row: { column_name: string }) => String(row.column_name)));
   }
 
   private async insert(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: string, columns: Set<string>, values: Record<string, unknown>) {

@@ -989,9 +989,9 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
     for (const plan of plans) {
       const current = Array.isArray(plan.includedFeatures) ? plan.includedFeatures.map((item: unknown) => String(item)) : [];
-      const present = current.some(item => aliases.includes(item.trim().toLowerCase()));
+      const present = current.some((item: string) => aliases.includes(item.trim().toLowerCase()));
       const next = operation === 'delete'
-        ? current.filter(item => !aliases.includes(item.trim().toLowerCase()))
+        ? current.filter((item: string) => !aliases.includes(item.trim().toLowerCase()))
         : present ? current : [...current, String(feature.id)];
       if (next.length !== current.length || next.some((item: string, index: number) => item !== current[index])) {
         await manager.query(

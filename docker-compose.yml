@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # Redis Cache & Pub/Sub
   redis:
@@ -32,7 +34,7 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
-  # PostgreSQL — local and AWS VPS both use this container as the only app database
+  # PostgreSQL Primary Database
   postgres:
     image: postgres:16-alpine
     container_name: pdh-postgres
@@ -45,13 +47,8 @@ services:
       POSTGRES_DB: pinaka_commerce_hub
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U pdh_user -d pinaka_commerce_hub" ]
-      interval: 5s
-      timeout: 5s
-      retries: 12
 
-  # pgAdmin — http://localhost:5050 — preloaded with the same Docker Postgres
+  # pgAdmin Web Database Management Dashboard
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pdh-pgadmin
@@ -60,13 +57,8 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@pdh.com
       PGADMIN_DEFAULT_PASSWORD: pdh_password
-      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
-    volumes:
-      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
-      - ./docker/pgadmin/pgpass:/pgpass:ro
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
 
 volumes:
   redis_data:

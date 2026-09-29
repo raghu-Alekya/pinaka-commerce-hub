@@ -1,5 +1,5 @@
 import { storeSetup } from './store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from './merchant.repository';
@@ -563,18 +563,41 @@ export class AppController {
       storeName: body.name.trim(),
       storeType: body.type?.trim().toUpperCase() ?? existing.storeType,
       phone: body.phone?.trim() ?? existing.phone,
+      email: body.email === undefined ? existing.email : (body.email.trim().toLowerCase() || null),
       baseUrl: body.url?.trim() ?? existing.baseUrl,
       currency: body.currency ?? existing.currency,
       status: body.status ?? existing.status,
       timezone: body.timezone ?? existing.timezone,
       onboardingSetup: storeSetup(body, existing.onboardingSetup),
       address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
+        addressLine2: body.addressLine2?.trim() ?? existing.address.addressLine2 ?? '',
         state: body.state.trim(), zipCode: body.zip.trim(), country: body.country ?? existing.address.country },
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
     const employees = await this.attachStoreEmployees(body.merchantId, store.id, body.employees);
-    return { success: true, store, ...(employees ? { employees, count: employees.length } : {}) };
+    return {
+      success: true,
+      store: { ...store, email: store.email ?? null },
+      ...(employees ? { employees, count: employees.length } : {}),
+    };
+  }
+
+  @Delete(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
+  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+    const existing = await this.merchantRepository.getStoreById(storeId);
+    if (!existing || (merchantId && existing.merchantId !== merchantId)) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    const deleted = await this.merchantRepository.deleteStore(storeId);
+    if (!deleted) throw new NotFoundException(`Store '${storeId}' not found`);
+    return {
+      success: true,
+      message: `Store '${storeId}' deleted successfully`,
+      storeId,
+      deletedAt: deleted.deletedAt,
+      isDeleted: deleted.isDeleted,
+    };
   }
 
   async getAllMerchants() {
