@@ -911,6 +911,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         ...(config.name === 'EmployeeStores' && loginPinHash ? [loginPinHash] : []),
         ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
+      await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'create', { ...fields, ...item });
       return { success: true, item };
     }
     const where = `${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`;
@@ -919,6 +920,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (operation === 'get') return { success: true, item: existing };
     if (operation === 'delete') {
       await manager.query(`DELETE FROM public.${config.table} WHERE ${where}`, [parent, child]);
+      await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'delete', existing);
       return { success: true, message: 'Relationship removed' };
     }
     this.dates({ ...existing, ...fields });
@@ -930,7 +932,101 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.timestamps) assignments.push(`${quoteIdent(config.updatedColumn || 'updatedAt')} = clock_timestamp()`);
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
     const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value), ...(loginPinHash ? [loginPinHash] : [])]);
+    await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'update', { ...existing, ...fields, ...rows[0] });
     return { success: true, item: rows[0] };
+  }
+
+  /**
+   * Plans for a store type keep their own feature list. A store-type feature
+   * assignment is the source: create adds it, update copies enabled/config,
+   * and delete removes it from those plans.
+   */
+  private async syncStoreFeatureToPlans(
+    manager: EntityManager,
+    config: Relationship,
+    parent: string,
+    child: string,
+    operation: 'create' | 'update' | 'delete',
+    state: Record<string, unknown>,
+  ) {
+    const target = config.name === 'StoreTypeFeatures'
+      ? { storeTypeId: parent, featureId: child }
+      : config.name === 'FeatureStoreTypes'
+        ? { storeTypeId: child, featureId: parent }
+        : null;
+    if (!target) return;
+
+    const [storeType] = await manager.query(
+      `SELECT id::text AS id, name,
+              COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', '') AS code
+       FROM public.store_types s WHERE id = $1::uuid`,
+      [target.storeTypeId],
+    );
+    const [feature] = await manager.query(
+      `SELECT id::text AS id, name,
+              COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', '') AS key
+       FROM public.features f WHERE id = $1::uuid`,
+      [target.featureId],
+    );
+    if (!storeType || !feature) return;
+
+    const match = [storeType.id, storeType.code, storeType.name]
+      .map((value: unknown) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    const plans = await manager.query(
+      `SELECT id, included_features AS "includedFeatures"
+       FROM public.plans
+       WHERE lower(COALESCE(store_type, '')) = ANY($1::text[])`,
+      [match],
+    );
+    const aliases = [feature.id, feature.name, feature.key]
+      .map((value: unknown) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    const enabled = operation !== 'delete' && state.defaultEnabled !== false;
+    const configuration = state.configurationJson && typeof state.configurationJson === 'object'
+      ? JSON.stringify(state.configurationJson)
+      : null;
+
+    for (const plan of plans) {
+      const current = Array.isArray(plan.includedFeatures) ? plan.includedFeatures.map((item: unknown) => String(item)) : [];
+      const present = current.some(item => aliases.includes(item.trim().toLowerCase()));
+      const next = operation === 'delete'
+        ? current.filter(item => !aliases.includes(item.trim().toLowerCase()))
+        : present ? current : [...current, String(feature.id)];
+      if (next.length !== current.length || next.some((item: string, index: number) => item !== current[index])) {
+        await manager.query(
+          `UPDATE public.plans SET included_features = $2::text[], "updatedAt" = clock_timestamp() WHERE id = $1`,
+          [plan.id, next],
+        );
+      }
+      if (operation === 'delete') {
+        await manager.query(
+          `DELETE FROM public.plan_entitlements WHERE plan_id = $1 AND feature_id = $2`,
+          [plan.id, feature.id],
+        );
+        continue;
+      }
+      const existing = await manager.query(
+        `SELECT id FROM public.plan_entitlements WHERE plan_id = $1 AND feature_id = $2 LIMIT 1`,
+        [plan.id, feature.id],
+      );
+      if (existing.length) {
+        await manager.query(
+          `UPDATE public.plan_entitlements
+           SET enabled = $3,
+               configuration_json = COALESCE($4::jsonb, configuration_json),
+               updated_at = now()
+           WHERE plan_id = $1 AND feature_id = $2`,
+          [plan.id, feature.id, enabled, configuration],
+        );
+      } else {
+        await manager.query(
+          `INSERT INTO public.plan_entitlements (plan_id, feature_id, enabled, configuration_json)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [plan.id, feature.id, enabled, configuration],
+        );
+      }
+    }
   }
 
   private async resolveMerchantCode(identifier: string): Promise<string> {
