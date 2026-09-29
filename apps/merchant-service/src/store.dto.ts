@@ -1,6 +1,6 @@
 import { StoreSetupDto } from './store-setup.dto';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMinSize, ArrayMaxSize, IsArray, ValidateNested, IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength, Matches } from 'class-validator';
+import { ArrayMinSize, ArrayMaxSize, IsArray, ValidateNested, IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength, Matches, IsEmail, ValidateIf } from 'class-validator';
 import { StoreStatus } from './entities/store.entity';
 
 export class UpdateStoreDto extends StoreSetupDto {
@@ -9,12 +9,14 @@ export class UpdateStoreDto extends StoreSetupDto {
   @IsString() @Matches(/\S/) @MaxLength(255) name!: string;
   @IsOptional() @IsString() @MaxLength(50) type?: string;
   @IsOptional() @IsString() @MaxLength(50) phone?: string;
+  @ValidateIf((_object, value) => value !== undefined && value !== null && value !== '') @IsEmail() @MaxLength(255) email?: string;
   @IsOptional() @IsString() @MaxLength(2048) url?: string;
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? (value.split(' - ')[0].trim().toUpperCase() || undefined) : value)
   @Matches(/^[A-Z]{3}$/) currency?: string;
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.toUpperCase() : value)
   @IsEnum(StoreStatus) status?: StoreStatus;
   @IsString() @Matches(/\S/) @MaxLength(1000) address!: string;
+  @IsOptional() @IsString() @MaxLength(1000) addressLine2?: string;
   @IsOptional() @IsString() @MaxLength(100) timezone?: string;
   @IsString() @Matches(/\S/) @MaxLength(255) city!: string;
   @IsString() @Matches(/\S/) @MaxLength(255) state!: string;
