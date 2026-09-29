@@ -726,7 +726,7 @@ export class MerchantRepository implements OnModuleInit {
     const merchantId = await this.resolveMerchantId(id);
     const merchant = merchantId ? await this.merchantRepo.findOne({ where: { merchantId }, order: { createdAt: 'DESC' } }) : null;
     if (!merchant) return { merchant: null, stores: [], subscription: null };
-    const stores = await this.storeRepo.find({ where: { merchantId: merchant.merchantId, isDeleted: 0 } });
+    const stores = await this.listStores(merchant.merchantId);
     const subscription = (await this.listSubscriptions(merchant.merchantId!))[0] || null;
     return { merchant: { ...merchant, id: merchant.merchantId! }, stores, subscription };
   }
@@ -739,6 +739,23 @@ export class MerchantRepository implements OnModuleInit {
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
     const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [idOrUuid]);
     return rows[0]?.id || null;
+  }
+
+  private async merchantIdentity(idOrUuid: string): Promise<{ merchantId: string; merchantUuid: string; aliases: string[] } | null> {
+    const rows = await this.dataSource.query(
+      'SELECT "merchantId", "merchantCode", id::text AS uuid FROM public.merchants WHERE "merchantId"=$1 OR "merchantCode"=$1 OR id::text=$1 LIMIT 1',
+      [idOrUuid],
+    );
+    const row = rows[0];
+    if (!row?.merchantId || !row?.uuid) return null;
+    const aliases = [...new Set([row.merchantId, row.merchantCode, row.uuid].filter((value: string) => Boolean(value)))];
+    return { merchantId: row.merchantId, merchantUuid: row.uuid, aliases };
+  }
+
+  async storeMatchesMerchant(store: { merchantId?: string; merchantUuid?: string }, idOrUuid: string): Promise<boolean> {
+    const identity = await this.merchantIdentity(idOrUuid);
+    if (!identity) return false;
+    return identity.aliases.includes(String(store.merchantId || '')) || String(store.merchantUuid || '') === identity.merchantUuid;
   }
 
   private buildStore(merchantId: string, data: Partial<StoreEntity>): StoreEntity {
@@ -770,10 +787,10 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
-    const merchantUuid = data.merchantUuid || await this.resolveMerchantUuid(merchantId);
-    if (!merchantUuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    const identity = await this.merchantIdentity(merchantId);
+    if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
     const generatedId = data.id || await this.allocateId('store');
-    const store = this.buildStore(merchantId, { ...data, merchantUuid, id: generatedId, storeCode: data.storeCode || generatedId });
+    const store = this.buildStore(identity.merchantId, { ...data, merchantUuid: identity.merchantUuid, id: generatedId, storeCode: data.storeCode || generatedId });
     const { activationPin } = store;
     const entity = this.storeRepo.create(store);
     try {
@@ -785,14 +802,14 @@ export class MerchantRepository implements OnModuleInit {
       throw error;
     }
     await this.cacheStorePin(activationPin, entity);
-    await this.recordAuditLog('STORE_CREATED', merchantId, entity.id, 'merchant', { storeName: entity.storeName, pin: activationPin });
+    await this.recordAuditLog('STORE_CREATED', identity.merchantId, entity.id, 'merchant', { storeName: entity.storeName, pin: activationPin });
     return entity;
   }
 
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
-    const merchantUuid = await this.resolveMerchantUuid(merchantId);
-    if (!merchantUuid) throw new NotFoundException(`Merchant '${merchantId}' not found`);
-    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(merchantId, { ...item, merchantUuid, id, storeCode: item.storeCode || id }); }));
+    const identity = await this.merchantIdentity(merchantId);
+    if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(identity.merchantId, { ...item, merchantUuid: identity.merchantUuid, id, storeCode: item.storeCode || id }); }));
     if (new Set(stores.map(s => s.id)).size !== stores.length ||
       new Set(stores.map(s => s.storeCode)).size !== stores.length) {
       throw new ConflictException('Each store must have a unique Store ID.');
@@ -809,23 +826,25 @@ export class MerchantRepository implements OnModuleInit {
     }
     for (const store of stores) {
       await this.cacheStorePin(store.activationPin, store);
-      await this.recordAuditLog('STORE_CREATED', merchantId, store.id, 'merchant', { storeName: store.storeName });
+      await this.recordAuditLog('STORE_CREATED', identity.merchantId, store.id, 'merchant', { storeName: store.storeName });
     }
     return stores;
   }
 
   async createOrUpdateStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+    const identity = await this.merchantIdentity(merchantId);
+    if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
     if (data.id) {
       const existing = await this.storeRepo.findOne({ where: { id: data.id, isDeleted: 0 } });
       if (existing) {
-        if (existing.merchantId !== merchantId) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
-        Object.assign(existing, data, { merchantId, updatedAt: new Date() });
+        if (!(await this.storeMatchesMerchant(existing, identity.merchantId))) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
+        Object.assign(existing, data, { merchantId: identity.merchantId, merchantUuid: identity.merchantUuid, updatedAt: new Date() });
         const saved = await this.storeRepo.save(existing);
-        await this.recordAuditLog('STORE_UPDATED', merchantId, saved.id, 'merchant', { storeName: saved.storeName });
+        await this.recordAuditLog('STORE_UPDATED', identity.merchantId, saved.id, 'merchant', { storeName: saved.storeName });
         return saved;
       }
     }
-    return this.createStore(merchantId, data);
+    return this.createStore(identity.merchantId, data);
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
@@ -941,9 +960,19 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
-    const resolved = merchantId ? await this.resolveMerchantId(merchantId) : undefined;
-    if (merchantId && !resolved) return [];
-    return this.storeRepo.find({ where: resolved ? { merchantId: resolved, isDeleted: 0 } : { isDeleted: 0 }, order: { createdAt: 'DESC' } });
+    if (!merchantId) {
+      return this.storeRepo.find({ where: { isDeleted: 0 }, order: { createdAt: 'DESC' } });
+    }
+    const identity = await this.merchantIdentity(merchantId);
+    if (!identity) return [];
+    return this.storeRepo.createQueryBuilder('store')
+      .where('store.isDeleted = :alive', { alive: 0 })
+      .andWhere('(store.merchantId IN (:...aliases) OR store.merchantUuid = :merchantUuid)', {
+        aliases: identity.aliases,
+        merchantUuid: identity.merchantUuid,
+      })
+      .orderBy('store.createdAt', 'DESC')
+      .getMany();
   }
 
   async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
