@@ -975,6 +975,8 @@ export class MerchantRepository implements OnModuleInit {
       .getMany();
   }
 
+  
+
   async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
     const store = await this.getStoreById(id);
     if (!store) return null;
