@@ -589,14 +589,13 @@ export class AppController {
     if (!existing || (merchantId && existing.merchantId !== merchantId)) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
-    const deleted = await this.merchantRepository.deleteStore(storeId);
-    if (!deleted) throw new NotFoundException(`Store '${storeId}' not found`);
+    const inactivated = await this.merchantRepository.inactivateStore(storeId);
+    if (!inactivated) throw new NotFoundException(`Store '${storeId}' not found`);
     return {
       success: true,
-      message: `Store '${storeId}' deleted successfully`,
+      message: `Store '${storeId}' inactivated successfully`,
       storeId,
-      deletedAt: deleted.deletedAt,
-      isDeleted: deleted.isDeleted,
+      status: inactivated.status,
     };
   }
 

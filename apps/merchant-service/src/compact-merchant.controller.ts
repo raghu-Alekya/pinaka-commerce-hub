@@ -338,7 +338,6 @@ export class CompactMerchantController {
          ) s ON true
          LEFT JOIN public.plans mp
            ON mp.id::text = COALESCE(to_jsonb(m)->>'planId', to_jsonb(m)->>'plan_id')
-         WHERE COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
          ORDER BY COALESCE(
            (to_jsonb(m)->>'createdDate')::timestamptz,
            (to_jsonb(m)->>'created_at')::timestamptz,
@@ -712,18 +711,15 @@ export class CompactMerchantController {
   @Delete(':id')
   async remove(@Param('id') id: string) {
     try {
-      await this.db.query(
+      const rows = await this.db.query(
         `UPDATE public.merchants m SET status='INACTIVE'
          WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
-            OR m.id::text = $1`,
+            OR m.id::text = $1
+         RETURNING id`,
         [id],
       );
-      await this.db.query(
-        `UPDATE public.subscriptions s SET status='INACTIVE'
-         WHERE COALESCE(to_jsonb(s)->>'merchantId', to_jsonb(s)->>'merchant_id') = $1`,
-        [id],
-      );
-      return { success: true, merchantId: id };
+      if (!rows.length) throw new NotFoundException(`Merchant '${id}' not found`);
+      return { success: true, merchantId: id, status: 'INACTIVE' };
     } catch (error: any) {
       if ((error.driverError?.code || error.code) === '23503') throw new ConflictException('Merchant is referenced by other records');
       throw error;
