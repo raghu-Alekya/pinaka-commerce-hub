@@ -42,7 +42,7 @@ services:
     environment:
       POSTGRES_USER: pdh_user
       POSTGRES_PASSWORD: pdh_password
-      POSTGRES_DB: pinaka_commerce_hub
+      POSTGRES_DB: pinaka_commerce_hub_new
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

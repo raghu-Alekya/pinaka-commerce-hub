@@ -1,6 +1,6 @@
 import { DataSource, type DataSourceOptions } from 'typeorm';
 
-export const DEFAULT_POSTGRES_DB = 'pinaka_commerce_hub';
+export const DEFAULT_POSTGRES_DB = 'pinaka_commerce_hub_new';
 
 export function postgresConnectionOptions(
   entities: DataSourceOptions['entities'],
