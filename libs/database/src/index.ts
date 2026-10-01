@@ -96,6 +96,45 @@ async function tableExists(dataSource: DataSource, table: string): Promise<boole
   return rows.length > 0;
 }
 
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Schema scripts created unique indexes that TypeORM does not own.
+ * Dependent foreign keys make a plain DROP INDEX fail, so drop them
+ * with CASCADE before synchronize recreates the indexes declared on entities.
+ */
+async function dropIndexesOutsideEntities(dataSource: DataSource): Promise<void> {
+  const tables = [...new Set(dataSource.entityMetadatas.map(metadata => metadata.tableName))];
+  if (!tables.length) return;
+  const rows: Array<{ table_name: string; index_name: string; constraint_name: string | null }> = await dataSource.query(
+    `SELECT DISTINCT ON (c.relname)
+            t.relname AS table_name,
+            c.relname AS index_name,
+            u.conname AS constraint_name
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid
+       JOIN pg_class t ON t.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+       LEFT JOIN pg_constraint u ON u.conindid = i.indexrelid AND u.contype IN ('u', 'x')
+      WHERE n.nspname = 'public'
+        AND NOT i.indisprimary
+        AND t.relname = ANY($1)
+      ORDER BY c.relname, u.conname NULLS LAST`,
+    [tables],
+  );
+  for (const row of rows) {
+    if (row.constraint_name) {
+      await dataSource.query(
+        `ALTER TABLE public.${quoteIdent(row.table_name)} DROP CONSTRAINT IF EXISTS ${quoteIdent(row.constraint_name)} CASCADE`,
+      );
+    } else {
+      await dataSource.query(`DROP INDEX IF EXISTS public.${quoteIdent(row.index_name)} CASCADE`);
+    }
+  }
+}
+
 /** Rename leftover snake_case columns to camelCase before TypeORM synchronize. */
 async function alignLegacyCamelCaseColumns(dataSource: DataSource): Promise<void> {
   for (const { table, from, to } of LEGACY_COLUMN_RENAMES) {
@@ -143,6 +182,351 @@ async function addDecimalColumnIfMissing(
   await dataSource.query(
     `UPDATE public."${table}" SET "${column}" = 0 WHERE "${column}" IS NULL`,
   );
+}
+
+function columnSqlType(column: { type?: unknown; length?: string | number }): string {
+  const type = String(column.type || 'varchar');
+  if (type === 'uuid') return 'uuid';
+  if (type === 'boolean') return 'boolean';
+  if (type === 'int' || type === 'integer' || type === 'smallint') return 'integer';
+  if (type === 'bigint') return 'bigint';
+  if (type === 'text') return 'text';
+  if (type === 'jsonb' || type === 'json') return 'jsonb';
+  if (type === 'date') return 'date';
+  if (type === 'timestamptz' || type === 'timestamp' || type === 'datetime') return 'timestamptz';
+  if (type === 'numeric' || type === 'decimal') return 'numeric';
+  if (type === 'enum') return 'varchar(100)';
+  const length = Number(column.length) || 255;
+  return `varchar(${length})`;
+}
+
+const UUID_TEXT = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+
+/** Old camelCase columns that do not match the entity property name. */
+const EXTRA_COLUMN_SOURCES: Record<string, string[]> = {
+  feature_code: ['featureKey', 'feature_key'],
+  feature_type: ['featureType'],
+  role_code: ['roleCode'],
+  store_type_code: ['storeTypeCode'],
+  plan_code: ['planCode'],
+  store_code: ['storeCode', 'legacy_store_id'],
+  store_name: ['storeName'],
+  activation_pin: ['activationPin'],
+  merchant_code: ['merchantCode'],
+  business_display_name: ['businessDisplayName', 'businessName', 'merchantName'],
+  subscription_code: ['subscriptionCode', 'subscriptionId'],
+  device_code: ['deviceCode'],
+  device_name: ['deviceName'],
+  serial_number: ['serialNumber'],
+  merchant_name: ['merchantName'],
+  device_type: ['deviceType'],
+  vendor_code: ['vendorCode'],
+  vendor_name: ['vendorName'],
+  vendor_type: ['vendorType'],
+  tendor_code: ['tendorCode'],
+  tendor_name: ['tendorName'],
+  permission_code: ['permissionKey', 'permissionCode'],
+  permission_key: ['permissionKey'],
+  contact_person: ['contactPerson'],
+  product_category: ['productCategory'],
+  zip_code: ['zipCode'],
+  operational_status: ['operationalStatus'],
+  billing_cycle: ['billingCycle'],
+  billing_model: ['billingModel'],
+  base_price: ['basePrice'],
+  scope_type: ['scopeType'],
+};
+
+async function liveColumnType(dataSource: DataSource, table: string, column: string): Promise<string | null> {
+  const rows = await dataSource.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return rows[0]?.data_type ?? null;
+}
+
+async function postgresEnumExists(dataSource: DataSource, enumName: string): Promise<boolean> {
+  const rows = await dataSource.query(
+    `SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e' AND t.typname = $1`,
+    [enumName],
+  );
+  return rows.length > 0;
+}
+
+function enumLabels(column: { enum?: unknown }): string[] {
+  const value = column.enum;
+  if (!value) return [];
+  if (Array.isArray(value)) return [...new Set(value.map(String))];
+  return [...new Set(Object.values(value).filter((item): item is string => typeof item === 'string'))];
+}
+
+/** Copy camelCase values into new required columns before synchronize sets them NOT NULL. */
+async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promise<void> {
+  for (const entity of dataSource.entityMetadatas) {
+    const table = entity.tableName;
+    if (!(await tableExists(dataSource, table))) continue;
+    for (const column of entity.columns) {
+      if (column.isNullable || column.isGenerated || column.isCreateDate || column.isUpdateDate) continue;
+      if (column.default !== undefined && column.default !== null) continue;
+      const target = column.databaseName;
+      const source = column.propertyName;
+      if (!target || source === target) continue;
+      const sources = [source, ...(EXTRA_COLUMN_SOURCES[target] ?? [])].filter(
+        (name, index, all) => name !== target && all.indexOf(name) === index,
+      );
+      const presentSources: string[] = [];
+      for (const name of sources) {
+        if (await columnExists(dataSource, table, name)) presentSources.push(name);
+      }
+      const sqlType = columnSqlType(column);
+      const rawEnumName = column.enumName || '';
+      if (!presentSources.length && (await columnExists(dataSource, table, target))) {
+        // Still resolve uuid foreign keys that were stored as business codes.
+      } else if (!presentSources.length && sqlType !== 'uuid' && !rawEnumName) {
+        continue;
+      }
+      if (!(await columnExists(dataSource, table, target))) {
+        await dataSource.query(
+          `ALTER TABLE public.${quoteIdent(table)} ADD COLUMN ${quoteIdent(target)} ${sqlType}`,
+        );
+      }
+      const quotedTable = `public.${quoteIdent(table)}`;
+      const quotedTarget = quoteIdent(target);
+      const enumReady = rawEnumName ? await postgresEnumExists(dataSource, rawEnumName) : false;
+      const liveType = await liveColumnType(dataSource, table, target);
+      const quotedEnum = enumReady ? quoteIdent(rawEnumName) : '';
+      const assignAsEnum = Boolean(quotedEnum && liveType === 'USER-DEFINED');
+      for (const present of presentSources) {
+        const quotedSource = quoteIdent(present);
+        if (sqlType === 'uuid') {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource}::uuid WHERE ${quotedTarget} IS NULL AND ${quotedSource}::text ~* '${UUID_TEXT}'`,
+          );
+        } else if (assignAsEnum) {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource}::text::${quotedEnum} WHERE ${quotedTarget} IS NULL AND ${quotedSource}::text IN (SELECT e::text FROM unnest(enum_range(NULL::${quotedEnum})) AS e)`,
+          );
+        } else {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource} WHERE ${quotedTarget} IS NULL AND ${quotedSource} IS NOT NULL`,
+          );
+        }
+      }
+      if (sqlType === 'uuid' && target === 'merchant_id' && (await tableExists(dataSource, 'merchants'))) {
+        const liveType = await liveColumnType(dataSource, table, target);
+        const merchantKey = (await columnExists(dataSource, 'merchants', 'merchantId'))
+          ? 'm."merchantId"'
+          : (await columnExists(dataSource, 'merchants', 'merchant_id'))
+            ? 'm.merchant_id'
+            : '';
+        const merchantCode = (await columnExists(dataSource, 'merchants', 'merchantCode'))
+          ? 'm."merchantCode"'
+          : (await columnExists(dataSource, 'merchants', 'merchant_code'))
+            ? 'm.merchant_code'
+            : '';
+        const matches = [merchantKey, merchantCode, 'm.id::text'].filter(Boolean);
+        const codeSources = presentSources.map(name => `row.${quoteIdent(name)}::text`);
+        if (matches.length && codeSources.length && liveType !== 'uuid') {
+          await dataSource.query(
+            `UPDATE ${quotedTable} AS row SET ${quotedTarget} = m.id::text FROM public.merchants m WHERE row.${quotedTarget}::text !~* '${UUID_TEXT}' AND row.${quotedTarget}::text IN (${matches.join(', ')})`,
+          );
+          for (const codeSource of codeSources) {
+            await dataSource.query(
+              `UPDATE ${quotedTable} AS row SET ${quotedTarget} = m.id::text FROM public.merchants m WHERE (row.${quotedTarget} IS NULL OR row.${quotedTarget}::text !~* '${UUID_TEXT}') AND ${codeSource} IN (${matches.join(', ')})`,
+            );
+          }
+        } else if (matches.length && codeSources.length) {
+          for (const codeSource of codeSources) {
+            await dataSource.query(
+              `UPDATE ${quotedTable} AS row SET ${quotedTarget} = m.id FROM public.merchants m WHERE row.${quotedTarget} IS NULL AND ${codeSource} IN (${matches.join(', ')})`,
+            );
+          }
+        }
+        if (liveType && liveType !== 'uuid') {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT id::text FROM public.merchants ORDER BY id LIMIT 1) WHERE ${quotedTarget} IS NULL OR ${quotedTarget}::text !~* '${UUID_TEXT}'`,
+          );
+          await dataSource.query(
+            `ALTER TABLE ${quotedTable} ALTER COLUMN ${quotedTarget} TYPE uuid USING ${quotedTarget}::uuid`,
+          );
+        } else {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT id FROM public.merchants ORDER BY id LIMIT 1) WHERE ${quotedTarget} IS NULL`,
+          );
+        }
+      }
+      if (sqlType === 'uuid' && target === 'store_type_id' && (await tableExists(dataSource, 'store_types'))) {
+        const storeTypeCol = (await columnExists(dataSource, table, 'storeType')) ? '"storeType"' : '';
+        if (storeTypeCol) {
+          await dataSource.query(
+            `UPDATE ${quotedTable} AS row SET store_type_id = st.id FROM public.store_types st WHERE row.store_type_id IS NULL AND (row.${storeTypeCol} = st."storeTypeCode" OR row.${storeTypeCol} = st.name OR row.${storeTypeCol} = st.id::text)`,
+          );
+        }
+        await dataSource.query(
+          `UPDATE ${quotedTable} SET store_type_id = (SELECT id FROM public.store_types ORDER BY id LIMIT 1) WHERE store_type_id IS NULL`,
+        );
+      }
+      const uuidFallbackTable: Record<string, string> = {
+        feature_id: 'features',
+        store_id: 'stores',
+        role_template_id: 'role_templates',
+        role_id: 'roles',
+        vendor_id: 'vendors',
+        tendor_id: 'tendors',
+        permission_id: 'feature_permissions',
+      };
+      const fallbackTable = uuidFallbackTable[target];
+      if (
+        sqlType === 'uuid' &&
+        fallbackTable &&
+        (await tableExists(dataSource, fallbackTable)) &&
+        (await liveColumnType(dataSource, fallbackTable, 'id')) === 'uuid'
+      ) {
+        await dataSource.query(
+          `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT id FROM public.${quoteIdent(fallbackTable)} ORDER BY id LIMIT 1) WHERE ${quotedTarget} IS NULL`,
+        );
+      }
+      if (rawEnumName && assignAsEnum) {
+        await dataSource.query(
+          `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT e FROM unnest(enum_range(NULL::${quotedEnum})) AS e LIMIT 1) WHERE ${quotedTarget} IS NULL`,
+        );
+      } else if (rawEnumName) {
+        const labels = enumLabels(column);
+        if (target === 'vendor_type') {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = CASE upper(trim(${quotedTarget}::text))
+              WHEN 'SUPPLIER' THEN 'SUPPLIER'
+              WHEN 'SUPPLER' THEN 'SUPPLIER'
+              WHEN 'ORGANIZER' THEN 'ORGANIZER'
+              WHEN 'ORGANISER' THEN 'ORGANIZER'
+              ELSE ${quotedTarget}
+            END WHERE ${quotedTarget} IS NOT NULL`,
+          );
+        }
+        if (labels.length) {
+          await dataSource.query(
+            `UPDATE ${quotedTable} AS row SET ${quotedTarget} = label FROM unnest($1::text[]) AS label WHERE upper(trim(row.${quotedTarget}::text)) = upper(label)`,
+            [labels],
+          );
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = $1 WHERE ${quotedTarget} IS NULL OR ${quotedTarget}::text <> ALL($2::text[])`,
+            [labels[0], labels],
+          );
+        }
+      } else if (sqlType !== 'uuid') {
+        const hasId = await columnExists(dataSource, table, 'id');
+        const token = hasId ? `COALESCE(id::text, md5(ctid::text))` : `md5(ctid::text)`;
+        const max = Number(column.length);
+        const value = Number.isFinite(max) && max > 0 ? `LEFT('L' || ${token}, ${max})` : `'L' || ${token}`;
+        await dataSource.query(
+          `UPDATE ${quotedTable} SET ${quotedTarget} = ${value} WHERE ${quotedTarget} IS NULL`,
+        );
+      }
+    }
+    if (table === 'merchants' && (await columnExists(dataSource, table, 'merchant_code')) && (await columnExists(dataSource, table, 'merchant_id'))) {
+      await dataSource.query(
+        `UPDATE public.merchants SET merchant_id = merchant_id || '-ID' WHERE merchant_code IS NOT NULL AND merchant_id = merchant_code`,
+      );
+    }
+  }
+}
+
+async function dropEntityForeignKeys(dataSource: DataSource): Promise<void> {
+  const tables = new Set(dataSource.entityMetadatas.map(entity => entity.tableName));
+  const rows: Array<{ table: string; conname: string }> = await dataSource.query(
+    `SELECT c.relname AS table, con.conname
+     FROM pg_constraint con
+     JOIN pg_class c ON c.oid = con.conrelid
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE con.contype = 'f' AND n.nspname = 'public'`,
+  );
+  for (const row of rows) {
+    if (!tables.has(row.table)) continue;
+    await dataSource.query(
+      `ALTER TABLE public.${quoteIdent(row.table)} DROP CONSTRAINT IF EXISTS ${quoteIdent(row.conname)}`,
+    );
+  }
+}
+
+/** Null nullable foreign keys that point nowhere, and point required ones at a real parent row. */
+async function clearOrphanForeignKeys(dataSource: DataSource): Promise<void> {
+  for (const entity of dataSource.entityMetadatas) {
+    const table = entity.tableName;
+    if (!(await tableExists(dataSource, table))) continue;
+    for (const foreignKey of entity.foreignKeys) {
+      const column = foreignKey.columnNames[0];
+      const referenced = foreignKey.referencedColumnNames[0];
+      const refTable = foreignKey.referencedEntityMetadata?.tableName;
+      if (!column || !referenced || !refTable) continue;
+      if (!(await columnExists(dataSource, table, column))) continue;
+      const quotedTable = `public.${quoteIdent(table)}`;
+      const quotedColumn = quoteIdent(column);
+      const nullable = entity.columns.find(item => item.databaseName === column)?.isNullable === true;
+      const parentReady = (await tableExists(dataSource, refTable)) && (await columnExists(dataSource, refTable, referenced));
+      if (!parentReady) {
+        if (nullable) {
+          await dataSource.query(`UPDATE ${quotedTable} SET ${quotedColumn} = NULL WHERE ${quotedColumn} IS NOT NULL`);
+        } else {
+          await dataSource.query(`DELETE FROM ${quotedTable}`);
+        }
+        continue;
+      }
+      const quotedRef = `public.${quoteIdent(refTable)}`;
+      const quotedReferenced = quoteIdent(referenced);
+      const parentCount = await dataSource.query(`SELECT COUNT(*)::int AS n FROM ${quotedRef}`);
+      if (Number(parentCount[0]?.n ?? 0) === 0) {
+        if (nullable) {
+          await dataSource.query(`UPDATE ${quotedTable} SET ${quotedColumn} = NULL WHERE ${quotedColumn} IS NOT NULL`);
+        } else {
+          await dataSource.query(`DELETE FROM ${quotedTable}`);
+        }
+        continue;
+      }
+      const missing = `row.${quotedColumn} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${quotedRef} ref WHERE ref.${quotedReferenced}::text = row.${quotedColumn}::text)`;
+      if (nullable) {
+        await dataSource.query(`UPDATE ${quotedTable} AS row SET ${quotedColumn} = NULL WHERE ${missing}`);
+      } else {
+        await dataSource.query(
+          `UPDATE ${quotedTable} AS row SET ${quotedColumn} = (SELECT ${quotedReferenced} FROM ${quotedRef} ORDER BY ${quotedReferenced} LIMIT 1) WHERE ${missing}`,
+        );
+      }
+    }
+  }
+}
+
+/** Keep one row per unique value and suffix the rest so synchronize can add the index. */
+async function dedupeUniqueColumns(dataSource: DataSource): Promise<void> {
+  for (const entity of dataSource.entityMetadatas) {
+    const table = entity.tableName;
+    if (!(await tableExists(dataSource, table))) continue;
+    const uniqueNames = new Set<string>();
+    for (const index of entity.indices) {
+      if (index.isUnique && index.columns.length === 1) uniqueNames.add(index.columns[0].databaseName);
+    }
+    for (const unique of entity.uniques) {
+      if (unique.columns?.length === 1) uniqueNames.add(unique.columns[0].databaseName);
+    }
+    for (const column of entity.columns) {
+      if (!uniqueNames.has(column.databaseName)) continue;
+      const columnType = String(column.type || '');
+      if (columnType === 'uuid' || columnType === 'int' || columnType === 'integer' || columnType === 'bigint') continue;
+      const target = column.databaseName;
+      if (!target || !(await columnExists(dataSource, table, target))) continue;
+      const quotedTable = `public.${quoteIdent(table)}`;
+      const quotedTarget = quoteIdent(target);
+      const max = Number(column.length);
+      const suffixed = Number.isFinite(max) && max > 1
+        ? `LEFT(row.${quotedTarget}::text, ${max} - char_length('-' || d.rn::text)) || '-' || d.rn::text`
+        : `row.${quotedTarget}::text || '-' || d.rn::text`;
+      await dataSource.query(
+        `UPDATE ${quotedTable} AS row SET ${quotedTarget} = ${suffixed} FROM (
+          SELECT ctid, ROW_NUMBER() OVER (PARTITION BY ${quotedTarget} ORDER BY ctid) AS rn
+          FROM ${quotedTable}
+          WHERE ${quotedTarget} IS NOT NULL
+        ) d WHERE row.ctid = d.ctid AND d.rn > 1`,
+      );
+    }
+  }
 }
 
 async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<void> {
@@ -203,6 +587,269 @@ async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<vo
   }
 }
 
+/**
+ * Existing queries still name the pre-schema camelCase columns. Synchronize
+ * keeps the entity columns, then these mirrors are recreated so those queries
+ * can read and write the same rows.
+ */
+async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
+  const install = async (table: string, requiredColumn: string, sql: string) => {
+    if (!(await tableExists(dataSource, table))) return;
+    if (!(await columnExists(dataSource, table, requiredColumn))) return;
+    await dataSource.query(sql);
+  };
+
+  await install('merchants', 'merchant_code', `
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "businessName" varchar(255);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "businessDisplayName" varchar(255);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "addressLine1" text;
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "addressLine2" text;
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "postalCode" varchar(30);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "firstName" varchar(100);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "lastName" varchar(100);
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "createdAt" timestamptz;
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;
+    ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "createdDate" timestamptz;
+    UPDATE public.merchants SET
+      "merchantId" = merchant_id,
+      "merchantCode" = merchant_code,
+      "businessName" = business_display_name,
+      "businessDisplayName" = business_display_name,
+      "addressLine1" = address_line1,
+      "addressLine2" = address_line2,
+      "postalCode" = postal_code,
+      "firstName" = first_name,
+      "lastName" = last_name,
+      "createdAt" = created_at,
+      "updatedAt" = updated_at,
+      "createdDate" = created_at;
+    CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.merchant_code := COALESCE(NULLIF(NEW.merchant_code, ''), NULLIF(NEW."merchantCode", ''), 'MCH-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8));
+      NEW."merchantCode" := COALESCE(NULLIF(NEW."merchantCode", ''), NEW.merchant_code);
+      NEW.merchant_id := COALESCE(NULLIF(NEW.merchant_id, ''), NULLIF(NEW."merchantId", ''));
+      IF NEW.merchant_id IS NULL OR NEW.merchant_id = NEW.merchant_code THEN
+        NEW.merchant_id := 'MID-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8);
+      END IF;
+      NEW."merchantId" := NEW.merchant_id;
+      NEW.business_display_name := COALESCE(NEW.business_display_name, NEW."businessDisplayName", NEW."businessName");
+      NEW."businessName" := COALESCE(NEW."businessName", NEW.business_display_name);
+      NEW."businessDisplayName" := COALESCE(NEW."businessDisplayName", NEW.business_display_name);
+      NEW.address_line1 := COALESCE(NEW.address_line1, NEW."addressLine1");
+      NEW."addressLine1" := COALESCE(NEW."addressLine1", NEW.address_line1);
+      NEW.address_line2 := COALESCE(NEW.address_line2, NEW."addressLine2");
+      NEW."addressLine2" := COALESCE(NEW."addressLine2", NEW.address_line2);
+      NEW.postal_code := COALESCE(NEW.postal_code, NEW."postalCode");
+      NEW."postalCode" := COALESCE(NEW."postalCode", NEW.postal_code);
+      NEW.first_name := COALESCE(NEW.first_name, NEW."firstName");
+      NEW."firstName" := COALESCE(NEW."firstName", NEW.first_name);
+      NEW.last_name := COALESCE(NEW.last_name, NEW."lastName");
+      NEW."lastName" := COALESCE(NEW."lastName", NEW.last_name);
+      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
+      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
+      NEW."createdDate" := COALESCE(NEW."createdDate", NEW.created_at, now());
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS merchants_legacy_cols ON public.merchants;
+    CREATE TRIGGER merchants_legacy_cols BEFORE INSERT OR UPDATE ON public.merchants
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_merchants_legacy_cols();
+  `);
+
+  await install('features', 'feature_code', `
+    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS "featureKey" varchar(100);
+    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS "featureType" varchar(50);
+    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS category varchar(100);
+    UPDATE public.features SET
+      "featureKey" = feature_code,
+      "featureType" = feature_type::text;
+    CREATE OR REPLACE FUNCTION public.sync_features_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.feature_code := COALESCE(NULLIF(NEW.feature_code, ''), NULLIF(NEW."featureKey", ''));
+      NEW."featureKey" := COALESCE(NULLIF(NEW."featureKey", ''), NEW.feature_code);
+      NEW."featureType" := COALESCE(NEW.feature_type::text, NEW."featureType");
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS features_legacy_cols ON public.features;
+    CREATE TRIGGER features_legacy_cols BEFORE INSERT OR UPDATE ON public.features
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_features_legacy_cols();
+  `);
+
+  await install('store_types', 'store_type_code', `
+    ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" varchar(100);
+    UPDATE public.store_types SET "storeTypeCode" = store_type_code;
+    CREATE OR REPLACE FUNCTION public.sync_store_types_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.store_type_code := COALESCE(NULLIF(NEW.store_type_code, ''), NULLIF(NEW."storeTypeCode", ''));
+      NEW."storeTypeCode" := COALESCE(NULLIF(NEW."storeTypeCode", ''), NEW.store_type_code);
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types;
+    CREATE TRIGGER store_types_legacy_cols BEFORE INSERT OR UPDATE ON public.store_types
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_store_types_legacy_cols();
+  `);
+
+  await install('subscriptions', 'subscription_code', `
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionId" varchar(100);
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionCode" varchar(100);
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "startDate" date;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "renewalDate" date;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "trialEndDate" date;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "createdAt" timestamptz;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;
+    CREATE OR REPLACE FUNCTION public.sync_subscriptions_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      IF NEW.price IS NULL THEN NEW.price := 0; END IF;
+      NEW.subscription_code := COALESCE(NULLIF(NEW.subscription_code, ''), NULLIF(NEW."subscriptionCode", ''), NULLIF(NEW."subscriptionId", ''), NEW.id::text);
+      NEW."subscriptionCode" := COALESCE(NULLIF(NEW."subscriptionCode", ''), NEW.subscription_code);
+      NEW."subscriptionId" := COALESCE(NULLIF(NEW."subscriptionId", ''), NEW.subscription_code);
+      IF NEW.merchant_id IS NULL AND NEW."merchantId" IS NOT NULL THEN
+        SELECT m.id::text INTO NEW.merchant_id FROM public.merchants m
+         WHERE m.merchant_id = NEW."merchantId" OR m.merchant_code = NEW."merchantId" OR m.id::text = NEW."merchantId"
+         LIMIT 1;
+      END IF;
+      IF NEW.merchant_id IS NOT NULL THEN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'merchant_id'
+        ) THEN
+          EXECUTE 'SELECT merchant_id FROM public.merchants WHERE id::text = $1 LIMIT 1'
+            INTO NEW."merchantId" USING NEW.merchant_id::text;
+        ELSIF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'merchantId'
+        ) THEN
+          EXECUTE 'SELECT "merchantId" FROM public.merchants WHERE id::text = $1 LIMIT 1'
+            INTO NEW."merchantId" USING NEW.merchant_id::text;
+        END IF;
+      END IF;
+      NEW.start_date := COALESCE(NEW.start_date, NEW."startDate");
+      NEW."startDate" := COALESCE(NEW."startDate", NEW.start_date);
+      NEW.renewal_date := COALESCE(NEW.renewal_date, NEW."renewalDate");
+      NEW."renewalDate" := COALESCE(NEW."renewalDate", NEW.renewal_date);
+      NEW.trial_end_date := COALESCE(NEW.trial_end_date, NEW."trialEndDate");
+      NEW."trialEndDate" := COALESCE(NEW."trialEndDate", NEW.trial_end_date);
+      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
+      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS subscriptions_legacy_cols ON public.subscriptions;
+    CREATE TRIGGER subscriptions_legacy_cols BEFORE INSERT OR UPDATE ON public.subscriptions
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_subscriptions_legacy_cols();
+    UPDATE public.subscriptions s SET
+      "subscriptionId" = s.subscription_code,
+      "subscriptionCode" = s.subscription_code,
+      "startDate" = s.start_date,
+      "renewalDate" = s.renewal_date,
+      "trialEndDate" = s.trial_end_date,
+      "createdAt" = s.created_at,
+      "updatedAt" = s.updated_at;
+    UPDATE public.subscriptions s SET "merchantId" = COALESCE(to_jsonb(m)->>'merchant_id', to_jsonb(m)->>'merchantId')
+      FROM public.merchants m WHERE s.merchant_id::text = m.id::text;
+  `);
+
+  await install('vendors', 'vendor_code', `
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "deletedAt" timestamptz;
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "vendorName" varchar(150);
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "vendorCode" varchar(50);
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "vendorType" varchar(50);
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "contactPerson" varchar(150);
+    ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS "productCategory" varchar(150);
+    UPDATE public.vendors SET
+      "vendorName" = vendor_name,
+      "vendorCode" = vendor_code,
+      "vendorType" = vendor_type::text,
+      "contactPerson" = contact_person,
+      "productCategory" = product_category,
+      "deletedAt" = CASE WHEN is_deleted THEN COALESCE("deletedAt", updated_at, now()) ELSE NULL END;
+    CREATE OR REPLACE FUNCTION public.sync_vendors_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.vendor_code := COALESCE(NULLIF(NEW.vendor_code, ''), NULLIF(NEW."vendorCode", ''));
+      NEW."vendorCode" := COALESCE(NULLIF(NEW."vendorCode", ''), NEW.vendor_code);
+      NEW.vendor_name := COALESCE(NULLIF(NEW.vendor_name, ''), NULLIF(NEW."vendorName", ''));
+      NEW."vendorName" := COALESCE(NULLIF(NEW."vendorName", ''), NEW.vendor_name);
+      NEW."vendorType" := COALESCE(NEW.vendor_type::text, NEW."vendorType");
+      NEW.contact_person := COALESCE(NEW.contact_person, NEW."contactPerson");
+      NEW."contactPerson" := COALESCE(NEW."contactPerson", NEW.contact_person);
+      NEW.product_category := COALESCE(NEW.product_category, NEW."productCategory");
+      NEW."productCategory" := COALESCE(NEW."productCategory", NEW.product_category);
+      NEW."deletedAt" := CASE WHEN NEW.is_deleted THEN COALESCE(NEW."deletedAt", now()) ELSE NULL END;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS vendors_legacy_cols ON public.vendors;
+    CREATE TRIGGER vendors_legacy_cols BEFORE INSERT OR UPDATE ON public.vendors
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_vendors_legacy_cols();
+  `);
+
+  await install('tendors', 'tendor_code', `
+    ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "deletedAt" timestamptz;
+    ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorName" varchar(150);
+    ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorCode" varchar(50);
+    UPDATE public.tendors SET
+      "tendorName" = tendor_name,
+      "tendorCode" = tendor_code,
+      "deletedAt" = CASE WHEN is_deleted THEN COALESCE("deletedAt", updated_at, now()) ELSE NULL END;
+    CREATE OR REPLACE FUNCTION public.sync_tendors_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.tendor_code := COALESCE(NULLIF(NEW.tendor_code, ''), NULLIF(NEW."tendorCode", ''));
+      NEW."tendorCode" := COALESCE(NULLIF(NEW."tendorCode", ''), NEW.tendor_code);
+      NEW.tendor_name := COALESCE(NULLIF(NEW.tendor_name, ''), NULLIF(NEW."tendorName", ''));
+      NEW."tendorName" := COALESCE(NULLIF(NEW."tendorName", ''), NEW.tendor_name);
+      NEW."deletedAt" := CASE WHEN NEW.is_deleted THEN COALESCE(NEW."deletedAt", now()) ELSE NULL END;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS tendors_legacy_cols ON public.tendors;
+    CREATE TRIGGER tendors_legacy_cols BEFORE INSERT OR UPDATE ON public.tendors
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_tendors_legacy_cols();
+  `);
+
+  await install('devices', 'device_code', `
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "deviceCode" varchar(100);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "deviceName" varchar(255);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "deviceType" varchar(100);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "serialNumber" varchar(100);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "merchantName" varchar(255);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
+    ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "createdAt" timestamptz;
+    UPDATE public.devices SET
+      "deviceCode" = device_code,
+      "deviceName" = device_name,
+      "deviceType" = device_type,
+      "serialNumber" = serial_number,
+      "merchantName" = merchant_name,
+      "merchantId" = merchant_id::text,
+      "createdAt" = created_at;
+    CREATE OR REPLACE FUNCTION public.sync_devices_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      NEW.device_code := COALESCE(NULLIF(NEW.device_code, ''), NULLIF(NEW."deviceCode", ''));
+      NEW."deviceCode" := COALESCE(NULLIF(NEW."deviceCode", ''), NEW.device_code);
+      NEW.device_name := COALESCE(NULLIF(NEW.device_name, ''), NULLIF(NEW."deviceName", ''));
+      NEW."deviceName" := COALESCE(NULLIF(NEW."deviceName", ''), NEW.device_name);
+      NEW.device_type := COALESCE(NULLIF(NEW.device_type, ''), NULLIF(NEW."deviceType", ''));
+      NEW."deviceType" := COALESCE(NULLIF(NEW."deviceType", ''), NEW.device_type);
+      NEW.serial_number := COALESCE(NULLIF(NEW.serial_number, ''), NULLIF(NEW."serialNumber", ''));
+      NEW."serialNumber" := COALESCE(NULLIF(NEW."serialNumber", ''), NEW.serial_number);
+      NEW.merchant_name := COALESCE(NULLIF(NEW.merchant_name, ''), NULLIF(NEW."merchantName", ''));
+      NEW."merchantName" := COALESCE(NULLIF(NEW."merchantName", ''), NEW.merchant_name);
+      NEW."merchantId" := COALESCE(NEW.merchant_id::text, NEW."merchantId");
+      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS devices_legacy_cols ON public.devices;
+    CREATE TRIGGER devices_legacy_cols BEFORE INSERT OR UPDATE ON public.devices
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_devices_legacy_cols();
+  `);
+}
+
 function isRetryablePostgresError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|the database system is starting|timeout expired|Connection terminated/i.test(
@@ -213,7 +860,7 @@ function isRetryablePostgresError(error: unknown): boolean {
 export async function connectPostgres(
   serviceName: string,
   entities: DataSourceOptions['entities'],
-  settings: { synchronize?: boolean } = {},
+  settings: { synchronize?: boolean; legacyQueryColumns?: boolean } = {},
 ): Promise<DataSource> {
   const options = { ...postgresConnectionOptions(entities), ...settings };
   const attempts = Number(process.env.POSTGRES_CONNECT_ATTEMPTS) || 20;
@@ -232,9 +879,19 @@ export async function connectPostgres(
         try {
           await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
           try {
+            await dropEntityForeignKeys(dataSource);
             await alignLegacyCamelCaseColumns(dataSource);
+            await backfillRequiredColumnsBeforeSync(dataSource);
+            await dedupeUniqueColumns(dataSource);
+            await clearOrphanForeignKeys(dataSource);
             await backfillOptionalUniqueColumns(dataSource);
+            await dropIndexesOutsideEntities(dataSource);
             await dataSource.synchronize();
+            if (await tableExists(dataSource, 'stores')) {
+              await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
+              await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
+            }
+            if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
           } finally {
             await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
           }
@@ -256,8 +913,12 @@ export async function connectPostgres(
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
+  const driver = lastError && typeof lastError === 'object' && 'driverError' in lastError
+    ? (lastError as { driverError?: { detail?: string; table?: string; column?: string } }).driverError
+    : undefined;
+  const extra = [driver?.table, driver?.column, driver?.detail].filter(Boolean).join(': ');
   throw new Error(
-    `${serviceName} failed to initialize PostgreSQL at ${describeTarget(options)}: ${message}`,
+    `${serviceName} failed to initialize PostgreSQL at ${describeTarget(options)}: ${message}${extra ? ` (${extra})` : ''}`,
   );
 }
 

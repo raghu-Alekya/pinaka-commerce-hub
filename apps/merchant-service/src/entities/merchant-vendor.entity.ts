@@ -1,34 +1,35 @@
-import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { AuditColumns, RecordStatus } from './commerce-enums';
+import { MerchantEntity } from './merchant.entity';
 import { VendorEntity } from './vendor.entity';
 
-export enum MerchantVendorStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-}
+export { RecordStatus as MerchantVendorStatus } from './commerce-enums';
 
 @Entity('merchant_vendors')
-@Unique('merchant_vendors_merchant_vendor_uidx', ['merchantId', 'vendorId'])
-@Index('pch_merchant_vendors_vendor', ['vendorId'])
-export class MerchantVendorEntity {
+export class MerchantVendorEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
   @Column({ name: 'merchant_id', type: 'uuid' })
   merchantId!: string;
 
+  @ManyToOne(() => MerchantEntity)
+  @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id' })
+  merchant?: MerchantEntity;
+
   @Column({ name: 'vendor_id', type: 'uuid' })
   vendorId!: string;
 
-  @ManyToOne(() => VendorEntity, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => VendorEntity)
   @JoinColumn({ name: 'vendor_id' })
   vendor?: VendorEntity;
 
-  @Column({ type: 'varchar', length: 20, default: MerchantVendorStatus.ACTIVE })
-  status!: MerchantVendorStatus;
-
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt!: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: RecordStatus,
+    enumName: 'record_status',
+    default: RecordStatus.ACTIVE,
+  })
+  status!: RecordStatus;
 }

@@ -1,4 +1,7 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
+import { AuditColumns, MerchantStatus } from './commerce-enums';
+
+export { MerchantStatus } from './commerce-enums';
 
 export enum BusinessType {
   RETAIL = 'RETAIL',
@@ -8,13 +11,6 @@ export enum BusinessType {
 export enum RetailSubCategory {
   GROCERY = 'GROCERY',
   CONVENIENCE = 'CONVENIENCE',
-}
-
-export enum MerchantStatus {
-  PENDING = 'PENDING',
-  ACTIVE = 'ACTIVE',
-  SUSPENDED = 'SUSPENDED',
-  INACTIVE = 'INACTIVE',
 }
 
 export enum KycStatus {
@@ -32,130 +28,74 @@ export interface KycDocument {
   uploadedAt: string;
 }
 
+@Check('merchants_distinct_identity_code', `"merchant_code" <> "merchant_id"`)
 @Entity('merchants')
-export class MerchantEntity {
-  @PrimaryColumn({ name: 'merchantCode', type: 'varchar', length: 100 })
-  id!: string; // e.g. "MCH-1001"
+export class MerchantEntity extends AuditColumns {
+  @PrimaryColumn({ name: 'merchant_code', type: 'varchar', length: 100 })
+  merchantCode!: string;
 
   @Column({ name: 'id', type: 'uuid', unique: true, default: () => 'gen_random_uuid()' })
-  uuid?: string;
+  id!: string;
 
-  @Column({ type: 'varchar', length: 100 })
-  merchantId?: string;
+  @Column({ name: 'merchant_id', type: 'varchar', length: 100, unique: true })
+  merchantId!: string;
 
-  @Column({ type: 'varchar', length: 255 })
-  businessName!: string;
+  @Column({ name: 'first_name', type: 'varchar', length: 100, nullable: true })
+  firstName?: string | null;
 
-  // Fields captured by the merchant onboarding form.
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  legalBusinessName?: string;
+  @Column({ name: 'last_name', type: 'varchar', length: 100, nullable: true })
+  lastName?: string | null;
 
-  @Column({ type: 'varchar', length: 50, default: BusinessType.RETAIL })
-  businessType!: BusinessType;
-
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  retailSubCategory?: RetailSubCategory;
-
-  @Column({ type: 'varchar', length: 150 })
-  ownerName!: string;
-
-  // Email uniqueness is scoped to ACTIVE rows by merchant-crud.schema.ts.
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ name: 'email', type: 'varchar', length: 255 })
   email!: string;
 
-  @Column({ type: 'varchar', length: 50 })
+  @Column({ name: 'phone', type: 'varchar', length: 50 })
   phone!: string;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  taxId?: string; // EIN / GST
+  @Column({ name: 'alternate_phone', type: 'varchar', length: 50, nullable: true })
+  alternatePhone?: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  country?: string;
+  @Column({ name: 'tax_id', type: 'varchar', length: 100, nullable: true })
+  taxId?: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  state?: string;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  city?: string;
-
-  @Column({ type: 'varchar', length: 30, nullable: true })
-  postalCode?: string;
-
-  @Column({ type: 'text', nullable: true })
-  businessAddress?: string;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  firstName?: string;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  lastName?: string;
-
-  @Column({ type: 'varchar', length: 150, nullable: true })
-  jobTitle?: string;
-
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  alternatePhone?: string;
-
-  @Column({ type: 'boolean', default: true })
-  billingContact!: boolean;
-
-  @Column({ type: 'varchar', length: 50, default: KycStatus.PENDING })
-  kycStatus!: KycStatus;
-
-  @Column({ type: 'jsonb', default: [] })
-  kycDocuments!: KycDocument[];
-
-  @Column({ type: 'varchar', length: 50, default: MerchantStatus.PENDING })
-  status!: MerchantStatus;
-
-  @Column({ type: 'varchar', length: 50, default: 'STEP1_BUSINESS' })
+  @Column({ name: 'onboarding_step', type: 'varchar', length: 50, default: 'STEP1_BUSINESS' })
   onboardingStep!: string;
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
-  merchantName?: string;
+  @Column({ name: 'business_display_name', type: 'varchar', length: 255, nullable: true })
+  businessDisplayName?: string | null;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  businessDisplayName?: string;
+  get businessName(): string | null | undefined {
+    return this.businessDisplayName;
+  }
 
-  @Column({ type: 'text', nullable: true })
-  addressLine1?: string;
+  set businessName(value: string | null | undefined) {
+    if (value !== undefined) this.businessDisplayName = value;
+  }
 
-  @Column({ type: 'text', nullable: true })
-  addressLine2?: string;
+  @Column({ name: 'address_line1', type: 'text', nullable: true })
+  addressLine1?: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
-  planId?: string;
+  @Column({ name: 'address_line2', type: 'text', nullable: true })
+  addressLine2?: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  billingCycle?: string;
+  @Column({ name: 'postal_code', type: 'varchar', length: 30, nullable: true })
+  postalCode?: string | null;
 
-  @Column({ type: 'date', nullable: true })
-  startDate?: string;
+  @Column({ name: 'state', type: 'varchar', length: 100, nullable: true })
+  state?: string | null;
 
-  @Column({ type: 'date', nullable: true })
-  renewalDate?: string;
+  @Column({ name: 'city', type: 'varchar', length: 100, nullable: true })
+  city?: string | null;
 
-  @Column({ type: 'numeric', precision: 10, scale: 2, nullable: true })
-  agreementPrice?: number;
+  @Column({ name: 'country', type: 'varchar', length: 100, nullable: true })
+  country?: string | null;
 
-  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
-  tax?: number;
-
-  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
-  totalDueToday?: number;
-
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  paymentMethod?: string;
-
-  @Column({ type: 'uuid', nullable: true })
-  storeTypeId?: string;
-
-  @Column({ type: 'jsonb', default: [] })
-  roleIds?: string[];
-
-  @CreateDateColumn()
-  createdAt!: Date;
-
-  @UpdateDateColumn()
-  updatedAt!: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: MerchantStatus,
+    enumName: 'merchant_status',
+    default: MerchantStatus.ACTIVE,
+  })
+  status!: MerchantStatus;
 }

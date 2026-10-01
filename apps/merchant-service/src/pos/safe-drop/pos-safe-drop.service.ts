@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from '../../merchant.repository';
+import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { PosSafeDropEntity } from './pos-safe-drop.entity';
 import { PosSafeDropTubeEntity } from './pos-safe-drop-tube.entity';
 import { PosSafeDropDenominationEntity } from './pos-safe-drop-denomination.entity';

@@ -60,14 +60,16 @@ if [[ "$FORCE" -eq 1 ]]; then
   rm -f "$LOCK_FILE"
 fi
 
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  echo "The service launcher is already running (lock: $LOCK_FILE)." >&2
-  echo "Holder(s):" >&2
-  lock_holders >&2
-  echo "If nothing useful is running, clear it with:" >&2
-  echo "  bash ./scripts/launch-pdh.sh --force --restart" >&2
-  exit 1
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "The service launcher is already running (lock: $LOCK_FILE)." >&2
+    echo "Holder(s):" >&2
+    lock_holders >&2
+    echo "If nothing useful is running, clear it with:" >&2
+    echo "  bash ./scripts/launch-pdh.sh --force --restart" >&2
+    exit 1
+  fi
 fi
 
 services=(
@@ -110,25 +112,35 @@ show_logs() {
 }
 
 if [[ "$SKIP_DOCKER" -eq 0 ]]; then
-  docker compose --project-directory "$SERVICE_ROOT" -f "$SERVICE_ROOT/docker-compose.yml" up -d
-  pg_ready=0
-  for _ in $(seq 1 30); do
-    if docker compose --project-directory "$SERVICE_ROOT" exec -T postgres pg_isready -U pdh_user >/dev/null 2>&1; then
-      pg_ready=1
-      break
+  if docker info >/dev/null 2>&1; then
+    docker compose --project-directory "$SERVICE_ROOT" -f "$SERVICE_ROOT/docker-compose.yml" up -d
+    pg_ready=0
+    for _ in $(seq 1 30); do
+      if docker compose --project-directory "$SERVICE_ROOT" exec -T postgres pg_isready -U pdh_user >/dev/null 2>&1; then
+        pg_ready=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "$pg_ready" -ne 1 ]]; then
+      echo "Docker PostgreSQL did not become ready. Check: docker compose logs postgres" >&2
+      exit 1
     fi
-    sleep 1
-  done
-  if [[ "$pg_ready" -ne 1 ]]; then
-    echo "Docker PostgreSQL did not become ready. Check: docker compose logs postgres" >&2
-    exit 1
+    if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+      psql -U pdh_user -d template1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub'" 2>/dev/null | grep -q 1; then
+      docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+        psql -U pdh_user -d template1 -c "CREATE DATABASE pinaka_commerce_hub;" >/dev/null 2>&1 || true
+    fi
+    echo "PostgreSQL ready: pinaka_commerce_hub"
+  else
+    echo "Docker daemon is not running. Checking local PostgreSQL service..."
+    if node -e "const net = require('net'); const c = net.connect(5432, '127.0.0.1', () => process.exit(0)); c.on('error', () => process.exit(1));" >/dev/null 2>&1; then
+      echo "Local PostgreSQL is running on port 5432. Proceeding with local database."
+    else
+      echo "Docker daemon is not running and local PostgreSQL on port 5432 is not accessible." >&2
+      exit 1
+    fi
   fi
-  if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-    psql -U pdh_user -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub'" 2>/dev/null | grep -q 1; then
-    docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-      psql -U pdh_user -d postgres -c "CREATE DATABASE pinaka_commerce_hub;" >/dev/null 2>&1 || true
-  fi
-  echo "PostgreSQL ready: pinaka_commerce_hub"
 fi
 
 for item in "${services[@]}"; do
