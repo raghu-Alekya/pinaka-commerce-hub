@@ -77,13 +77,13 @@ services=(
   "connector-service:3001"
   "order-service:3002"
   "merchant-service:3003"
+  "auth-service:3010"
   "menu-service:3004"
   "inventory-service:3005"
   "analytics-service:3006"
   "pos-integration-service:3007"
   "notification-service:3008"
   "admin-api:3009"
-  "auth-service:3010"
 )
 
 port_pids() {
@@ -159,8 +159,14 @@ for item in "${services[@]}"; do
     for pid in "${pids[@]}"; do
       cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
       if [[ "$cmd" != *"$relative_entry"* && "$cmd" != *"$entry"* ]]; then
-        echo "Port $port belongs to another process (PID $pid): $cmd" >&2
-        exit 1
+        # --restart replaces a leftover service from this repo, such as loyalty-service on 3007.
+        if [[ "$RESTART" -eq 1 && "$cmd" == *"$SERVICE_ROOT"* && "$cmd" == *"apps/"* ]]; then
+          echo "Port $port is held by another repo service (PID $pid). Stopping it."
+          kill "$pid" 2>/dev/null || true
+        else
+          echo "Port $port belongs to another process (PID $pid): $cmd" >&2
+          exit 1
+        fi
       fi
       if [[ "$RESTART" -eq 1 ]]; then
         kill "$pid" 2>/dev/null || true
