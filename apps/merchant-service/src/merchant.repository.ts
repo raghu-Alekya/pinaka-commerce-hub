@@ -263,6 +263,9 @@ export class MerchantRepository implements OnModuleInit {
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
       sql = `UPDATE public.${table} SET ${entries.map(([key], index) => `${quote(columns[key])} = $${index + 2}`).join(', ')}, ${quote(updatedColumn)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+    } else if (operation === 'delete' && (table === 'features' || table === 'plans')) {
+      sql = `UPDATE public.${table} SET status = $2, ${quote(updatedColumn)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+      values = [id, 'INACTIVE'];
     } else { sql = `DELETE FROM public.${table} WHERE id = $1 RETURNING ${projection}`; values = [id]; }
     try {
       const result = await this.dataSource.query(sql, values);
@@ -639,7 +642,7 @@ export class MerchantRepository implements OnModuleInit {
         }
         if (!subscription) throw new BadRequestException('Create a merchant subscription before adding stores');
         for (const item of incoming) {
-          const current = await stores.findOneBy({ id: item.storeId, isDeleted: 0 });
+          const current = await stores.findOneBy({ id: item.storeId });
           if (current && current.merchantId !== id) throw new ConflictException(`Store '${item.storeId}' belongs to another merchant`);
           const type = await this.getStoreTypeByIdOrCode(item.type || '');
           if (!type || type.status !== 'ACTIVE') throw new BadRequestException('Select an active store type master code');
@@ -652,7 +655,7 @@ export class MerchantRepository implements OnModuleInit {
           };
           await stores.save(current ? { ...current, ...fields } : this.buildStore(id, fields));
         }
-        const savedStores = await stores.find({ where: { merchantId: id, isDeleted: 0 } });
+        const savedStores = await stores.find({ where: { merchantId: id } });
         const licensed = savedStores.filter(store => store.onboardingSetup?.licensed === true);
         const devices = savedStores.flatMap(store => (store.onboardingSetup?.devices || []) as Array<Record<string, unknown>>);
         if (licensed.length > (subscription.licensedStoreCount ?? subscription.maxStoresAllowed)) throw new BadRequestException('Store license limit exceeded');
@@ -726,7 +729,7 @@ export class MerchantRepository implements OnModuleInit {
     const merchantId = await this.resolveMerchantId(id);
     const merchant = merchantId ? await this.merchantRepo.findOne({ where: { merchantId }, order: { createdAt: 'DESC' } }) : null;
     if (!merchant) return { merchant: null, stores: [], subscription: null };
-    const stores = await this.listStores(merchant.merchantId);
+    const stores = await this.storeRepo.find({ where: { merchantId: merchant.merchantId } });
     const subscription = (await this.listSubscriptions(merchant.merchantId!))[0] || null;
     return { merchant: { ...merchant, id: merchant.merchantId! }, stores, subscription };
   }
@@ -835,7 +838,7 @@ export class MerchantRepository implements OnModuleInit {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
     if (data.id) {
-      const existing = await this.storeRepo.findOne({ where: { id: data.id, isDeleted: 0 } });
+      const existing = await this.storeRepo.findOne({ where: { id: data.id } });
       if (existing) {
         if (!(await this.storeMatchesMerchant(existing, identity.merchantId))) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
         Object.assign(existing, data, { merchantId: identity.merchantId, merchantUuid: identity.merchantUuid, updatedAt: new Date() });
@@ -848,7 +851,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
-    const rows = await this.dataSource.query('SELECT legacy_store_id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1) AND COALESCE("Is_Deleted", 0)=0 LIMIT 1', [id]);
+    const rows = await this.dataSource.query("SELECT legacy_store_id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1) AND status='ACTIVE' LIMIT 1", [id]);
     return rows[0] ? this.storeRepo.findOneBy({ id: rows[0].legacy_store_id }) : null;
   }
 
@@ -960,34 +963,22 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
-    if (!merchantId) {
-      return this.storeRepo.find({ where: { isDeleted: 0 }, order: { createdAt: 'DESC' } });
-    }
-    const identity = await this.merchantIdentity(merchantId);
-    if (!identity) return [];
-    return this.storeRepo.createQueryBuilder('store')
-      .where('store.isDeleted = :alive', { alive: 0 })
-      .andWhere('(store.merchantId IN (:...aliases) OR store.merchantUuid = :merchantUuid)', {
-        aliases: identity.aliases,
-        merchantUuid: identity.merchantUuid,
-      })
-      .orderBy('store.createdAt', 'DESC')
-      .getMany();
+    const resolved = merchantId ? await this.resolveMerchantId(merchantId) : undefined;
+    if (merchantId && !resolved) return [];
+    return this.storeRepo.find({ where: resolved ? { merchantId: resolved } : {}, order: { createdAt: 'DESC' } });
   }
 
-  
-
-  async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
+  async inactivateStore(id: string): Promise<{ status: StoreStatus } | null> {
     const store = await this.getStoreById(id);
     if (!store) return null;
-    const deletedAt = new Date();
+    const updatedAt = new Date();
     const result = await this.storeRepo.update(
-      { id, isDeleted: 0 },
-      { deletedAt, isDeleted: 1, updatedAt: deletedAt },
+      { id: store.id, status: StoreStatus.ACTIVE },
+      { status: StoreStatus.INACTIVE, updatedAt },
     );
     if (!result.affected) return null;
-    await this.recordAuditLog('STORE_DELETED', store.merchantId, id, 'merchant', { storeName: store.storeName });
-    return { deletedAt, isDeleted: 1 };
+    await this.recordAuditLog('STORE_INACTIVATED', store.merchantId, id, 'merchant', { storeName: store.storeName });
+    return { status: StoreStatus.INACTIVE };
   }
 
   async updateStore(id: string, fields: Partial<StoreEntity>): Promise<StoreEntity | null> {
@@ -1236,7 +1227,7 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
   ): Promise<StoreEntity | null> {
-    const store = await this.storeRepo.findOne({ where: { id: storeId, isDeleted: 0 } });
+    const store = await this.storeRepo.findOne({ where: { id: storeId, status: StoreStatus.ACTIVE } });
     if (!store) return null;
     store.websiteConnector = connector;
     store.updatedAt = new Date();
@@ -1328,7 +1319,7 @@ export class MerchantRepository implements OnModuleInit {
       } catch { }
     }
 
-    const store = await this.storeRepo.findOne({ where: { activationPin: pin, isDeleted: 0 } });
+    const store = await this.storeRepo.findOne({ where: { activationPin: pin, status: StoreStatus.ACTIVE } });
     if (!store) {
       return { success: false, message: 'Invalid 6-digit Activation PIN. Terminal pairing failed.' };
     }
@@ -1512,10 +1503,9 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async deleteSubscriptionPlan(planCode: string): Promise<boolean> {
-    if (!(await this.getSubscriptionPlan(planCode))) return false;
-    const inUse = await this.subRepo.existsBy({ planCode: planCode as PlanCode });
-    if (inUse) throw new ConflictException('Plan is assigned to a merchant. Set its status to INACTIVE instead.');
-    return Boolean((await this.planRepo.delete({ planCode })).affected);
+    const existing = await this.getSubscriptionPlan(planCode);
+    if (!existing) return false;
+    return Boolean((await this.planRepo.update({ planCode }, { status: 'INACTIVE', updatedAt: new Date() })).affected);
   }
 
   async fetchLiveWordPressCatalog(storeUrl?: string, jwtToken?: string): Promise<Array<{ name: string; category: string; price: number; sku: string; stock: number; description?: string }>> {

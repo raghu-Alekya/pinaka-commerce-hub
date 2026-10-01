@@ -301,14 +301,15 @@ export class MerchantCrudService {
   async deleteMerchant(code: string) {
     await this.transaction(async manager=>{
       const {root} = await this.lockMerchant(manager,code);
-      // Refuse deletion while related business records remain, including tables without FKs.
-      for (const table of ['subscriptions','stores']) if ((await manager.query(`SELECT 1 FROM public.${table} WHERE "merchantId"=$1 OR "merchantId" IN
-        (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) LIMIT 1`,[root])).length) throw new ConflictException(`Merchant has ${table}; remove them first`);
-      const records=await manager.query('DELETE FROM public.merchant_record_versions WHERE record_code IN (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) RETURNING record_code',[root]);
-      const rows=Array.isArray(records[0]) ? records[0] : records;
-      await manager.query('DELETE FROM public.merchants WHERE "merchantCode"=ANY($1::varchar[])',[rows.map((row: Input)=>row.record_code)]);
+      const rows = await manager.query(
+        `UPDATE public.merchants SET status='INACTIVE'
+         WHERE "merchantId"=$1 OR "merchantCode"=$1
+         RETURNING id`,
+        [root],
+      );
+      if (!rows.length) throw new NotFoundException(`Merchant '${code}' not found`);
     });
-    return {success:true,merchantId:code};
+    return {success:true,merchantId:code,status:'INACTIVE'};
   }
 
   async listSubscriptions(merchantId?: string, status?: string) {

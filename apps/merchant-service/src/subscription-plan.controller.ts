@@ -47,6 +47,6 @@ export class SubscriptionPlanController {
   @Delete(':planCode')
   async remove(@Param('planCode') code: string) {
     if (!(await this.repository.deleteSubscriptionPlan(code.toUpperCase()))) throw new NotFoundException('Subscription plan not found');
-    return { success: true, message: 'Subscription plan deleted' };
+    return { success: true, message: 'Subscription plan inactivated', planCode: code.toUpperCase(), status: 'INACTIVE' };
   }
 }

@@ -69,7 +69,7 @@ export class FeatureController {
       feature,
     };
   }
-  @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('features', 'delete', id); return { success: true, message: 'Feature deleted' }; }
+  @Delete(':id') async remove(@Param('id') id: string) { const feature = await this.repository.masterData('features', 'delete', id); return { success: true, message: 'Feature deactivated successfully', feature }; }
 }
 
 
@@ -96,5 +96,5 @@ export class PlanController {
   @Post() async create(@Body(validate(PlanDto)) body: PlanDto) { return { success: true, plan: await this.repository.masterData('plans', 'create', undefined, { description: '', status: 'ACTIVE', currency: 'INR', ...defined(body) }) }; }
   @Put(':id') async replace(@Param('id') id: string, @Body(validate(PlanDto)) body: PlanDto) { return { success: true, plan: await this.repository.masterData('plans', 'update', id, { description: '', status: 'ACTIVE', ...defined(body) }) }; }
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(PlanDto, true)) body: PlanDto) { return { success: true, plan: await this.repository.masterData('plans', 'update', id, defined(body)) }; }
-  @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('plans', 'delete', id); return { success: true, message: 'Plan deleted' }; }
+  @Delete(':id') async remove(@Param('id') id: string) { const plan = await this.repository.masterData('plans', 'delete', id); return { success: true, message: 'Plan deactivated successfully', plan }; }
 }
