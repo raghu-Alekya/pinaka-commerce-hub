@@ -6,7 +6,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { join } from 'node:path';
 import { TracingInterceptor } from '@pinaka-delivery-hub/observability';
 import { AppModule } from './app.module';
-import { normalizeTendorForm } from './vendor-tendor.form.pipe';
+import { normalizeTendorForm } from './modules/master/tenders/vendor-tendor.form.pipe';
 
 
 async function bootstrap() {

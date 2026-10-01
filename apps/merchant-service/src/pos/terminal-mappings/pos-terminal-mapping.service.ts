@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from '../../merchant.repository';
+import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { PosTerminalMappingSettingsEntity } from './pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from './pos-terminal-mapping.entity';
 import { PosTerminalMappingDto, SavePosTerminalMappingDto } from './pos-terminal-mapping.dto';
