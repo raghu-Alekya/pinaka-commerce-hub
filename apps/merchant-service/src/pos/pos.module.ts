@@ -17,8 +17,10 @@ import { PosServiceChargeController } from './service-charges/pos-service-charge
 import { PosServiceChargeService } from './service-charges/pos-service-charge.service';
 import { PosTerminalMappingController } from './terminal-mappings/pos-terminal-mapping.controller';
 import { PosTerminalMappingService } from './terminal-mappings/pos-terminal-mapping.service';
+import { MerchantModule } from '../modules/merchant/merchant.module';
 
 @Module({
+  imports: [MerchantModule],
   controllers: [
     PosCurrencyTaxController,
     PosServiceChargeController,

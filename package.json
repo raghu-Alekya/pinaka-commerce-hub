@@ -4,8 +4,8 @@
   "packageManager": "pnpm@11.18.0",
   "license": "MIT",
   "scripts": {
-    "start:all": "bash ./scripts/launch-pdh.sh",
-    "restart:all": "bash ./scripts/launch-pdh.sh --restart",
+    "start:all": "node ./scripts/start-all.js",
+    "restart:all": "node ./scripts/start-all.js --restart",
     "start:all:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/launch-pdh.ps1",
     "restart:all:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/launch-pdh.ps1 -Restart",
     "start:gateway": "nx serve gateway",

@@ -443,6 +443,10 @@ export class MerchantRepository implements OnModuleInit {
         port: Number(process.env.REDIS_PORT) || 6379,
         lazyConnect: true,
         maxRetriesPerRequest: 1,
+        retryStrategy: () => null,
+      });
+      this.redisClient.on('error', () => {
+        this.isRedisConnected = false;
       });
       await this.redisClient.connect();
       this.isRedisConnected = true;
