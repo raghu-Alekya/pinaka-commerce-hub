@@ -402,11 +402,6 @@ export class MerchantRepository implements OnModuleInit {
     await this.seedDefaultStoreTypes();
     await this.seedDefaultCommercialPlans();
     await this.seedDefaultPlans();
-    try {
-      await this.seedDefaultData();
-    } catch (error) {
-      console.warn('seedDefaultData skipped:', error);
-    }
 
     // 3. Redis Connection
     try {
@@ -479,66 +474,6 @@ export class MerchantRepository implements OnModuleInit {
       }),
     ]);
     console.log('âœ… [PCH Seed] Seeded subscription_plans (STARTER, PRO, ENTERPRISE)');
-  }
-
-  private async seedDefaultData() {
-    if (!this.merchantRepo || !this.storeRepo) return;
-    if (!this.merchantRepo || !this.storeRepo || !this.subRepo) return;
-    const storeType = await this.storeTypeRepo?.findOne({ where: { storeTypeCode: 'GROCERY' } })
-      || await this.storeTypeRepo?.findOne({ where: {} });
-    if (!storeType) return;
-    let merchant = await this.merchantRepo.findOne({ where: [{ merchantCode: 'MCH-1001' }, { merchantId: 'MCH-1001' }, { merchantId: 'MID-1001' }] });
-    if (!merchant) {
-      merchant = await this.merchantRepo.save(this.merchantRepo.create({
-        id: crypto.randomUUID(),
-        merchantCode: 'MCH-1001',
-        merchantId: 'MID-1001',
-        businessDisplayName: 'Fresh Mart Organics LLC',
-        firstName: 'Alex',
-        lastName: 'Johnson',
-        email: 'alex@freshmart.com',
-        phone: '+1 (555) 234-5678',
-        taxId: '12-3456789',
-        status: MerchantStatus.ACTIVE,
-        onboardingStep: 'COMPLETED',
-      }));
-    }
-    let store = await this.storeRepo.findOne({ where: { storeCode: 'STR-DT-01' } });
-    if (!store) {
-      store = await this.storeRepo.save(this.storeRepo.create({
-        id: crypto.randomUUID(),
-        merchantId: merchant.id,
-        storeTypeId: storeType.id,
-        storeName: 'Fresh Mart - Downtown Branch',
-        storeCode: 'STR-DT-01',
-        addressLine1: '123 Main St, Suite 400',
-        city: 'Austin',
-        state: 'TX',
-        postalCode: '78701',
-        country: 'USA',
-        currency: 'USD',
-        timezone: 'America/Chicago',
-        activationPin: '849201',
-        status: StoreStatus.ACTIVE,
-        operationalStatus: OperationalStatus.OPEN,
-        channels: [{ platform: 'POS', externalStoreId: 'POS-01', apiKey: 'key_pos_1', enabled: true }, { platform: 'UBER_EATS', externalStoreId: 'UBER-99', apiKey: 'key_uber', enabled: true }],
-      }));
-      await this.cacheStorePin(store.activationPin, store);
-      console.log('✅ [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-DT-01 (PIN: 849201)');
-    }
-    const subscription = await this.subRepo.findOne({ where: { subscriptionCode: 'SUB-9001' } });
-    if (!subscription) {
-      await this.subRepo.save(this.subRepo.create({
-        id: 'SUB-9001',
-        merchantId: merchant.id,
-        subscriptionCode: 'SUB-9001',
-        entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
-        billingCycle: BillingCycle.MONTHLY,
-        price: 99.00,
-        autoRenew: true,
-        status: SubscriptionStatus.ACTIVE,
-      }));
-    }
   }
 
   async recordAuditLog(action: string, merchantId: string, storeId?: string, performedBy = 'system', details: Record<string, any> = {}): Promise<void> {
