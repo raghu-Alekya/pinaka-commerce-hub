@@ -70,6 +70,8 @@ import { PosSafeDropTubeEntity } from './pos/safe-drop/pos-safe-drop-tube.entity
 import { PosSafeDropDenominationEntity } from './pos/safe-drop/pos-safe-drop-denomination.entity';
 import { ensurePosCardPaymentSchema } from './pos/card-payments/pos-card-payment.schema';
 import { PosCardPaymentEntity } from './pos/card-payments/pos-card-payment.entity';
+import { ensureStorePosConfigurationSchema } from './modules/store-pos-configuration/store-pos-configuration.schema';
+import { StorePosConfigurationEntity } from './entities/store-pos-configuration.entity';
 import { ensurePosTerminalMappingSchema } from './pos/terminal-mappings/pos-terminal-mapping.schema';
 import { PosTerminalMappingSettingsEntity } from './pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from './pos/terminal-mappings/pos-terminal-mapping.entity';
@@ -349,6 +351,7 @@ export class MerchantRepository implements OnModuleInit {
       PosSafeDropTubeEntity,
       PosSafeDropDenominationEntity,
       PosCardPaymentEntity,
+      StorePosConfigurationEntity,
       PosTerminalMappingSettingsEntity,
       PosTerminalMappingEntity,
       SessionEntity,
@@ -403,6 +406,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensurePosCashRegisterSchema(this.dataSource);
     await ensurePosSafeDropSchema(this.dataSource);
     await ensurePosCardPaymentSchema(this.dataSource);
+    await ensureStorePosConfigurationSchema(this.dataSource);
     await ensurePosTerminalMappingSchema(this.dataSource);
     await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);

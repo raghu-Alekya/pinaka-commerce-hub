@@ -44,23 +44,42 @@ import { PosCardPaymentService } from './pos/card-payments/pos-card-payment.serv
 import { PosTerminalMappingController } from './pos/terminal-mappings/pos-terminal-mapping.controller';
 import { PosTerminalMappingService } from './pos/terminal-mappings/pos-terminal-mapping.service';
 import { StoreTypeController } from './store-type.controller';
-import { FeatureStoreTypeCatalogController, StoreTypeFeatureCatalogController, StoreTypeRoleTemplateCatalogController } from './store-type-mapping.controller';
-import { RoleTemplateFeatureAccessController, RoleTemplateStoreTypeBulkController, RoleTemplateStoreTypeCatalogController } from './role-template-mapping.controller';
-import { StoreRoleTemplateController, StoreTypeAssignedRoleTemplatesController } from './store-role-template.controller';
+import {
+  FeatureStoreTypeCatalogController,
+  StoreTypeFeatureCatalogController,
+  StoreTypeRoleTemplateCatalogController,
+} from './store-type-mapping.controller';
+import {
+  RoleTemplateFeatureAccessController,
+  RoleTemplateStoreTypeBulkController,
+  RoleTemplateStoreTypeCatalogController,
+} from './role-template-mapping.controller';
+import {
+  StoreRoleTemplateController,
+  StoreTypeAssignedRoleTemplatesController,
+} from './store-role-template.controller';
 import { FeaturePermissionController } from './feature-permission.controller';
-import { FeatureController, RoleTemplateController, PlanController } from './master-data.controller';
+import {
+  FeatureController,
+  RoleTemplateController,
+  PlanController,
+} from './master-data.controller';
 import { SessionAuthGuard } from './session-auth.guard';
-import { RELATIONSHIP_CONTROLLERS, RelationshipOwnerGuard, RoleTemplatePermissionsReplaceController } from './relationships.controller';
+import {
+  RELATIONSHIP_CONTROLLERS,
+  RelationshipOwnerGuard,
+  RoleTemplatePermissionsReplaceController,
+} from './relationships.controller';
 import { RelationshipsRepository } from './relationships.repository';
 import { DynamicQueryController } from './dynamic-query/dynamic-query.controller';
 import { DynamicQueryService } from './dynamic-query/dynamic-query.service';
 import { DynamicQueryRepository } from './dynamic-query/dynamic-query.repository';
 import { MerchantPlanFeaturesController } from './merchant-plan-features.controller';
 import { MerchantTendorController } from './merchant-tendor.controller';
- 
+import { StorePosConfigurationController } from './modules/store-pos-configuration/store-pos-configuration.controller';
+import { StorePosConfigurationsService } from './modules/store-pos-configuration/store-pos-configuration.service';
 
 @Module({
-  imports: [],
   controllers: [
     MerchantVendorController,
     MerchantPlanFeaturesController,
@@ -110,6 +129,7 @@ import { MerchantTendorController } from './merchant-tendor.controller';
     RoleTemplateController,
     PlanController,
     DynamicQueryController,
+    StorePosConfigurationController,
   ],
   exports: [MerchantRepository],
   providers: [
@@ -126,13 +146,17 @@ import { MerchantTendorController } from './merchant-tendor.controller';
     PosSafeDropService,
     PosCardPaymentService,
     PosTerminalMappingService,
+    StorePosConfigurationsService,
     VendorRepository,
     TendorRepository,
     DynamicQueryRepository,
     DynamicQueryService,
     SessionAuthGuard,
     { provide: APP_GUARD, useExisting: SessionAuthGuard },
-    { provide: APP_INTERCEPTOR, useClass: MerchantResponseRelationsInterceptor },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: MerchantResponseRelationsInterceptor,
+    },
   ],
 })
 export class AppModule {}
