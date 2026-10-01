@@ -142,7 +142,8 @@ export class MerchantResponseRelations {
         if (!row) return row;
         const plan = lookup('plan', reference(row, 'plan'));
         const details = { ...withStoreType(row, plan), merchant: merchantDetails(lookup('merchant', reference(row, 'merchant'))) };
-        return withPlanLicenseCounts(details, isRecord(details.plan) ? details.plan : plan);
+        const detailsPlan = isRecord((details as Row).plan) ? (details as Row).plan : plan;
+        return withPlanLicenseCounts(details, detailsPlan);
       };
       const visit = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(visit);

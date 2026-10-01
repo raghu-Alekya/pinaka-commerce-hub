@@ -127,7 +127,7 @@ export class AppController {
     if (new Set(ids).size !== ids.length) throw new ConflictException('Each store must have a unique ID');
     for (const storeId of ids) {
       const store = await this.merchantRepository.getStoreById(storeId);
-      if (store && store.merchantId !== id) throw new ConflictException('Store belongs to another merchant');
+      if (store && !(await this.merchantRepository.storeMatchesMerchant(store, id))) throw new ConflictException('Store belongs to another merchant');
     }
     const merchant = await this.merchantRepository.updateMerchant(id, this.merchantFields({ ...body, merchantId: id }));
     if (!merchant) throw new NotFoundException(`Merchant with ID '${id}' not found`);
@@ -507,7 +507,7 @@ export class AppController {
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
   async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
     const store = await this.merchantRepository.getStoreById(storeId);
-    if (!store || (merchantId && store.merchantId !== merchantId)) throw new NotFoundException(`Store '${storeId}' not found`);
+    if (!store || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(store, merchantId)))) throw new NotFoundException(`Store '${storeId}' not found`);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     const setup = store.onboardingSetup || {};
     let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
@@ -553,10 +553,10 @@ export class AppController {
   async updateStore(@Param('storeId') storeId: string, @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: UpdateStoreDto })) body: UpdateStoreDto,
     @Param('merchantId') merchantId?: string) {
     const existing = await this.merchantRepository.getStoreById(storeId);
-    if (!existing || (merchantId && existing.merchantId !== merchantId)) {
+    if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
-    if (body.storeId !== storeId || body.merchantId !== existing.merchantId) {
+    if (body.storeId !== storeId || !(await this.merchantRepository.storeMatchesMerchant(existing, body.merchantId))) {
       throw new BadRequestException('Merchant and store ID cannot be changed');
     }
     const store = await this.merchantRepository.updateStore(storeId, {
@@ -586,7 +586,7 @@ export class AppController {
   @Delete(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
   async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
     const existing = await this.merchantRepository.getStoreById(storeId);
-    if (!existing || (merchantId && existing.merchantId !== merchantId)) {
+    if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
     const inactivated = await this.merchantRepository.inactivateStore(storeId);
@@ -603,7 +603,7 @@ export class AppController {
     const list = await this.merchantRepository.getAllMerchants();
     const [stores, subscriptions] = await Promise.all([this.merchantRepository.listStores(), this.merchantRepository.listSubscriptions()]);
     const merchants = list.map(merchant => ({ ...merchant,
-      storeCount: stores.filter(store => store.merchantId === merchant.id).length,
+      storeCount: stores.filter(store => store.merchantId === merchant.merchantId || store.merchantId === merchant.id || store.merchantUuid === merchant.id).length,
       subscription: subscriptions.find(subscription => subscription.merchantId === merchant.id) || null,
     }));
     return { success: true, count: merchants.length, merchants };
