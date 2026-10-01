@@ -850,6 +850,110 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 }
 
+function columnDefaultSql(column: {
+  default?: unknown;
+  isCreateDate?: boolean;
+  isUpdateDate?: boolean;
+  isGenerated?: boolean;
+  generationStrategy?: string;
+}): string | null {
+  if (column.isCreateDate || column.isUpdateDate) return 'now()';
+  if (column.isGenerated && column.generationStrategy === 'uuid') return 'gen_random_uuid()';
+  let value = column.default;
+  if (typeof value === 'function') {
+    try {
+      value = value();
+    } catch {
+      return null;
+    }
+  }
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  const text = String(value).trim();
+  if (!text) return `''`;
+  if (text.includes('(') || text.startsWith("'") || /^-?\d+(\.\d+)?$/.test(text)) return text;
+  return `'${text.replace(/'/g, "''")}'`;
+}
+
+function missingColumnSqlType(column: {
+  type?: unknown;
+  length?: string | number;
+  enum?: unknown;
+  enumName?: string;
+}): string {
+  if ((column.type === 'enum' || column.enumName) && column.enumName) return quoteIdent(column.enumName);
+  if (column.type === 'timestamp') return 'timestamp';
+  return columnSqlType(column);
+}
+
+async function ensureEnumTypes(
+  dataSource: DataSource,
+  columns: Array<{ type?: unknown; enum?: unknown; enumName?: string }>,
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const column of columns) {
+    if (!column.enumName || seen.has(column.enumName)) continue;
+    const labels = enumLabels(column);
+    if (!labels.length) continue;
+    seen.add(column.enumName);
+    const values = labels.map(label => `'${label.replace(/'/g, "''")}'`).join(', ');
+    await dataSource.query(
+      `DO $$ BEGIN CREATE TYPE ${quoteIdent(column.enumName)} AS ENUM (${values}); EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    );
+  }
+}
+
+/**
+ * Create entity tables that are not in the database yet.
+ * A brand-new database is synchronized once. An existing database only gets
+ * CREATE TABLE for gaps, because TypeORM synchronize drops and re-adds columns
+ * and PostgreSQL keeps every dropped column until the 1600-column limit.
+ */
+export async function createMissingTables(dataSource: DataSource): Promise<string[]> {
+  const missing = [];
+  let existing = 0;
+  for (const entity of dataSource.entityMetadatas) {
+    if (await tableExists(dataSource, entity.tableName)) existing += 1;
+    else missing.push(entity);
+  }
+  if (!missing.length) return [];
+  if (existing === 0) {
+    await dataSource.synchronize();
+    return missing.map(entity => entity.tableName);
+  }
+
+  const created: string[] = [];
+  for (const entity of missing) {
+    const columns = entity.columns.filter(column => !column.isVirtual);
+    const uniqueColumns = new Set<string>();
+    for (const unique of entity.uniques ?? []) {
+      if (unique.columns?.length === 1) uniqueColumns.add(unique.columns[0].databaseName);
+    }
+    for (const index of entity.indices ?? []) {
+      if (index.isUnique && index.columns.length === 1) uniqueColumns.add(index.columns[0].databaseName);
+    }
+    await ensureEnumTypes(dataSource, columns);
+    const definitions = columns.map(column => {
+      const parts = [
+        quoteIdent(column.databaseName),
+        missingColumnSqlType(column),
+      ];
+      const fallback = columnDefaultSql(column);
+      if (fallback) parts.push(`DEFAULT ${fallback}`);
+      if (!column.isNullable) parts.push('NOT NULL');
+      if (uniqueColumns.has(column.databaseName) && !column.isPrimary) parts.push('UNIQUE');
+      return parts.join(' ');
+    });
+    const primaryKey = columns.filter(column => column.isPrimary).map(column => quoteIdent(column.databaseName));
+    if (primaryKey.length) definitions.push(`PRIMARY KEY (${primaryKey.join(', ')})`);
+    await dataSource.query(
+      `CREATE TABLE IF NOT EXISTS public.${quoteIdent(entity.tableName)} (${definitions.join(', ')})`,
+    );
+    created.push(entity.tableName);
+  }
+  return created;
+}
+
 function isRetryablePostgresError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|the database system is starting|timeout expired|Connection terminated/i.test(

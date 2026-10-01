@@ -1,9 +1,10 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 import { MerchantEntity } from './merchant.entity';
 import { TendorEntity } from './tendor.entity';
 
 @Entity('merchant_tendors')
+@Audited()
 export class MerchantTendorEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

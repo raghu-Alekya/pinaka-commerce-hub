@@ -1,5 +1,5 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
-import { AuditColumns, BillingCycle, SubscriptionStatus } from './commerce-enums';
+import { Audited, AuditColumns, BillingCycle, SubscriptionStatus } from './commerce-enums';
 import { MerchantEntity } from './merchant.entity';
 import { PlanEntity } from './plan.entity';
 
@@ -18,6 +18,7 @@ const numericPrice = {
 };
 
 @Entity('subscriptions')
+@Audited()
 export class SubscriptionEntity extends AuditColumns {
   @PrimaryColumn({ name: 'id', type: 'varchar', length: 100 })
   id!: string;

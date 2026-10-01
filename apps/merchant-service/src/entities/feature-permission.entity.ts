@@ -1,8 +1,9 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, PermissionType, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, PermissionType, RecordStatus } from './commerce-enums';
 import { FeatureEntity } from './feature.entity';
 
 @Entity('feature_permissions')
+@Audited()
 export class FeaturePermissionEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

@@ -1,9 +1,10 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, FeatureType, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, FeatureType, RecordStatus } from './commerce-enums';
 
 export { RecordStatus as FeatureStatus, FeatureType } from './commerce-enums';
 
 @Entity('features')
+@Audited()
 export class FeatureEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

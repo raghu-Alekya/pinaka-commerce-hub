@@ -1,5 +1,5 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, BillingCycle, BillingModel, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, BillingCycle, BillingModel, RecordStatus } from './commerce-enums';
 import { StoreTypeEntity } from './store-type.entity';
 
 export {
@@ -9,6 +9,7 @@ export {
 } from './commerce-enums';
 
 @Entity('plans')
+@Audited()
 export class PlanEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

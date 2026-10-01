@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
-import { connectPostgres } from '@pinaka-delivery-hub/database';
+import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { AccountEntity } from './account.entity';
@@ -26,7 +26,11 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       AccountEntity,
       RefreshTokenEntity,
       SessionEntity,
-    ]);
+    ], { synchronize: false });
+    const createdTables = await createMissingTables(this.dataSource);
+    if (createdTables.length) {
+      console.log(`🐘 [Auth PostgreSQL] Created missing tables: ${createdTables.join(', ')}`);
+    }
     this.repository = this.dataSource.getRepository(UserEntity);
     this.accountRepository = this.dataSource.getRepository(AccountEntity);
     this.refreshTokenRepository =

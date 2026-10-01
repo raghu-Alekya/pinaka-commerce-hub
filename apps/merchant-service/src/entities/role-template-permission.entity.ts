@@ -1,9 +1,10 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 import { FeaturePermissionEntity } from './feature-permission.entity';
 import { RoleTemplateEntity } from './role-template.entity';
 
 @Entity('role_template_permissions')
+@Audited()
 export class RoleTemplatePermissionEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

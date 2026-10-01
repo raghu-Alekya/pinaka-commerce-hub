@@ -127,11 +127,11 @@ if [[ "$SKIP_DOCKER" -eq 0 ]]; then
       exit 1
     fi
     if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-      psql -U pdh_user -d template1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub_new_new'" 2>/dev/null | grep -q 1; then
+      psql -U pdh_user -d template1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub_new'" 2>/dev/null | grep -q 1; then
       docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-        psql -U pdh_user -d template1 -c "CREATE DATABASE pinaka_commerce_hub_new_new;" >/dev/null 2>&1 || true
+        psql -U pdh_user -d template1 -c "CREATE DATABASE pinaka_commerce_hub_new;" >/dev/null 2>&1 || true
     fi
-    echo "PostgreSQL ready: pinaka_commerce_hub_new_new"
+    echo "PostgreSQL ready: pinaka_commerce_hub_new"
   else
     echo "Docker daemon is not running. Checking local PostgreSQL service..."
     if node -e "const net = require('net'); const c = net.connect(5432, '127.0.0.1', () => process.exit(0)); c.on('error', () => process.exit(1));" >/dev/null 2>&1; then

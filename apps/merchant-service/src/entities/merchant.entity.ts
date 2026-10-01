@@ -1,5 +1,5 @@
 import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
-import { AuditColumns, MerchantStatus } from './commerce-enums';
+import { Audited, AuditColumns, MerchantStatus } from './commerce-enums';
 
 export { MerchantStatus } from './commerce-enums';
 
@@ -30,6 +30,7 @@ export interface KycDocument {
 
 @Check('merchants_distinct_identity_code', `"merchant_code" <> "merchant_id"`)
 @Entity('merchants')
+@Audited()
 export class MerchantEntity extends AuditColumns {
   @PrimaryColumn({ name: 'merchant_code', type: 'varchar', length: 100 })
   merchantCode!: string;

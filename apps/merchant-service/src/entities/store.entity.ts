@@ -1,5 +1,5 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, OperationalStatus, StoreStatus } from './commerce-enums';
+import { Audited, AuditColumns, OperationalStatus, StoreStatus } from './commerce-enums';
 import { MerchantEntity } from './merchant.entity';
 import { StoreTypeEntity } from './store-type.entity';
 
@@ -30,6 +30,7 @@ export interface StoreWebsiteConnectorConfig {
 }
 
 @Entity('stores')
+@Audited()
 export class StoreEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

@@ -23,7 +23,7 @@ import { StoreTypeEntity, StoreTypeStatus } from '../../entities/store-type.enti
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from '../master/store-setup/store-type.dto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { connectPostgres } from '@pinaka-delivery-hub/database';
+import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from '../../entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from '../../entities/store.entity';
@@ -348,33 +348,13 @@ export class MerchantRepository implements OnModuleInit {
       StoreRoleFeatureEntity,
       MerchantVendorEntity,
       MerchantTendorEntity,
-    ], { synchronize: true, legacyQueryColumns: true });
-    // A brand-new local database has no base tables yet. Bootstrap it once before
-    // installing the additive schemas below. Existing databases deliberately skip
-    // global synchronization because it can remove repository-owned indexes.
-    const [{ core_schema_missing: coreSchemaMissing }] = await this.dataSource.query(`
-      SELECT to_regclass('public.merchants') IS NULL
-         AND to_regclass('public.stores') IS NULL
-         AND to_regclass('public.features') IS NULL AS core_schema_missing
-    `);
-    if (coreSchemaMissing) {
-      const schemaLock = this.dataSource.createQueryRunner();
-      await schemaLock.connect();
-      try {
-        await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
-        try {
-          const [{ core_schema_missing: stillMissing }] = await schemaLock.query(`
-            SELECT to_regclass('public.merchants') IS NULL
-               AND to_regclass('public.stores') IS NULL
-               AND to_regclass('public.features') IS NULL AS core_schema_missing
-          `);
-          if (stillMissing) await this.dataSource.synchronize();
-        } finally {
-          await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
-        }
-      } finally {
-        await schemaLock.release();
-      }
+    ], { synchronize: false, legacyQueryColumns: true });
+    // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
+    // re-adds columns, and PostgreSQL counts those dropped columns until startup
+    // dies with "tables can have at most 1600 columns".
+    const createdTables = await createMissingTables(this.dataSource);
+    if (createdTables.length) {
+      console.log(`🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`);
     }
 
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);

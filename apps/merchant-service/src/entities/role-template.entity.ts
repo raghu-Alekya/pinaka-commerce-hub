@@ -1,9 +1,10 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
-import { AuditColumns, RecordStatus, ScopeType } from './commerce-enums';
+import { Audited, AuditColumns, RecordStatus, ScopeType } from './commerce-enums';
 
 export { RecordStatus as RoleTemplateStatus, ScopeType as RoleScopeType } from './commerce-enums';
 
 @Entity('role_templates')
+@Audited()
 export class RoleTemplateEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
