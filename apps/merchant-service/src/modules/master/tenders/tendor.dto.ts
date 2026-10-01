@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
 import { TendorStatus } from '../../../entities/tendor.entity';
 
 
@@ -22,12 +23,13 @@ const tendorCodeFrom = ({ obj, value }: { obj: Record<string, unknown>; value: u
 const tendorNameFrom = ({ obj, value }: { obj: Record<string, unknown>; value: unknown }) =>
   firstText(value, obj.tendorName, obj.tendor_Name, obj.tendor_name, obj.name);
 
-export class CreateTendorDto {
+export class CreateTendorDto extends AuditInputDto {
   @Transform(tendorCodeFrom)
+  @IsOptional()
   @IsString()
   @Matches(/\S/)
   @MaxLength(50)
-  tendorCode!: string;
+  tendorCode?: string;
 
   @Transform(tendorNameFrom)
   @IsString()
@@ -35,13 +37,17 @@ export class CreateTendorDto {
   @MaxLength(150)
   tendorName!: string;
 
+  @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
+
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsOptional()
   @IsIn([TendorStatus.ACTIVE, TendorStatus.INACTIVE])
   status?: TendorStatus;
 }
 
-export class UpdateTendorDto {
+export class UpdateTendorDto extends AuditInputDto {
   @Transform(tendorCodeFrom)
   @IsOptional()
   @IsString()
@@ -55,6 +61,10 @@ export class UpdateTendorDto {
   @Matches(/\S/)
   @MaxLength(150)
   tendorName?: string;
+
+  @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsOptional()

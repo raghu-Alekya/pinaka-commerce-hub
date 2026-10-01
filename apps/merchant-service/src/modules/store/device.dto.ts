@@ -1,80 +1,85 @@
-import { Transform } from "class-transformer";
-import { IsIn, IsOptional, IsString, Matches, MaxLength } from "class-validator";
+import { Transform } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../audit.dto';
+import { RecordStatus } from '../../entities/commerce-enums';
 
-const deviceTypes = [
-  "POS Terminal",
-  "Kitchen Display",
-  "Barcode Scanner",
-  "Receipt Printer",
-  "Customer Display",
-];
-
-export class CreateDeviceDto {
+export class CreateDeviceDto extends AuditInputDto {
   @IsOptional()
-  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(100)
   deviceCode?: string;
 
-  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsUUID()
+  merchantId!: string;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(255)
-  deviceName!: string;
+  merchantName!: string;
 
-  @IsIn(deviceTypes)
-  deviceType!: string;
-
-  @Transform(({ value }) => (typeof value === "string" ? value.trim().toUpperCase() : value))
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(100)
   serialNumber!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
+  @MaxLength(255)
+  deviceName!: string;
+
+  @IsString()
   @MaxLength(100)
-  merchantId!: string;
+  deviceType!: string;
 
   @IsOptional()
-  @IsIn(["Active", "Inactive"])
-  status?: string;
+  @IsEnum(RecordStatus)
+  status?: RecordStatus;
 }
 
-export class UpdateDeviceDto {
+export class UpdateDeviceDto extends AuditInputDto {
   @IsOptional()
-  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(100)
   deviceCode?: string;
 
   @IsOptional()
-  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsUUID()
+  merchantId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(255)
-  deviceName?: string;
+  merchantName?: string;
 
   @IsOptional()
-  @IsIn(deviceTypes)
-  deviceType?: string;
-
-  @IsOptional()
-  @Transform(({ value }) => (typeof value === "string" ? value.trim().toUpperCase() : value))
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
   @IsString()
   @Matches(/\S/)
   @MaxLength(100)
   serialNumber?: string;
 
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @Matches(/\S/)
-  @MaxLength(100)
-  merchantId?: string;
+  @MaxLength(255)
+  deviceName?: string;
 
   @IsOptional()
-  @IsIn(["Active", "Inactive"])
-  status?: string;
+  @IsString()
+  @MaxLength(100)
+  deviceType?: string;
+
+  @IsOptional()
+  @IsEnum(RecordStatus)
+  status?: RecordStatus;
 }

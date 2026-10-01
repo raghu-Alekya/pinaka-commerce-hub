@@ -1,55 +1,50 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
-import { FeatureStatus } from '../../../entities/feature.entity';
+import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
+import { FeatureStatus, FeatureType } from '../../../entities/feature.entity';
 
-export class CreateFeatureDto {
+export class CreateFeatureDto extends AuditInputDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(100)
-  featureKey!: string;
+  featureCode?: string;
 
   @IsString()
-  @IsNotEmpty()
   @MaxLength(150)
   name!: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  category!: string;
-
-  @IsString()
   @IsOptional()
-  featureType?: string;
+  @IsEnum(FeatureType)
+  featureType?: FeatureType;
 
+  @IsOptional()
   @IsEnum(FeatureStatus)
-  @IsOptional()
   status?: FeatureStatus;
 }
 
-export class UpdateFeatureDto {
-  @IsString()
+export class UpdateFeatureDto extends AuditInputDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  featureCode?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(150)
   name?: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsString()
   @IsOptional()
-  @MaxLength(100)
-  category?: string;
+  @IsEnum(FeatureType)
+  featureType?: FeatureType;
 
-  @IsString()
   @IsOptional()
-  featureType?: string;
-
   @IsEnum(FeatureStatus)
-  @IsOptional()
   status?: FeatureStatus;
 }

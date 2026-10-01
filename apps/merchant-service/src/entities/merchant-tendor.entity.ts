@@ -1,12 +1,10 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 import { AuditColumns, RecordStatus } from './commerce-enums';
 import { MerchantEntity } from './merchant.entity';
-import { VendorEntity } from './vendor.entity';
+import { TendorEntity } from './tendor.entity';
 
-export { RecordStatus as MerchantVendorStatus } from './commerce-enums';
-
-@Entity('merchant_vendors')
-export class MerchantVendorEntity extends AuditColumns {
+@Entity('merchant_tendors')
+export class MerchantTendorEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
@@ -17,12 +15,15 @@ export class MerchantVendorEntity extends AuditColumns {
   @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id' })
   merchant?: MerchantEntity;
 
-  @Column({ name: 'vendor_id', type: 'uuid' })
-  vendorId!: string;
+  @Column({ name: 'tendor_id', type: 'uuid' })
+  tendorId!: string;
 
-  @ManyToOne(() => VendorEntity)
-  @JoinColumn({ name: 'vendor_id' })
-  vendor?: VendorEntity;
+  @ManyToOne(() => TendorEntity)
+  @JoinColumn({ name: 'tendor_id' })
+  tendor?: TendorEntity;
+
+  @Column({ name: 'tendor_code', type: 'varchar', length: 50, nullable: true })
+  tendorCode?: string | null;
 
   @Column({
     name: 'status',

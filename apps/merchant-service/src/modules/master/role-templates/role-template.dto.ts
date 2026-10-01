@@ -1,45 +1,50 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
-import { RoleTemplateStatus, RoleScopeType } from '../../../entities/role-template.entity';
+import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
+import { RoleScopeType, RoleTemplateStatus } from '../../../entities/role-template.entity';
 
-export class CreateRoleTemplateDto {
+export class CreateRoleTemplateDto extends AuditInputDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(50)
-  roleCode!: string;
+  roleCode?: string;
 
   @IsString()
-  @IsNotEmpty()
   @MaxLength(100)
   name!: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsEnum(RoleScopeType)
   @IsOptional()
+  @IsEnum(RoleScopeType)
   scopeType?: RoleScopeType;
 
-  @IsEnum(RoleTemplateStatus)
   @IsOptional()
+  @IsEnum(RoleTemplateStatus)
   status?: RoleTemplateStatus;
 }
 
-export class UpdateRoleTemplateDto {
-  @IsString()
+export class UpdateRoleTemplateDto extends AuditInputDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  roleCode?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(100)
   name?: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsEnum(RoleScopeType)
   @IsOptional()
+  @IsEnum(RoleScopeType)
   scopeType?: RoleScopeType;
 
-  @IsEnum(RoleTemplateStatus)
   @IsOptional()
+  @IsEnum(RoleTemplateStatus)
   status?: RoleTemplateStatus;
 }

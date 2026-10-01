@@ -1,93 +1,80 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import { AuditColumns, BillingCycle, SubscriptionStatus } from './commerce-enums';
+import { MerchantEntity } from './merchant.entity';
+import { PlanEntity } from './plan.entity';
 
+export { SubscriptionStatus, BillingCycle } from './commerce-enums';
+
+/** Codes for the subscription_plans catalog. Not a column on subscriptions. */
 export enum PlanCode {
   STARTER = 'STARTER',
   PRO = 'PRO',
   ENTERPRISE = 'ENTERPRISE',
 }
 
-export enum SubscriptionStatus {
-  ACTIVE = 'ACTIVE',
-  TRIAL = 'TRIAL',
-  PAST_DUE = 'PAST_DUE',
-  CANCELLED = 'CANCELLED',
-  PENDING = 'PENDING',
-  SUSPENDED = 'SUSPENDED',
-  EXPIRED = 'EXPIRED',
-}
+const numericPrice = {
+  to: (value: number) => value,
+  from: (value: string) => Number(value),
+};
 
 @Entity('subscriptions')
-export class SubscriptionEntity {
-  @PrimaryColumn({ type: 'varchar', length: 100 })
-  id!: string; // e.g. "SUB-9001"
+export class SubscriptionEntity extends AuditColumns {
+  @PrimaryColumn({ name: 'id', type: 'varchar', length: 100 })
+  id!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'merchant_id', type: 'uuid' })
   merchantId!: string;
 
-  @Column({ type: 'varchar', length: 100, unique: true, nullable: true })
-  subscriptionCode?: string | null;
+  @ManyToOne(() => MerchantEntity)
+  @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id' })
+  merchant?: MerchantEntity;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ name: 'subscription_code', type: 'varchar', length: 100, unique: true })
+  subscriptionCode!: string;
+
+  @Column({ name: 'plan_id', type: 'uuid', nullable: true })
   planId?: string | null;
 
-  @Column({ type: 'date', nullable: true })
+  @ManyToOne(() => PlanEntity, { nullable: true })
+  @JoinColumn({ name: 'plan_id' })
+  plan?: PlanEntity;
+
+  @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate?: string | null;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ name: 'renewal_date', type: 'date', nullable: true })
   renewalDate?: string | null;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ name: 'trial_end_date', type: 'date', nullable: true })
   trialEndDate?: string | null;
 
-  @Column({ type: 'integer', nullable: true })
-  licensedStoreCount?: number | null;
-
-  @Column({ type: 'integer', nullable: true })
-  licensedDeviceCount?: number | null;
-
-  @Column({ type: 'varchar', length: 10, nullable: true })
-  currency?: string | null;
-
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ name: 'cancelled_at', type: 'timestamptz', nullable: true })
   cancelledAt?: Date | null;
 
-  @Column({ type: 'varchar', length: 50, default: PlanCode.PRO })
-  planCode!: PlanCode;
+  @Column({ name: 'entitlements', type: 'jsonb', default: () => "'[]'" })
+  entitlements!: unknown[];
 
-  @Column({ type: 'varchar', length: 100 })
-  planName!: string;
+  @Column({
+    name: 'billing_cycle',
+    type: 'enum',
+    enum: BillingCycle,
+    enumName: 'billing_cycle',
+    default: BillingCycle.MONTHLY,
+  })
+  billingCycle!: BillingCycle;
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
-  storeTypeName?: string | null;
-
-  @Column({ type: 'integer', default: 3 })
-  maxStoresAllowed!: number;
-
-  @Column({ type: 'jsonb' })
-  entitlements!: string[]; // ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY']
-
-  @Column({ type: 'varchar', length: 20, default: 'MONTHLY' })
-  billingCycle!: 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL';
-
-  @Column({ type: 'integer', default: 0 })
-  trialDays!: number;
-
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 99.00,
-    transformer: { to: (value: number) => value, from: (value: string) => Number(value) } })
+  @Column({ name: 'price', type: 'numeric', precision: 10, scale: 2, transformer: numericPrice })
   price!: number;
 
-  @Column({ type: 'varchar', length: 50, default: SubscriptionStatus.ACTIVE })
+  @Column({ name: 'auto_renew', type: 'boolean', default: true })
+  autoRenew!: boolean;
+
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: SubscriptionStatus,
+    enumName: 'subscription_status',
+    default: SubscriptionStatus.ACTIVE,
+  })
   status!: SubscriptionStatus;
-
-  @Column({ type: 'timestamptz', nullable: true })
-  currentPeriodStart?: Date;
-
-  @Column({ type: 'timestamptz', nullable: true })
-  currentPeriodEnd?: Date;
-
-  @CreateDateColumn()
-  createdAt!: Date;
-
-  @UpdateDateColumn()
-  updatedAt!: Date;
 }

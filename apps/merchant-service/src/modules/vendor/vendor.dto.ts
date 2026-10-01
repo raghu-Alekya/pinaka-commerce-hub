@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsIn, IsOptional, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, ValidateIf } from 'class-validator';
+import { AuditInputDto } from '../../audit.dto';
 import { VendorStatus, VendorType } from '../../entities/vendor.entity';
 
 const blankToUndefined = ({ value }: { value: unknown }) => {
@@ -17,7 +18,7 @@ export function normalizeVendorType(value: unknown): unknown {
   return normalized;
 }
 
-export class CreateVendorDto {
+export class CreateVendorDto extends AuditInputDto {
   @Transform(blankToUndefined)
   @IsString()
   @Matches(/\S/)
@@ -27,6 +28,10 @@ export class CreateVendorDto {
   @Transform(({ value }) => normalizeVendorType(value))
   @IsIn([VendorType.ORGANIZER, VendorType.SUPPLIER])
   vendorType!: VendorType;
+
+  @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
 
   @Transform(blankToUndefined)
   @IsOptional()
@@ -101,7 +106,7 @@ export class CreateVendorDto {
   status?: VendorStatus;
 }
 
-export class UpdateVendorDto {
+export class UpdateVendorDto extends AuditInputDto {
   @Transform(blankToUndefined)
   @IsOptional()
   @IsString()
@@ -113,6 +118,10 @@ export class UpdateVendorDto {
   @IsOptional()
   @IsIn([VendorType.ORGANIZER, VendorType.SUPPLIER])
   vendorType?: VendorType;
+
+  @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
 
   @Transform(blankToUndefined)
   @IsOptional()

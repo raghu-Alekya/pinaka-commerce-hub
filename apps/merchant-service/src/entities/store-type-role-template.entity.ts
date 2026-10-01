@@ -1,26 +1,26 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 import { AuditColumns, RecordStatus } from './commerce-enums';
+import { RoleTemplateEntity } from './role-template.entity';
 import { StoreTypeEntity } from './store-type.entity';
 
-export { RecordStatus as TendorStatus } from './commerce-enums';
-
-@Entity('tendors')
-export class TendorEntity extends AuditColumns {
+@Entity('store_type_role_templates')
+export class StoreTypeRoleTemplateEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'tendor_code', type: 'varchar', length: 50, unique: true })
-  tendorCode!: string;
+  @Column({ name: 'store_type_id', type: 'uuid' })
+  storeTypeId!: string;
 
-  @Column({ name: 'tendor_name', type: 'varchar', length: 150 })
-  tendorName!: string;
-
-  @Column({ name: 'store_type_id', type: 'uuid', nullable: true })
-  storeTypeId?: string | null;
-
-  @ManyToOne(() => StoreTypeEntity, { nullable: true })
+  @ManyToOne(() => StoreTypeEntity)
   @JoinColumn({ name: 'store_type_id' })
   storeType?: StoreTypeEntity;
+
+  @Column({ name: 'role_template_id', type: 'uuid' })
+  roleTemplateId!: string;
+
+  @ManyToOne(() => RoleTemplateEntity)
+  @JoinColumn({ name: 'role_template_id' })
+  roleTemplate?: RoleTemplateEntity;
 
   @Column({
     name: 'status',

@@ -1,35 +1,73 @@
-import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsEmail, IsIn, IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested, IsDefined } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsISO8601, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateNested, IsDefined } from 'class-validator';
+import { CreateMerchantDto } from '../../merchant.dto';
 import { CreateStoreDto } from '../store/store.dto';
+import { BillingCycle, SubscriptionStatus } from '../../entities/subscription.entity';
 
-const trim = ({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value;
-export class OnboardingMerchantDto {
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(100) code!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(255) business!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(255) display!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(150) name!: string;
-  @Transform(trim) @IsEmail() @MaxLength(255) email!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(50) phone!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(100) country!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(100) city!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(100) state!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(1000) address!: string;
-  @Transform(trim) @IsString() @Matches(/\S/) @MaxLength(30) postal!: string;
-}
+export class OnboardingMerchantDto extends CreateMerchantDto {}
 
 export class OnboardingSubscriptionDto {
-  @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
-  @IsString() @Matches(/^[A-Z][A-Z0-9_]{0,49}$/) planCode!: string;
-  @Transform(({ value }) => typeof value === 'string' ? value.toUpperCase() : value)
-  @IsIn(['MONTHLY', 'ANNUAL']) billingCycle!: 'MONTHLY' | 'ANNUAL';
-  @IsISO8601({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/) startDate!: string;
-  @IsOptional() @IsInt() @Min(1) @Max(100000) licensedStoreCount?: number;
-  @IsOptional() @IsInt() @Min(1) @Max(100000) licensedDeviceCount?: number;
+  @IsOptional()
+  @IsUUID()
+  planId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  subscriptionCode?: string;
+
+  @IsOptional()
+  @IsEnum(BillingCycle)
+  billingCycle?: BillingCycle;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(99999999.99)
+  price!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  autoRenew?: boolean;
+
+  @IsOptional()
+  @IsEnum(SubscriptionStatus)
+  status?: SubscriptionStatus;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  startDate?: string;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  renewalDate?: string;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  trialEndDate?: string;
+
+  @IsOptional()
+  @IsArray()
+  entitlements?: unknown[];
 }
 
 export class MerchantOnboardingDto {
-  @IsDefined() @ValidateNested() @Type(() => OnboardingMerchantDto) merchant!: OnboardingMerchantDto;
-  @IsOptional() @ValidateNested() @Type(() => OnboardingSubscriptionDto) subscription?: OnboardingSubscriptionDto;
-  @IsOptional() @IsArray() @ArrayMaxSize(100) @ValidateNested({ each: true }) @Type(() => CreateStoreDto) stores?: CreateStoreDto[];
-}
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => OnboardingMerchantDto)
+  merchant!: OnboardingMerchantDto;
 
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OnboardingSubscriptionDto)
+  subscription?: OnboardingSubscriptionDto;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => CreateStoreDto)
+  stores?: CreateStoreDto[];
+}

@@ -1,126 +1,172 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsNumber, IsInt, IsArray, IsISO8601, Min, MaxLength } from 'class-validator';
-import { PlanStatus, PlanBillingModel, PlanBillingCycle } from '../../../entities/plan.entity';
- 
-export class CreatePlanDto {
+import { IsArray, IsEnum, IsInt, IsISO8601, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
+import { PlanBillingCycle, PlanBillingModel, PlanStatus } from '../../../entities/plan.entity';
+
+export class CreatePlanDto extends AuditInputDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(50)
-  planCode!: string;
- 
+  planCode?: string;
+
   @IsString()
-  @IsNotEmpty()
   @MaxLength(100)
   name!: string;
- 
-  @IsString()
+
   @IsOptional()
+  @IsString()
   description?: string;
- 
+
+  @IsOptional()
   @IsEnum(PlanBillingModel)
-  @IsNotEmpty()
-  billingModel!: PlanBillingModel;
- 
-  @IsNumber()
-  @Min(0)
-  basePrice!: number;
- 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(3)
-  currency!: string;
- 
-  @IsEnum(PlanBillingCycle)
-  @IsNotEmpty()
-  billingCycle!: PlanBillingCycle;
- 
-  @IsString() @IsOptional() @MaxLength(50)
-  storeType?: string;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedStores?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedTerminals?: number;
- 
-  @IsNumber() @IsOptional() @Min(0)
-  additionalTerminalPrice?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedEmployees?: number;
- 
-  @IsNumber() @IsOptional() @Min(0)
-  additionalEmployeePrice?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  trialPeriod?: number;
- 
-  @IsISO8601() @IsOptional()
-  effectiveFrom?: string | null;
- 
-  @IsArray() @IsString({ each: true }) @IsOptional()
-  includedFeatures?: string[];
- 
-  @IsEnum(PlanStatus)
-  @IsOptional()
-  status?: PlanStatus;
-}
- 
-export class UpdatePlanDto {
-  @IsString()
-  @IsOptional()
-  @MaxLength(100)
-  name?: string;
- 
-  @IsString()
-  @IsOptional()
-  description?: string;
- 
-  @IsEnum(PlanBillingModel)
-  @IsOptional()
   billingModel?: PlanBillingModel;
- 
-  @IsNumber()
+
   @IsOptional()
+  @IsNumber()
   @Min(0)
   basePrice?: number;
- 
-  @IsString()
+
   @IsOptional()
+  @IsString()
   @MaxLength(3)
   currency?: string;
- 
+
+  @IsOptional()
   @IsEnum(PlanBillingCycle)
-  @IsOptional()
   billingCycle?: PlanBillingCycle;
- 
-  @IsString() @IsOptional() @MaxLength(50)
-  storeType?: string | null;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedStores?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedTerminals?: number;
- 
-  @IsNumber() @IsOptional() @Min(0)
-  additionalTerminalPrice?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  includedEmployees?: number;
- 
-  @IsNumber() @IsOptional() @Min(0)
-  additionalEmployeePrice?: number;
- 
-  @IsInt() @IsOptional() @Min(0)
-  trialPeriod?: number;
- 
-  @IsISO8601() @IsOptional()
-  effectiveFrom?: string | null;
- 
-  @IsArray() @IsString({ each: true }) @IsOptional()
-  includedFeatures?: string[];
- 
-  @IsEnum(PlanStatus)
+
   @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  storesLimit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  terminalLimit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  additionalTerminalPrice?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  employeesLimit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  additionalEmployeePrice?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  trialPeriod?: number;
+
+  @IsOptional()
+  @IsISO8601()
+  effectiveFrom?: string | null;
+
+  @IsOptional()
+  @IsISO8601()
+  planEndDate?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  includedFeatures?: string[];
+
+  @IsOptional()
+  @IsEnum(PlanStatus)
+  status?: PlanStatus;
+}
+
+export class UpdatePlanDto extends AuditInputDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  planCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsEnum(PlanBillingModel)
+  billingModel?: PlanBillingModel;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  basePrice?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+
+  @IsOptional()
+  @IsEnum(PlanBillingCycle)
+  billingCycle?: PlanBillingCycle;
+
+  @IsOptional()
+  @IsUUID()
+  storeTypeId?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  storesLimit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  terminalLimit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  additionalTerminalPrice?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  employeesLimit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  additionalEmployeePrice?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  trialPeriod?: number;
+
+  @IsOptional()
+  @IsISO8601()
+  effectiveFrom?: string | null;
+
+  @IsOptional()
+  @IsISO8601()
+  planEndDate?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  includedFeatures?: string[];
+
+  @IsOptional()
+  @IsEnum(PlanStatus)
   status?: PlanStatus;
 }

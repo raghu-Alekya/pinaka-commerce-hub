@@ -1,4 +1,6 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsUUID } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
+import { RecordStatus } from '../../../entities/commerce-enums';
 
 export class AddMerchantTendorsDto {
   @IsArray()
@@ -6,4 +8,40 @@ export class AddMerchantTendorsDto {
   @ArrayMaxSize(100)
   @IsUUID('all', { each: true })
   tendorIds!: string[];
+}
+
+export class CreateMerchantTendorDto extends AuditInputDto {
+  @IsUUID()
+  merchantId!: string;
+
+  @IsUUID()
+  tendorId!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  tendorCode?: string;
+
+  @IsOptional()
+  @IsEnum(RecordStatus)
+  status?: RecordStatus;
+}
+
+export class UpdateMerchantTendorDto extends AuditInputDto {
+  @IsOptional()
+  @IsUUID()
+  merchantId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  tendorId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  tendorCode?: string | null;
+
+  @IsOptional()
+  @IsEnum(RecordStatus)
+  status?: RecordStatus;
 }

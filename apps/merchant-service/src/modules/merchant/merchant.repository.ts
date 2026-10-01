@@ -1,18 +1,10 @@
 import { groupFeaturesByCategory } from '../master/common/master-list';
-import { ensureOnboardingSchema } from './onboarding.schema';
-import { ensureMerchantCrudSchema } from './merchant-crud.schema';
-import { ensureMerchantIdentitySchema } from './merchant-identity.schema';
-import { ensureCompactMerchantSchema } from './compact-merchant.schema';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from '../master/store-setup/store-setup';
 import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
-
-import { ensureEmployeeAccessSchema } from '../employee/employee-access.schema';
-import { ensureStoreRoleTemplateSchema } from '../master/store-setup/store-role-template.schema';
-import { ensurePlanSchema } from '../master/plans/plan.schema';
-import { FeatureEntity, FeatureStatus } from '../../entities/feature.entity';
+import { FeatureEntity, FeatureStatus, FeatureType } from '../../entities/feature.entity';
 import { PermissionEntity, PermissionStatus } from '../../entities/permission.entity';
 import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from '../../entities/role-template.entity';
 import { PlanEntity, PlanStatus, PlanBillingModel, PlanBillingCycle } from '../../entities/plan.entity';
@@ -35,7 +27,7 @@ import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from '../../entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from '../../entities/store.entity';
-import { SubscriptionEntity, PlanCode, SubscriptionStatus } from '../../entities/subscription.entity';
+import { SubscriptionEntity, PlanCode, SubscriptionStatus, BillingCycle } from '../../entities/subscription.entity';
 import { OnboardingAuditEntity } from '../../entities/onboarding-audit.entity';
 import { SubscriptionPlanEntity } from '../../entities/subscription-plan.entity';
 import { WebsiteConnectionEntity } from '../../entities/website-connection.entity';
@@ -44,33 +36,28 @@ import { ProductEntity } from '../../entities/product.entity';
 import { DeviceEntity } from '../../entities/device.entity';
 import { VendorEntity } from '../../entities/vendor.entity';
 import { TendorEntity } from '../../entities/tendor.entity';
-import { ensureVendorTendorSchema } from '../master/tenders/vendor-tendor.schema';
-import { ensureDeviceSchema } from '../store/device.schema';
-import { ensureStoreAccessSchema } from '../master/store-setup/store-access.schema';
-import { ensurePosCurrencyTaxSchema } from '../../pos/currency-tax/pos-currency-tax.schema';
+import { FeaturePermissionEntity } from '../../entities/feature-permission.entity';
+import { RoleTemplatePermissionEntity } from '../../entities/role-template-permission.entity';
+import { StoreTypeFeatureEntity } from '../../entities/store-type-feature.entity';
+import { StoreTypeRoleTemplateEntity } from '../../entities/store-type-role-template.entity';
+import { StoreRoleFeatureEntity } from '../../entities/store-role-feature.entity';
+import { MerchantVendorEntity } from '../../entities/merchant-vendor.entity';
+import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
 import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
-import { ensurePosServiceChargeSchema } from '../../pos/service-charges/pos-service-charge.schema';
 import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
 import { PosServiceChargeTierEntity } from '../../pos/service-charges/pos-service-charge-tier.entity';
-import { ensurePosCashbackSchema } from '../../pos/cashback/pos-cashback.schema';
 import { PosCashbackEntity } from '../../pos/cashback/pos-cashback.entity';
 import { PosCashbackTierEntity } from '../../pos/cashback/pos-cashback-tier.entity';
-import { ensurePosOpeningBalanceSchema } from '../../pos/opening-balance/pos-opening-balance.schema';
 import { PosOpeningBalanceEntity } from '../../pos/opening-balance/pos-opening-balance.entity';
-import { ensurePosCashDenominationSchema } from '../../pos/cash-denominations/pos-cash-denomination.schema';
 import { PosCashDenominationEntity } from '../../pos/cash-denominations/pos-cash-denomination.entity';
 import { PosCashDenominationItemEntity } from '../../pos/cash-denominations/pos-cash-denomination-item.entity';
-import { ensurePosCashRegisterSchema } from '../../pos/cash-registers/pos-cash-register.schema';
 import { PosCashRegisterSettingsEntity } from '../../pos/cash-registers/pos-cash-register-settings.entity';
 import { PosCashRegisterEntity } from '../../pos/cash-registers/pos-cash-register.entity';
-import { ensurePosSafeDropSchema } from '../../pos/safe-drop/pos-safe-drop.schema';
 import { PosSafeDropEntity } from '../../pos/safe-drop/pos-safe-drop.entity';
 import { PosSafeDropTubeEntity } from '../../pos/safe-drop/pos-safe-drop-tube.entity';
 import { PosSafeDropDenominationEntity } from '../../pos/safe-drop/pos-safe-drop-denomination.entity';
-import { ensurePosCardPaymentSchema } from '../../pos/card-payments/pos-card-payment.schema';
 import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.entity';
-import { ensurePosTerminalMappingSchema } from '../../pos/terminal-mappings/pos-terminal-mapping.schema';
 import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 
@@ -122,7 +109,7 @@ export class MerchantRepository implements OnModuleInit {
       !(active.cancelledAt && Date.parse(active.cancelledAt) <= Date.now()));
     const planId = subscriptionActive ? (active.planId || active.plan_id) : null;
     const [plan] = planId ? await this.dataSource.query(
-      `SELECT id, status, included_features, store_type FROM public.plans WHERE id=$1`, [planId]) : [];
+      `SELECT id, status, included_features, store_type_id AS store_type FROM public.plans WHERE id::text=$1`, [planId]) : [];
     const activePlan = plan?.status === 'ACTIVE' ? plan : null;
     let featureStoreType = storeType;
     const planStoreTypeRef = activePlan?.store_type ? String(activePlan.store_type).trim() : '';
@@ -354,7 +341,14 @@ export class MerchantRepository implements OnModuleInit {
       SessionEntity,
       VendorEntity,
       TendorEntity,
-    ], { synchronize: false });
+      FeaturePermissionEntity,
+      RoleTemplatePermissionEntity,
+      StoreTypeFeatureEntity,
+      StoreTypeRoleTemplateEntity,
+      StoreRoleFeatureEntity,
+      MerchantVendorEntity,
+      MerchantTendorEntity,
+    ], { synchronize: true, legacyQueryColumns: true });
     // A brand-new local database has no base tables yet. Bootstrap it once before
     // installing the additive schemas below. Existing databases deliberately skip
     // global synchronization because it can remove repository-owned indexes.
@@ -383,28 +377,6 @@ export class MerchantRepository implements OnModuleInit {
       }
     }
 
-    // 1. Initialize all repositories first
-    // Repository-managed foreign keys depend on indexes unknown to TypeORM.
-    // Keep them intact even when other services opt into TYPEORM_SYNCHRONIZE.
-    await ensureMerchantIdentitySchema(this.dataSource);
-    await ensureCompactMerchantSchema(this.dataSource);
-    await ensureEmployeeAccessSchema(this.dataSource);
-    await ensureStoreRoleTemplateSchema(this.dataSource);
-    await ensureOnboardingSchema(this.dataSource);
-    await ensurePlanSchema(this.dataSource);
-    await ensureVendorTendorSchema(this.dataSource);
-    await ensureDeviceSchema(this.dataSource);
-    await ensureStoreAccessSchema(this.dataSource);
-    await ensurePosCurrencyTaxSchema(this.dataSource);
-    await ensurePosServiceChargeSchema(this.dataSource);
-    await ensurePosCashbackSchema(this.dataSource);
-    await ensurePosOpeningBalanceSchema(this.dataSource);
-    await ensurePosCashDenominationSchema(this.dataSource);
-    await ensurePosCashRegisterSchema(this.dataSource);
-    await ensurePosSafeDropSchema(this.dataSource);
-    await ensurePosCardPaymentSchema(this.dataSource);
-    await ensurePosTerminalMappingSchema(this.dataSource);
-    await ensureMerchantCrudSchema(this.dataSource);
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
     this.storeTypeRepo = this.dataSource.getRepository(StoreTypeEntity);
@@ -512,59 +484,60 @@ export class MerchantRepository implements OnModuleInit {
   private async seedDefaultData() {
     if (!this.merchantRepo || !this.storeRepo) return;
     if (!this.merchantRepo || !this.storeRepo || !this.subRepo) return;
-    const existing = await this.merchantRepo.findOne({ where: { merchantId: 'MCH-1001' } });
-    if (!existing) {
-      const mch1 = this.merchantRepo.create({
-        id: `MRC-${crypto.randomUUID()}`,
-        merchantId: 'MCH-1001',
-        businessName: 'Fresh Mart Organics LLC',
-        businessType: BusinessType.RETAIL,
-        retailSubCategory: RetailSubCategory.GROCERY,
-        ownerName: 'Alex Johnson',
+    const storeType = await this.storeTypeRepo?.findOne({ where: { storeTypeCode: 'GROCERY' } })
+      || await this.storeTypeRepo?.findOne({ where: {} });
+    if (!storeType) return;
+    let merchant = await this.merchantRepo.findOne({ where: [{ merchantCode: 'MCH-1001' }, { merchantId: 'MCH-1001' }, { merchantId: 'MID-1001' }] });
+    if (!merchant) {
+      merchant = await this.merchantRepo.save(this.merchantRepo.create({
+        id: crypto.randomUUID(),
+        merchantCode: 'MCH-1001',
+        merchantId: 'MID-1001',
+        businessDisplayName: 'Fresh Mart Organics LLC',
+        firstName: 'Alex',
+        lastName: 'Johnson',
         email: 'alex@freshmart.com',
         phone: '+1 (555) 234-5678',
         taxId: '12-3456789',
-        billingContact: true,
-        kycStatus: KycStatus.VERIFIED,
         status: MerchantStatus.ACTIVE,
         onboardingStep: 'COMPLETED',
-      });
-      await this.merchantRepo.save(mch1);
-
-      const str1 = this.storeRepo.create({
-        id: 'STR-5001',
-        merchantId: 'MCH-1001',
+      }));
+    }
+    let store = await this.storeRepo.findOne({ where: { storeCode: 'STR-DT-01' } });
+    if (!store) {
+      store = await this.storeRepo.save(this.storeRepo.create({
+        id: crypto.randomUUID(),
+        merchantId: merchant.id,
+        storeTypeId: storeType.id,
         storeName: 'Fresh Mart - Downtown Branch',
         storeCode: 'STR-DT-01',
-        storeType: 'GROCERY',
-        address: { street: '123 Main St, Suite 400', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
+        addressLine1: '123 Main St, Suite 400',
+        city: 'Austin',
+        state: 'TX',
+        postalCode: '78701',
+        country: 'USA',
         currency: 'USD',
         timezone: 'America/Chicago',
-        taxRate: 8.25,
         activationPin: '849201',
         status: StoreStatus.ACTIVE,
         operationalStatus: OperationalStatus.OPEN,
         channels: [{ platform: 'POS', externalStoreId: 'POS-01', apiKey: 'key_pos_1', enabled: true }, { platform: 'UBER_EATS', externalStoreId: 'UBER-99', apiKey: 'key_uber', enabled: true }],
-      });
-      await this.storeRepo.save(str1);
-
-      const sub1 = this.subRepo.create({
+      }));
+      await this.cacheStorePin(store.activationPin, store);
+      console.log('✅ [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-DT-01 (PIN: 849201)');
+    }
+    const subscription = await this.subRepo.findOne({ where: { subscriptionCode: 'SUB-9001' } });
+    if (!subscription) {
+      await this.subRepo.save(this.subRepo.create({
         id: 'SUB-9001',
-        merchantId: 'MCH-1001',
-        planCode: PlanCode.PRO,
-        planName: 'Pro Commerce Plan',
-        maxStoresAllowed: 3,
+        merchantId: merchant.id,
+        subscriptionCode: 'SUB-9001',
         entitlements: ['POS', 'BARCODE_SCANNING', 'UBER_EATS', 'DOORDASH', 'PAYROLL', 'LOYALTY'],
-        billingCycle: 'MONTHLY',
-        trialDays: 0,
+        billingCycle: BillingCycle.MONTHLY,
         price: 99.00,
+        autoRenew: true,
         status: SubscriptionStatus.ACTIVE,
-      });
-      await this.subRepo.save(sub1);
-
-      await this.cacheStorePin(str1.activationPin, str1);
-      await this.recordAuditLog('MERCHANT_SEEDED', 'MCH-1001', 'STR-5001', 'system', { seed: true });
-      console.log('âœ… [PCH Seed] Seeded Demo Retail Merchant MCH-1001 & Store STR-5001 (PIN: 849201)');
+      }));
     }
   }
 
@@ -595,78 +568,99 @@ export class MerchantRepository implements OnModuleInit {
 
   async saveOnboarding(body: MerchantOnboardingDto, editing: boolean) {
     if (!this.dataSource?.isInitialized) throw new ServiceUnavailableException('Onboarding requires PostgreSQL');
-    const id = body.merchant.code;
-    const incoming = body.stores || [];
-    if (incoming.some(store => store.merchantId !== id)) throw new BadRequestException('All stores must belong to this merchant');
-    if (new Set(incoming.map(store => store.storeId)).size !== incoming.length) throw new BadRequestException('Store IDs must be unique');
     const m = body.merchant;
+    const incoming = body.stores || [];
+    const storeCodes = incoming.map(store => store.storeCode || store.storeName);
+    if (new Set(storeCodes).size !== storeCodes.length) throw new BadRequestException('Store codes must be unique');
     let result;
     try {
       result = await this.dataSource.transaction(async manager => {
         const merchants = manager.getRepository(MerchantEntity);
         const stores = manager.getRepository(StoreEntity);
         const subscriptions = manager.getRepository(SubscriptionEntity);
-        const existing = await merchants.findOne({ where: { merchantId: id }, lock: { mode: 'pessimistic_write' } });
+        const existing = await merchants.findOne({
+          where: [{ merchantId: m.merchantId }, { merchantCode: m.merchantCode || m.merchantId }],
+          lock: { mode: 'pessimistic_write' },
+        });
         if (editing && !existing) throw new NotFoundException('Merchant not found');
         if (!editing && existing) throw new ConflictException('Merchant code already exists');
-        const merchant = merchants.create({
-          ...existing, id: existing?.id || `MRC-${crypto.randomUUID()}`, merchantId: id, businessName: m.display,
-          legalBusinessName: m.business, ownerName: m.name, email: m.email.toLowerCase(), phone: m.phone,
-          country: m.country, city: m.city, state: m.state, postalCode: m.postal, businessAddress: m.address,
-          status: existing?.status || MerchantStatus.PENDING,
-          onboardingStep: incoming.length ? 'COMPLETED' : existing?.onboardingStep || 'STEP2_STORE',
-        });
-        // Save everything in one transaction: no partial merchant when a store or plan fails.
-        await merchants.save(merchant);
-        let subscription = await subscriptions.findOne({ where: { merchantId: id }, order: { createdAt: 'DESC' } });
+        const rowId = existing?.id && this.isUuid(existing.id) ? existing.id : crypto.randomUUID();
+        const merchantCode = m.merchantCode || existing?.merchantCode || m.merchantId;
+        const merchantBusinessId = m.merchantId === merchantCode ? `MID-${rowId.slice(0, 8).toUpperCase()}` : m.merchantId;
+        const merchant = await merchants.save(merchants.create({
+          ...existing,
+          id: rowId,
+          merchantCode,
+          merchantId: merchantBusinessId,
+          businessDisplayName: m.businessDisplayName,
+          firstName: m.firstName,
+          lastName: m.lastName,
+          email: m.email.toLowerCase(),
+          phone: m.phone,
+          alternatePhone: m.alternatePhone,
+          taxId: m.taxId,
+          addressLine1: m.addressLine1,
+          addressLine2: m.addressLine2,
+          postalCode: m.postalCode,
+          country: m.country,
+          city: m.city,
+          state: m.state,
+          status: m.status || existing?.status || MerchantStatus.PENDING,
+          onboardingStep: incoming.length ? 'COMPLETED' : m.onboardingStep || existing?.onboardingStep || 'STEP2_STORE',
+        }));
+        const ownerKeys = new Set([merchant.id, merchant.merchantId, merchant.merchantCode]);
+        if (incoming.some(store => store.merchantId && !ownerKeys.has(store.merchantId))) {
+          throw new BadRequestException('All stores must belong to this merchant');
+        }
+        let subscription = await subscriptions.findOne({ where: { merchantId: merchant.id }, order: { createdAt: 'DESC' } });
         if (body.subscription) {
-          const fields = await this.prepareSubscriptionContract({
-            ...body.subscription,
-            status: subscription?.status || SubscriptionStatus.PENDING,
-          }, subscription || undefined);
-          if (fields.licensedStoreCount == null || fields.licensedDeviceCount == null) {
-            throw new BadRequestException('The plan must define store/device limits, or supply the agreed license counts');
-          }
-          const start = body.subscription.startDate;
-          const renewal = new Date(start + 'T00:00:00Z');
-          const day = renewal.getUTCDate();
-          renewal.setUTCDate(1);
-          renewal.setUTCMonth(renewal.getUTCMonth() + (body.subscription.billingCycle === 'ANNUAL' ? 12 : 1));
-          const last = new Date(Date.UTC(renewal.getUTCFullYear(), renewal.getUTCMonth() + 1, 0)).getUTCDate();
-          renewal.setUTCDate(Math.min(day, last));
           const subId = subscription?.id || `SUB-${crypto.randomUUID()}`;
           subscription = await subscriptions.save(subscriptions.create({
-            ...subscription, ...fields,
-            id: subId, subscriptionCode: subscription?.subscriptionCode || subId, merchantId: id,
-            renewalDate: renewal.toISOString().slice(0, 10), currentPeriodEnd: renewal,
+            ...subscription,
+            id: subId,
+            merchantId: merchant.id,
+            subscriptionCode: body.subscription.subscriptionCode || subscription?.subscriptionCode || subId,
+            planId: body.subscription.planId ?? subscription?.planId,
+            price: body.subscription.price,
+            billingCycle: body.subscription.billingCycle || subscription?.billingCycle || BillingCycle.MONTHLY,
+            autoRenew: body.subscription.autoRenew ?? subscription?.autoRenew ?? true,
+            status: body.subscription.status || subscription?.status || SubscriptionStatus.PENDING,
+            startDate: body.subscription.startDate ?? subscription?.startDate,
+            renewalDate: body.subscription.renewalDate ?? subscription?.renewalDate,
+            trialEndDate: body.subscription.trialEndDate ?? subscription?.trialEndDate,
+            entitlements: body.subscription.entitlements || subscription?.entitlements || [],
           }));
         }
-        if (!subscription) throw new BadRequestException('Create a merchant subscription before adding stores');
+        if (!subscription && incoming.length) throw new BadRequestException('Create a merchant subscription before adding stores');
         for (const item of incoming) {
-          const current = await stores.findOneBy({ id: item.storeId, isDeleted: 0 });
-          if (current && current.merchantId !== id) throw new ConflictException(`Store '${item.storeId}' belongs to another merchant`);
-          const type = await this.getStoreTypeByIdOrCode(item.type || '');
-          if (!type || type.status !== 'ACTIVE') throw new BadRequestException('Select an active store type master code');
-          const fields = {
-            id: item.storeId, storeCode: item.storeId, storeName: item.name.trim(),
-            storeType: type.storeTypeCode, phone: item.phone, baseUrl: item.url, currency: item.currency || subscription.currency || 'USD',
-            timezone: item.timezone || 'UTC', status: current?.status || StoreStatus.PENDING,
-            address: { street: item.address.trim(), city: item.city.trim(), state: item.state.trim(), zipCode: item.zip.trim(), country: item.country || m.country },
-            onboardingSetup: storeSetup(item, current?.onboardingSetup),
-          };
-          await stores.save(current ? { ...current, ...fields } : this.buildStore(id, fields));
+          const storeId = crypto.randomUUID();
+          const type = await this.getStoreTypeByIdOrCode(item.storeTypeId);
+          if (!type || type.status !== 'ACTIVE') throw new BadRequestException('Select an active store type');
+          await stores.save(this.buildStore(merchant.id, {
+            id: storeId,
+            storeTypeId: type.id,
+            storeCode: item.storeCode || `STR-${storeId.slice(0, 8).toUpperCase()}`,
+            storeName: item.storeName,
+            phone: item.phone,
+            storeEmail: item.storeEmail,
+            currency: item.currency || 'USD',
+            timezone: item.timezone || 'UTC',
+            activationPin: item.activationPin,
+            addressLine1: item.addressLine1,
+            addressLine2: item.addressLine2,
+            city: item.city,
+            state: item.state,
+            postalCode: item.postalCode,
+            country: item.country || m.country,
+            status: item.status || StoreStatus.PENDING,
+            operationalStatus: item.operationalStatus || OperationalStatus.OPEN,
+          }));
         }
-        const savedStores = await stores.find({ where: { merchantId: id, isDeleted: 0 } });
-        const licensed = savedStores.filter(store => store.onboardingSetup?.licensed === true);
-        const devices = savedStores.flatMap(store => (store.onboardingSetup?.devices || []) as Array<Record<string, unknown>>);
-        if (licensed.length > (subscription.licensedStoreCount ?? subscription.maxStoresAllowed)) throw new BadRequestException('Store license limit exceeded');
-        if (devices.length > (subscription.licensedDeviceCount ?? 0)) throw new BadRequestException('Device license limit exceeded');
-        const serials = devices.map(d => String(d.serial).trim().toLowerCase());
-        if (new Set(serials).size !== serials.length) throw new BadRequestException('Device identifiers must be unique across stores');
+        const savedStores = await stores.find({ where: { merchantId: merchant.id, isDeleted: false } });
         await manager.getRepository(OnboardingAuditEntity).save({
-          id: `AUD-${crypto.randomUUID()}`, merchantId: id,
+          id: `AUD-${crypto.randomUUID()}`, merchantId: merchant.merchantId,
           action: editing ? 'ONBOARDING_UPDATED' : 'ONBOARDING_CREATED', performedBy: 'merchant',
-          details: { storeCount: savedStores.length, subscriptionId: subscription.id },
+          details: { storeCount: savedStores.length, subscriptionId: subscription?.id },
         });
         return { merchant, stores: savedStores, subscription };
       });
@@ -678,39 +672,35 @@ export class MerchantRepository implements OnModuleInit {
     return result;
   }
 
-  async createMerchant(data: Partial<MerchantEntity>): Promise<MerchantEntity> {
-    const id = data.id || await this.allocateId('merchant');
-    const merchant: MerchantEntity = {
-      id: `MRC-${crypto.randomUUID()}`,
-      merchantId: data.merchantId || id,
-      businessName: data.businessName || 'New Merchant Business',
-      businessType: data.businessType || BusinessType.RETAIL,
-      retailSubCategory: data.retailSubCategory || (data.businessType === BusinessType.RETAIL ? RetailSubCategory.GROCERY : undefined),
-      ownerName: data.ownerName || 'Owner Name',
+  async createMerchant(data: Partial<MerchantEntity> & { businessName?: string; ownerName?: string; businessAddress?: string }): Promise<MerchantEntity> {
+    const rowId = crypto.randomUUID();
+    const requestedCode = data.merchantCode || data.merchantId || `MCH-${rowId.slice(0, 8).toUpperCase()}`;
+    const merchantId = data.merchantId && data.merchantId !== requestedCode
+      ? data.merchantId
+      : `MID-${rowId.slice(0, 8).toUpperCase()}`;
+    const owner = data.ownerName || data.firstName || 'Owner';
+    const [firstName, ...rest] = owner.split(' ');
+    const saved = await this.merchantRepo.save(this.merchantRepo.create({
+      id: rowId,
+      merchantCode: requestedCode,
+      merchantId,
+      businessDisplayName: data.businessDisplayName || data.businessName || 'New Merchant Business',
+      firstName: data.firstName || firstName,
+      lastName: data.lastName || rest.join(' '),
       email: data.email || `owner_${Date.now()}@pinaka.com`,
-      phone: data.phone || '',
-      taxId: data.taxId || '',
-      legalBusinessName: data.legalBusinessName,
+      phone: data.phone || '0000000000',
+      taxId: data.taxId || null,
       country: data.country,
       state: data.state,
       city: data.city,
       postalCode: data.postalCode,
-      businessAddress: data.businessAddress,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      jobTitle: data.jobTitle,
+      addressLine1: data.addressLine1 || data.businessAddress || null,
       alternatePhone: data.alternatePhone,
-      billingContact: data.billingContact ?? true,
-      kycStatus: data.kycStatus || KycStatus.PENDING,
-      kycDocuments: data.kycDocuments || [],
       status: data.status || MerchantStatus.PENDING,
       onboardingStep: data.onboardingStep || 'STEP1_BUSINESS',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    const saved = await this.merchantRepo.save(this.merchantRepo.create(merchant));
+    }));
     await this.recordAuditLog('MERCHANT_CREATED', saved.merchantId!, undefined, saved.email, { businessName: saved.businessName });
-    return { ...saved, id: saved.merchantId! };
+    return saved;
   }
 
   async getAllMerchants(): Promise<MerchantEntity[]> {
@@ -762,39 +752,54 @@ export class MerchantRepository implements OnModuleInit {
     return identity.aliases.includes(String(store.merchantId || '')) || String(store.merchantUuid || '') === identity.merchantUuid;
   }
 
-  private buildStore(merchantId: string, data: Partial<StoreEntity>): StoreEntity {
-    const id = data.id || `STR-${Math.floor(5000 + Math.random() * 5000)}`;
-    const activationPin = data.activationPin || Math.floor(100000 + Math.random() * 900000).toString();
-    const storeCode = data.storeCode || `STR-${Date.now().toString().slice(-4)}`;
+  private isUuid(value?: string | null): value is string {
+    return !!value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+
+  private buildStore(merchantUuid: string, data: Partial<StoreEntity> & { address?: { street?: string; addressLine2?: string; city?: string; state?: string; zipCode?: string; country?: string } }): StoreEntity {
+    const id = this.isUuid(data.id) ? data.id : crypto.randomUUID();
+    const address = data.address;
+    const storeCode = data.storeCode || (!this.isUuid(data.id) && data.id) || `STR-${id.slice(0, 8).toUpperCase()}`;
     return {
       id,
-      merchantId,
-      merchantUuid: data.merchantUuid || merchantId,
+      merchantId: merchantUuid,
+      storeTypeId: data.storeTypeId!,
       storeName: data.storeName || 'Store Branch',
       storeCode,
-      storeType: data.storeType || 'RETAIL',
-      baseUrl: data.baseUrl,
+      addressLine1: data.addressLine1 || address?.street || null,
+      addressLine2: data.addressLine2 || address?.addressLine2 || null,
+      city: data.city || address?.city || null,
+      state: data.state || address?.state || null,
+      postalCode: data.postalCode || address?.zipCode || null,
+      country: data.country || address?.country || null,
       phone: data.phone,
-      address: data.address || { street: '', city: '', state: '', zipCode: '', country: 'USA' },
       currency: data.currency || 'USD',
-      timezone: data.timezone || 'America/Chicago',
-      taxRate: data.taxRate !== undefined ? Number(data.taxRate) : 8.25,
-      activationPin,
-      autoAcceptOrders: data.autoAcceptOrders ?? true,
+      timezone: data.timezone || 'UTC',
+      activationPin: data.activationPin || Math.floor(100000 + Math.random() * 900000).toString(),
       status: data.status || StoreStatus.ACTIVE,
       operationalStatus: data.operationalStatus || OperationalStatus.OPEN,
       onboardingSetup: data.onboardingSetup || {},
       channels: data.channels || [{ platform: 'POS', externalStoreId: id, apiKey: `key_${id}`, enabled: true }],
+      isDeleted: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
   }
 
-  async createStore(merchantId: string, data: Partial<StoreEntity>): Promise<StoreEntity> {
+  private async resolveStoreTypeId(data: Partial<StoreEntity> & { storeType?: string }): Promise<string> {
+    if (this.isUuid(data.storeTypeId)) return data.storeTypeId;
+    const type = await this.getStoreTypeByIdOrCode(String(data.storeType || data.storeTypeId || 'RETAIL'));
+    if (!type?.id) throw new BadRequestException('storeTypeId is required');
+    return type.id;
+  }
+
+  async createStore(merchantId: string, data: Partial<StoreEntity> & { storeType?: string }): Promise<StoreEntity> {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
-    const generatedId = data.id || await this.allocateId('store');
-    const store = this.buildStore(identity.merchantId, { ...data, merchantUuid: identity.merchantUuid, id: generatedId, storeCode: data.storeCode || generatedId });
+    const storeTypeId = await this.resolveStoreTypeId(data);
+    const generatedId = this.isUuid(data.id) ? data.id : crypto.randomUUID();
+    const storeCode = data.storeCode || (!this.isUuid(data.id) && data.id) || await this.allocateId('store');
+    const store = this.buildStore(identity.merchantUuid, { ...data, storeTypeId, id: generatedId, storeCode });
     const { activationPin } = store;
     const entity = this.storeRepo.create(store);
     try {
@@ -813,7 +818,12 @@ export class MerchantRepository implements OnModuleInit {
   async createStoresBatch(merchantId: string, data: Partial<StoreEntity>[]): Promise<StoreEntity[]> {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
-    const stores = await Promise.all(data.map(async item => { const id = item.id || await this.allocateId('store'); return this.buildStore(identity.merchantId, { ...item, merchantUuid: identity.merchantUuid, id, storeCode: item.storeCode || id }); }));
+    const stores = await Promise.all(data.map(async item => {
+      const storeTypeId = await this.resolveStoreTypeId(item);
+      const id = this.isUuid(item.id) ? item.id : crypto.randomUUID();
+      const storeCode = item.storeCode || (!this.isUuid(item.id) && item.id) || await this.allocateId('store');
+      return this.buildStore(identity.merchantUuid, { ...item, storeTypeId, id, storeCode });
+    }));
     if (new Set(stores.map(s => s.id)).size !== stores.length ||
       new Set(stores.map(s => s.storeCode)).size !== stores.length) {
       throw new ConflictException('Each store must have a unique Store ID.');
@@ -839,10 +849,10 @@ export class MerchantRepository implements OnModuleInit {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity) throw new NotFoundException(`Merchant '${merchantId}' not found`);
     if (data.id) {
-      const existing = await this.storeRepo.findOne({ where: { id: data.id, isDeleted: 0 } });
+      const existing = await this.storeRepo.findOne({ where: { id: data.id, isDeleted: false } });
       if (existing) {
         if (!(await this.storeMatchesMerchant(existing, identity.merchantId))) throw new Error(`Store ID '${data.id}' belongs to another merchant`);
-        Object.assign(existing, data, { merchantId: identity.merchantId, merchantUuid: identity.merchantUuid, updatedAt: new Date() });
+        Object.assign(existing, data, { merchantId: identity.merchantUuid, updatedAt: new Date() });
         const saved = await this.storeRepo.save(existing);
         await this.recordAuditLog('STORE_UPDATED', identity.merchantId, saved.id, 'merchant', { storeName: saved.storeName });
         return saved;
@@ -852,8 +862,8 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
-    const rows = await this.dataSource.query('SELECT legacy_store_id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1) AND COALESCE("Is_Deleted", 0)=0 LIMIT 1', [id]);
-    return rows[0] ? this.storeRepo.findOneBy({ id: rows[0].legacy_store_id }) : null;
+    if (this.isUuid(id)) return this.storeRepo.findOne({ where: { id, isDeleted: false } });
+    return this.storeRepo.findOne({ where: { storeCode: id, isDeleted: false } });
   }
 
 
@@ -965,14 +975,13 @@ export class MerchantRepository implements OnModuleInit {
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
     if (!merchantId) {
-      return this.storeRepo.find({ where: { isDeleted: 0 }, order: { createdAt: 'DESC' } });
+      return this.storeRepo.find({ where: { isDeleted: false }, order: { createdAt: 'DESC' } });
     }
     const identity = await this.merchantIdentity(merchantId);
     if (!identity) return [];
     return this.storeRepo.createQueryBuilder('store')
-      .where('store.isDeleted = :alive', { alive: 0 })
-      .andWhere('(store.merchantId IN (:...aliases) OR store.merchantUuid = :merchantUuid)', {
-        aliases: identity.aliases,
+      .where('store.isDeleted = :alive', { alive: false })
+      .andWhere('store.merchantId = :merchantUuid', {
         merchantUuid: identity.merchantUuid,
       })
       .orderBy('store.createdAt', 'DESC')
@@ -986,8 +995,8 @@ export class MerchantRepository implements OnModuleInit {
     if (!store) return null;
     const deletedAt = new Date();
     const result = await this.storeRepo.update(
-      { id, isDeleted: 0 },
-      { deletedAt, isDeleted: 1, updatedAt: deletedAt },
+      { id, isDeleted: false },
+      { isDeleted: true, updatedAt: deletedAt },
     );
     if (!result.affected) return null;
     await this.recordAuditLog('STORE_DELETED', store.merchantId, id, 'merchant', { storeName: store.storeName });
@@ -1240,7 +1249,7 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
   ): Promise<StoreEntity | null> {
-    const store = await this.storeRepo.findOne({ where: { id: storeId, isDeleted: 0 } });
+    const store = await this.storeRepo.findOne({ where: { id: storeId, isDeleted: false } });
     if (!store) return null;
     store.websiteConnector = connector;
     store.updatedAt = new Date();
@@ -1332,7 +1341,7 @@ export class MerchantRepository implements OnModuleInit {
       } catch { }
     }
 
-    const store = await this.storeRepo.findOne({ where: { activationPin: pin, isDeleted: 0 } });
+    const store = await this.storeRepo.findOne({ where: { activationPin: pin, isDeleted: false } });
     if (!store) {
       return { success: false, message: 'Invalid 6-digit Activation PIN. Terminal pairing failed.' };
     }
@@ -1847,12 +1856,12 @@ export class MerchantRepository implements OnModuleInit {
     try {
       if ((await this.featureRepo.count()) === 0) {
         const defaults = [
-          { id: 'f1111111-0000-0000-0000-000000000001', featureKey: 'ORDER_MANAGEMENT', name: 'Order Management', description: 'Manage in-store POS and online delivery orders', category: 'OPERATIONS', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000002', featureKey: 'REFUNDS', name: 'Refunds & Returns', description: 'Process full and partial order refunds', category: 'FINANCIAL', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000003', featureKey: 'KDS', name: 'Kitchen Display System', description: 'Live kitchen prep tickets and bump bar tracking', category: 'KITCHEN', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000004', featureKey: 'LOYALTY', name: 'Loyalty & Rewards', description: 'Earn and redeem loyalty points at checkout', category: 'MARKETING', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000005', featureKey: 'SAFE_DROP', name: 'Safe Drop & Cash Management', description: 'Mid-shift safe drops and drawer reconciliations', category: 'FINANCIAL', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000006', featureKey: 'INVENTORY', name: 'Live Stock Tracking', description: 'Real-time multi-location inventory deduction', category: 'INVENTORY', featureType: 'FLAG', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000001', featureCode: 'ORDER_MANAGEMENT', name: 'Order Management', description: 'Manage in-store POS and online delivery orders', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000002', featureCode: 'REFUNDS', name: 'Refunds & Returns', description: 'Process full and partial order refunds', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000003', featureCode: 'KDS', name: 'Kitchen Display System', description: 'Live kitchen prep tickets and bump bar tracking', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000004', featureCode: 'LOYALTY', name: 'Loyalty & Rewards', description: 'Earn and redeem loyalty points at checkout', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000005', featureCode: 'SAFE_DROP', name: 'Safe Drop & Cash Management', description: 'Mid-shift safe drops and drawer reconciliations', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000006', featureCode: 'INVENTORY', name: 'Live Stock Tracking', description: 'Real-time multi-location inventory deduction', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
         ];
         for (const item of defaults) {
           await this.featureRepo.save(this.featureRepo.create(item));
@@ -1911,7 +1920,6 @@ export class MerchantRepository implements OnModuleInit {
     if (!this.featureRepo) return [];
     const where: any = {};
     if (status) where.status = status.toUpperCase();
-    if (category) where.category = category.toUpperCase();
     return this.featureRepo.find({ where, order: { name: 'ASC' } });
   }
 
@@ -1922,16 +1930,15 @@ export class MerchantRepository implements OnModuleInit {
       const byId = await this.featureRepo.findOneBy({ id: idOrKey.trim() });
       if (byId) return byId;
     }
-    return this.featureRepo.findOneBy({ featureKey: idOrKey.trim().toUpperCase() });
+    return this.featureRepo.findOneBy({ featureCode: idOrKey.trim().toUpperCase() });
   }
 
   async createFeature(dto: CreateFeatureDto): Promise<FeatureEntity> {
     const entity = this.featureRepo.create({
-      featureKey: dto.featureKey.trim().toUpperCase(),
+      featureCode: (dto.featureCode || 'FEATURE').trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      category: dto.category.trim().toUpperCase(),
-      featureType: dto.featureType || 'TEXT',
+      featureType: dto.featureType || FeatureType.TEXT,
       status: dto.status || FeatureStatus.ACTIVE,
     });
     return this.featureRepo.save(entity);
@@ -1940,9 +1947,9 @@ export class MerchantRepository implements OnModuleInit {
   async updateFeature(idOrKey: string, dto: UpdateFeatureDto): Promise<FeatureEntity | null> {
     const existing = await this.getFeatureByIdOrKey(idOrKey);
     if (!existing) return null;
+    if (dto.featureCode !== undefined) existing.featureCode = dto.featureCode.trim().toUpperCase();
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
-    if (dto.category !== undefined) existing.category = dto.category.trim().toUpperCase();
     if (dto.featureType !== undefined) existing.featureType = dto.featureType;
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();

@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, IsUUID, ValidateNested } from 'class-validator';
+import { AuditInputDto } from '../../audit.dto';
 import { EmployeeStatus } from '../../entities/employee.entity';
 
 
@@ -19,7 +20,7 @@ export class EmployeeStoreAssignmentDto {
   loginPin?: string;
 }
 
-export class CreateEmployeeDto {
+export class CreateEmployeeDto extends AuditInputDto {
 
   @IsArray()
   @IsOptional()
@@ -27,10 +28,12 @@ export class CreateEmployeeDto {
   @Type(() => EmployeeStoreAssignmentDto)
   storeAssignments?: EmployeeStoreAssignmentDto[];
 
-  @IsString()
+  @IsUUID()
+  merchantId!: string;
+
   @IsOptional()
-  @MaxLength(100)
-  merchantId?: string;
+  @IsUUID()
+  userId?: string | null;
 
   @IsString()
   @IsOptional()
@@ -47,8 +50,28 @@ export class CreateEmployeeDto {
   @MaxLength(100)
   lastName?: string;
 
+  @IsOptional()
   @IsEmail()
-  email!: string;
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  profileImageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  loginPinHash?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  passwordHash?: string;
+
+  @IsOptional()
+  @IsDateString()
+  lastActiveAt?: string;
 
   @IsString()
   @IsOptional()
@@ -62,7 +85,7 @@ export class CreateEmployeeDto {
   @IsString() @IsOptional() @MaxLength(50) state?: string;
   @IsString() @IsOptional() @MaxLength(20) postalCode?: string;
   @IsString() @IsOptional() @MaxLength(50) country?: string;
-  @IsString() @IsNotEmpty() @MaxLength(30) username!: string;
+  @IsOptional() @IsString() @MaxLength(30) username?: string;
   @IsString() @IsOptional() @Matches(/^\d{6}$/) loginPin?: string;
   @IsString() @MinLength(8) @MaxLength(128) temporaryPassword!: string;
   @IsBoolean() @IsOptional() sendCredentials?: boolean;
@@ -72,13 +95,26 @@ export class CreateEmployeeDto {
   status?: EmployeeStatus;
 }
 
-export class UpdateEmployeeDto {
+export class UpdateEmployeeDto extends AuditInputDto {
 
   @IsArray()
   @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => EmployeeStoreAssignmentDto)
   storeAssignments?: EmployeeStoreAssignmentDto[];
+
+  @IsOptional()
+  @IsUUID()
+  merchantId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  userId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  employeeCode?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -94,6 +130,25 @@ export class UpdateEmployeeDto {
   @IsEmail()
   @IsOptional()
   email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  profileImageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  loginPinHash?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  passwordHash?: string;
+
+  @IsOptional()
+  @IsDateString()
+  lastActiveAt?: string;
 
   @IsString()
   @IsOptional()

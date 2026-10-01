@@ -1,30 +1,28 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { AuditColumns, RecordStatus } from './commerce-enums';
 
-export enum StoreTypeStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-}
+export { RecordStatus as StoreTypeStatus } from './commerce-enums';
 
 @Entity('store_types')
-export class StoreTypeEntity {
+export class StoreTypeEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
+  @Column({ name: 'store_type_code', type: 'varchar', length: 50, unique: true })
   storeTypeCode!: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'name', type: 'varchar', length: 100 })
   name!: string;
 
-  @Column({ type: 'text', default: '' })
+  @Column({ name: 'description', type: 'text', default: '' })
   description!: string;
 
-  @Column({ type: 'varchar', length: 20, default: StoreTypeStatus.ACTIVE })
-  status!: StoreTypeStatus;
-
-  @CreateDateColumn({ type: 'timestamptz' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updatedAt!: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: RecordStatus,
+    enumName: 'record_status',
+    default: RecordStatus.ACTIVE,
+  })
+  status!: RecordStatus;
 }

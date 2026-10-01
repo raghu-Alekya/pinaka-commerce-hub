@@ -1,49 +1,42 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { AuditInputDto } from '../../../audit.dto';
 import { StoreTypeStatus } from '../../../entities/store-type.entity';
 
-export class CreateStoreTypeDto {
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  storeTypeCode!: string;
-
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  name!: string;
-
-  @IsString()
+export class CreateStoreTypeDto extends AuditInputDto {
   @IsOptional()
-  description?: string;
-
-  @IsEnum(StoreTypeStatus)
-  @IsOptional()
-  status?: StoreTypeStatus;
-}
-
-export class UpdateStoreTypeDto {
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString()
-  @IsNotEmpty()
-  @IsOptional()
   @MaxLength(50)
   storeTypeCode?: string;
 
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString()
-  @IsNotEmpty()
+  @MaxLength(100)
+  name!: string;
+
   @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsEnum(StoreTypeStatus)
+  status?: StoreTypeStatus;
+}
+
+export class UpdateStoreTypeDto extends AuditInputDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  storeTypeCode?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(100)
   name?: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsEnum(StoreTypeStatus)
   @IsOptional()
+  @IsEnum(StoreTypeStatus)
   status?: StoreTypeStatus;
 }

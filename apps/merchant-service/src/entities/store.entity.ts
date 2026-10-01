@@ -1,17 +1,9 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { AuditColumns, OperationalStatus, StoreStatus } from './commerce-enums';
+import { MerchantEntity } from './merchant.entity';
+import { StoreTypeEntity } from './store-type.entity';
 
-export enum StoreStatus {
-  PENDING = 'PENDING',
-  ACTIVE = 'ACTIVE',
-  SUSPENDED = 'SUSPENDED',
-  INACTIVE = 'INACTIVE',
-}
-
-export enum OperationalStatus {
-  OPEN = 'OPEN',
-  CLOSED = 'CLOSED',
-  PAUSED = 'PAUSED',
-}
+export { StoreStatus, OperationalStatus } from './commerce-enums';
 
 export interface StoreAddress {
   street: string;
@@ -24,7 +16,7 @@ export interface StoreAddress {
 }
 
 export interface StoreChannelConfig {
-  platform: string; // 'DOORDASH' | 'UBER_EATS' | 'POS' | 'WOOCOMMERCE'
+  platform: string;
   externalStoreId: string;
   apiKey: string;
   enabled: boolean;
@@ -38,82 +30,90 @@ export interface StoreWebsiteConnectorConfig {
 }
 
 @Entity('stores')
-export class StoreEntity {
-  @PrimaryColumn({ name: 'legacy_store_id', type: 'varchar', length: 100 })
-  id!: string; // e.g. "STR-5001" or "STR-50069"
+export class StoreEntity extends AuditColumns {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string;
 
-  @Column({ name: 'id', type: 'uuid', default: () => 'gen_random_uuid()' })
-  uuid?: string;
-
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'merchant_id', type: 'uuid' })
   merchantId!: string;
 
-  @Column({ name: 'merchant_uuid', type: 'uuid' })
-  merchantUuid!: string;
+  @ManyToOne(() => MerchantEntity)
+  @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id' })
+  merchant?: MerchantEntity;
 
-  @Column({ type: 'varchar', length: 50, default: 'RETAIL' })
-  storeType!: string; // e.g. 'RETAIL' | 'GROCERY' | 'RESTAURANT'
+  @Column({ name: 'store_type_id', type: 'uuid' })
+  storeTypeId!: string;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
-  storeCode!: string; // e.g. "ST-001"
+  @ManyToOne(() => StoreTypeEntity)
+  @JoinColumn({ name: 'store_type_id' })
+  storeType?: StoreTypeEntity;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ name: 'store_code', type: 'varchar', length: 50, unique: true })
+  storeCode!: string;
+
+  @Column({ name: 'store_name', type: 'varchar', length: 255 })
   storeName!: string;
 
-  @Column({ type: 'varchar', length: 100, default: 'UTC' })
-  timezone!: string;
+  @Column({ name: 'store_website_url', type: 'varchar', length: 2048, unique: true, nullable: true })
+  storeWebsiteUrl?: string | null;
 
-  @Column({ type: 'varchar', length: 10, default: 'USD' })
-  currency!: string;
+  @Column({ name: 'address_line1', type: 'text', nullable: true })
+  addressLine1?: string | null;
 
-  @Column({ type: 'jsonb', default: {} })
-  address!: StoreAddress;
+  @Column({ name: 'address_line2', type: 'text', nullable: true })
+  addressLine2?: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  woocommerceStoreId?: string;
+  @Column({ name: 'postal_code', type: 'varchar', length: 30, nullable: true })
+  postalCode?: string | null;
 
-  @Column({ type: 'varchar', length: 2048, nullable: true })
-  baseUrl?: string;
+  @Column({ name: 'state', type: 'varchar', length: 100, nullable: true })
+  state?: string | null;
+
+  @Column({ name: 'city', type: 'varchar', length: 100, nullable: true })
+  city?: string | null;
+
+  @Column({ name: 'country', type: 'varchar', length: 100, nullable: true })
+  country?: string | null;
+
+  @Column({ name: 'phone', type: 'varchar', length: 50, nullable: true })
+  phone?: string | null;
 
   @Column({ name: 'store_email', type: 'varchar', length: 255, nullable: true })
-  email?: string | null;
+  storeEmail?: string | null;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  phone?: string;
+  @Column({ name: 'currency', type: 'varchar', length: 10, default: 'USD' })
+  currency!: string;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, default: 8.25 })
-  taxRate!: number;
+  @Column({ name: 'timezone', type: 'varchar', length: 100, default: 'UTC' })
+  timezone!: string;
 
-  @Column({ type: 'varchar', length: 10, default: '123456' })
+  @Column({ name: 'activation_pin', type: 'varchar', length: 10 })
   activationPin!: string;
 
-  @Column({ type: 'boolean', default: true })
-  autoAcceptOrders!: boolean;
-
-  @Column({ type: 'varchar', length: 50, default: StoreStatus.ACTIVE })
-  status!: StoreStatus;
-
-  @Column({ type: 'varchar', length: 50, default: OperationalStatus.OPEN })
+  @Column({
+    name: 'operational_status',
+    type: 'enum',
+    enum: OperationalStatus,
+    enumName: 'operational_status',
+    default: OperationalStatus.OPEN,
+  })
   operationalStatus!: OperationalStatus;
 
-  @Column({ type: 'jsonb', default: [] })
+  @Column({ name: 'channels', type: 'jsonb', default: () => "'[]'" })
   channels!: StoreChannelConfig[];
 
-  @Column({ type: 'jsonb', nullable: true, select: false })
+  @Column({ name: 'website_connector', type: 'jsonb', nullable: true })
   websiteConnector?: StoreWebsiteConnectorConfig | null;
 
-  @Column({ type: 'jsonb', default: {} })
-  onboardingSetup!: Record<string, any>;
+  @Column({ name: 'onboarding_setup', type: 'jsonb', default: () => "'{}'" })
+  onboardingSetup!: Record<string, unknown>;
 
-  @Column({ name: 'Deleted_At', type: 'timestamptz', nullable: true })
-  deletedAt?: Date | null;
-
-  @Column({ name: 'Is_Deleted', type: 'integer', default: 0 })
-  isDeleted?: number;
-
-  @CreateDateColumn()
-  createdAt!: Date;
-
-  @UpdateDateColumn()
-  updatedAt!: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: StoreStatus,
+    enumName: 'store_status',
+    default: StoreStatus.ACTIVE,
+  })
+  status!: StoreStatus;
 }
