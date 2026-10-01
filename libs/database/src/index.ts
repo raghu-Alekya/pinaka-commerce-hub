@@ -245,6 +245,21 @@ async function liveColumnType(dataSource: DataSource, table: string, column: str
   return rows[0]?.data_type ?? null;
 }
 
+async function postgresEnumExists(dataSource: DataSource, enumName: string): Promise<boolean> {
+  const rows = await dataSource.query(
+    `SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e' AND t.typname = $1`,
+    [enumName],
+  );
+  return rows.length > 0;
+}
+
+function enumLabels(column: { enum?: unknown }): string[] {
+  const value = column.enum;
+  if (!value) return [];
+  if (Array.isArray(value)) return [...new Set(value.map(String))];
+  return [...new Set(Object.values(value).filter((item): item is string => typeof item === 'string'))];
+}
+
 /** Copy camelCase values into new required columns before synchronize sets them NOT NULL. */
 async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promise<void> {
   for (const entity of dataSource.entityMetadatas) {
@@ -264,9 +279,10 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
         if (await columnExists(dataSource, table, name)) presentSources.push(name);
       }
       const sqlType = columnSqlType(column);
+      const rawEnumName = column.enumName || '';
       if (!presentSources.length && (await columnExists(dataSource, table, target))) {
         // Still resolve uuid foreign keys that were stored as business codes.
-      } else if (!presentSources.length && sqlType !== 'uuid') {
+      } else if (!presentSources.length && sqlType !== 'uuid' && !rawEnumName) {
         continue;
       }
       if (!(await columnExists(dataSource, table, target))) {
@@ -276,16 +292,19 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
       }
       const quotedTable = `public.${quoteIdent(table)}`;
       const quotedTarget = quoteIdent(target);
-      const enumName = column.enumName ? quoteIdent(column.enumName) : '';
+      const enumReady = rawEnumName ? await postgresEnumExists(dataSource, rawEnumName) : false;
+      const liveType = await liveColumnType(dataSource, table, target);
+      const quotedEnum = enumReady ? quoteIdent(rawEnumName) : '';
+      const assignAsEnum = Boolean(quotedEnum && liveType === 'USER-DEFINED');
       for (const present of presentSources) {
         const quotedSource = quoteIdent(present);
         if (sqlType === 'uuid') {
           await dataSource.query(
             `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource}::uuid WHERE ${quotedTarget} IS NULL AND ${quotedSource}::text ~* '${UUID_TEXT}'`,
           );
-        } else if (enumName) {
+        } else if (assignAsEnum) {
           await dataSource.query(
-            `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource}::text::${enumName} WHERE ${quotedTarget} IS NULL AND ${quotedSource}::text IN (SELECT e::text FROM unnest(enum_range(NULL::${enumName})) AS e)`,
+            `UPDATE ${quotedTable} SET ${quotedTarget} = ${quotedSource}::text::${quotedEnum} WHERE ${quotedTarget} IS NULL AND ${quotedSource}::text IN (SELECT e::text FROM unnest(enum_range(NULL::${quotedEnum})) AS e)`,
           );
         } else {
           await dataSource.query(
@@ -367,10 +386,33 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
           `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT id FROM public.${quoteIdent(fallbackTable)} ORDER BY id LIMIT 1) WHERE ${quotedTarget} IS NULL`,
         );
       }
-      if (enumName) {
+      if (rawEnumName && assignAsEnum) {
         await dataSource.query(
-          `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT e FROM unnest(enum_range(NULL::${enumName})) AS e LIMIT 1) WHERE ${quotedTarget} IS NULL`,
+          `UPDATE ${quotedTable} SET ${quotedTarget} = (SELECT e FROM unnest(enum_range(NULL::${quotedEnum})) AS e LIMIT 1) WHERE ${quotedTarget} IS NULL`,
         );
+      } else if (rawEnumName) {
+        const labels = enumLabels(column);
+        if (target === 'vendor_type') {
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = CASE upper(trim(${quotedTarget}::text))
+              WHEN 'SUPPLIER' THEN 'SUPPLIER'
+              WHEN 'SUPPLER' THEN 'SUPPLIER'
+              WHEN 'ORGANIZER' THEN 'ORGANIZER'
+              WHEN 'ORGANISER' THEN 'ORGANIZER'
+              ELSE ${quotedTarget}
+            END WHERE ${quotedTarget} IS NOT NULL`,
+          );
+        }
+        if (labels.length) {
+          await dataSource.query(
+            `UPDATE ${quotedTable} AS row SET ${quotedTarget} = label FROM unnest($1::text[]) AS label WHERE upper(trim(row.${quotedTarget}::text)) = upper(label)`,
+            [labels],
+          );
+          await dataSource.query(
+            `UPDATE ${quotedTable} SET ${quotedTarget} = $1 WHERE ${quotedTarget} IS NULL OR ${quotedTarget}::text <> ALL($2::text[])`,
+            [labels[0], labels],
+          );
+        }
       } else if (sqlType !== 'uuid') {
         const hasId = await columnExists(dataSource, table, 'id');
         const token = hasId ? `COALESCE(id::text, md5(ctid::text))` : `md5(ctid::text)`;
