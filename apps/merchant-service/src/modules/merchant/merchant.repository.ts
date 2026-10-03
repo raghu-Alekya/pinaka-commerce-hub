@@ -243,6 +243,28 @@ export class MerchantRepository implements OnModuleInit {
     let sql: string;
     let values: unknown[] = [];
     if (table === 'features' && operation === 'list') {
+      try {
+        const countRes = await this.dataSource.query('SELECT count(*)::int AS cnt FROM public.features');
+        if ((countRes[0]?.cnt || 0) === 0) {
+          await this.dataSource.query(`
+            INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status)
+            VALUES
+              ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'OPERATIONS', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'FINANCIAL', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'KITCHEN', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'MARKETING', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'FINANCIAL', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'INVENTORY', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'OPERATIONS', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'MARKETING', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'HARDWARE', 'FLAG', 'ACTIVE'),
+              ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'HARDWARE', 'FLAG', 'ACTIVE')
+            ON CONFLICT DO NOTHING
+          `);
+        }
+      } catch {
+        // ignore seed error
+      }
       sql = `SELECT 
         f.id,
         f.name,
