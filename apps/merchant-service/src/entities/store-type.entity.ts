@@ -9,7 +9,14 @@ export class StoreTypeEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'store_type_code', type: 'varchar', length: 50, unique: true })
+  @Column({
+    name: 'store_type_code',
+    type: 'varchar',
+    length: 50,
+    unique: true,
+    insert: false,
+    update: false,
+  })
   storeTypeCode!: string;
 
   @Column({ name: 'name', type: 'varchar', length: 100 })

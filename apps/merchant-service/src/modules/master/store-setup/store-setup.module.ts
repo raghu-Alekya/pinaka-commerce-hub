@@ -11,6 +11,7 @@ import {
 import { StoreTypeController } from './store-type.controller';
 import { MerchantModule } from '../../merchant/merchant.module';
 import { RelationshipsModule } from '../../shared/relationships.module';
+import { StoreTypeRepository } from './store-type.repository';
 
 @Module({
   imports: [MerchantModule, RelationshipsModule],
@@ -22,5 +23,7 @@ import { RelationshipsModule } from '../../shared/relationships.module';
     StoreTypeAssignedRoleTemplatesController,
     StoreRoleTemplateController,
   ],
+  providers: [StoreTypeRepository],
+  exports: [StoreTypeRepository],
 })
 export class StoreSetupModule {}
