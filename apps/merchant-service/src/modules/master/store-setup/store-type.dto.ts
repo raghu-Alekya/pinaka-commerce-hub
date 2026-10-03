@@ -1,12 +1,12 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { AuditInputDto } from '../../../audit.dto';
 import { StoreTypeStatus } from '../../../entities/store-type.entity';
 
-export class CreateStoreTypeDto extends AuditInputDto {
+export class CreateStoreTypeDto {
+  // Kept for compatibility with existing shared repository code. The Store
+  // Type API ignores this value because PostgreSQL generates the code.
   @IsOptional()
   @IsString()
-  @MaxLength(50)
-  storeTypeCode?: string;
+  storeTypeCode!: string;
 
   @IsString()
   @MaxLength(100)
@@ -21,10 +21,11 @@ export class CreateStoreTypeDto extends AuditInputDto {
   status?: StoreTypeStatus;
 }
 
-export class UpdateStoreTypeDto extends AuditInputDto {
+export class UpdateStoreTypeDto {
+  // Kept for compatibility with existing shared repository code. The Store
+  // Type API never updates the trigger-owned code.
   @IsOptional()
   @IsString()
-  @MaxLength(50)
   storeTypeCode?: string;
 
   @IsOptional()
