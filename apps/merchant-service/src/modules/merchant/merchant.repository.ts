@@ -242,7 +242,32 @@ export class MerchantRepository implements OnModuleInit {
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
+    if (table === 'features' && operation === 'list') {
+      sql = `SELECT 
+        f.id,
+        f.name,
+        f.description,
+        f.category,
+        f.status,
+        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
+        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
+        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
+        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
+      FROM public.features f ORDER BY f.name, f.id`;
+    } else if (table === 'features' && operation === 'get') {
+      sql = `SELECT 
+        f.id,
+        f.name,
+        f.description,
+        f.category,
+        f.status,
+        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
+        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
+        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
+        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
+      FROM public.features f WHERE f.id = $1`;
+      values = [id];
+    } else if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
     else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
     else if (operation === 'create') {
       values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
