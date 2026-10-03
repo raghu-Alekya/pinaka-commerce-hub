@@ -15,10 +15,9 @@ export class FeatureDto extends MasterFieldsDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Matches(/\S/) @MaxLength(150) name!: string;
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @Matches(/\S/) @MaxLength(100) featureKey!: string;
+  @IsString() @Matches(/\S/) @MaxLength(100) feature_code!: string;
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @Matches(/\S/) @MaxLength(100) category!: string;
-  @ValidateIf((_, value) => value !== undefined) @IsIn(['BOOLEAN', 'LIMIT', 'CONFIG', 'TEXT']) featureType?: string;
+  @IsString() @Matches(/\S/) @MaxLength(100) feature_type!: string;
 }
  
  

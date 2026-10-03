@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { DataSource, EntityManager } from 'typeorm';
 import { postgresConnectionOptions } from '@pinaka-delivery-hub/database';
@@ -80,13 +80,6 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       ...(config.tenantColumn ? [`${quoteIdent(config.tenantField || 'merchantId')} AS ${quoteIdent('merchantId')}`] : []),
       ...(config.name === 'EmployeeStoreRoles' ? [`${quoteIdent('store_id')} AS ${quoteIdent('storeId')}`] : []),
       ...(config.name === 'EmployeeStores' ? ['(login_pin_hash IS NOT NULL) AS "hasLoginPin"'] : []),
-      ...(['StoreTypeRoleTemplates', 'RoleTemplateStoreTypes'].includes(config.name)
-        ? [
-            `${quoteIdent('is_deleted')} AS ${quoteIdent('isDeleted')}`,
-            `${quoteIdent('created_by')} AS ${quoteIdent('createdBy')}`,
-            `${quoteIdent('updated_by')} AS ${quoteIdent('updatedBy')}`,
-          ]
-        : []),
       ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
       `${quoteIdent(config.createdColumn || 'createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent(config.updatedColumn || 'updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
   }
@@ -114,7 +107,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     return { body: payload, loginPinHash };
   }
 
-  async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown, auditUserId?: string) {
+  async execute(config: Relationship, operation: RelationshipOperation, params: Record<string, string>, child?: string, body?: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
     const merchant = config.ownerColumn ? await this.resolveRelationshipMerchant(config, parent, params.merchantId) : undefined;
     let fields: Record<string, unknown> = {};
@@ -133,15 +126,15 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     else if (operation !== 'list') child = this.id(child, config.childKey, config.childUuid);
     if (config.name === 'EmployeeStores' && child) child = await this.resolveStoreUuid(child, merchant!);
     try {
-      return await this.db.transaction(async manager => this.perform(manager, config, operation, parent, merchant, child, fields, auditUserId));
+      return await this.db.transaction(async manager => this.perform(manager, config, operation, parent, merchant, child, fields));
     } catch (error: any) {
       this.rethrow(error);
     }
   }
 
-  async createBulk(config: Relationship, params: Record<string, string>, body: unknown, auditUserId?: string) {
+  async createBulk(config: Relationship, params: Record<string, string>, body: unknown) {
     if (config.name === 'RoleTemplatePermissions') return this.syncRoleTemplatePermissions(config, params, body);
-    if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body, auditUserId);
+    if (config.name === 'RoleTemplateStoreTypes') return this.saveRoleTemplateStoreTypes(config, params, body);
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
     const merchant = config.ownerColumn ? await this.resolveRelationshipMerchant(config, parent, params.merchantId) : undefined;
     const { items, skipExisting } = this.bulkItems(config, body);
@@ -182,7 +175,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
               continue;
             }
           }
-          const result = await this.perform(manager, config, 'create', parent, merchant, item.child, item.fields, auditUserId);
+          const result = await this.perform(manager, config, 'create', parent, merchant, item.child, item.fields);
           resolved.push(result.item);
         }
         return { success: true, count: resolved.length, items: await this.withChildDetails(manager, config, resolved) };
@@ -272,8 +265,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
            FROM public.store_type_role_templates mapping
            JOIN public.store_type_features stf ON stf.store_type_id = mapping.store_type_id
            JOIN public.permissions p ON p.feature_id = stf.feature_id
-           WHERE mapping.role_template_id = $1
-             AND mapping.is_deleted = false`,
+           WHERE mapping.role_template_id = $1`,
           [parent],
         );
         const allowed = new Map<string, boolean>();
@@ -306,7 +298,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async saveRoleTemplateStoreTypes(config: Relationship, params: Record<string, string>, body: unknown, auditUserId?: string) {
+  async saveRoleTemplateStoreTypes(config: Relationship, params: Record<string, string>, body: unknown) {
     const parent = this.id(params[config.parentParam], config.parentParam, config.parentUuid);
     const { selected, replace } = this.roleTemplateStoreTypeSelections(config, body);
     try {
@@ -314,8 +306,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         const owners = await manager.query('SELECT id FROM public.role_templates WHERE id = $1 FOR SHARE', [parent]);
         if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
         const existing = await manager.query(
-          `SELECT ${quoteIdent(config.childColumn)} AS id FROM public.${config.table}
-           WHERE ${quoteIdent(config.parentColumn)} = $1 AND is_deleted = false`,
+          `SELECT ${quoteIdent(config.childColumn)} AS id FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1`,
           [parent],
         );
         const selectedIds = new Set(selected.map(item => item.child.toLowerCase()));
@@ -323,19 +314,16 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
           for (const row of existing) {
             const current = String(row.id);
             if (!selectedIds.has(current.toLowerCase())) {
-              await this.perform(manager, config, 'delete', parent, undefined, current, {}, auditUserId);
+              await this.perform(manager, config, 'delete', parent, undefined, current, {});
             }
           }
         }
         for (const item of selected) {
           const current = await manager.query(
-            `SELECT 1 FROM public.${config.table}
-             WHERE ${quoteIdent(config.parentColumn)} = $1
-               AND ${quoteIdent(config.childColumn)} = $2
-               AND is_deleted = false`,
+            `SELECT 1 FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`,
             [parent, item.child],
           );
-          await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, item.child, item.fields, auditUserId);
+          await this.perform(manager, config, current.length ? 'replace' : 'create', parent, undefined, item.child, item.fields);
         }
         if (replace) {
           await manager.query(
@@ -347,7 +335,6 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
                  JOIN public.store_type_features stf ON stf.store_type_id = mapping.store_type_id
                  JOIN public.permissions p ON p.feature_id = stf.feature_id
                  WHERE mapping.role_template_id = rtp.role_template_id
-                   AND mapping.is_deleted = false
                    AND p.id = rtp.permission_id
                )`,
             [parent],
@@ -355,7 +342,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         }
         const items = await manager.query(
           `SELECT ${this.projection(config)} FROM public.${config.table}
-           WHERE ${quoteIdent(config.parentColumn)} = $1 AND is_deleted = false
+           WHERE ${quoteIdent(config.parentColumn)} = $1
            ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`,
           [parent],
         );
@@ -382,12 +369,13 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (hasItems && hasIds) throw new BadRequestException(`Supply either items or ${idAlias}, not both`);
     if (!hasItems && !hasIds) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
     if (hasIds) {
-      const allowed = new Set([idAlias, 'ids', 'skipExisting', 'status', 'replace']);
+      const allowed = new Set([idAlias, 'ids', 'skipExisting', 'defaultEnabled', 'required', 'replace']);
       if (Object.keys(payload).some(key => !allowed.has(key))) throw new BadRequestException(`Provide { ${idAlias}: [...] }`);
       const ids = payload[idAlias] ?? payload.ids;
       if (!Array.isArray(ids) || ids.length > 100) throw new BadRequestException(`${idAlias} must contain at most 100 mappings`);
       const fields = this.fields(config, {
-        status: payload.status ?? 'ACTIVE',
+        defaultEnabled: payload.defaultEnabled !== false,
+        required: payload.required === true,
       }, 'create');
       const seen = new Set<string>();
       return {
@@ -529,11 +517,11 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
                f.id,
                f.name,
                f.description,
+               f.feature_type AS category,
                f.status,
                COALESCE(
                  to_jsonb(f)->>'featureKey',
-                 to_jsonb(f)->>'feature_key',
-                 to_jsonb(f)->>'feature_code'
+                 to_jsonb(f)->>'feature_key'
                ) AS "featureKey",
                COALESCE(
                  to_jsonb(f)->>'featureType',
@@ -547,6 +535,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
                f.id,
                f.name,
                f.description,
+               f.feature_type,
                f.status
              ORDER BY f.name, f.id`,
             [storeTypeIds],
@@ -755,13 +744,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   private bulkDefaults(config: Relationship, payload: Record<string, unknown> = {}) {
     if (config.name === 'PlanEntitlements') return { enabled: true };
     if (config.name === 'RoleTemplatePermissions') return { defaultAllowed: payload.defaultAllowed !== false };
-    if (['StoreTypeFeatures', 'FeatureStoreTypes'].includes(config.name)) {
-      return { required: false, status: 'ACTIVE' };
-    }
-    if (['StoreTypeRoleTemplates', 'RoleTemplateStoreTypes'].includes(config.name)) {
-      return { status: 'ACTIVE' };
-    }
-    return {};
+    return { defaultEnabled: true, required: false };
   }
 
   private bulkItems(config: Relationship, body: unknown): { items: Record<string, unknown>[]; skipExisting: boolean } {
@@ -800,15 +783,15 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (!items.length) return items;
     if (config.name === 'StoreTypeFeatures') {
       const rows = await manager.query(
-        `SELECT id, name, status,
-           COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey"
+        `SELECT id, name, feature_type AS category, status,
+           COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key') AS "featureKey"
          FROM public.features f WHERE id = ANY($1::uuid[])`,
         [items.map(item => item.featureId)],
       );
       const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id).toLowerCase(), row]));
       return items.map(item => {
         const feature: Record<string, any> = byId.get(String(item.featureId).toLowerCase()) || {};
-        return { ...item, name: feature.name, featureKey: feature.featureKey, featureStatus: feature.status };
+        return { ...item, name: feature.name, category: feature.category, featureKey: feature.featureKey, featureStatus: feature.status };
       });
     }
     if (config.name === 'FeatureStoreTypes') {
@@ -888,24 +871,15 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async perform(manager: EntityManager, config: Relationship, operation: RelationshipOperation,
-    parent: string, merchant: string | undefined, child: string | undefined, fields: Record<string, unknown>, auditUserId?: string) {
+    parent: string, merchant: string | undefined, child: string | undefined, fields: Record<string, unknown>) {
     const merchantUuid = merchant && ['EmployeeStores', 'EmployeeStoreRoles'].includes(config.name)
       ? await this.resolveMerchantUuid(merchant) : undefined;
     const parentOwner = ['EmployeeStores', 'EmployeeStoreRoles'].includes(config.name) ? merchantUuid : merchant;
     const owners = await manager.query(`SELECT id FROM public.${config.parentTable} WHERE id = $1${config.ownerColumn ? ` AND ${quoteIdent(config.ownerColumn)} = $2` : ''} FOR SHARE`, config.ownerColumn ? [parent, parentOwner] : [parent]);
     if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
     const projection = this.projection(config);
-    const softDeleteRoleMapping = ['StoreTypeRoleTemplates', 'RoleTemplateStoreTypes'].includes(config.name);
-    if (softDeleteRoleMapping && ['create', 'replace', 'patch', 'delete'].includes(operation) && !auditUserId) {
-      throw new UnauthorizedException('Authenticated user id is required');
-    }
     if (operation === 'list') {
-      const items = await manager.query(
-        `SELECT ${projection} FROM public.${config.table}
-         WHERE ${quoteIdent(config.parentColumn)} = $1${softDeleteRoleMapping ? ' AND is_deleted = false' : ''}
-         ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`,
-        [parent],
-      );
+      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`, [parent]);
       return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
     }
     if (operation === 'create') {
@@ -922,38 +896,6 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       const childOwnerValue = config.name === 'EmployeeStores' ? merchantUuid : merchant;
       const children = await manager.query(`SELECT id FROM public.${config.childTable} WHERE id = $1${scopeChild ? ` AND ${quoteIdent(childOwner)} = $2` : ''} FOR SHARE`, scopeChild ? [child, childOwnerValue] : [child]);
       if (!children.length) throw new NotFoundException('Related record not found in the requested scope');
-      if (softDeleteRoleMapping) {
-        const [previous] = await manager.query(
-          `SELECT id, is_deleted AS "isDeleted"
-           FROM public.${config.table}
-           WHERE ${quoteIdent(config.parentColumn)} = $1
-             AND ${quoteIdent(config.childColumn)} = $2
-           ORDER BY is_deleted ASC, created_at DESC
-           LIMIT 1
-           FOR UPDATE`,
-          [parent, child],
-        );
-        if (previous && !previous.isDeleted) {
-          throw new ConflictException('This relationship already exists');
-        }
-        if (previous?.isDeleted) {
-          const status = fields.status ?? 'ACTIVE';
-          const updateResult = await manager.query(
-            `UPDATE public.${config.table}
-             SET status = $2,
-                 is_deleted = false,
-                 created_by = COALESCE(created_by, $3),
-                 updated_by = $3,
-                 updated_at = clock_timestamp()
-             WHERE id = $1 AND is_deleted = true
-             RETURNING ${projection}`,
-            [previous.id, status, auditUserId],
-          );
-          const reactivatedRows = Array.isArray(updateResult[0]) ? updateResult[0] : updateResult;
-          const reactivated = reactivatedRows[0];
-          return { success: true, item: reactivated, reactivated: true };
-        }
-      }
       this.dates(fields);
       const loginPinHash = fields.__loginPinHash;
       delete fields.__loginPinHash;
@@ -963,51 +905,33 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       const columns = [config.parentColumn, config.childColumn, ...(config.tenantColumn ? [config.tenantField || 'merchantId'] : []),
         ...(config.name === 'EmployeeStoreRoles' ? ['store_id'] : []),
         ...(config.name === 'EmployeeStores' && loginPinHash ? ['login_pin_hash'] : []),
-        ...(softDeleteRoleMapping ? ['is_deleted'] : []),
-        ...(softDeleteRoleMapping ? ['created_by', 'updated_by'] : []),
         ...entries.map(([key]) => config.fields[key].column)].map(quoteIdent);
       const values = [parent, child, ...(config.tenantColumn ? [tenantValue] : []),
         ...(config.name === 'EmployeeStoreRoles' ? [assignmentStore] : []),
         ...(config.name === 'EmployeeStores' && loginPinHash ? [loginPinHash] : []),
-        ...(softDeleteRoleMapping ? [false] : []),
-        ...(softDeleteRoleMapping ? [auditUserId, null] : []),
         ...entries.map(([,value]) => value)];
       const [item] = await manager.query(`INSERT INTO public.${config.table} (${columns.join(', ')}) VALUES (${values.map((_,i) => `$${i+1}`).join(', ')}) RETURNING ${projection}`, values);
       await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'create', { ...fields, ...item });
       return { success: true, item };
     }
-    const where = `${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2${softDeleteRoleMapping ? ' AND is_deleted = false' : ''}`;
+    const where = `${quoteIdent(config.parentColumn)} = $1 AND ${quoteIdent(config.childColumn)} = $2`;
     const [existing] = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${where} FOR UPDATE`, [parent, child]);
     if (!existing) throw new NotFoundException('Relationship not found');
     if (operation === 'get') return { success: true, item: existing };
     if (operation === 'delete') {
-      if (softDeleteRoleMapping) {
-        await manager.query(
-          `UPDATE public.${config.table}
-           SET status = 'INACTIVE', is_deleted = true, updated_by = $3, updated_at = clock_timestamp()
-           WHERE ${where}`,
-          [parent, child, auditUserId],
-        );
-      } else {
-        await manager.query(`DELETE FROM public.${config.table} WHERE ${where}`, [parent, child]);
-      }
+      await manager.query(`DELETE FROM public.${config.table} WHERE ${where}`, [parent, child]);
       await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'delete', existing);
-      return {
-        success: true,
-        message: softDeleteRoleMapping ? 'Relationship soft-deleted' : 'Relationship removed',
-        ...(softDeleteRoleMapping ? { status: 'INACTIVE', isDeleted: true } : {}),
-      };
+      return { success: true, message: 'Relationship removed' };
     }
     this.dates({ ...existing, ...fields });
     const loginPinHash = fields.__loginPinHash;
     delete fields.__loginPinHash;
     const entries = Object.entries(fields);
     const assignments = entries.map(([key], i) => `${quoteIdent(config.fields[key].column)} = $${i+3}`);
-    if (softDeleteRoleMapping) assignments.push(`${quoteIdent('updated_by')} = $${entries.length + 3}`);
-    if (loginPinHash) assignments.push(`${quoteIdent('login_pin_hash')} = $${entries.length + (softDeleteRoleMapping ? 4 : 3)}`);
+    if (loginPinHash) assignments.push(`${quoteIdent('login_pin_hash')} = $${entries.length + 3}`);
     if (config.timestamps) assignments.push(`${quoteIdent(config.updatedColumn || 'updatedAt')} = clock_timestamp()`);
     // TypeORM's PostgreSQL driver returns [rows, affectedCount] for UPDATE.
-    const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value), ...(softDeleteRoleMapping ? [auditUserId] : []), ...(loginPinHash ? [loginPinHash] : [])]);
+    const [rows] = await manager.query(`UPDATE public.${config.table} SET ${assignments.join(', ')} WHERE ${where} RETURNING ${projection}`, [parent, child, ...entries.map(([,value])=>value), ...(loginPinHash ? [loginPinHash] : [])]);
     await this.syncStoreFeatureToPlans(manager, config, parent, child!, 'update', { ...existing, ...fields, ...rows[0] });
     return { success: true, item: rows[0] };
   }
@@ -1040,33 +964,66 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     );
     const [feature] = await manager.query(
       `SELECT id::text AS id, name,
-              COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS key
+              COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', '') AS key
        FROM public.features f WHERE id = $1::uuid`,
       [target.featureId],
     );
     if (!storeType || !feature) return;
 
+    const match = [storeType.id, storeType.code, storeType.name]
+      .map((value: unknown) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
     const plans = await manager.query(
       `SELECT id, included_features AS "includedFeatures"
        FROM public.plans
-       WHERE store_type_id = $1::uuid AND is_deleted = false`,
-      [target.storeTypeId],
+       WHERE lower(COALESCE(store_type, '')) = ANY($1::text[])`,
+      [match],
     );
     const aliases = [feature.id, feature.name, feature.key]
       .map((value: unknown) => String(value || '').trim().toLowerCase())
       .filter(Boolean);
-    const enabled = operation !== 'delete' && state.status !== 'INACTIVE';
+    const enabled = operation !== 'delete' && state.defaultEnabled !== false;
+    const configuration = state.configurationJson && typeof state.configurationJson === 'object'
+      ? JSON.stringify(state.configurationJson)
+      : null;
 
     for (const plan of plans) {
       const current = Array.isArray(plan.includedFeatures) ? plan.includedFeatures.map((item: unknown) => String(item)) : [];
       const present = current.some((item: string) => aliases.includes(item.trim().toLowerCase()));
-      const next = !enabled
+      const next = operation === 'delete'
         ? current.filter((item: string) => !aliases.includes(item.trim().toLowerCase()))
         : present ? current : [...current, String(feature.id)];
       if (next.length !== current.length || next.some((item: string, index: number) => item !== current[index])) {
         await manager.query(
-          `UPDATE public.plans SET included_features = $2::text[], updated_at = clock_timestamp() WHERE id = $1`,
+          `UPDATE public.plans SET included_features = $2::text[], "updatedAt" = clock_timestamp() WHERE id = $1`,
           [plan.id, next],
+        );
+      }
+      if (operation === 'delete') {
+        await manager.query(
+          `DELETE FROM public.plan_entitlements WHERE plan_id = $1 AND feature_id = $2`,
+          [plan.id, feature.id],
+        );
+        continue;
+      }
+      const existing = await manager.query(
+        `SELECT id FROM public.plan_entitlements WHERE plan_id = $1 AND feature_id = $2 LIMIT 1`,
+        [plan.id, feature.id],
+      );
+      if (existing.length) {
+        await manager.query(
+          `UPDATE public.plan_entitlements
+           SET enabled = $3,
+               configuration_json = COALESCE($4::jsonb, configuration_json),
+               updated_at = now()
+           WHERE plan_id = $1 AND feature_id = $2`,
+          [plan.id, feature.id, enabled, configuration],
+        );
+      } else {
+        await manager.query(
+          `INSERT INTO public.plan_entitlements (plan_id, feature_id, enabled, configuration_json)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [plan.id, feature.id, enabled, configuration],
         );
       }
     }

@@ -37,12 +37,14 @@ import { DeviceEntity } from '../../entities/device.entity';
 import { VendorEntity } from '../../entities/vendor.entity';
 import { TendorEntity } from '../../entities/tendor.entity';
 import { FeaturePermissionEntity } from '../../entities/feature-permission.entity';
+import { PermissionType, RecordStatus } from '../../entities/commerce-enums';
 import { RoleTemplatePermissionEntity } from '../../entities/role-template-permission.entity';
 import { StoreTypeFeatureEntity } from '../../entities/store-type-feature.entity';
 import { StoreTypeRoleTemplateEntity } from '../../entities/store-type-role-template.entity';
 import { StoreRoleFeatureEntity } from '../../entities/store-role-feature.entity';
 import { MerchantVendorEntity } from '../../entities/merchant-vendor.entity';
 import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
+import { ensureVendorSchema } from '../vendor/vendor.schema';
 import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
 import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
@@ -269,7 +271,7 @@ export class MerchantRepository implements OnModuleInit {
         f.id,
         f.name,
         f.description,
-        f.category,
+        COALESCE(to_jsonb(f)->>'category', '') AS category,
         f.status,
         COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
         COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
@@ -281,7 +283,7 @@ export class MerchantRepository implements OnModuleInit {
         f.id,
         f.name,
         f.description,
-        f.category,
+        COALESCE(to_jsonb(f)->>'category', '') AS category,
         f.status,
         COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
         COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
@@ -403,6 +405,7 @@ export class MerchantRepository implements OnModuleInit {
     if (createdTables.length) {
       console.log(`🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`);
     }
+    await ensureVendorSchema(this.dataSource);
 
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
@@ -1933,10 +1936,10 @@ export class MerchantRepository implements OnModuleInit {
 
   async createFeature(dto: CreateFeatureDto): Promise<FeatureEntity> {
     const entity = this.featureRepo.create({
-      featureCode: (dto.featureCode || 'FEATURE').trim().toUpperCase(),
+      featureCode: dto.feature_code.trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      featureType: dto.featureType || FeatureType.TEXT,
+      featureType: dto.feature_type || FeatureType.TEXT,
       status: dto.status || FeatureStatus.ACTIVE,
     });
     return this.featureRepo.save(entity);
@@ -1945,10 +1948,10 @@ export class MerchantRepository implements OnModuleInit {
   async updateFeature(idOrKey: string, dto: UpdateFeatureDto): Promise<FeatureEntity | null> {
     const existing = await this.getFeatureByIdOrKey(idOrKey);
     if (!existing) return null;
-    if (dto.featureCode !== undefined) existing.featureCode = dto.featureCode.trim().toUpperCase();
+    if (dto.feature_code !== undefined) existing.featureCode = dto.feature_code.trim().toUpperCase();
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
-    if (dto.featureType !== undefined) existing.featureType = dto.featureType;
+    if (dto.feature_type !== undefined) existing.featureType = dto.feature_type;
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();
     return this.featureRepo.save(existing);
@@ -2212,6 +2215,99 @@ export class MerchantRepository implements OnModuleInit {
       }
       return { success: true as const, count: permissions.length, permissions };
     });
+  }
+
+  async listFeaturePermissions(
+    featureId: string,
+    filters: { status?: string; search?: string; page?: number; limit?: number } = {},
+  ): Promise<{ permissions: FeaturePermissionEntity[]; total: number }> {
+    const feature = await this.getFeatureByIdOrKey(featureId);
+    if (!feature) throw new NotFoundException(`Feature '${featureId}' not found`);
+    const query = this.dataSource.getRepository(FeaturePermissionEntity).createQueryBuilder('permission')
+      .where('permission.featureId = :featureId', { featureId: feature.id })
+      .andWhere('permission.isDeleted = false');
+    if (filters.status) query.andWhere('permission.status = :status', { status: filters.status.toUpperCase() });
+    if (filters.search?.trim()) {
+      query.andWhere('(permission.permissionCode ILIKE :search OR permission.name ILIKE :search OR permission.description ILIKE :search)', { search: `%${filters.search.trim()}%` });
+    }
+    query.orderBy('permission.name', 'ASC');
+    if (filters.page !== undefined && filters.limit !== undefined) {
+      query.skip((filters.page - 1) * filters.limit).take(filters.limit);
+    }
+    const [permissions, total] = await query.getManyAndCount();
+    return { permissions, total };
+  }
+
+  async getFeaturePermissionByIdOrCode(idOrCode: string, featureId: string): Promise<FeaturePermissionEntity | null> {
+    const feature = await this.getFeatureByIdOrKey(featureId);
+    if (!feature || !this.dataSource?.isInitialized) return null;
+    const repo = this.dataSource.getRepository(FeaturePermissionEntity);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await repo.findOneBy({ id: idOrCode.trim(), featureId: feature.id, isDeleted: false });
+      if (byId) return byId;
+    }
+    return repo.findOneBy({ permissionCode: idOrCode.trim().toUpperCase(), featureId: feature.id, isDeleted: false });
+  }
+
+  async createFeaturePermission(input: {
+    featureId: string; permissionCode: string; permissionType: PermissionType; name: string;
+    description?: string; status?: RecordStatus; createdBy?: string; updatedBy?: string;
+  }): Promise<FeaturePermissionEntity> {
+    const feature = await this.getFeatureByIdOrKey(input.featureId);
+    if (!feature) throw new NotFoundException(`Feature '${input.featureId}' not found`);
+    const repo = this.dataSource.getRepository(FeaturePermissionEntity);
+    const permission = repo.create({
+      featureId: feature.id,
+      permissionCode: input.permissionCode.trim().toUpperCase(),
+      permissionType: input.permissionType,
+      name: input.name.trim(),
+      description: input.description?.trim() || '',
+      status: input.status || RecordStatus.ACTIVE,
+      createdBy: input.createdBy,
+      updatedBy: input.updatedBy,
+      isDeleted: false,
+    });
+    try {
+      return await repo.save(permission);
+    } catch (error: any) {
+      if (error?.driverError?.code === '23505' || error?.code === '23505') {
+        throw new ConflictException(`Permission code '${input.permissionCode}' already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async updateFeaturePermission(
+    idOrCode: string,
+    featureId: string,
+    fields: Partial<Pick<FeaturePermissionEntity, 'featureId' | 'permissionCode' | 'permissionType' | 'name' | 'description' | 'status'>> & { updatedBy?: string },
+  ): Promise<FeaturePermissionEntity | null> {
+    const existing = await this.getFeaturePermissionByIdOrCode(idOrCode, featureId);
+    if (!existing) return null;
+    if (fields.featureId !== undefined) {
+      const feature = await this.getFeatureByIdOrKey(fields.featureId);
+      if (!feature) throw new NotFoundException(`Feature '${fields.featureId}' not found`);
+      existing.featureId = feature.id;
+    }
+    if (fields.permissionCode !== undefined) existing.permissionCode = fields.permissionCode.trim().toUpperCase();
+    if (fields.permissionType !== undefined) existing.permissionType = fields.permissionType;
+    if (fields.name !== undefined) existing.name = fields.name.trim();
+    if (fields.description !== undefined) existing.description = fields.description.trim();
+    if (fields.status !== undefined) existing.status = fields.status;
+    if (fields.updatedBy !== undefined) existing.updatedBy = fields.updatedBy;
+    return this.dataSource.getRepository(FeaturePermissionEntity).save(existing);
+  }
+
+  async deleteFeaturePermission(idOrCode: string, featureId: string, updatedBy?: string): Promise<boolean> {
+    const existing = await this.getFeaturePermissionByIdOrCode(idOrCode, featureId);
+    if (!existing) return false;
+    existing.status = RecordStatus.INACTIVE;
+    existing.isDeleted = true;
+    existing.updatedBy = updatedBy ?? existing.updatedBy;
+    existing.updatedAt = new Date();
+    await this.dataSource.getRepository(FeaturePermissionEntity).save(existing);
+    return true;
   }
 
   // --- Role Templates CRUD ---

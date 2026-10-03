@@ -1,5 +1,5 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
-import { Audited, AuditColumns, FeatureType, RecordStatus } from './commerce-enums';
+import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 
 export { RecordStatus as FeatureStatus, FeatureType } from './commerce-enums';
 
@@ -26,14 +26,8 @@ export class FeatureEntity extends AuditColumns {
   @Column({ name: 'description', type: 'text', default: '' })
   description!: string;
 
-  @Column({
-    name: 'feature_type',
-    type: 'enum',
-    enum: FeatureType,
-    enumName: 'feature_type',
-    default: FeatureType.TEXT,
-  })
-  featureType!: FeatureType;
+  @Column({ name: 'feature_type', type: 'varchar', length: 100 })
+  featureType!: string;
 
   @Column({
     name: 'status',

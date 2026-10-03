@@ -1,9 +1,20 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { ILike, IsNull, Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { TendorEntity, TendorStatus } from '../../../entities/tendor.entity';
 import { CreateTendorDto, UpdateTendorDto } from './tendor.dto';
 
+
+const normalizeText = (value?: string | null): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const normalizeStatus = (value?: string | null): string | undefined => {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.toUpperCase();
+};
 
 @Injectable()
 export class TendorRepository {
@@ -14,6 +25,12 @@ export class TendorRepository {
   private store() {
     this.repo ??= this.merchants.requireDataSource().getRepository(TendorEntity);
     return this.repo;
+  }
+
+  private requireText(value: string | undefined, field: string): string {
+    const normalized = normalizeText(value);
+    if (!normalized) throw new BadRequestException(`${field} is required`);
+    return normalized;
   }
 
   private uniqueConflict(error: any, tendorCode: string, tendorName: string) {
@@ -33,10 +50,13 @@ export class TendorRepository {
   }
 
   private async findByNormalized(column: 'tendorCode' | 'tendorName', value: string, excludeId?: string) {
+    const normalized = normalizeText(value);
+    if (!normalized) return null;
+
     const query = this.store()
       .createQueryBuilder('tendor')
-      .where('tendor.deletedAt IS NULL')
-      .andWhere(`LOWER(BTRIM(tendor.${column})) = LOWER(BTRIM(:value))`, { value });
+      .where('tendor.isDeleted = false')
+      .andWhere(`LOWER(BTRIM(tendor.${column})) = LOWER(BTRIM(:value))`, { value: normalized });
     if (excludeId) query.andWhere('tendor.id != :excludeId', { excludeId });
     return query.getOne();
   }
@@ -44,12 +64,14 @@ export class TendorRepository {
   private async assertUniqueFields(tendorCode?: string, tendorName?: string, excludeId?: string) {
     const conflicts: string[] = [];
     if (tendorCode !== undefined) {
-      const existing = await this.findByNormalized('tendorCode', tendorCode, excludeId);
-      if (existing) conflicts.push(`Tendor code '${tendorCode}' already exists`);
+      const normalizedCode = this.requireText(tendorCode, 'tendorCode');
+      const existing = await this.findByNormalized('tendorCode', normalizedCode, excludeId);
+      if (existing) conflicts.push(`Tendor code '${normalizedCode}' already exists`);
     }
     if (tendorName !== undefined) {
-      const existing = await this.findByNormalized('tendorName', tendorName, excludeId);
-      if (existing) conflicts.push(`Tendor name '${tendorName}' already exists`);
+      const normalizedName = this.requireText(tendorName, 'tendorName');
+      const existing = await this.findByNormalized('tendorName', normalizedName, excludeId);
+      if (existing) conflicts.push(`Tendor name '${normalizedName}' already exists`);
     }
     if (conflicts.length) {
       throw new ConflictException({ message: conflicts, error: 'Conflict', statusCode: 409 });
@@ -64,23 +86,24 @@ export class TendorRepository {
 
   async listMerchantTendors(merchantId: string, query: { search?: string; status?: string } = {}): Promise<any[]> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const status = normalizeStatus(query.status);
     const params: unknown[] = [merchantUuid];
     let sql = `
       SELECT t.*, mt.status AS "assignmentStatus", mt.id AS "assignmentId", true AS assigned
       FROM public.merchant_tendors mt
       JOIN public.tendors t ON t.id = mt.tendor_id
-      WHERE mt.merchant_id = $1 AND mt.status = 'ACTIVE' AND t."deletedAt" IS NULL
+      WHERE mt.merchant_id = $1 AND mt.status = 'ACTIVE' AND t.is_deleted = FALSE
     `;
-    if (query.status) {
-      params.push(query.status);
+    if (status) {
+      params.push(status);
       sql += ` AND t.status = $${params.length}`;
     }
     if (query.search?.trim()) {
       params.push(`%${query.search.trim()}%`);
       const i = params.length;
-      sql += ` AND (t."tendorName" ILIKE $${i} OR t."tendorCode" ILIKE $${i})`;
+      sql += ` AND (t.tendor_name ILIKE $${i} OR t.tendor_code ILIKE $${i})`;
     }
-    sql += ` ORDER BY t."tendorName" ASC, t.id ASC`;
+    sql += ` ORDER BY t.tendor_name ASC, t.id ASC`;
     return this.merchants.requireDataSource().query(sql, params);
   }
 
@@ -89,6 +112,7 @@ export class TendorRepository {
     query: { search?: string; status?: string } = {},
   ): Promise<any[]> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const status = normalizeStatus(query.status);
     const params: unknown[] = [merchantUuid];
     let sql = `
       SELECT t.*,
@@ -96,10 +120,10 @@ export class TendorRepository {
              mt.status AS "assignmentStatus", mt.id AS "assignmentId"
       FROM public.tendors t
       LEFT JOIN public.merchant_tendors mt ON mt.tendor_id = t.id AND mt.merchant_id = $1
-      WHERE t."deletedAt" IS NULL
+      WHERE t.is_deleted = FALSE
     `;
-    if (query.status) {
-      params.push(query.status);
+    if (status) {
+      params.push(status);
       sql += ` AND t.status = $${params.length}`;
     } else {
       sql += ` AND t.status = 'ACTIVE'`;
@@ -107,9 +131,9 @@ export class TendorRepository {
     if (query.search?.trim()) {
       params.push(`%${query.search.trim()}%`);
       const i = params.length;
-      sql += ` AND (t."tendorName" ILIKE $${i} OR t."tendorCode" ILIKE $${i})`;
+      sql += ` AND (t.tendor_name ILIKE $${i} OR t.tendor_code ILIKE $${i})`;
     }
-    sql += ` ORDER BY assigned DESC, t."tendorName" ASC, t.id ASC`;
+    sql += ` ORDER BY assigned DESC, t.tendor_name ASC, t.id ASC`;
     return this.merchants.requireDataSource().query(sql, params);
   }
 
@@ -119,13 +143,13 @@ export class TendorRepository {
     if (!uniqueIds.length) throw new BadRequestException('tendorIds is required');
     const db = this.merchants.requireDataSource();
     const found = await db.query(
-      `SELECT id FROM public.tendors WHERE id = ANY($1::uuid[]) AND "deletedAt" IS NULL`,
+      `SELECT id FROM public.tendors WHERE id = ANY($1::uuid[]) AND is_deleted = FALSE`,
       [uniqueIds],
     );
     if (found.length !== uniqueIds.length) throw new NotFoundException('One or more tendors were not found');
     await db.query(
       `INSERT INTO public.merchant_tendors (merchant_id, tendor_id, tendor_code, status)
-       SELECT $1::uuid, t.id, t."tendorCode", 'ACTIVE'
+       SELECT $1::uuid, t.id, t.tendor_code, 'ACTIVE'
        FROM unnest($2::uuid[]) AS x(tendor_id)
        JOIN public.tendors t ON t.id = x.tendor_id
        ON CONFLICT (merchant_id, tendor_id) DO UPDATE
@@ -145,8 +169,9 @@ export class TendorRepository {
   }
 
   async list(query: { status?: string; search?: string } = {}): Promise<TendorEntity[]> {
-    const where: Record<string, unknown> = {};
-    if (query.status) where.status = query.status;
+    const where: Record<string, unknown> = { isDeleted: false };
+    const status = normalizeStatus(query.status);
+    if (status) where.status = status;
     if (query.search?.trim()) {
       const search = ILike(`%${query.search.trim()}%`);
       return this.store().find({
@@ -161,19 +186,19 @@ export class TendorRepository {
   }
 
   async getById(id: string): Promise<TendorEntity> {
-    const tendor = await this.store().findOne({ where: { id } });
+    const tendor = await this.store().findOne({ where: { id, isDeleted: false } });
     if (!tendor) throw new NotFoundException(`Tendor '${id}' not found`);
     return tendor;
   }
 
   async create(dto: CreateTendorDto): Promise<TendorEntity> {
-    const tendorCode = dto.tendorCode.trim();
-    const tendorName = dto.tendorName.trim();
+    const tendorCode = this.requireText(dto.tendorCode, 'tendorCode');
+    const tendorName = this.requireText(dto.tendorName, 'tendorName');
     await this.assertUniqueFields(tendorCode, tendorName);
     const entity = this.store().create({
       tendorCode,
       tendorName,
-      status: dto.status || TendorStatus.ACTIVE,
+      status: ((normalizeStatus(dto.status) || TendorStatus.ACTIVE) as TendorStatus),
     });
     try {
       return await this.store().save(entity);
@@ -190,12 +215,12 @@ export class TendorRepository {
       return this.getById(id);
     }
     const existing = await this.getById(id);
-    const tendorCode = dto.tendorCode !== undefined ? dto.tendorCode.trim() : undefined;
-    const tendorName = dto.tendorName !== undefined ? dto.tendorName.trim() : undefined;
+    const tendorCode = dto.tendorCode !== undefined ? this.requireText(dto.tendorCode, 'tendorCode') : undefined;
+    const tendorName = dto.tendorName !== undefined ? this.requireText(dto.tendorName, 'tendorName') : undefined;
     await this.assertUniqueFields(tendorCode, tendorName, existing.id);
     if (tendorCode !== undefined) existing.tendorCode = tendorCode;
     if (tendorName !== undefined) existing.tendorName = tendorName;
-    if (dto.status !== undefined) existing.status = dto.status;
+    if (dto.status !== undefined) existing.status = normalizeStatus(dto.status) as TendorStatus;
     try {
       return await this.store().save(existing);
     } catch (error: any) {
@@ -208,6 +233,6 @@ export class TendorRepository {
 
   async softDelete(id: string): Promise<void> {
     await this.getById(id);
-    await this.store().softDelete({ id, deletedAt: IsNull() });
+    await this.store().update({ id, isDeleted: false }, { isDeleted: true });
   }
 }
