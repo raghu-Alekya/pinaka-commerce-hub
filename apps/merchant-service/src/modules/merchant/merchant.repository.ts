@@ -1726,7 +1726,24 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
-  async listStoreTypes(status?: string): Promise<StoreTypeEntity[]> {
+  async listStoreTypes(status?: string): Promise<any[]> {
+    if (this.dataSource?.isInitialized) {
+      const where = status ? `WHERE lower(COALESCE(s.status::text, '')) = lower($1)` : '';
+      const params = status ? [status] : [];
+      return await this.dataSource.query(`
+        SELECT 
+          s.id,
+          s.name,
+          s.description,
+          s.status,
+          COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', to_jsonb(s)->>'code', '') AS "storeTypeCode",
+          COALESCE(to_jsonb(s)->>'createdAt', to_jsonb(s)->>'created_at', now()::text) AS "createdAt",
+          COALESCE(to_jsonb(s)->>'updatedAt', to_jsonb(s)->>'updated_at', now()::text) AS "updatedAt"
+        FROM public.store_types s
+        ${where}
+        ORDER BY s.name ASC, s.id ASC
+      `, params);
+    }
     if (!this.storeTypeRepo) return [];
     if (status) {
       return this.storeTypeRepo.find({ where: { status: status.toUpperCase() as StoreTypeStatus }, order: { name: 'ASC' } });
@@ -1734,7 +1751,27 @@ export class MerchantRepository implements OnModuleInit {
     return this.storeTypeRepo.find({ order: { name: 'ASC' } });
   }
 
-  async getStoreTypeByIdOrCode(idOrCode: string): Promise<StoreTypeEntity | null> {
+  async getStoreTypeByIdOrCode(idOrCode: string): Promise<any | null> {
+    if (this.dataSource?.isInitialized && idOrCode) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+      const where = isUuid
+        ? `WHERE s.id::text = $1 OR lower(COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', '')) = lower($1)`
+        : `WHERE lower(COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', '')) = lower($1) OR lower(s.name) = lower($1)`;
+      const rows = await this.dataSource.query(`
+        SELECT 
+          s.id,
+          s.name,
+          s.description,
+          s.status,
+          COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', to_jsonb(s)->>'code', '') AS "storeTypeCode",
+          COALESCE(to_jsonb(s)->>'createdAt', to_jsonb(s)->>'created_at', now()::text) AS "createdAt",
+          COALESCE(to_jsonb(s)->>'updatedAt', to_jsonb(s)->>'updated_at', now()::text) AS "updatedAt"
+        FROM public.store_types s
+        ${where}
+        LIMIT 1
+      `, [idOrCode.trim()]);
+      if (rows.length) return rows[0];
+    }
     if (!this.storeTypeRepo || !idOrCode) return null;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
     if (isUuid) {
