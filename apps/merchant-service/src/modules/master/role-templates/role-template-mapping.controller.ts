@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Inject, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { filterMasterList } from '../common/master-list';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { RELATIONSHIPS } from '../../shared/relationships.config';
-import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
+import { RelationshipOwnerGuard, relationshipUserId } from '../../shared/relationships.controller';
+import type { RelationshipRequest } from '../../shared/relationships.controller';
 import { RelationshipsRepository } from '../../shared/relationships.repository';
 
 const roleTemplateStoreTypes = RELATIONSHIPS.find(config => config.name === 'RoleTemplateStoreTypes')!;
@@ -53,13 +54,13 @@ export class RoleTemplateStoreTypeBulkController {
   constructor(@Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository) {}
 
   @Put()
-  replace(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown) {
-    return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body);
+  replace(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body, relationshipUserId(request));
   }
 
   @Post()
-  create(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown) {
-    return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body);
+  create(@Param('roleTemplateId') roleTemplateId: string, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.saveRoleTemplateStoreTypes(roleTemplateStoreTypes, { roleTemplateId }, body, relationshipUserId(request));
   }
 }
 

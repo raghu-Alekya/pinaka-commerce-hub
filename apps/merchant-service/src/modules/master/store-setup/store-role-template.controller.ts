@@ -9,11 +9,13 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { RELATIONSHIPS } from '../../shared/relationships.config';
-import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
+import { RelationshipOwnerGuard, relationshipUserId } from '../../shared/relationships.controller';
+import type { RelationshipRequest } from '../../shared/relationships.controller';
 import { RelationshipsRepository } from '../../shared/relationships.repository';
 import { SaveStoreRoleTemplatesDto } from './store-role-template.dto';
 import { WorkforceValidationPipe } from '../../employee/workforce-validation.pipe';
@@ -33,7 +35,6 @@ const storeTypeRoleTemplates = RELATIONSHIPS.find(config => config.name === 'Sto
 @UseGuards(RelationshipOwnerGuard)
 export class StoreTypeAssignedRoleTemplatesController {
   constructor(
-    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
@@ -43,19 +44,21 @@ export class StoreTypeAssignedRoleTemplatesController {
     @Query('status') status?: string,
     @Query('defaultEnabled') defaultEnabled?: string,
   ) {
-    const roleTemplates = await this.merchants.listRoleTemplatesForStoreType(storeTypeId, {
-      status,
-      defaultEnabled:
-        defaultEnabled === undefined
-          ? undefined
-          : defaultEnabled.trim().toLowerCase() === 'true',
-    });
+    const result = await this.relationships.execute(storeTypeRoleTemplates, 'list', { storeTypeId });
+    const expectedStatus = status?.trim().toUpperCase();
+    const expectedEnabled = defaultEnabled === undefined
+      ? undefined
+      : defaultEnabled.trim().toLowerCase() === 'true';
+    const roleTemplates = (result.items as Record<string, any>[]).filter(item =>
+      (!expectedStatus || item.templateStatus === expectedStatus)
+      && (expectedEnabled === undefined || (item.status === 'ACTIVE') === expectedEnabled),
+    );
     return { success: true, count: roleTemplates.length, roleTemplates };
   }
 
   @Post('bulk')
-  createBulk(@Param() params: Record<string, string>, @Body() body: unknown) {
-    return this.relationships.createBulk(storeTypeRoleTemplates, params, body);
+  createBulk(@Param() params: Record<string, string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.createBulk(storeTypeRoleTemplates, params, body, relationshipUserId(request));
   }
 
   @Get()
@@ -69,23 +72,23 @@ export class StoreTypeAssignedRoleTemplatesController {
   }
 
   @Post()
-  create(@Param() params: Record<string, string>, @Body() body: unknown) {
-    return this.relationships.execute(storeTypeRoleTemplates, 'create', params, undefined, body);
+  create(@Param() params: Record<string, string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.execute(storeTypeRoleTemplates, 'create', params, undefined, body, relationshipUserId(request));
   }
 
   @Put(':relatedId')
-  replace(@Param() params: Record<string, string>, @Body() body: unknown) {
-    return this.relationships.execute(storeTypeRoleTemplates, 'replace', params, params.relatedId, body);
+  replace(@Param() params: Record<string, string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.execute(storeTypeRoleTemplates, 'replace', params, params.relatedId, body, relationshipUserId(request));
   }
 
   @Patch(':relatedId')
-  patch(@Param() params: Record<string, string>, @Body() body: unknown) {
-    return this.relationships.execute(storeTypeRoleTemplates, 'patch', params, params.relatedId, body);
+  patch(@Param() params: Record<string, string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+    return this.relationships.execute(storeTypeRoleTemplates, 'patch', params, params.relatedId, body, relationshipUserId(request));
   }
 
   @Delete(':relatedId')
-  remove(@Param() params: Record<string, string>) {
-    return this.relationships.execute(storeTypeRoleTemplates, 'delete', params, params.relatedId);
+  remove(@Param() params: Record<string, string>, @Req() request: RelationshipRequest) {
+    return this.relationships.execute(storeTypeRoleTemplates, 'delete', params, params.relatedId, undefined, relationshipUserId(request));
   }
 }
 

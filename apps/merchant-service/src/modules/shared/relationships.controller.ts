@@ -1,6 +1,13 @@
-import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, Param, Patch, Post, Put, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { RELATIONSHIPS, EMPLOYEE_ACCESS_RELATIONSHIPS, Relationship } from './relationships.config';
 import { RelationshipsRepository } from './relationships.repository';
+
+export type RelationshipRequest = { user?: { id?: string } };
+export function relationshipUserId(request: RelationshipRequest): string {
+  const userId = request.user?.id;
+  if (!userId) throw new UnauthorizedException('Authenticated user id is required');
+  return userId;
+}
 
 // The existing global session guard authenticates first. These new administration
 // routes require OWNER, consistent with the application's privileged owner role.
@@ -24,13 +31,13 @@ function createController(config: Relationship) {
     @Get(':relatedId')
     get(@Param() params: Record<string,string>) { return this.repository.execute(config, 'get', params, params.relatedId); }
     @Post()
-    create(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'create', params, undefined, body); }
+    create(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'create', params, undefined, body, request.user?.id); }
     @Put(':relatedId')
-    replace(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'replace', params, params.relatedId, body); }
+    replace(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'replace', params, params.relatedId, body, request.user?.id); }
     @Patch(':relatedId')
-    patch(@Param() params: Record<string,string>, @Body() body: unknown) { return this.repository.execute(config, 'patch', params, params.relatedId, body); }
+    patch(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'patch', params, params.relatedId, body, request.user?.id); }
     @Delete(':relatedId')
-    remove(@Param() params: Record<string,string>) { return this.repository.execute(config, 'delete', params, params.relatedId); }
+    remove(@Param() params: Record<string,string>, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'delete', params, params.relatedId, undefined, request.user?.id); }
   }
   Object.defineProperty(RelationshipController, 'name', { value: `${config.name}Controller` });
   return RelationshipController;
@@ -51,8 +58,8 @@ function createBulkController(config: Relationship) {
   class BulkRelationshipController {
     constructor(@Inject(RelationshipsRepository) readonly repository: RelationshipsRepository) {}
     @Post('bulk')
-    create(@Param() params: Record<string, string>, @Body() body: unknown) {
-      return this.repository.createBulk(config, params, body);
+    create(@Param() params: Record<string, string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+      return this.repository.createBulk(config, params, body, request.user?.id);
     }
   }
   Object.defineProperty(BulkRelationshipController, 'name', { value: `${config.name}BulkController` });

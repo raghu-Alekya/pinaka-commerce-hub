@@ -41,19 +41,12 @@ export class StoreTypeController {
 
   @Get()
   async listStoreTypes(@Query() query: Record<string, string>) {
-<<<<<<< HEAD
-    const raw = await this.repository.listStoreTypes();
-    const storeTypes = filterMasterList(raw, query);
-    const count = (raw?.length || 0) + 1;
-    const nextStoreTypeCode = `ST-${String(count).padStart(3, '0')}`;
-    return { success: true, count: storeTypes.length, storeTypes, nextStoreTypeCode };
-=======
     const storeTypes = filterMasterList(await this.repository.list(), query);
     const nextStoreTypeCode = await this.repository.previewNextCode();
     return { success: true, count: storeTypes.length, nextStoreTypeCode, storeTypes };
->>>>>>> 1ba0cff621a15be136a304c16c6e6f9b892fbf84
   }
 
+  @Get(':idOrCode')
   async getStoreType(@Param('idOrCode') idOrCode: string) {
     const storeType = await this.repository.findByIdOrCode(idOrCode);
     if (!storeType) throw new NotFoundException(`Store type '${idOrCode}' not found`);
