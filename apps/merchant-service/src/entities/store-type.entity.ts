@@ -14,8 +14,6 @@ export class StoreTypeEntity extends AuditColumns {
     type: 'varchar',
     length: 50,
     unique: true,
-    insert: false,
-    update: false,
   })
   storeTypeCode!: string;
 

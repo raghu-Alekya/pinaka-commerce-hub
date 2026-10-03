@@ -12,7 +12,6 @@ import {
   Put,
   Query,
   Req,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 import { StoreTypeRepository } from './store-type.repository';
@@ -138,9 +137,9 @@ export class StoreTypeController {
     };
   }
 
-  private loginUserId(request: AuthenticatedRequest): string {
+  private loginUserId(request: AuthenticatedRequest): string | undefined {
     const userId = request.user?.id;
-    if (!userId) throw new UnauthorizedException('Authenticated user id is required');
-    return userId;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId || '');
+    return isUuid ? userId : undefined;
   }
 }
