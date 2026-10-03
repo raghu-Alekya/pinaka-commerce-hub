@@ -4,11 +4,15 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  SetMetadata,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { extractBearerToken, IS_PUBLIC_ROUTE, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from '../merchant/merchant.repository';
+
+export const REQUIRE_AUTH_ROUTE = 'requireAuthRoute';
+export const RequireAuth = () => SetMetadata(REQUIRE_AUTH_ROUTE, true);
 
 @Injectable()
 export class SessionAuthGuard implements CanActivate {
@@ -18,12 +22,16 @@ export class SessionAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (process.env.SKIP_AUTH === 'true') return true;
+    const requiresAuth = this.reflector?.getAllAndOverride<boolean>(REQUIRE_AUTH_ROUTE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (process.env.SKIP_AUTH === 'true' && !requiresAuth) return true;
     const isPublic = this.reflector?.getAllAndOverride<boolean>(IS_PUBLIC_ROUTE, [
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) return true;
+    if (isPublic && !requiresAuth) return true;
     const request = context.switchToHttp().getRequest<{ headers?: { authorization?: string }; user?: unknown }>();
     const token = extractBearerToken(request.headers?.authorization);
     const payload = verifyAccessToken(token);

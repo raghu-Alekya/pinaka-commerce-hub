@@ -2,8 +2,10 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, Par
 import { AddMerchantVendorsDto } from './merchant-vendor.dto';
 import { RelationshipOwnerGuard } from '../shared/relationships.controller';
 import { VendorRepository } from './vendor.repository';
+import { RequireAuth } from '../shared/session-auth.guard';
 
 @UseGuards(RelationshipOwnerGuard)
+@RequireAuth()
 @Controller([
   'api/v1/merchants/:merchantId/vendors',
   'connector/api/v1/merchants/:merchantId/vendors',

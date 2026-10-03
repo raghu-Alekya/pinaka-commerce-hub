@@ -55,10 +55,17 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@pdh.com
       PGADMIN_DEFAULT_PASSWORD: pdh_password
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+      PGPASS_FILE: /pgpass
     depends_on:
       - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./docker/pgadmin/pgpass:/pgpass:ro
 
 volumes:
   redis_data:
   rabbitmq_data:
   postgres_data:
+  pgadmin_data:
