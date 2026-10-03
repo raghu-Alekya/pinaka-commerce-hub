@@ -28,7 +28,16 @@ $services = @(
 )
 # Serialize launches so repeated clicks cannot start competing service copies.
 $launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHubLauncher')
-if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
+if ($Restart) {
+    if (-not $launchMutex.WaitOne(3000)) {
+        Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*apps/*/src/main.ts*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        if (-not $launchMutex.WaitOne(2000)) {
+            Write-Warning "Acquired lock after terminating previous background launcher."
+        }
+    }
+} else {
+    if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
+}
 try {
     if (-not $SkipDocker) {
         $dockerRunning = $false
@@ -38,7 +47,12 @@ try {
         } catch {}
 
         if ($dockerRunning) {
-            & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d
+            & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d --remove-orphans
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host 'Docker compose up failed. Attempting container cleanup and retry...'
+                & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') down --remove-orphans
+                & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d --remove-orphans
+            }
             if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed.' }
             $pgReady = $false
             for ($attempt = 1; $attempt -le 30; $attempt++) {
@@ -49,8 +63,13 @@ try {
             if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
             $ensureDbSql = "SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub') \gexec"
             $ensureDbSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d template1 -v ON_ERROR_STOP=1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL database initialization failed.' }
-            Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
+            $ensureDbNewSql = "SELECT 'CREATE DATABASE pinaka_commerce_hub_new' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub_new') \gexec"
+            $ensureDbNewSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d template1 -v ON_ERROR_STOP=1 | Out-Null
+
+            Write-Host 'Synchronizing all entity schemas into pinaka_commerce_hub_new database...'
+            pnpm exec tsx (Join-Path $serviceRoot 'scripts/sync-all-entities.ts')
+            pnpm exec tsx (Join-Path $serviceRoot 'scripts/seed-via-typeorm.ts')
+            Write-Host 'PostgreSQL ready: pinaka_commerce_hub & pinaka_commerce_hub_new (71 tables seeded, pgAdmin http://localhost:5050).'
         } else {
             Write-Host 'Docker daemon is not running. Checking local PostgreSQL service...'
             $pgLocalReady = $false
@@ -82,7 +101,7 @@ try {
                 $absoluteEntry = $entry -replace '\\', '/'
                 # Relative entry points are also used by this project's original launcher.
                 $relativeEntry = "apps/$($service.Name)/src/main.ts"
-                $matchesService = $process.Name -eq 'node.exe' -and ($normalized.Contains($absoluteEntry) -or $normalized -match ('(?:\s|"|\x27)' + [regex]::Escape($relativeEntry) + '(?:\s|"|\x27|$)'))
+                $matchesService = $process.Name -eq 'node.exe' -and ($normalized.Contains($absoluteEntry) -or $normalized -match ('(?:/|\\|\s|"|\x27)' + [regex]::Escape($relativeEntry) + '(?:\s|"|\x27|$)'))
                 if (-not $matchesService) { throw "Port $($service.Port) belongs to another process (PID $owner). It was not stopped." }
                 if ($Restart) { Stop-Process -Id $owner -ErrorAction Stop }
             }

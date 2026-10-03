@@ -1,1 +1,1 @@
-postgres:5432:*:pdh_user:pdh_password
+host.docker.internal:5432:pinaka_commerce_hub_new:pdh_user:pdh_password

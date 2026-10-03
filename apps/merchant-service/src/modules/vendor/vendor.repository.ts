@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { ILike, Repository } from 'typeorm';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { VendorEntity, VendorStatus, VendorType } from '../../entities/vendor.entity';
@@ -26,8 +27,8 @@ export class VendorRepository {
     }
   }
 
-  async list(query: { vendorType?: string; status?: string; search?: string } = {}): Promise<VendorEntity[]> {
-    const where: Record<string, unknown> = {};
+  async list(query: { vendorType?: string; status?: string; search?: string; isDeleted?: boolean } = {}): Promise<VendorEntity[]> {
+    const where: Record<string, unknown> = { isDeleted: query.isDeleted ?? false };
     if (query.vendorType) where.vendorType = query.vendorType;
     if (query.status) where.status = query.status;
     if (query.search?.trim()) {
@@ -45,18 +46,20 @@ export class VendorRepository {
     return this.store().find({ where, order: { vendorName: 'ASC', id: 'ASC' } });
   }
 
-  async getById(id: string): Promise<VendorEntity> {
-    const vendor = await this.store().findOne({ where: { id } });
+  async getById(id: string, isDeleted = false): Promise<VendorEntity> {
+    const vendor = await this.store().findOne({ where: { id, isDeleted } });
     if (!vendor) throw new NotFoundException(`Vendor '${id}' not found`);
     return vendor;
   }
 
-  async create(dto: CreateVendorDto): Promise<VendorEntity> {
+  async create(dto: CreateVendorDto, actorId: string): Promise<VendorEntity> {
     this.assertOrganizerContact(dto.vendorType, dto.contactPerson);
     const entity = this.store().create({
       vendorName: dto.vendorName.trim(),
       vendorType: dto.vendorType,
-      vendorCode: optionalText(dto.vendorCode),
+      vendorCode: optionalText(dto.vendorCode) ?? `VEN-${randomUUID()}`,
+      createdBy: actorId,
+      updatedBy: actorId,
       contactPerson: optionalText(dto.contactPerson),
       phone: optionalText(dto.phone),
       email: optionalText(dto.email)?.toLowerCase(),
@@ -79,11 +82,14 @@ export class VendorRepository {
     }
   }
 
-  async update(id: string, dto: UpdateVendorDto): Promise<VendorEntity> {
+  async update(id: string, dto: UpdateVendorDto, actorId: string): Promise<VendorEntity> {
     const existing = await this.getById(id);
     if (dto.vendorName !== undefined) existing.vendorName = dto.vendorName.trim();
     if (dto.vendorType !== undefined) existing.vendorType = dto.vendorType;
-    if (dto.vendorCode !== undefined) existing.vendorCode = optionalText(dto.vendorCode);
+    if (dto.vendorCode !== undefined) {
+      const vendorCode = optionalText(dto.vendorCode);
+      if (vendorCode) existing.vendorCode = vendorCode;
+    }
     if (dto.contactPerson !== undefined) existing.contactPerson = optionalText(dto.contactPerson);
     if (dto.phone !== undefined) existing.phone = optionalText(dto.phone);
     if (dto.email !== undefined) existing.email = optionalText(dto.email)?.toLowerCase() ?? null;
@@ -95,6 +101,7 @@ export class VendorRepository {
     if (dto.zipCode !== undefined) existing.zipCode = optionalText(dto.zipCode);
     if (dto.country !== undefined) existing.country = optionalText(dto.country);
     if (dto.status !== undefined) existing.status = dto.status;
+    existing.updatedBy = actorId;
     this.assertOrganizerContact(existing.vendorType, existing.contactPerson);
     try {
       return await this.store().save(existing);
@@ -106,16 +113,13 @@ export class VendorRepository {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actorId: string): Promise<void> {
     await this.getById(id);
-    try {
-      await this.store().createQueryBuilder().delete().from(VendorEntity).where('id = :id', { id }).execute();
-    } catch (error: any) {
-      if (error?.code === '23503' || error?.driverError?.code === '23503') {
-        throw new ConflictException('Vendor is in use and cannot be deleted');
-      }
-      throw error;
-    }
+    const deletedAt = new Date();
+    await this.store().update(
+      { id, isDeleted: false },
+      { isDeleted: true, deletedAt, updatedAt: deletedAt, updatedBy: actorId },
+    );
   }
 
   private async requireMerchantUuid(merchantId: string): Promise<string> {
@@ -137,7 +141,7 @@ export class VendorRepository {
       JOIN public.vendors v ON v.id = mv.vendor_id
       WHERE mv.merchant_id = $1
         AND mv.status = 'ACTIVE'
-        AND v."deletedAt" IS NULL
+        AND v.is_deleted = false
     `;
     if (query.status) {
       params.push(query.status);
@@ -151,13 +155,13 @@ export class VendorRepository {
       params.push(`%${query.search.trim()}%`);
       const i = params.length;
       sql += ` AND (
-        v."vendorName" ILIKE $${i}
-        OR COALESCE(v."vendorCode", '') ILIKE $${i}
-        OR COALESCE(v."contactPerson", '') ILIKE $${i}
-        OR COALESCE(v."productCategory", '') ILIKE $${i}
+        v.vendor_name ILIKE $${i}
+        OR COALESCE(v.vendor_code, '') ILIKE $${i}
+        OR COALESCE(v.contact_person, '') ILIKE $${i}
+        OR COALESCE(v.product_category, '') ILIKE $${i}
       )`;
     }
-    sql += ` ORDER BY v."vendorName" ASC, v.id ASC`;
+    sql += ` ORDER BY v.vendor_name ASC, v.id ASC`;
     return db.query(sql, params);
   }
 
@@ -176,7 +180,7 @@ export class VendorRepository {
       FROM public.vendors v
       LEFT JOIN public.merchant_vendors mv
         ON mv.vendor_id = v.id AND mv.merchant_id = $1
-      WHERE v."deletedAt" IS NULL
+      WHERE v.is_deleted = false
     `;
     if (query.status) {
       params.push(query.status);
@@ -192,13 +196,13 @@ export class VendorRepository {
       params.push(`%${query.search.trim()}%`);
       const i = params.length;
       sql += ` AND (
-        v."vendorName" ILIKE $${i}
-        OR COALESCE(v."vendorCode", '') ILIKE $${i}
-        OR COALESCE(v."contactPerson", '') ILIKE $${i}
-        OR COALESCE(v."productCategory", '') ILIKE $${i}
+        v.vendor_name ILIKE $${i}
+        OR COALESCE(v.vendor_code, '') ILIKE $${i}
+        OR COALESCE(v.contact_person, '') ILIKE $${i}
+        OR COALESCE(v.product_category, '') ILIKE $${i}
       )`;
     }
-    sql += ` ORDER BY assigned DESC, v."vendorName" ASC, v.id ASC`;
+    sql += ` ORDER BY assigned DESC, v.vendor_name ASC, v.id ASC`;
     return db.query(sql, params);
   }
 
@@ -209,7 +213,7 @@ export class VendorRepository {
     if (!uniqueIds.length) throw new BadRequestException('vendorIds is required');
 
     const found = await db.query(
-      `SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND "deletedAt" IS NULL`,
+      `SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND is_deleted = false`,
       [uniqueIds],
     );
     if (found.length !== uniqueIds.length) {

@@ -16,6 +16,9 @@ export class VendorEntity extends AuditColumns {
   @Column({ name: 'vendor_name', type: 'varchar', length: 150 })
   vendorName!: string;
 
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt?: Date | null;
+
   @Column({ name: 'vendor_type', type: 'enum', enum: VendorType, enumName: 'vendor_type' })
   vendorType!: VendorType;
 
