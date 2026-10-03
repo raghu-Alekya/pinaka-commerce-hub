@@ -12,7 +12,6 @@ import {
   Put,
   Query,
   Req,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 import { StoreTypeRepository } from './store-type.repository';
@@ -41,19 +40,19 @@ export class StoreTypeController {
 
   @Get()
   async listStoreTypes(@Query() query: Record<string, string>) {
-<<<<<<< HEAD
-    const raw = await this.repository.listStoreTypes();
+    const raw = await this.repository.list();
     const storeTypes = filterMasterList(raw, query);
-    const count = (raw?.length || 0) + 1;
-    const nextStoreTypeCode = `ST-${String(count).padStart(3, '0')}`;
-    return { success: true, count: storeTypes.length, storeTypes, nextStoreTypeCode };
-=======
-    const storeTypes = filterMasterList(await this.repository.list(), query);
-    const nextStoreTypeCode = await this.repository.previewNextCode();
+    let nextStoreTypeCode = `ST-${String(storeTypes.length + 1).padStart(3, '0')}`;
+    try {
+      const preview = await this.repository.previewNextCode();
+      if (preview) nextStoreTypeCode = preview;
+    } catch {
+      // fallback
+    }
     return { success: true, count: storeTypes.length, nextStoreTypeCode, storeTypes };
->>>>>>> 1ba0cff621a15be136a304c16c6e6f9b892fbf84
   }
 
+  @Get(':idOrCode')
   async getStoreType(@Param('idOrCode') idOrCode: string) {
     const storeType = await this.repository.findByIdOrCode(idOrCode);
     if (!storeType) throw new NotFoundException(`Store type '${idOrCode}' not found`);
@@ -145,9 +144,9 @@ export class StoreTypeController {
     };
   }
 
-  private loginUserId(request: AuthenticatedRequest): string {
+  private loginUserId(request: AuthenticatedRequest): string | undefined {
     const userId = request.user?.id;
-    if (!userId) throw new UnauthorizedException('Authenticated user id is required');
-    return userId;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId || '');
+    return isUuid ? userId : undefined;
   }
 }
