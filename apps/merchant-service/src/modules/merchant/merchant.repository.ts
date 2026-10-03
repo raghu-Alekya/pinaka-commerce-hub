@@ -1753,10 +1753,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async getStoreTypeByIdOrCode(idOrCode: string): Promise<any | null> {
     if (this.dataSource?.isInitialized && idOrCode) {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
-      const where = isUuid
-        ? `WHERE s.id::text = $1 OR lower(COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', '')) = lower($1)`
-        : `WHERE lower(COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', '')) = lower($1) OR lower(s.name) = lower($1)`;
+      const trimmed = idOrCode.trim();
       const rows = await this.dataSource.query(`
         SELECT 
           s.id,
@@ -1767,9 +1764,11 @@ export class MerchantRepository implements OnModuleInit {
           COALESCE(to_jsonb(s)->>'createdAt', to_jsonb(s)->>'created_at', now()::text) AS "createdAt",
           COALESCE(to_jsonb(s)->>'updatedAt', to_jsonb(s)->>'updated_at', now()::text) AS "updatedAt"
         FROM public.store_types s
-        ${where}
+        WHERE s.id::text = $1
+           OR lower(COALESCE(to_jsonb(s)->>'storeTypeCode', to_jsonb(s)->>'store_type_code', to_jsonb(s)->>'code', '')) = lower($1)
+           OR lower(s.name) = lower($1)
         LIMIT 1
-      `, [idOrCode.trim()]);
+      `, [trimmed]);
       if (rows.length) return rows[0];
     }
     if (!this.storeTypeRepo || !idOrCode) return null;
