@@ -115,12 +115,22 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private projection(config: Relationship) {
-    return ['id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
+    if (config.name === 'StoreTypeFeatures') {
+      return `t.id, ${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}, ${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)},
+        COALESCE(to_jsonb(t)->>'default_enabled', to_jsonb(t)->>'defaultEnabled', 'false')::boolean AS "defaultEnabled",
+        COALESCE(to_jsonb(t)->>'required', 'false')::boolean AS "required",
+        CASE WHEN (to_jsonb(t)->>'display_order') IS NOT NULL THEN (to_jsonb(t)->>'display_order')::integer ELSE NULL END AS "displayOrder",
+        CASE WHEN (to_jsonb(t)->>'configuration_json') IS NOT NULL THEN (to_jsonb(t)->'configuration_json') ELSE NULL END AS "configurationJson",
+        COALESCE(to_jsonb(t)->>'created_at', to_jsonb(t)->>'createdAt', now()::text) AS "createdAt",
+        COALESCE(to_jsonb(t)->>'updated_at', to_jsonb(t)->>'updatedAt', now()::text) AS "updatedAt"`;
+    }
+    return ['t.id', `${quoteIdent(config.parentColumn)} AS ${quoteIdent(config.parentParam)}`, `${quoteIdent(config.childColumn)} AS ${quoteIdent(config.childKey)}`,
       ...(config.tenantColumn ? [`${quoteIdent(config.tenantField || 'merchantId')} AS ${quoteIdent('merchantId')}`] : []),
       ...(config.name === 'EmployeeStoreRoles' ? [`${quoteIdent('store_id')} AS ${quoteIdent('storeId')}`] : []),
-      ...(config.name === 'EmployeeStores' ? ['(login_pin_hash IS NOT NULL) AS "hasLoginPin"'] : []),
-      ...Object.entries(config.fields).map(([key, field]) => `${quoteIdent(field.column)} AS ${quoteIdent(key)}`),
-      `${quoteIdent(config.createdColumn || 'createdAt')} AS ${quoteIdent('createdAt')}`, ...(config.timestamps ? [`${quoteIdent(config.updatedColumn || 'updatedAt')} AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
+      ...(config.name === 'EmployeeStores' ? ['(t.login_pin_hash IS NOT NULL) AS "hasLoginPin"'] : []),
+      ...Object.entries(config.fields).map(([key, field]) => `COALESCE(to_jsonb(t)->>'${field.column}', to_jsonb(t)->>'${key}', ${field.default !== null && field.default !== undefined ? (typeof field.default === 'boolean' ? (field.default ? "'true'" : "'false'") : "'" + field.default + "'") : 'NULL'}) AS ${quoteIdent(key)}`),
+      `COALESCE(to_jsonb(t)->>'${config.createdColumn || 'created_at'}', to_jsonb(t)->>'createdAt', now()::text) AS ${quoteIdent('createdAt')}`,
+      ...(config.timestamps ? [`COALESCE(to_jsonb(t)->>'${config.updatedColumn || 'updated_at'}', to_jsonb(t)->>'updatedAt', now()::text) AS ${quoteIdent('updatedAt')}`] : [])].join(', ');
   }
 
   private hashStoreLoginPin(value: unknown): string {
@@ -918,7 +928,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (!owners.length) throw new NotFoundException('Parent not found in the requested scope');
     const projection = this.projection(config);
     if (operation === 'list') {
-      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY ${quoteIdent(config.createdColumn || 'createdAt')}, id`, [parent]);
+      const items = await manager.query(`SELECT ${projection} FROM public.${config.table} t WHERE ${quoteIdent(config.parentColumn)} = $1 ORDER BY COALESCE(to_jsonb(t)->>'created_at', to_jsonb(t)->>'createdAt', now()::text), t.id`, [parent]);
       return { success: true, count: items.length, items: await this.withChildDetails(manager, config, items) };
     }
     if (operation === 'create') {
