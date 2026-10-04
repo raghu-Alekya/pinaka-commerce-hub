@@ -265,8 +265,8 @@ export class MerchantRepository implements OnModuleInit {
           if ((countRes[0]?.cnt || 0) === 0) {
             await this.dataSource.query(`
               INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status)
-              VALUES
-                ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'Operations', 'Operations', 'BOOLEAN', 'ACTIVE'),
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp(), clock_timestamp())
+          `, [newId, fCode, fName, fDesc, fCat, fCat, fType, fStatus]);
                 ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'Refund', 'Refund', 'BOOLEAN', 'ACTIVE'),
                 ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'Kitchen Management', 'Kitchen Management', 'BOOLEAN', 'ACTIVE'),
                 ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'Promotions', 'Promotions', 'BOOLEAN', 'ACTIVE'),
@@ -339,8 +339,8 @@ export class MerchantRepository implements OnModuleInit {
           // Attempt insert with both feature_category and category
           await this.dataSource.query(`
             INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $5, $6, $7, clock_timestamp(), clock_timestamp())
-          `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp(), clock_timestamp())
+          `, [newId, fCode, fName, fDesc, fCat, fCat, fType, fStatus]);
         } catch (error: any) {
           const code = error.driverError?.code || error.code;
           if (code === '42703') {
