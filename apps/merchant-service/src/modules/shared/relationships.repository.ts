@@ -17,6 +17,45 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.db = new DataSource({ ...postgresConnectionOptions([]), synchronize: false });
     await this.db.initialize();
+    await this.ensureSchema();
+  }
+
+  private async ensureSchema() {
+    try {
+      await this.db.query(`
+        ALTER TABLE IF EXISTS public.store_type_features
+          ADD COLUMN IF NOT EXISTS default_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS required BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS display_order INTEGER,
+          ADD COLUMN IF NOT EXISTS configuration_json JSONB,
+          ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+        ALTER TABLE IF EXISTS public.store_type_role_templates
+          ADD COLUMN IF NOT EXISTS default_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS required BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+        ALTER TABLE IF EXISTS public.plan_entitlements
+          ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS limit_value VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS configuration_json JSONB,
+          ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_store_type_feature_idx
+          ON public.store_type_features (store_type_id, feature_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_store_type_role_template_idx
+          ON public.store_type_role_templates (store_type_id, role_template_id);
+      `);
+    } catch {
+      // ignore
+    }
   }
   async onModuleDestroy() { if (this.db?.isInitialized) await this.db.destroy(); }
 
