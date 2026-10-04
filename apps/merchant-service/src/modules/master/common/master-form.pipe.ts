@@ -4,7 +4,7 @@ const aliases: Record<string, Record<string, string>> = {
   StoreTypeDto: { code: 'storeTypeCode' },
   CreateStoreTypeDto: { code: 'storeTypeCode' },
   UpdateStoreTypeDto: { code: 'storeTypeCode' },
-  FeatureDto: { type: 'feature_type', code: 'feature_code', featureKey: 'feature_code', featureType: 'feature_type' },
+  FeatureDto: { type: 'feature_type', code: 'feature_code', featureKey: 'feature_code', featureType: 'feature_type', featureCategory: 'feature_category' },
   RoleTemplateDto: { key: 'roleCode', scope: 'scopeType' },
   PlanDto: {
     code: 'planCode', price: 'basePrice', cycle: 'billingCycle',

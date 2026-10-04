@@ -245,12 +245,15 @@ export class MerchantRepository implements OnModuleInit {
     let sql: string;
     let values: unknown[] = [];
     if (table === 'features') {
-      // Ensure category and snake_case columns exist in public.features
+      // Ensure feature_category, category, feature_code and feature_type columns exist
       try {
         await this.dataSource.query(`
+          ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_category VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS category VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_code VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_type VARCHAR(100) DEFAULT 'BOOLEAN';
+          UPDATE public.features SET feature_category = COALESCE(NULLIF(feature_category, ''), category) WHERE feature_category IS NULL OR feature_category = '';
+          UPDATE public.features SET category = COALESCE(NULLIF(category, ''), feature_category) WHERE category IS NULL OR category = '';
         `);
       } catch {
         // ignore schema inspection errors
@@ -261,18 +264,18 @@ export class MerchantRepository implements OnModuleInit {
           const countRes = await this.dataSource.query('SELECT count(*)::int AS cnt FROM public.features');
           if ((countRes[0]?.cnt || 0) === 0) {
             await this.dataSource.query(`
-              INSERT INTO public.features (id, feature_code, name, description, category, feature_type, status)
+              INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status)
               VALUES
-                ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'Operations', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'Refund', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'Kitchen Management', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'Promotions', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'Cash Management', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'Inventory', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'Operations', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'Promotions', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'Peripheral', 'BOOLEAN', 'ACTIVE'),
-                ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'Peripheral', 'BOOLEAN', 'ACTIVE')
+                ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'Operations', 'Operations', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'Refund', 'Refund', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'Kitchen Management', 'Kitchen Management', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'Promotions', 'Promotions', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'Cash Management', 'Cash Management', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'Inventory', 'Inventory', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'Operations', 'Operations', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'Promotions', 'Promotions', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'Peripheral', 'Peripheral', 'BOOLEAN', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'Peripheral', 'Peripheral', 'BOOLEAN', 'ACTIVE')
               ON CONFLICT DO NOTHING
             `);
           }
@@ -284,7 +287,9 @@ export class MerchantRepository implements OnModuleInit {
             f.id,
             f.name,
             f.description,
-            COALESCE(to_jsonb(f)->>'category', '') AS category,
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "feature_category",
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "category",
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "featureCategory",
             f.status,
             COALESCE(to_jsonb(f)->>'feature_code', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', '') AS "featureKey",
             COALESCE(to_jsonb(f)->>'feature_code', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', '') AS "feature_code",
@@ -304,7 +309,9 @@ export class MerchantRepository implements OnModuleInit {
             f.id,
             f.name,
             f.description,
-            COALESCE(to_jsonb(f)->>'category', '') AS category,
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "feature_category",
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "category",
+            COALESCE(to_jsonb(f)->>'feature_category', to_jsonb(f)->>'category', '') AS "featureCategory",
             f.status,
             COALESCE(to_jsonb(f)->>'feature_code', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', '') AS "featureKey",
             COALESCE(to_jsonb(f)->>'feature_code', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', '') AS "feature_code",
@@ -324,24 +331,31 @@ export class MerchantRepository implements OnModuleInit {
         const fCode = String(fields.feature_code || fields.featureKey || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
         const fName = String(fields.name || '').trim();
         const fDesc = String(fields.description || '').trim();
-        const fCat = String(fields.category || '').trim();
+        const fCat = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
         const fType = String(fields.feature_type || fields.featureType || fields.type || 'BOOLEAN').trim().toUpperCase();
         const fStatus = String(fields.status || 'ACTIVE').trim().toUpperCase();
 
         try {
-          // Attempt insert with feature_code
+          // Attempt insert with both feature_category and category
           await this.dataSource.query(`
-            INSERT INTO public.features (id, feature_code, name, description, category, feature_type, status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp())
+            INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $5, $6, $7, clock_timestamp(), clock_timestamp())
           `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
         } catch (error: any) {
           const code = error.driverError?.code || error.code;
           if (code === '42703') {
-            // If feature_key is used instead of feature_code
-            await this.dataSource.query(`
-              INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status, created_at, updated_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp())
-            `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
+            // If feature_category doesn't exist yet, insert with category
+            try {
+              await this.dataSource.query(`
+                INSERT INTO public.features (id, feature_code, name, description, category, feature_type, status, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp())
+              `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
+            } catch (err2: any) {
+              await this.dataSource.query(`
+                INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp())
+              `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
+            }
           } else if (code === '23505') {
             throw new ConflictException('Master record code or key already exists');
           } else {
@@ -362,9 +376,12 @@ export class MerchantRepository implements OnModuleInit {
           setClauses.push(`description = ${idx++}`);
           setValues.push(String(fields.description).trim());
         }
-        if (fields.category !== undefined) {
+        if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
+          const catVal = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
+          setClauses.push(`feature_category = ${idx++}`);
+          setValues.push(catVal);
           setClauses.push(`category = ${idx++}`);
-          setValues.push(String(fields.category).trim());
+          setValues.push(catVal);
         }
         if (fields.status !== undefined) {
           setClauses.push(`status = ${idx++}`);
@@ -392,11 +409,11 @@ export class MerchantRepository implements OnModuleInit {
           } catch (error: any) {
             const code = error.driverError?.code || error.code;
             if (code === '42703') {
-              // Fallback if column is feature_key
-              const altClauses = setClauses.map(c => c.replace('feature_code', 'feature_key'));
+              // Fallback if one of the columns doesn't exist
+              const filteredClauses = setClauses.filter(c => !c.startsWith('feature_category'));
               await this.dataSource.query(`
                 UPDATE public.features
-                SET ${altClauses.join(', ')}
+                SET ${filteredClauses.join(', ')}
                 WHERE id = $1
               `, setValues);
             } else if (code === '23505') {

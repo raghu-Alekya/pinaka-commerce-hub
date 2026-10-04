@@ -21,6 +21,14 @@ export class FeatureDto extends MasterFieldsDto {
 
   @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) feature_category?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) featureCategory?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(100) feature_code?: string;
 
   @ValidateIf((_, value) => value !== undefined)
