@@ -220,30 +220,7 @@ export class MerchantRepository implements OnModuleInit {
   }
   async masterData(table: 'store_types' | 'features' | 'role_templates' | 'plans', operation: 'list' | 'get' | 'create' | 'update' | 'delete', id?: string, fields: Record<string, unknown> = {}): Promise<any> {
     if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
-    const columns: Record<string, string> = {
-      name: 'name', description: 'description', status: 'status',
-      ...({
-        store_types: { storeTypeCode: 'storeTypeCode' },
-        features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
-        role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
-        plans: {
-          planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle',
-          storeType: 'store_type', includedStores: 'included_stores', includedTerminals: 'included_terminals',
-          additionalTerminalPrice: 'additional_terminal_price', includedEmployees: 'included_employees',
-          additionalEmployeePrice: 'additional_employee_price', trialPeriod: 'trial_period',
-          effectiveFrom: 'effective_from', includedFeatures: 'included_features',
-        },
-      }[table]),
-    };
-    const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
-    const createdColumn = table === 'role_templates' ? 'created_at' : 'createdAt';
-    const updatedColumn = table === 'role_templates' ? 'updated_at' : 'updatedAt';
-    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${quote(column)} AS ${quote(key)}`), `${quote(createdColumn)} AS ${quote('createdAt')}`, `${quote(updatedColumn)} AS ${quote('updatedAt')}`].join(', ');
-    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
-    if (entries.some(([key]) => !columns[key])) throw new BadRequestException('Unknown master data field');
-    if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
-    let sql: string;
-    let values: unknown[] = [];
+
     if (table === 'features') {
       // Ensure feature_category, category, feature_code and feature_type columns exist in public.features
       try {
@@ -444,7 +421,6 @@ export class MerchantRepository implements OnModuleInit {
         } catch (error: any) {
           const code = error.driverError?.code || error.code;
           if (code === '23503') {
-            // Soft delete / inactivate if in use
             await this.dataSource.query(`UPDATE public.features SET status = 'INACTIVE', updated_at = clock_timestamp() WHERE id = $1`, [id]);
             return { ...feat, status: 'INACTIVE' };
           }
@@ -452,7 +428,32 @@ export class MerchantRepository implements OnModuleInit {
         }
         return feat;
       }
-    } else if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
+    }
+    const columns: Record<string, string> = {
+      name: 'name', description: 'description', status: 'status',
+      ...({
+        store_types: { storeTypeCode: 'storeTypeCode' },
+        features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
+        role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
+        plans: {
+          planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle',
+          storeType: 'store_type', includedStores: 'included_stores', includedTerminals: 'included_terminals',
+          additionalTerminalPrice: 'additional_terminal_price', includedEmployees: 'included_employees',
+          additionalEmployeePrice: 'additional_employee_price', trialPeriod: 'trial_period',
+          effectiveFrom: 'effective_from', includedFeatures: 'included_features',
+        },
+      }[table]),
+    };
+    const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+    const createdColumn = table === 'role_templates' ? 'created_at' : 'createdAt';
+    const updatedColumn = table === 'role_templates' ? 'updated_at' : 'updatedAt';
+    const projection = ['id', ...Object.entries(columns).map(([key, column]) => `${quote(column)} AS ${quote(key)}`), `${quote(createdColumn)} AS ${quote('createdAt')}`, `${quote(updatedColumn)} AS ${quote('updatedAt')}`].join(', ');
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (entries.some(([key]) => !columns[key])) throw new BadRequestException('Unknown master data field');
+    if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
+    let sql: string;
+    let values: unknown[] = [];
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
     else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
     else if (operation === 'create') {
       values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
