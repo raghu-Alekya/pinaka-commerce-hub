@@ -272,7 +272,8 @@ export class MerchantRepository implements OnModuleInit {
           const fName = String(fields.name || '').trim();
           const fDesc = String(fields.description || '').trim();
           const fCat = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
-          const fType = String(fields.feature_type || fields.featureType || fields.type || 'BOOLEAN').trim().toUpperCase();
+          const rawType = String(fields.feature_type || fields.featureType || fields.type || 'BOOLEAN').trim().toUpperCase();
+          const fType = ['BOOLEAN', 'LIMIT', 'CONFIG'].includes(rawType) ? rawType : 'BOOLEAN';
           const fStatus = String(fields.status || 'ACTIVE').trim().toUpperCase();
 
           const insertCols = ['id'];
@@ -300,6 +301,7 @@ export class MerchantRepository implements OnModuleInit {
           } catch (error: any) {
             const code = error.driverError?.code || error.code;
             if (code === '23505') throw new ConflictException('Feature code already exists');
+            if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
             throw error;
           }
           return this.masterData('features', 'get', newId);
@@ -347,7 +349,8 @@ export class MerchantRepository implements OnModuleInit {
             }
           }
           if ((fields.feature_type !== undefined || fields.featureType !== undefined || fields.type !== undefined)) {
-            const t = String(fields.feature_type || fields.featureType || fields.type).trim().toUpperCase();
+            const rawT = String(fields.feature_type || fields.featureType || fields.type).trim().toUpperCase();
+            const t = ['BOOLEAN', 'LIMIT', 'CONFIG'].includes(rawT) ? rawT : 'BOOLEAN';
             if (existingCols.has('feature_type')) {
               setClauses.push('feature_type = $' + idx++);
               setValues.push(t);
@@ -371,6 +374,7 @@ export class MerchantRepository implements OnModuleInit {
             } catch (error: any) {
               const code = error.driverError?.code || error.code;
               if (code === '23505') throw new ConflictException('Feature code already exists');
+            if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
               throw error;
             }
           }

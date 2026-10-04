@@ -42,8 +42,8 @@ export class FeatureController {
   }
   @Get() async list(@Query() query: Record<string, string>) { const features = filterMasterList(await this.repository.masterData('features', 'list'), query); return { success: true, count: features.length, features }; }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, feature: await this.repository.masterData('features', 'get', id) }; }
-  @Post() async create(@Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: 'TEXT', ...defined(body) }) }; }
-  @Put(':id') async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { description: '', status: 'ACTIVE', featureType: 'TEXT', ...defined(body) }) }; }
+  @Post() async create(@Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: 'BOOLEAN', ...defined(body) }) }; }
+  @Put(':id') async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(FeatureDto, true)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
    @Put(':id/status')
   async replaceStatus(
