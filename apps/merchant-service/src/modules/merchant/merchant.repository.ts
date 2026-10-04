@@ -244,7 +244,7 @@ export class MerchantRepository implements OnModuleInit {
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-if (table === 'features') {
+    if (table === 'features') {
       // Ensure feature_category, category, feature_code and feature_type columns exist in public.features
       try {
         await this.dataSource.query(`
@@ -1114,7 +1114,7 @@ if (table === 'features') {
       .getMany();
   }
 
-  
+
 
   async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
     const store = await this.getStoreById(id);
