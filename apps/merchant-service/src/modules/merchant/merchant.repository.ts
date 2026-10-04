@@ -222,176 +222,180 @@ export class MerchantRepository implements OnModuleInit {
     if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
 
     if (table === 'features') {
-        const colRes = await this.dataSource.query(
-          "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'features'"
-        );
-        const existingCols = new Set<string>((colRes || []).map((r: any) => String(r.column_name).toLowerCase()));
+        let cols: string[] = [];
+        try {
+          const colRes = await this.dataSource.query(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'features'"
+          );
+          cols = (colRes || []).map((r: any) => String(r.column_name));
+        } catch {
+          // fallback
+        }
+        if (!cols.length) {
+          cols = ['id', 'feature_key', 'name', 'description', 'category', 'feature_type', 'status', 'created_at', 'updated_at'];
+        }
 
-        const catCol = existingCols.has('feature_category') ? 'f.feature_category' : (existingCols.has('category') ? 'f.category' : "''");
-        const codeCol = existingCols.has('feature_code') ? 'f.feature_code' : (existingCols.has('feature_key') ? 'f.feature_key' : (existingCols.has('code') ? 'f.code' : "''"));
-        const typeCol = existingCols.has('feature_type') ? 'f.feature_type' : (existingCols.has('featuretype') ? 'f."featureType"' : (existingCols.has('type') ? 'f.type' : "'BOOLEAN'"));
-        const descCol = existingCols.has('description') ? 'f.description' : "''";
-        const statusCol = existingCols.has('status') ? 'f.status' : "'ACTIVE'";
-        const createdCol = existingCols.has('created_at') ? 'f.created_at' : (existingCols.has('createdat') ? 'f."createdAt"' : 'now()');
-        const updatedCol = existingCols.has('updated_at') ? 'f.updated_at' : (existingCols.has('updatedat') ? 'f."updatedAt"' : 'now()');
+        const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
-        const baseProjection = [
-          'f.id',
-          'f.name',
-          descCol + ' AS "description"',
-          catCol + ' AS "feature_category"',
-          catCol + ' AS "category"',
-          catCol + ' AS "featureCategory"',
-          statusCol + ' AS "status"',
-          codeCol + ' AS "featureKey"',
-          codeCol + ' AS "feature_code"',
-          codeCol + ' AS "code"',
-          typeCol + ' AS "featureType"',
-          typeCol + ' AS "feature_type"',
-          createdCol + '::text AS "createdAt"',
-          createdCol + '::text AS "created_at"',
-          updatedCol + '::text AS "updatedAt"',
-          updatedCol + '::text AS "updated_at"'
+        // Resolve actual database column names
+        const keyDbCol = cols.find(c => ['feature_key', 'featurekey', 'feature_code'].includes(c.toLowerCase())) || 'feature_key';
+        const catDbCol = cols.find(c => ['category', 'feature_category'].includes(c.toLowerCase())) || 'category';
+        const typeDbCol = cols.find(c => ['feature_type', 'featuretype'].includes(c.toLowerCase())) || 'feature_type';
+        const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c.toLowerCase())) || 'created_at';
+        const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c.toLowerCase())) || 'updated_at';
+
+        const projection = [
+          'id',
+          'name',
+          'description',
+          'status',
+          `${quote(keyDbCol)} AS "featureKey"`,
+          `${quote(keyDbCol)} AS "feature_code"`,
+          `${quote(keyDbCol)} AS "code"`,
+          `${quote(catDbCol)} AS "category"`,
+          `${quote(catDbCol)} AS "feature_category"`,
+          `${quote(catDbCol)} AS "featureCategory"`,
+          `${quote(typeDbCol)} AS "featureType"`,
+          `${quote(typeDbCol)} AS "feature_type"`,
+          `${quote(createdDbCol)}::text AS "createdAt"`,
+          `${quote(createdDbCol)}::text AS "created_at"`,
+          `${quote(updatedDbCol)}::text AS "updatedAt"`,
+          `${quote(updatedDbCol)}::text AS "updated_at"`
         ].join(', ');
 
         if (operation === 'list') {
-          const rows = await this.dataSource.query(
-            'SELECT ' + baseProjection + ' FROM public.features f ORDER BY f.name, f.id'
+          return await this.dataSource.query(
+            `SELECT ${projection} FROM public.features ORDER BY name, id`
           );
-          return rows;
         } else if (operation === 'get') {
           const rows = await this.dataSource.query(
-            'SELECT ' + baseProjection + ' FROM public.features f WHERE f.id = $1',
+            `SELECT ${projection} FROM public.features WHERE id = $1`,
             [id]
           );
           if (!rows.length) throw new NotFoundException('Feature not found');
           return rows[0];
         } else if (operation === 'create') {
           const newId = crypto.randomUUID();
-          const fCode = String(fields.feature_code || fields.featureKey || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
-          const fName = String(fields.name || '').trim();
-          const fDesc = String(fields.description || '').trim();
-          const fCat = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
-          const rawType = String(fields.feature_type || fields.featureType || fields.type || 'BOOLEAN').trim().toUpperCase();
-          const fType = ['BOOLEAN', 'LIMIT', 'CONFIG'].includes(rawType) ? rawType : 'BOOLEAN';
-          const fStatus = String(fields.status || 'ACTIVE').trim().toUpperCase();
+          const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
+          const nameVal = String(fields.name || '').trim();
+          const descVal = String(fields.description || '').trim();
+          const catVal = String(fields.category || fields.feature_category || fields.featureCategory || 'Operations').trim();
+          const typeVal = String(fields.featureType || fields.feature_type || fields.type || 'TEXT').trim().toUpperCase();
+          const statusVal = String(fields.status || 'ACTIVE').trim().toUpperCase();
 
-          const insertCols = ['id'];
-          const insertVals: unknown[] = [newId];
+          const insertData: Record<string, unknown> = {
+            id: newId,
+            name: nameVal,
+            description: descVal,
+            status: statusVal,
+            [keyDbCol]: keyVal,
+            [catDbCol]: catVal,
+            [typeDbCol]: typeVal,
+            [createdDbCol]: new Date(),
+            [updatedDbCol]: new Date(),
+          };
 
-          if (existingCols.has('name')) { insertCols.push('name'); insertVals.push(fName); }
-          if (existingCols.has('description')) { insertCols.push('description'); insertVals.push(fDesc); }
-          if (existingCols.has('status')) { insertCols.push('status'); insertVals.push(fStatus); }
-          if (existingCols.has('feature_category')) { insertCols.push('feature_category'); insertVals.push(fCat); }
-          if (existingCols.has('category')) { insertCols.push('category'); insertVals.push(fCat); }
-          if (existingCols.has('feature_code')) { insertCols.push('feature_code'); insertVals.push(fCode); }
-          if (existingCols.has('feature_key')) { insertCols.push('feature_key'); insertVals.push(fCode); }
-          if (existingCols.has('code')) { insertCols.push('code'); insertVals.push(fCode); }
-          if (existingCols.has('feature_type')) { insertCols.push('feature_type'); insertVals.push(fType); }
-          if (existingCols.has('type')) { insertCols.push('type'); insertVals.push(fType); }
-          if (existingCols.has('created_at')) { insertCols.push('created_at'); insertVals.push(new Date()); }
-          if (existingCols.has('updated_at')) { insertCols.push('updated_at'); insertVals.push(new Date()); }
+          if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
+            insertData['feature_category'] = catVal;
+            insertData['category'] = catVal;
+          }
+          if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
+            insertData['feature_code'] = keyVal;
+            insertData['feature_key'] = keyVal;
+          }
 
-          const placeholders = insertVals.map((_, i) => '$' + (i + 1)).join(', ');
+          const insertKeys = Object.keys(insertData);
+          const insertValues = Object.values(insertData);
+          const placeholders = insertValues.map((_, i) => '$' + (i + 1)).join(', ');
+
           try {
-            await this.dataSource.query(
-              'INSERT INTO public.features (' + insertCols.join(', ') + ') VALUES (' + placeholders + ')',
-              insertVals
+            const res = await this.dataSource.query(
+              `INSERT INTO public.features (${insertKeys.map(k => quote(k)).join(', ')}) VALUES (${placeholders}) RETURNING ${projection}`,
+              insertValues
             );
+            return res[0];
           } catch (error: any) {
             const code = error.driverError?.code || error.code;
             if (code === '23505') throw new ConflictException('Feature code already exists');
             if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
             throw error;
           }
-          return this.masterData('features', 'get', newId);
         } else if (operation === 'update') {
           const setClauses: string[] = [];
           const setValues: unknown[] = [id];
           let idx = 2;
 
-          if (fields.name !== undefined && existingCols.has('name')) {
-            setClauses.push('name = $' + idx++);
+          if (fields.name !== undefined) {
+            setClauses.push(`${quote('name')} = $${idx++}`);
             setValues.push(String(fields.name).trim());
           }
-          if (fields.description !== undefined && existingCols.has('description')) {
-            setClauses.push('description = $' + idx++);
+          if (fields.description !== undefined) {
+            setClauses.push(`${quote('description')} = $${idx++}`);
             setValues.push(String(fields.description).trim());
           }
-          if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
-            const catVal = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
-            if (existingCols.has('feature_category')) {
-              setClauses.push('feature_category = $' + idx++);
-              setValues.push(catVal);
-            }
-            if (existingCols.has('category')) {
-              setClauses.push('category = $' + idx++);
-              setValues.push(catVal);
-            }
-          }
-          if (fields.status !== undefined && existingCols.has('status')) {
-            setClauses.push('status = $' + idx++);
+          if (fields.status !== undefined) {
+            setClauses.push(`${quote('status')} = $${idx++}`);
             setValues.push(String(fields.status).trim().toUpperCase());
           }
-          if ((fields.feature_code !== undefined || fields.featureKey !== undefined || fields.code !== undefined)) {
-            const k = String(fields.feature_code || fields.featureKey || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
-            if (existingCols.has('feature_code')) {
-              setClauses.push('feature_code = $' + idx++);
-              setValues.push(k);
-            }
-            if (existingCols.has('feature_key')) {
-              setClauses.push('feature_key = $' + idx++);
-              setValues.push(k);
-            }
-            if (existingCols.has('code')) {
-              setClauses.push('code = $' + idx++);
-              setValues.push(k);
+          if (fields.category !== undefined || fields.feature_category !== undefined || fields.featureCategory !== undefined) {
+            const catVal = String(fields.category || fields.feature_category || fields.featureCategory || '').trim();
+            setClauses.push(`${quote(catDbCol)} = $${idx++}`);
+            setValues.push(catVal);
+            if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
+              const otherCat = catDbCol.toLowerCase() === 'category' ? 'feature_category' : 'category';
+              setClauses.push(`${quote(otherCat)} = $${idx++}`);
+              setValues.push(catVal);
             }
           }
-          if ((fields.feature_type !== undefined || fields.featureType !== undefined || fields.type !== undefined)) {
-            const rawT = String(fields.feature_type || fields.featureType || fields.type).trim().toUpperCase();
-            const t = ['BOOLEAN', 'LIMIT', 'CONFIG'].includes(rawT) ? rawT : 'BOOLEAN';
-            if (existingCols.has('feature_type')) {
-              setClauses.push('feature_type = $' + idx++);
-              setValues.push(t);
-            }
-            if (existingCols.has('type')) {
-              setClauses.push('type = $' + idx++);
-              setValues.push(t);
+          if (fields.featureKey !== undefined || fields.feature_key !== undefined || fields.feature_code !== undefined || fields.code !== undefined) {
+            const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
+            setClauses.push(`${quote(keyDbCol)} = $${idx++}`);
+            setValues.push(keyVal);
+            if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
+              const otherKey = keyDbCol.toLowerCase() === 'feature_key' ? 'feature_code' : 'feature_key';
+              setClauses.push(`${quote(otherKey)} = $${idx++}`);
+              setValues.push(keyVal);
             }
           }
+          if (fields.featureType !== undefined || fields.feature_type !== undefined || fields.type !== undefined) {
+            const typeVal = String(fields.featureType || fields.feature_type || fields.type).trim().toUpperCase();
+            setClauses.push(`${quote(typeDbCol)} = $${idx++}`);
+            setValues.push(typeVal);
+          }
+          setClauses.push(`${quote(updatedDbCol)} = clock_timestamp()`);
 
-          if (existingCols.has('updated_at')) {
-            setClauses.push('updated_at = clock_timestamp()');
-          }
-
-          if (setClauses.length > 0) {
-            try {
-              await this.dataSource.query(
-                'UPDATE public.features SET ' + setClauses.join(', ') + ' WHERE id = $1',
-                setValues
-              );
-            } catch (error: any) {
-              const code = error.driverError?.code || error.code;
-              if (code === '23505') throw new ConflictException('Feature code already exists');
-            if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
-              throw error;
-            }
-          }
-          return this.masterData('features', 'get', id);
-        } else if (operation === 'delete') {
-          const feat = await this.masterData('features', 'get', id);
           try {
-            await this.dataSource.query('DELETE FROM public.features WHERE id = $1', [id]);
+            const res = await this.dataSource.query(
+              `UPDATE public.features SET ${setClauses.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+              setValues
+            );
+            if (!res.length) throw new NotFoundException('Feature not found');
+            return res[0];
+          } catch (error: any) {
+            const code = error.driverError?.code || error.code;
+            if (code === '23505') throw new ConflictException('Feature code already exists');
+            if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
+            throw error;
+          }
+        } else if (operation === 'delete') {
+          try {
+            const res = await this.dataSource.query(
+              `DELETE FROM public.features WHERE id = $1 RETURNING ${projection}`,
+              [id]
+            );
+            if (res.length) return res[0];
           } catch (error: any) {
             const code = error.driverError?.code || error.code;
             if (code === '23503') {
-              await this.dataSource.query("UPDATE public.features SET status = 'INACTIVE', updated_at = clock_timestamp() WHERE id = $1", [id]);
-              return { ...feat, status: 'INACTIVE' };
+              const res = await this.dataSource.query(
+                `UPDATE public.features SET status = 'INACTIVE', ${quote(updatedDbCol)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`,
+                [id]
+              );
+              return res[0];
             }
             throw error;
           }
-          return feat;
+          return { id, status: 'INACTIVE' };
         }
       }
     const columns: Record<string, string> = {
