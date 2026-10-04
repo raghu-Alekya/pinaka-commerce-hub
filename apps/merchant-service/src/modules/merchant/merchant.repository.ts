@@ -227,42 +227,41 @@ export class MerchantRepository implements OnModuleInit {
         );
         const existingCols = new Set<string>((colRes || []).map((r: any) => String(r.column_name).toLowerCase()));
 
+        const catCol = existingCols.has('feature_category') ? 'f.feature_category' : (existingCols.has('category') ? 'f.category' : "''");
+        const codeCol = existingCols.has('feature_code') ? 'f.feature_code' : (existingCols.has('feature_key') ? 'f.feature_key' : (existingCols.has('code') ? 'f.code' : "''"));
+        const typeCol = existingCols.has('feature_type') ? 'f.feature_type' : (existingCols.has('featuretype') ? 'f."featureType"' : (existingCols.has('type') ? 'f.type' : "'BOOLEAN'"));
+        const descCol = existingCols.has('description') ? 'f.description' : "''";
+        const statusCol = existingCols.has('status') ? 'f.status' : "'ACTIVE'";
+        const createdCol = existingCols.has('created_at') ? 'f.created_at' : (existingCols.has('createdat') ? 'f."createdAt"' : 'now()');
+        const updatedCol = existingCols.has('updated_at') ? 'f.updated_at' : (existingCols.has('updatedat') ? 'f."updatedAt"' : 'now()');
+
+        const baseProjection = [
+          'f.id',
+          'f.name',
+          descCol + ' AS "description"',
+          catCol + ' AS "feature_category"',
+          catCol + ' AS "category"',
+          catCol + ' AS "featureCategory"',
+          statusCol + ' AS "status"',
+          codeCol + ' AS "featureKey"',
+          codeCol + ' AS "feature_code"',
+          codeCol + ' AS "code"',
+          typeCol + ' AS "featureType"',
+          typeCol + ' AS "feature_type"',
+          createdCol + '::text AS "createdAt"',
+          createdCol + '::text AS "created_at"',
+          updatedCol + '::text AS "updatedAt"',
+          updatedCol + '::text AS "updated_at"'
+        ].join(', ');
+
         if (operation === 'list') {
           const rows = await this.dataSource.query(
-            'SELECT f.id, f.name, f.description, ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "feature_category", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "category", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "featureCategory", ' +
-            'f.status, ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "featureKey", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "feature_code", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "code", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_type\', to_jsonb(f)->>\'featureType\', \'BOOLEAN\') AS "featureType", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_type\', to_jsonb(f)->>\'featureType\', \'BOOLEAN\') AS "feature_type", ' +
-            'COALESCE(to_jsonb(f)->>\'created_at\', to_jsonb(f)->>\'createdAt\', now()::text) AS "createdAt", ' +
-            'COALESCE(to_jsonb(f)->>\'created_at\', to_jsonb(f)->>\'createdAt\', now()::text) AS "created_at", ' +
-            'COALESCE(to_jsonb(f)->>\'updated_at\', to_jsonb(f)->>\'updatedAt\', now()::text) AS "updatedAt", ' +
-            'COALESCE(to_jsonb(f)->>\'updated_at\', to_jsonb(f)->>\'updatedAt\', now()::text) AS "updated_at" ' +
-            'FROM public.features f ORDER BY f.name, f.id'
+            'SELECT ' + baseProjection + ' FROM public.features f ORDER BY f.name, f.id'
           );
           return rows;
         } else if (operation === 'get') {
           const rows = await this.dataSource.query(
-            'SELECT f.id, f.name, f.description, ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "feature_category", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "category", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_category\', to_jsonb(f)->>\'category\', \'\') AS "featureCategory", ' +
-            'f.status, ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "featureKey", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "feature_code", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_code\', to_jsonb(f)->>\'feature_key\', to_jsonb(f)->>\'featureKey\', \'\') AS "code", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_type\', to_jsonb(f)->>\'featureType\', \'BOOLEAN\') AS "featureType", ' +
-            'COALESCE(to_jsonb(f)->>\'feature_type\', to_jsonb(f)->>\'featureType\', \'BOOLEAN\') AS "feature_type", ' +
-            'COALESCE(to_jsonb(f)->>\'created_at\', to_jsonb(f)->>\'createdAt\', now()::text) AS "createdAt", ' +
-            'COALESCE(to_jsonb(f)->>\'created_at\', to_jsonb(f)->>\'createdAt\', now()::text) AS "created_at", ' +
-            'COALESCE(to_jsonb(f)->>\'updated_at\', to_jsonb(f)->>\'updatedAt\', now()::text) AS "updatedAt", ' +
-            'COALESCE(to_jsonb(f)->>\'updated_at\', to_jsonb(f)->>\'updatedAt\', now()::text) AS "updated_at" ' +
-            'FROM public.features f WHERE f.id = $1',
+            'SELECT ' + baseProjection + ' FROM public.features f WHERE f.id = $1',
             [id]
           );
           if (!rows.length) throw new NotFoundException('Feature not found');
