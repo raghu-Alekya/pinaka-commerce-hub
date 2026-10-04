@@ -369,53 +369,68 @@ export class MerchantRepository implements OnModuleInit {
         let idx = 2;
 
         if (fields.name !== undefined) {
-          setClauses.push(`name = ${idx++}`);
+          setClauses.push('name = $' + idx++);
           setValues.push(String(fields.name).trim());
         }
         if (fields.description !== undefined) {
-          setClauses.push(`description = ${idx++}`);
+          setClauses.push('description = $' + idx++);
           setValues.push(String(fields.description).trim());
         }
         if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
           const catVal = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
-          setClauses.push(`feature_category = ${idx++}`);
+          setClauses.push('feature_category = $' + idx++);
           setValues.push(catVal);
-          setClauses.push(`category = ${idx++}`);
+          setClauses.push('category = $' + idx++);
           setValues.push(catVal);
         }
         if (fields.status !== undefined) {
-          setClauses.push(`status = ${idx++}`);
+          setClauses.push('status = $' + idx++);
           setValues.push(String(fields.status).trim().toUpperCase());
         }
         if (fields.feature_code !== undefined || fields.featureKey !== undefined || fields.code !== undefined) {
           const k = String(fields.feature_code || fields.featureKey || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
-          setClauses.push(`feature_code = ${idx++}`);
+          setClauses.push('feature_code = $' + idx++);
           setValues.push(k);
         }
         if (fields.feature_type !== undefined || fields.featureType !== undefined || fields.type !== undefined) {
           const t = String(fields.feature_type || fields.featureType || fields.type).trim().toUpperCase();
-          setClauses.push(`feature_type = ${idx++}`);
+          setClauses.push('feature_type = $' + idx++);
           setValues.push(t);
         }
 
         if (setClauses.length > 0) {
-          setClauses.push(`updated_at = clock_timestamp()`);
+          setClauses.push('updated_at = clock_timestamp()');
           try {
-            await this.dataSource.query(`
-              UPDATE public.features
-              SET ${setClauses.join(', ')}
-              WHERE id = $1
-            `, setValues);
+            await this.dataSource.query(
+              'UPDATE public.features SET ' + setClauses.join(', ') + ' WHERE id = $1',
+              setValues
+            );
           } catch (error: any) {
             const code = error.driverError?.code || error.code;
             if (code === '42703') {
-              // Fallback if one of the columns doesn't exist
-              const filteredClauses = setClauses.filter(c => !c.startsWith('feature_category'));
-              await this.dataSource.query(`
-                UPDATE public.features
-                SET ${filteredClauses.join(', ')}
-                WHERE id = $1
-              `, setValues);
+              const rebuildClauses: string[] = [];
+              const rebuildValues: unknown[] = [id];
+              let aIdx = 2;
+              if (fields.name !== undefined) { rebuildClauses.push('name = $' + aIdx++); rebuildValues.push(String(fields.name).trim()); }
+              if (fields.description !== undefined) { rebuildClauses.push('description = $' + aIdx++); rebuildValues.push(String(fields.description).trim()); }
+              if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
+                const catVal = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
+                rebuildClauses.push('category = $' + aIdx++);
+                rebuildValues.push(catVal);
+              }
+              if (fields.status !== undefined) { rebuildClauses.push('status = $' + aIdx++); rebuildValues.push(String(fields.status).trim().toUpperCase()); }
+              if (fields.feature_code !== undefined || fields.featureKey !== undefined || fields.code !== undefined) {
+                const k = String(fields.feature_code || fields.featureKey || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
+                rebuildClauses.push('feature_code = $' + aIdx++);
+                rebuildValues.push(k);
+              }
+              if (fields.feature_type !== undefined || fields.featureType !== undefined || fields.type !== undefined) {
+                const t = String(fields.feature_type || fields.featureType || fields.type).trim().toUpperCase();
+                rebuildClauses.push('feature_type = $' + aIdx++);
+                rebuildValues.push(t);
+              }
+              rebuildClauses.push('updated_at = clock_timestamp()');
+              await this.dataSource.query('UPDATE public.features SET ' + rebuildClauses.join(', ') + ' WHERE id = $1', rebuildValues);
             } else if (code === '23505') {
               throw new ConflictException('Master record code or key already exists');
             } else {
