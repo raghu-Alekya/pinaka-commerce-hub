@@ -244,16 +244,16 @@ export class MerchantRepository implements OnModuleInit {
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-    if (table === 'features') {
-      // Ensure feature_category, category, feature_code and feature_type columns exist
+if (table === 'features') {
+      // Ensure feature_category, category, feature_code and feature_type columns exist in public.features
       try {
         await this.dataSource.query(`
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_category VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS category VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_code VARCHAR(100);
           ALTER TABLE public.features ADD COLUMN IF NOT EXISTS feature_type VARCHAR(100) DEFAULT 'BOOLEAN';
-          UPDATE public.features SET feature_category = COALESCE(NULLIF(feature_category, ''), category) WHERE feature_category IS NULL OR feature_category = '';
-          UPDATE public.features SET category = COALESCE(NULLIF(category, ''), feature_category) WHERE category IS NULL OR category = '';
+          UPDATE public.features SET feature_category = COALESCE(NULLIF(feature_category, ''), category, 'Operations') WHERE feature_category IS NULL OR feature_category = '';
+          UPDATE public.features SET category = COALESCE(NULLIF(category, ''), feature_category, 'Operations') WHERE category IS NULL OR category = '';
         `);
       } catch {
         // ignore schema inspection errors
@@ -265,8 +265,8 @@ export class MerchantRepository implements OnModuleInit {
           if ((countRes[0]?.cnt || 0) === 0) {
             await this.dataSource.query(`
               INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp(), clock_timestamp())
-          `, [newId, fCode, fName, fDesc, fCat, fCat, fType, fStatus]);
+              VALUES
+                ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'Operations', 'Operations', 'BOOLEAN', 'ACTIVE'),
                 ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'Refund', 'Refund', 'BOOLEAN', 'ACTIVE'),
                 ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'Kitchen Management', 'Kitchen Management', 'BOOLEAN', 'ACTIVE'),
                 ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'Promotions', 'Promotions', 'BOOLEAN', 'ACTIVE'),
@@ -331,12 +331,11 @@ export class MerchantRepository implements OnModuleInit {
         const fCode = String(fields.feature_code || fields.featureKey || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
         const fName = String(fields.name || '').trim();
         const fDesc = String(fields.description || '').trim();
-        const fCat = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
+        const fCat = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
         const fType = String(fields.feature_type || fields.featureType || fields.type || 'BOOLEAN').trim().toUpperCase();
         const fStatus = String(fields.status || 'ACTIVE').trim().toUpperCase();
 
         try {
-          // Attempt insert with both feature_category and category
           await this.dataSource.query(`
             INSERT INTO public.features (id, feature_code, name, description, feature_category, category, feature_type, status, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp(), clock_timestamp())
@@ -344,7 +343,6 @@ export class MerchantRepository implements OnModuleInit {
         } catch (error: any) {
           const code = error.driverError?.code || error.code;
           if (code === '42703') {
-            // If feature_category doesn't exist yet, insert with category
             try {
               await this.dataSource.query(`
                 INSERT INTO public.features (id, feature_code, name, description, category, feature_type, status, created_at, updated_at)
@@ -357,7 +355,7 @@ export class MerchantRepository implements OnModuleInit {
               `, [newId, fCode, fName, fDesc, fCat, fType, fStatus]);
             }
           } else if (code === '23505') {
-            throw new ConflictException('Master record code or key already exists');
+            throw new ConflictException('Feature code already exists');
           } else {
             throw error;
           }
@@ -377,7 +375,7 @@ export class MerchantRepository implements OnModuleInit {
           setValues.push(String(fields.description).trim());
         }
         if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
-          const catVal = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
+          const catVal = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
           setClauses.push('feature_category = $' + idx++);
           setValues.push(catVal);
           setClauses.push('category = $' + idx++);
@@ -414,7 +412,7 @@ export class MerchantRepository implements OnModuleInit {
               if (fields.name !== undefined) { rebuildClauses.push('name = $' + aIdx++); rebuildValues.push(String(fields.name).trim()); }
               if (fields.description !== undefined) { rebuildClauses.push('description = $' + aIdx++); rebuildValues.push(String(fields.description).trim()); }
               if (fields.feature_category !== undefined || fields.category !== undefined || fields.featureCategory !== undefined) {
-                const catVal = String(fields.feature_category || fields.category || fields.featureCategory || '').trim();
+                const catVal = String(fields.feature_category || fields.category || fields.featureCategory || 'Operations').trim();
                 rebuildClauses.push('category = $' + aIdx++);
                 rebuildValues.push(catVal);
               }
@@ -432,7 +430,7 @@ export class MerchantRepository implements OnModuleInit {
               rebuildClauses.push('updated_at = clock_timestamp()');
               await this.dataSource.query('UPDATE public.features SET ' + rebuildClauses.join(', ') + ' WHERE id = $1', rebuildValues);
             } else if (code === '23505') {
-              throw new ConflictException('Master record code or key already exists');
+              throw new ConflictException('Feature code already exists');
             } else {
               throw error;
             }
@@ -445,7 +443,11 @@ export class MerchantRepository implements OnModuleInit {
           await this.dataSource.query(`DELETE FROM public.features WHERE id = $1`, [id]);
         } catch (error: any) {
           const code = error.driverError?.code || error.code;
-          if (code === '23503') throw new ConflictException('Record is in use. Set status to INACTIVE instead.');
+          if (code === '23503') {
+            // Soft delete / inactivate if in use
+            await this.dataSource.query(`UPDATE public.features SET status = 'INACTIVE', updated_at = clock_timestamp() WHERE id = $1`, [id]);
+            return { ...feat, status: 'INACTIVE' };
+          }
           throw error;
         }
         return feat;

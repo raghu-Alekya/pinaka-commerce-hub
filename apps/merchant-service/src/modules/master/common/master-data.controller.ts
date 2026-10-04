@@ -8,7 +8,7 @@ import { MasterFormValidationPipe } from './master-form.pipe';
 const defined = (body: object) => Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 
 const validate = (expectedType: typeof StoreTypeDto | typeof FeatureDto | typeof RoleTemplateDto | typeof PlanDto, patch = false) =>
-  new MasterFormValidationPipe({ expectedType, transform: true, whitelist: true, forbidNonWhitelisted: true, skipUndefinedProperties: patch });
+  new MasterFormValidationPipe({ expectedType, transform: true, whitelist: false, forbidNonWhitelisted: false, skipUndefinedProperties: patch });
 class StatusDto {
   @IsIn(['ACTIVE', 'INACTIVE'])
   status!: 'ACTIVE' | 'INACTIVE';
