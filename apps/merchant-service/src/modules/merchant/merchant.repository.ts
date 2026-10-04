@@ -244,53 +244,140 @@ export class MerchantRepository implements OnModuleInit {
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-    if (table === 'features' && operation === 'list') {
-      try {
-        const countRes = await this.dataSource.query('SELECT count(*)::int AS cnt FROM public.features');
-        if ((countRes[0]?.cnt || 0) === 0) {
-          await this.dataSource.query(`
-            INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status)
-            VALUES
-              ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'OPERATIONS', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'FINANCIAL', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'KITCHEN', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'MARKETING', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'FINANCIAL', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'INVENTORY', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'OPERATIONS', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'MARKETING', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'HARDWARE', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'HARDWARE', 'FLAG', 'ACTIVE')
-            ON CONFLICT DO NOTHING
-          `);
+    if (table === 'features') {
+      if (operation === 'list') {
+        try {
+          const countRes = await this.dataSource.query('SELECT count(*)::int AS cnt FROM public.features');
+          if ((countRes[0]?.cnt || 0) === 0) {
+            await this.dataSource.query(`
+              INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status)
+              VALUES
+                ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'OPERATIONS', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'FINANCIAL', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'KITCHEN', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'MARKETING', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'FINANCIAL', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'INVENTORY', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'OPERATIONS', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'MARKETING', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'HARDWARE', 'FLAG', 'ACTIVE'),
+                ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'HARDWARE', 'FLAG', 'ACTIVE')
+              ON CONFLICT DO NOTHING
+            `);
+          }
+        } catch {
+          // ignore seed error
         }
-      } catch {
-        // ignore seed error
+        const rows = await this.dataSource.query(`
+          SELECT 
+            f.id,
+            f.name,
+            f.description,
+            COALESCE(to_jsonb(f)->>'category', '') AS category,
+            f.status,
+            COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_code', '') AS "featureKey",
+            COALESCE(to_jsonb(f)->>'feature_type', to_jsonb(f)->>'featureType', 'TEXT') AS "featureType",
+            COALESCE(to_jsonb(f)->>'created_at', to_jsonb(f)->>'createdAt', now()::text) AS "createdAt",
+            COALESCE(to_jsonb(f)->>'updated_at', to_jsonb(f)->>'updatedAt', now()::text) AS "updatedAt"
+          FROM public.features f ORDER BY f.name, f.id
+        `);
+        return rows;
+      } else if (operation === 'get') {
+        const rows = await this.dataSource.query(`
+          SELECT 
+            f.id,
+            f.name,
+            f.description,
+            COALESCE(to_jsonb(f)->>'category', '') AS category,
+            f.status,
+            COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_code', '') AS "featureKey",
+            COALESCE(to_jsonb(f)->>'feature_type', to_jsonb(f)->>'featureType', 'TEXT') AS "featureType",
+            COALESCE(to_jsonb(f)->>'created_at', to_jsonb(f)->>'createdAt', now()::text) AS "createdAt",
+            COALESCE(to_jsonb(f)->>'updated_at', to_jsonb(f)->>'updatedAt', now()::text) AS "updatedAt"
+          FROM public.features f WHERE f.id = $1
+        `, [id]);
+        if (!rows.length) throw new NotFoundException('Feature not found');
+        return rows[0];
+      } else if (operation === 'create') {
+        const newId = crypto.randomUUID();
+        const fKey = String(fields.featureKey || fields.feature_code || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
+        const fName = String(fields.name || '').trim();
+        const fDesc = String(fields.description || '').trim();
+        const fCat = String(fields.category || '').trim();
+        const fType = String(fields.featureType || fields.feature_type || fields.type || 'TEXT').trim().toUpperCase();
+        const fStatus = String(fields.status || 'ACTIVE').trim().toUpperCase();
+
+        try {
+          await this.dataSource.query(`
+            INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp())
+          `, [newId, fKey, fName, fDesc, fCat, fType, fStatus]);
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Master record code or key already exists');
+          if (code === '42P01' || code === '42703') throw new ServiceUnavailableException('Master data schema is not installed');
+          throw error;
+        }
+        return this.masterData('features', 'get', newId);
+      } else if (operation === 'update') {
+        const setClauses: string[] = [];
+        const setValues: unknown[] = [id];
+        let idx = 2;
+
+        if (fields.name !== undefined) {
+          setClauses.push(`name = $${idx++}`);
+          setValues.push(String(fields.name).trim());
+        }
+        if (fields.description !== undefined) {
+          setClauses.push(`description = $${idx++}`);
+          setValues.push(String(fields.description).trim());
+        }
+        if (fields.category !== undefined) {
+          setClauses.push(`category = $${idx++}`);
+          setValues.push(String(fields.category).trim());
+        }
+        if (fields.status !== undefined) {
+          setClauses.push(`status = $${idx++}`);
+          setValues.push(String(fields.status).trim().toUpperCase());
+        }
+        if (fields.featureKey !== undefined || fields.feature_code !== undefined || fields.code !== undefined) {
+          const k = String(fields.featureKey || fields.feature_code || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
+          setClauses.push(`feature_key = $${idx++}`);
+          setValues.push(k);
+        }
+        if (fields.featureType !== undefined || fields.feature_type !== undefined || fields.type !== undefined) {
+          const t = String(fields.featureType || fields.feature_type || fields.type).trim().toUpperCase();
+          setClauses.push(`feature_type = $${idx++}`);
+          setValues.push(t);
+        }
+
+        if (setClauses.length > 0) {
+          setClauses.push(`updated_at = clock_timestamp()`);
+          try {
+            await this.dataSource.query(`
+              UPDATE public.features
+              SET ${setClauses.join(', ')}
+              WHERE id = $1
+            `, setValues);
+          } catch (error: any) {
+            const code = error.driverError?.code || error.code;
+            if (code === '23505') throw new ConflictException('Master record code or key already exists');
+            if (code === '42P01' || code === '42703') throw new ServiceUnavailableException('Master data schema is not installed');
+            throw error;
+          }
+        }
+        return this.masterData('features', 'get', id);
+      } else if (operation === 'delete') {
+        const feat = await this.masterData('features', 'get', id);
+        try {
+          await this.dataSource.query(`DELETE FROM public.features WHERE id = $1`, [id]);
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23503') throw new ConflictException('Record is in use. Set status to INACTIVE instead.');
+          throw error;
+        }
+        return feat;
       }
-      sql = `SELECT 
-        f.id,
-        f.name,
-        f.description,
-        COALESCE(to_jsonb(f)->>'category', '') AS category,
-        f.status,
-        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
-        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
-        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
-        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
-      FROM public.features f ORDER BY f.name, f.id`;
-    } else if (table === 'features' && operation === 'get') {
-      sql = `SELECT 
-        f.id,
-        f.name,
-        f.description,
-        COALESCE(to_jsonb(f)->>'category', '') AS category,
-        f.status,
-        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
-        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
-        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
-        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
-      FROM public.features f WHERE f.id = $1`;
-      values = [id];
     } else if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
     else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
     else if (operation === 'create') {
