@@ -1,3 +1,4 @@
+import { Public } from '@pinaka-delivery-hub/auth';
 import { IsIn } from 'class-validator';
 import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { filterMasterList, groupFeaturesByCategory } from './master-list';
@@ -20,6 +21,7 @@ const statusValidation = new MasterFormValidationPipe({
   forbidNonWhitelisted: true,
 });
 
+@Public()
 @Controller(['api/v1/features', 'connector/api/v1/features', 'features'])
 export class FeatureController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
@@ -74,6 +76,7 @@ export class FeatureController {
 
 
 
+@Public()
 @Controller(['api/v1/role-templates', 'api/v1/role_templates', 'connector/api/v1/role-templates', 'connector/api/v1/role_templates', 'role-templates', 'role_templates'])
 export class RoleTemplateController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
@@ -84,6 +87,7 @@ export class RoleTemplateController {
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(RoleTemplateDto, true)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'update', id, defined(body)) }; }
   @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('role_templates', 'delete', id); return { success: true, message: 'RoleTemplate deleted' }; }
 }
+@Public()
 @Controller(['api/v1/plans', 'connector/api/v1/plans', 'plans'])
 export class PlanController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
