@@ -28,7 +28,9 @@ const DRIVER_FIELDS = [
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
-  constructor(private readonly httpAdapterHost: HttpAdapterHost) {}
+  constructor(private readonly httpAdapterHost: HttpAdapterHost) {
+    this.logger.log('Global exception filter is active');
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const { httpAdapter } = this.httpAdapterHost;
@@ -115,5 +117,6 @@ function driverFields(exception: unknown): Record<string, string> {
     const value = driver[field];
     if (typeof value === 'string' && value.trim()) details[field] = value;
   }
+  if (typeof record.query === 'string' && record.query.trim()) details.query = record.query;
   return details;
 }
