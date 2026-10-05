@@ -26,30 +26,22 @@ export class PlanRepository {
     const dataSource = this.merchant.requireDataSource();
     const writable = ['name', 'description', 'status', 'billing_model', 'base_price', 'currency', 'billing_cycle',
       'store_type_id', 'stores_limit', 'terminal_limit', 'additional_terminal_price', 'employees_limit',
-      'additional_employee_price', 'trial_period', 'effective_from', 'plan_end_date', 'included_features', 'is_deleted'];
+      'additional_employee_price', 'trial_period', 'effective_from', 'plan_end_date', 'included_features'];
     const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
-    const projection = ['id', 'plan_code', ...writable, 'created_by', 'updated_by', 'created_at', 'updated_at'].map(quote).join(', ');
+    const projection = ['id', 'plan_code', ...writable, 'is_deleted', 'created_by', 'updated_by', 'created_at', 'updated_at'].map(quote).join(', ');
     let entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (entries.some(([key]) => !writable.includes(key))) throw new BadRequestException('Unknown or server-managed plan field');
     if (operation === 'create' || operation === 'update') {
       if (!userId) throw new UnauthorizedException('Authenticated user is required');
       if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
-      // Keep status and deletion state in sync in the same INSERT/UPDATE.
-      // Explicit status takes precedence if both fields are supplied.
-      if (fields.status !== undefined) {
-        entries = entries.filter(([key]) => key !== 'is_deleted');
-        entries.push(['is_deleted', fields.status === 'INACTIVE']);
-      } else if (fields.is_deleted !== undefined) {
-        entries.push(['status', fields.is_deleted ? 'INACTIVE' : 'ACTIVE']);
-      } else if (operation === 'create') {
-        entries.push(['status', 'ACTIVE'], ['is_deleted', false]);
-      }
       entries = [...entries, [operation === 'create' ? 'created_by' : 'updated_by', userId]];
     }
+    if (operation === 'delete' && !userId) throw new UnauthorizedException('Authenticated user is required');
     let sql: string;
     let values: unknown[] = [];
-    if (operation === 'list') sql = `SELECT ${projection} FROM public.plans ORDER BY name, id`;
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.plans WHERE is_deleted = false ORDER BY name, id`;
     else if (operation === 'get') {
+      // GET by ID includes deleted plans; list continues to hide them.
       sql = `SELECT ${projection} FROM public.plans WHERE id = $1`;
       values = [id];
     } else if (operation === 'create') {
@@ -60,10 +52,10 @@ export class PlanRepository {
       sql = `INSERT INTO public.plans (id, plan_code, ${entries.map(([key]) => quote(key)).join(', ')}) VALUES ($1, ${code}, ${entries.map((_, index) => `$${index + 2}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
-      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
+      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
     } else {
-      sql = `DELETE FROM public.plans WHERE id = $1 RETURNING ${projection}`;
-      values = [id];
+      sql = `UPDATE public.plans SET is_deleted = true, updated_by = $2, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
+      values = [id, userId];
     }
     try {
       const result = await dataSource.query(sql, values);
