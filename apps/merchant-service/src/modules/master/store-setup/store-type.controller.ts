@@ -12,12 +12,14 @@ import {
   Put,
   Query,
   Req,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 import { StoreTypeRepository } from './store-type.repository';
 import { MasterFormValidationPipe } from '../common/master-form.pipe';
 import { filterMasterList } from '../common/master-list';
+import { RequireAuth } from '../../shared/session-auth.guard';
 
 const bodyValidation = new MasterFormValidationPipe({
   transform: true,
@@ -63,15 +65,17 @@ export class StoreTypeController {
   }
 
   @Post()
+  @RequireAuth()
   async createStoreType(
     @Body(bodyValidation) body: CreateStoreTypeDto,
     @Req() request: AuthenticatedRequest,
   ) {
     const storeType = await this.repository.create(body, this.loginUserId(request));
-    return { success: true, message: 'Store type saved to PostgreSQL', storeType };
+    return { success: true, message: 'Store type created successfully', storeType };
   }
 
   @Put(':idOrCode')
+  @RequireAuth()
   async replaceStoreType(
     @Param('idOrCode') idOrCode: string,
     @Body(bodyValidation) body: CreateStoreTypeDto,
@@ -83,10 +87,11 @@ export class StoreTypeController {
       status: body.status,
     }, this.loginUserId(request));
     if (!updated) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type updated in PostgreSQL', storeType: updated };
+    return { success: true, message: 'Store type updated successfully', storeType: updated };
   }
 
   @Patch(':idOrCode')
+  @RequireAuth()
   async patchStoreType(
     @Param('idOrCode') idOrCode: string,
     @Body(patchValidation) body: UpdateStoreTypeDto,
@@ -94,10 +99,11 @@ export class StoreTypeController {
   ) {
     const updated = await this.repository.update(idOrCode, body, this.loginUserId(request));
     if (!updated) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type updated in PostgreSQL', storeType: updated };
+    return { success: true, message: 'Store type updated successfully', storeType: updated };
   }
 
   @Put(':idOrCode/status')
+  @RequireAuth()
   async replaceStatus(
     @Param('idOrCode') idOrCode: string,
     @Body(patchValidation) body: UpdateStoreTypeDto,
@@ -107,6 +113,7 @@ export class StoreTypeController {
   }
 
   @Patch(':idOrCode/status')
+  @RequireAuth()
   async patchStatus(
     @Param('idOrCode') idOrCode: string,
     @Body(patchValidation) body: UpdateStoreTypeDto,
@@ -127,13 +134,14 @@ export class StoreTypeController {
   }
 
   @Delete(':idOrCode')
+  @RequireAuth()
   async deleteStoreType(
     @Param('idOrCode') idOrCode: string,
     @Req() request: AuthenticatedRequest,
   ) {
     const deleted = await this.repository.softDelete(idOrCode, this.loginUserId(request));
     if (!deleted) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type soft-deleted in PostgreSQL', isDeleted: true };
+    return { success: true, message: 'Store type deleted successfully', isDeleted: true };
   }
 
   @Post('dummy-test')
@@ -147,9 +155,12 @@ export class StoreTypeController {
     };
   }
 
-  private loginUserId(request: AuthenticatedRequest): string | undefined {
+  private loginUserId(request: AuthenticatedRequest): string {
     const userId = request.user?.id;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId || '');
-    return isUuid ? userId : undefined;
+    if (!isUuid) {
+      throw new UnauthorizedException('Authenticated user UUID is required for audit fields');
+    }
+    return userId!;
   }
 }
