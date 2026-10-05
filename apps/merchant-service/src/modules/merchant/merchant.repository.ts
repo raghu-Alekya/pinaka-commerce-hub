@@ -25,7 +25,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
-import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from '../../entities/merchant.entity';
+import { MerchantEntity, MerchantStatus } from '../../entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from '../../entities/store.entity';
 import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
 import { ensureStorePosConfigurationSchema } from '../store-pos-configuration/store-pos-configuration.schema';
@@ -39,12 +39,14 @@ import { DeviceEntity } from '../../entities/device.entity';
 import { VendorEntity } from '../../entities/vendor.entity';
 import { TendorEntity } from '../../entities/tendor.entity';
 import { FeaturePermissionEntity } from '../../entities/feature-permission.entity';
+import { PermissionType, RecordStatus } from '../../entities/commerce-enums';
 import { RoleTemplatePermissionEntity } from '../../entities/role-template-permission.entity';
 import { StoreTypeFeatureEntity } from '../../entities/store-type-feature.entity';
 import { StoreTypeRoleTemplateEntity } from '../../entities/store-type-role-template.entity';
 import { StoreRoleFeatureEntity } from '../../entities/store-role-feature.entity';
 import { MerchantVendorEntity } from '../../entities/merchant-vendor.entity';
 import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
+import { ensureVendorSchema } from '../vendor/vendor.schema';
 import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
 import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
@@ -220,6 +222,296 @@ export class MerchantRepository implements OnModuleInit {
   }
   async masterData(table: 'store_types' | 'features' | 'role_templates' | 'plans', operation: 'list' | 'get' | 'create' | 'update' | 'delete', id?: string, fields: Record<string, unknown> = {}): Promise<any> {
     if (!this.isDbConnected || !this.dataSource?.isInitialized) throw new ServiceUnavailableException('Master data requires PostgreSQL');
+
+    if (table === 'features') {
+      let cols: string[] = [];
+      try {
+        const colRes = await this.dataSource.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'features'"
+        );
+        cols = (colRes || []).map((r: any) => String(r.column_name));
+      } catch {
+        // fallback
+      }
+      if (!cols.length) {
+        cols = ['id', 'feature_key', 'name', 'description', 'category', 'feature_type', 'status', 'created_at', 'updated_at'];
+      }
+
+      const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+
+      // Resolve actual database column names
+      const keyDbCol = cols.find(c => ['feature_key', 'featurekey', 'feature_code'].includes(c.toLowerCase())) || 'feature_key';
+      const catDbCol = cols.find(c => ['category', 'feature_category'].includes(c.toLowerCase())) || 'category';
+      const typeDbCol = cols.find(c => ['feature_type', 'featuretype'].includes(c.toLowerCase())) || 'feature_type';
+      const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c.toLowerCase())) || 'created_at';
+      const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c.toLowerCase())) || 'updated_at';
+
+      const projection = [
+        'id',
+        'name',
+        'description',
+        'status',
+        `${quote(keyDbCol)} AS "featureKey"`,
+        `${quote(keyDbCol)} AS "feature_code"`,
+        `${quote(keyDbCol)} AS "code"`,
+        `${quote(catDbCol)} AS "category"`,
+        `${quote(catDbCol)} AS "feature_category"`,
+        `${quote(catDbCol)} AS "featureCategory"`,
+        `${quote(typeDbCol)} AS "featureType"`,
+        `${quote(typeDbCol)} AS "feature_type"`,
+        `${quote(createdDbCol)}::text AS "createdAt"`,
+        `${quote(createdDbCol)}::text AS "created_at"`,
+        `${quote(updatedDbCol)}::text AS "updatedAt"`,
+        `${quote(updatedDbCol)}::text AS "updated_at"`
+      ].join(', ');
+
+      if (operation === 'list') {
+        return await this.dataSource.query(
+          `SELECT ${projection} FROM public.features ORDER BY name, id`
+        );
+      } else if (operation === 'get') {
+        const rows = await this.dataSource.query(
+          `SELECT ${projection} FROM public.features WHERE id = $1`,
+          [id]
+        );
+        if (!rows.length) throw new NotFoundException('Feature not found');
+        return rows[0];
+      } else if (operation === 'create') {
+        const newId = crypto.randomUUID();
+        const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
+        const nameVal = String(fields.name || '').trim();
+        const descVal = String(fields.description || '').trim();
+        const catVal = String(fields.category || fields.feature_category || fields.featureCategory || 'Operations').trim();
+        const typeVal = String(fields.featureType || fields.feature_type || fields.type || 'TEXT').trim().toUpperCase();
+        const statusVal = String(fields.status || 'ACTIVE').trim().toUpperCase();
+
+        const insertData: Record<string, unknown> = {
+          id: newId,
+          name: nameVal,
+          description: descVal,
+          status: statusVal,
+          [keyDbCol]: keyVal,
+          [catDbCol]: catVal,
+          [typeDbCol]: typeVal,
+          [createdDbCol]: new Date(),
+          [updatedDbCol]: new Date(),
+        };
+
+        if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
+          insertData['feature_category'] = catVal;
+          insertData['category'] = catVal;
+        }
+        if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
+          insertData['feature_code'] = keyVal;
+          insertData['feature_key'] = keyVal;
+        }
+
+        const insertKeys = Object.keys(insertData);
+        const insertValues = Object.values(insertData);
+        const placeholders = insertValues.map((_, i) => '$' + (i + 1)).join(', ');
+
+        try {
+          const res = await this.dataSource.query(
+            `INSERT INTO public.features (${insertKeys.map(k => quote(k)).join(', ')}) VALUES (${placeholders}) RETURNING ${projection}`,
+            insertValues
+          );
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Feature code already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'update') {
+        const setClauses: string[] = [];
+        const setValues: unknown[] = [id];
+        let idx = 2;
+
+        if (fields.name !== undefined) {
+          setClauses.push(`${quote('name')} = $${idx++}`);
+          setValues.push(String(fields.name).trim());
+        }
+        if (fields.description !== undefined) {
+          setClauses.push(`${quote('description')} = $${idx++}`);
+          setValues.push(String(fields.description).trim());
+        }
+        if (fields.status !== undefined) {
+          setClauses.push(`${quote('status')} = $${idx++}`);
+          setValues.push(String(fields.status).trim().toUpperCase());
+        }
+        if (fields.category !== undefined || fields.feature_category !== undefined || fields.featureCategory !== undefined) {
+          const catVal = String(fields.category || fields.feature_category || fields.featureCategory || '').trim();
+          setClauses.push(`${quote(catDbCol)} = $${idx++}`);
+          setValues.push(catVal);
+          if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
+            const otherCat = catDbCol.toLowerCase() === 'category' ? 'feature_category' : 'category';
+            setClauses.push(`${quote(otherCat)} = $${idx++}`);
+            setValues.push(catVal);
+          }
+        }
+        if (fields.featureKey !== undefined || fields.feature_key !== undefined || fields.feature_code !== undefined || fields.code !== undefined) {
+          const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
+          setClauses.push(`${quote(keyDbCol)} = $${idx++}`);
+          setValues.push(keyVal);
+          if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
+            const otherKey = keyDbCol.toLowerCase() === 'feature_key' ? 'feature_code' : 'feature_key';
+            setClauses.push(`${quote(otherKey)} = $${idx++}`);
+            setValues.push(keyVal);
+          }
+        }
+        if (fields.featureType !== undefined || fields.feature_type !== undefined || fields.type !== undefined) {
+          const typeVal = String(fields.featureType || fields.feature_type || fields.type).trim().toUpperCase();
+          setClauses.push(`${quote(typeDbCol)} = $${idx++}`);
+          setValues.push(typeVal);
+        }
+        setClauses.push(`${quote(updatedDbCol)} = clock_timestamp()`);
+
+        try {
+          const res = await this.dataSource.query(
+            `UPDATE public.features SET ${setClauses.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+            setValues
+          );
+          if (!res.length) throw new NotFoundException('Feature not found');
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Feature code already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Feature save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'delete') {
+        try {
+          const res = await this.dataSource.query(
+            `DELETE FROM public.features WHERE id = $1 RETURNING ${projection}`,
+            [id]
+          );
+          if (res.length) return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23503') {
+            const res = await this.dataSource.query(
+              `UPDATE public.features SET status = 'INACTIVE', ${quote(updatedDbCol)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`,
+              [id]
+            );
+            return res[0];
+          }
+          throw error;
+        }
+        return { id, status: 'INACTIVE' };
+      }
+    }
+    if (table === 'store_types') {
+      let cols: string[] = [];
+      try {
+        const colRes = await this.dataSource.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_types'"
+        );
+        cols = (colRes || []).map((r: any) => String(r.column_name).toLowerCase());
+      } catch {
+        // fallback
+      }
+      if (!cols.length) {
+        cols = ['id', 'store_type_code', 'name', 'description', 'status', 'created_at', 'updated_at'];
+      }
+      const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+      const codeDbCol = cols.find(c => ['store_type_code', 'storetypecode', 'code'].includes(c)) || 'store_type_code';
+      const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c)) || 'created_at';
+      const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c)) || 'updated_at';
+
+      const projection = [
+        'id',
+        `${quote(codeDbCol)} AS "storeTypeCode"`,
+        `${quote(codeDbCol)} AS "code"`,
+        'name',
+        'description',
+        'status',
+        `${quote(createdDbCol)}::text AS "createdAt"`,
+        `${quote(createdDbCol)}::text AS "created_at"`,
+        `${quote(updatedDbCol)}::text AS "updatedAt"`,
+        `${quote(updatedDbCol)}::text AS "updated_at"`,
+      ].join(', ');
+
+      if (operation === 'list') {
+        return await this.dataSource.query(`SELECT ${projection} FROM public.store_types ORDER BY name, id`);
+      } else if (operation === 'get') {
+        const rows = await this.dataSource.query(`SELECT ${projection} FROM public.store_types WHERE id = $1`, [id]);
+        if (!rows.length) throw new NotFoundException('Store type not found');
+        return rows[0];
+      } else if (operation === 'create') {
+        const newId = crypto.randomUUID();
+        const codeVal = String(fields.storeTypeCode || fields.code || '').trim() || `ST-${Date.now().toString().slice(-4)}`;
+        const nameVal = String(fields.name || '').trim();
+        const descVal = String(fields.description || '').trim();
+        const statusVal = String(fields.status || 'ACTIVE').trim().toUpperCase();
+        try {
+          const res = await this.dataSource.query(
+            `INSERT INTO public.store_types (id, ${quote(codeDbCol)}, name, description, status, ${quote(createdDbCol)}, ${quote(updatedDbCol)})
+             VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp())
+             RETURNING ${projection}`,
+            [newId, codeVal, nameVal, descVal, statusVal]
+          );
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Store type code or name already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'update') {
+        const setClauses: string[] = [];
+        const setValues: unknown[] = [id];
+        let idx = 2;
+        if (fields.name !== undefined) {
+          setClauses.push(`name = $${idx++}`);
+          setValues.push(String(fields.name).trim());
+        }
+        if (fields.description !== undefined) {
+          setClauses.push(`description = $${idx++}`);
+          setValues.push(String(fields.description).trim());
+        }
+        if (fields.status !== undefined) {
+          setClauses.push(`status = $${idx++}`);
+          setValues.push(String(fields.status).trim().toUpperCase());
+        }
+        if (fields.storeTypeCode !== undefined || fields.code !== undefined) {
+          setClauses.push(`${quote(codeDbCol)} = $${idx++}`);
+          setValues.push(String(fields.storeTypeCode || fields.code).trim());
+        }
+        setClauses.push(`${quote(updatedDbCol)} = clock_timestamp()`);
+        try {
+          const res = await this.dataSource.query(
+            `UPDATE public.store_types SET ${setClauses.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+            setValues
+          );
+          if (!res.length) throw new NotFoundException('Store type not found');
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Store type code already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'delete') {
+        try {
+          const res = await this.dataSource.query(
+            `DELETE FROM public.store_types WHERE id = $1 RETURNING ${projection}`,
+            [id]
+          );
+          if (res.length) return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23503') {
+            const res = await this.dataSource.query(
+              `UPDATE public.store_types SET status = 'INACTIVE', ${quote(updatedDbCol)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`,
+              [id]
+            );
+            return res[0];
+          }
+          throw error;
+        }
+        return { id, status: 'INACTIVE' };
+      }
+    }
     const columns: Record<string, string> = {
       name: 'name', description: 'description', status: 'status',
       ...({
@@ -244,54 +536,7 @@ export class MerchantRepository implements OnModuleInit {
     if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
     let sql: string;
     let values: unknown[] = [];
-    if (table === 'features' && operation === 'list') {
-      try {
-        const countRes = await this.dataSource.query('SELECT count(*)::int AS cnt FROM public.features');
-        if ((countRes[0]?.cnt || 0) === 0) {
-          await this.dataSource.query(`
-            INSERT INTO public.features (id, feature_key, name, description, category, feature_type, status)
-            VALUES
-              ('f1111111-0000-0000-0000-000000000001', 'ORDER_MANAGEMENT', 'Order Management', 'Manage in-store POS and online delivery orders', 'OPERATIONS', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000002', 'REFUNDS', 'Refunds & Returns', 'Process full and partial order refunds', 'FINANCIAL', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000003', 'KDS', 'Kitchen Display System', 'Live kitchen prep tickets and bump bar tracking', 'KITCHEN', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000004', 'LOYALTY', 'Loyalty & Rewards', 'Earn and redeem loyalty points at checkout', 'MARKETING', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000005', 'SAFE_DROP', 'Safe Drop & Cash Management', 'Mid-shift safe drops and drawer reconciliations', 'FINANCIAL', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000006', 'INVENTORY', 'Live Stock Tracking', 'Real-time multi-location inventory deduction', 'INVENTORY', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000007', 'TABLE_MANAGEMENT', 'Table & Dine-in Management', 'Table layout, split checks and floor status', 'OPERATIONS', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000008', 'DISCOUNTS', 'Discounts & Promotions', 'Item discounts, cart coupons, and time-based sales', 'MARKETING', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000009', 'CUSTOMER_DISPLAY', 'Customer Facing Display', 'Show cart summary and loyalty prompt to customer', 'HARDWARE', 'FLAG', 'ACTIVE'),
-              ('f1111111-0000-0000-0000-000000000010', 'BARCODE_SCANNER', 'Barcode Scanner & Weigh Scale', 'Weigh scale integration and fast barcode scanning', 'HARDWARE', 'FLAG', 'ACTIVE')
-            ON CONFLICT DO NOTHING
-          `);
-        }
-      } catch {
-        // ignore seed error
-      }
-      sql = `SELECT 
-        f.id,
-        f.name,
-        f.description,
-        f.category,
-        f.status,
-        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
-        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
-        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
-        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
-      FROM public.features f ORDER BY f.name, f.id`;
-    } else if (table === 'features' && operation === 'get') {
-      sql = `SELECT 
-        f.id,
-        f.name,
-        f.description,
-        f.category,
-        f.status,
-        COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS "featureKey",
-        COALESCE(to_jsonb(f)->>'featureType', to_jsonb(f)->>'feature_type', 'TEXT') AS "featureType",
-        COALESCE(to_jsonb(f)->>'createdAt', to_jsonb(f)->>'created_at', now()::text) AS "createdAt",
-        COALESCE(to_jsonb(f)->>'updatedAt', to_jsonb(f)->>'updated_at', now()::text) AS "updatedAt"
-      FROM public.features f WHERE f.id = $1`;
-      values = [id];
-    } else if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.${table} ORDER BY ${quote('name')}, id`;
     else if (operation === 'get') { sql = `SELECT ${projection} FROM public.${table} WHERE id = $1`; values = [id]; }
     else if (operation === 'create') {
       values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
@@ -967,7 +1212,7 @@ export class MerchantRepository implements OnModuleInit {
       .getMany();
   }
 
-  
+
 
   async deleteStore(id: string): Promise<{ deletedAt: Date; isDeleted: 1 } | null> {
     const store = await this.getStoreById(id);
@@ -1823,13 +2068,15 @@ export class MerchantRepository implements OnModuleInit {
     if (!this.storeTypeRepo) {
       throw new ServiceUnavailableException('Store types require PostgreSQL');
     }
+    const rawCode = dto.storeTypeCode || (dto as any).code || '';
+    const code = rawCode ? String(rawCode).trim().toUpperCase() : `ST-${Date.now().toString().slice(-4)}`;
     const entity = this.storeTypeRepo.create({
-      storeTypeCode: dto.storeTypeCode.trim().toUpperCase(),
+      storeTypeCode: code,
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      status: dto.status || StoreTypeStatus.ACTIVE,
+      status: (dto.status || StoreTypeStatus.ACTIVE) as any,
     });
-    return this.storeTypeRepo.save(entity);
+    return (await this.storeTypeRepo.save(entity)) as unknown as StoreTypeEntity;
   }
 
   async updateStoreType(idOrCode: string, dto: UpdateStoreTypeDto): Promise<StoreTypeEntity | null> {
@@ -1950,10 +2197,10 @@ export class MerchantRepository implements OnModuleInit {
 
   async createFeature(dto: CreateFeatureDto): Promise<FeatureEntity> {
     const entity = this.featureRepo.create({
-      featureCode: (dto.featureCode || 'FEATURE').trim().toUpperCase(),
+      featureCode: dto.feature_code.trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      featureType: dto.featureType || FeatureType.TEXT,
+      featureType: dto.feature_type || FeatureType.TEXT,
       status: dto.status || FeatureStatus.ACTIVE,
     });
     return this.featureRepo.save(entity);
@@ -1962,10 +2209,10 @@ export class MerchantRepository implements OnModuleInit {
   async updateFeature(idOrKey: string, dto: UpdateFeatureDto): Promise<FeatureEntity | null> {
     const existing = await this.getFeatureByIdOrKey(idOrKey);
     if (!existing) return null;
-    if (dto.featureCode !== undefined) existing.featureCode = dto.featureCode.trim().toUpperCase();
+    if (dto.feature_code !== undefined) existing.featureCode = dto.feature_code.trim().toUpperCase();
     if (dto.name !== undefined) existing.name = dto.name.trim();
     if (dto.description !== undefined) existing.description = dto.description.trim();
-    if (dto.featureType !== undefined) existing.featureType = dto.featureType;
+    if (dto.feature_type !== undefined) existing.featureType = dto.feature_type;
     if (dto.status !== undefined) existing.status = dto.status;
     existing.updatedAt = new Date();
     return this.featureRepo.save(existing);
@@ -2229,6 +2476,99 @@ export class MerchantRepository implements OnModuleInit {
       }
       return { success: true as const, count: permissions.length, permissions };
     });
+  }
+
+  async listFeaturePermissions(
+    featureId: string,
+    filters: { status?: string; search?: string; page?: number; limit?: number } = {},
+  ): Promise<{ permissions: FeaturePermissionEntity[]; total: number }> {
+    const feature = await this.getFeatureByIdOrKey(featureId);
+    if (!feature) throw new NotFoundException(`Feature '${featureId}' not found`);
+    const query = this.dataSource.getRepository(FeaturePermissionEntity).createQueryBuilder('permission')
+      .where('permission.featureId = :featureId', { featureId: feature.id })
+      .andWhere('permission.isDeleted = false');
+    if (filters.status) query.andWhere('permission.status = :status', { status: filters.status.toUpperCase() });
+    if (filters.search?.trim()) {
+      query.andWhere('(permission.permissionCode ILIKE :search OR permission.name ILIKE :search OR permission.description ILIKE :search)', { search: `%${filters.search.trim()}%` });
+    }
+    query.orderBy('permission.name', 'ASC');
+    if (filters.page !== undefined && filters.limit !== undefined) {
+      query.skip((filters.page - 1) * filters.limit).take(filters.limit);
+    }
+    const [permissions, total] = await query.getManyAndCount();
+    return { permissions, total };
+  }
+
+  async getFeaturePermissionByIdOrCode(idOrCode: string, featureId: string): Promise<FeaturePermissionEntity | null> {
+    const feature = await this.getFeatureByIdOrKey(featureId);
+    if (!feature || !this.dataSource?.isInitialized) return null;
+    const repo = this.dataSource.getRepository(FeaturePermissionEntity);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode.trim());
+    if (isUuid) {
+      const byId = await repo.findOneBy({ id: idOrCode.trim(), featureId: feature.id, isDeleted: false });
+      if (byId) return byId;
+    }
+    return repo.findOneBy({ permissionCode: idOrCode.trim().toUpperCase(), featureId: feature.id, isDeleted: false });
+  }
+
+  async createFeaturePermission(input: {
+    featureId: string; permissionCode: string; permissionType: PermissionType; name: string;
+    description?: string; status?: RecordStatus; createdBy?: string; updatedBy?: string;
+  }): Promise<FeaturePermissionEntity> {
+    const feature = await this.getFeatureByIdOrKey(input.featureId);
+    if (!feature) throw new NotFoundException(`Feature '${input.featureId}' not found`);
+    const repo = this.dataSource.getRepository(FeaturePermissionEntity);
+    const permission = repo.create({
+      featureId: feature.id,
+      permissionCode: input.permissionCode.trim().toUpperCase(),
+      permissionType: input.permissionType,
+      name: input.name.trim(),
+      description: input.description?.trim() || '',
+      status: input.status || RecordStatus.ACTIVE,
+      createdBy: input.createdBy,
+      updatedBy: input.updatedBy,
+      isDeleted: false,
+    });
+    try {
+      return await repo.save(permission);
+    } catch (error: any) {
+      if (error?.driverError?.code === '23505' || error?.code === '23505') {
+        throw new ConflictException(`Permission code '${input.permissionCode}' already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async updateFeaturePermission(
+    idOrCode: string,
+    featureId: string,
+    fields: Partial<Pick<FeaturePermissionEntity, 'featureId' | 'permissionCode' | 'permissionType' | 'name' | 'description' | 'status'>> & { updatedBy?: string },
+  ): Promise<FeaturePermissionEntity | null> {
+    const existing = await this.getFeaturePermissionByIdOrCode(idOrCode, featureId);
+    if (!existing) return null;
+    if (fields.featureId !== undefined) {
+      const feature = await this.getFeatureByIdOrKey(fields.featureId);
+      if (!feature) throw new NotFoundException(`Feature '${fields.featureId}' not found`);
+      existing.featureId = feature.id;
+    }
+    if (fields.permissionCode !== undefined) existing.permissionCode = fields.permissionCode.trim().toUpperCase();
+    if (fields.permissionType !== undefined) existing.permissionType = fields.permissionType;
+    if (fields.name !== undefined) existing.name = fields.name.trim();
+    if (fields.description !== undefined) existing.description = fields.description.trim();
+    if (fields.status !== undefined) existing.status = fields.status;
+    if (fields.updatedBy !== undefined) existing.updatedBy = fields.updatedBy;
+    return this.dataSource.getRepository(FeaturePermissionEntity).save(existing);
+  }
+
+  async deleteFeaturePermission(idOrCode: string, featureId: string, updatedBy?: string): Promise<boolean> {
+    const existing = await this.getFeaturePermissionByIdOrCode(idOrCode, featureId);
+    if (!existing) return false;
+    existing.status = RecordStatus.INACTIVE;
+    existing.isDeleted = true;
+    existing.updatedBy = updatedBy ?? existing.updatedBy;
+    existing.updatedAt = new Date();
+    await this.dataSource.getRepository(FeaturePermissionEntity).save(existing);
+    return true;
   }
 
   // --- Role Templates CRUD ---

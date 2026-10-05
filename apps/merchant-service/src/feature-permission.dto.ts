@@ -1,15 +1,16 @@
-import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { AuditInputDto } from './audit.dto';
 import { PermissionType, RecordStatus } from './entities/commerce-enums';
 
 export class CreateFeaturePermissionDto extends AuditInputDto {
-  @IsUUID()
-  featureId!: string;
-
   @IsOptional()
+  @IsUUID()
+  featureId?: string;
+
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
-  permissionCode?: string;
+  permissionCode!: string;
 
   @IsEnum(PermissionType)
   permissionType!: PermissionType;

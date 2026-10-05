@@ -13,6 +13,7 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 import { StoreTypeRepository } from './store-type.repository';
 import { MasterFormValidationPipe } from '../common/master-form.pipe';
@@ -20,21 +21,30 @@ import { filterMasterList } from '../common/master-list';
 
 const bodyValidation = new MasterFormValidationPipe({
   transform: true,
-  whitelist: true,
-  forbidNonWhitelisted: true,
+  whitelist: false,
+  forbidNonWhitelisted: false,
+  skipUndefinedProperties: true,
   expectedType: CreateStoreTypeDto,
 });
 const patchValidation = new MasterFormValidationPipe({
   transform: true,
-  whitelist: true,
-  forbidNonWhitelisted: true,
+  whitelist: false,
+  forbidNonWhitelisted: false,
   skipUndefinedProperties: true,
   expectedType: UpdateStoreTypeDto,
 });
 
 type AuthenticatedRequest = { user?: { id?: string } };
 
-@Controller(['api/v1/store-types', 'api/v1/store_types', 'connector/api/v1/store-types', 'connector/api/v1/store_types', 'store-types', 'store_types'])
+@Public()
+@Controller([
+  'api/v1/store-types',
+  'api/v1/store_types',
+  'connector/api/v1/store-types',
+  'connector/api/v1/store_types',
+  'store-types',
+  'store_types',
+])
 export class StoreTypeController {
   constructor(@Inject(StoreTypeRepository) private readonly repository: StoreTypeRepository) {}
 

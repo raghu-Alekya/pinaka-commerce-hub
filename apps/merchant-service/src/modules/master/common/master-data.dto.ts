@@ -14,14 +14,48 @@ export class StoreTypeDto extends MasterFieldsDto {
 export class FeatureDto extends MasterFieldsDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Matches(/\S/) @MaxLength(150) name!: string;
+
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @Matches(/\S/) @MaxLength(100) featureKey!: string;
+  @IsString() @MaxLength(100) category?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @Matches(/\S/) @MaxLength(100) category!: string;
-  @ValidateIf((_, value) => value !== undefined) @IsIn(['BOOLEAN', 'LIMIT', 'CONFIG', 'TEXT']) featureType?: string;
+  @IsString() @MaxLength(100) feature_category?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) featureCategory?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) feature_code?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) feature_type?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) featureKey?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === "string" ? value.trim() : value)
+  @IsString() @MaxLength(100) feature_key?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === "string" ? value.trim() : value)
+  @IsString() @MaxLength(100) type?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) featureType?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MaxLength(100) code?: string;
 }
- 
- 
+
 export class RoleTemplateDto extends MasterFieldsDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Matches(/\S/) @MaxLength(100) name!: string;

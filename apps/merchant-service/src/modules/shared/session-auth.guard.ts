@@ -22,17 +22,33 @@ export class SessionAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<{ headers?: { authorization?: string }; user?: unknown }>();
     const requiresAuth = this.reflector?.getAllAndOverride<boolean>(REQUIRE_AUTH_ROUTE, [
       context.getHandler(),
       context.getClass(),
     ]);
-    if (process.env.SKIP_AUTH === 'true' && !requiresAuth) return true;
+    if (process.env.SKIP_AUTH === 'true' && !requiresAuth) {
+      if (request.headers?.authorization) {
+        try {
+          const payload = verifyAccessToken(extractBearerToken(request.headers.authorization));
+          request.user = {
+            id: payload.sub,
+            accountId: payload.accountId,
+            email: payload.email,
+            role: payload.role,
+            sessionId: payload.jti,
+          };
+        } catch {
+          // Authentication is optional only while the explicit local bypass is enabled.
+        }
+      }
+      return true;
+    }
     const isPublic = this.reflector?.getAllAndOverride<boolean>(IS_PUBLIC_ROUTE, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (isPublic && !requiresAuth) return true;
-    const request = context.switchToHttp().getRequest<{ headers?: { authorization?: string }; user?: unknown }>();
     const token = extractBearerToken(request.headers?.authorization);
     const payload = verifyAccessToken(token);
     const session = await this.merchants.touchSession(payload.jti!, token);

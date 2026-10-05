@@ -149,7 +149,7 @@ export class VendorRepository {
     }
     if (query.vendorType) {
       params.push(query.vendorType);
-      sql += ` AND v."vendorType" = $${params.length}`;
+      sql += ` AND v.vendor_type = $${params.length}`;
     }
     if (query.search?.trim()) {
       params.push(`%${query.search.trim()}%`);
@@ -190,7 +190,7 @@ export class VendorRepository {
     }
     if (query.vendorType) {
       params.push(query.vendorType);
-      sql += ` AND v."vendorType" = $${params.length}`;
+      sql += ` AND v.vendor_type = $${params.length}`;
     }
     if (query.search?.trim()) {
       params.push(`%${query.search.trim()}%`);

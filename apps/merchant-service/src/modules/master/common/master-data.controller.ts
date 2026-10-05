@@ -1,3 +1,4 @@
+import { Public } from '@pinaka-delivery-hub/auth';
 import { IsIn } from 'class-validator';
 import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { filterMasterList, groupFeaturesByCategory } from './master-list';
@@ -8,7 +9,7 @@ import { MasterFormValidationPipe } from './master-form.pipe';
 const defined = (body: object) => Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 
 const validate = (expectedType: typeof StoreTypeDto | typeof FeatureDto | typeof RoleTemplateDto | typeof PlanDto, patch = false) =>
-  new MasterFormValidationPipe({ expectedType, transform: true, whitelist: true, forbidNonWhitelisted: true, skipUndefinedProperties: patch });
+  new MasterFormValidationPipe({ expectedType, transform: true, whitelist: false, forbidNonWhitelisted: false, skipUndefinedProperties: patch });
 class StatusDto {
   @IsIn(['ACTIVE', 'INACTIVE'])
   status!: 'ACTIVE' | 'INACTIVE';
@@ -20,6 +21,7 @@ const statusValidation = new MasterFormValidationPipe({
   forbidNonWhitelisted: true,
 });
 
+@Public()
 @Controller(['api/v1/features', 'connector/api/v1/features', 'features'])
 export class FeatureController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
@@ -40,8 +42,8 @@ export class FeatureController {
   }
   @Get() async list(@Query() query: Record<string, string>) { const features = filterMasterList(await this.repository.masterData('features', 'list'), query); return { success: true, count: features.length, features }; }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, feature: await this.repository.masterData('features', 'get', id) }; }
-  @Post() async create(@Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: 'TEXT', ...defined(body) }) }; }
-  @Put(':id') async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { description: '', status: 'ACTIVE', featureType: 'TEXT', ...defined(body) }) }; }
+  @Post() async create(@Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: 'BOOLEAN', ...defined(body) }) }; }
+  @Put(':id') async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(FeatureDto, true)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
    @Put(':id/status')
   async replaceStatus(
@@ -74,6 +76,7 @@ export class FeatureController {
 
 
 
+@Public()
 @Controller(['api/v1/role-templates', 'api/v1/role_templates', 'connector/api/v1/role-templates', 'connector/api/v1/role_templates', 'role-templates', 'role_templates'])
 export class RoleTemplateController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
@@ -84,6 +87,7 @@ export class RoleTemplateController {
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(RoleTemplateDto, true)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'update', id, defined(body)) }; }
   @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('role_templates', 'delete', id); return { success: true, message: 'RoleTemplate deleted' }; }
 }
+@Public()
 @Controller(['api/v1/plans', 'connector/api/v1/plans', 'plans'])
 export class PlanController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}

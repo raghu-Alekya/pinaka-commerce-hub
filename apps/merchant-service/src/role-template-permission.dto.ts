@@ -1,37 +1,41 @@
-import { IsBoolean, IsEnum, IsOptional, IsUUID } from 'class-validator';
-import { AuditInputDto } from './audit.dto';
-import { RecordStatus } from './entities/commerce-enums';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
+import { PermissionStatus } from './entities/permission.entity';
+import { PermissionType } from './entities/commerce-enums';
 
-export class CreateRoleTemplatePermissionDto extends AuditInputDto {
-  @IsUUID()
-  roleTemplateId!: string;
-
-  @IsUUID()
-  permissionId!: string;
-
-  @IsOptional()
-  @IsBoolean()
-  defaultAllowed?: boolean;
-
-  @IsOptional()
-  @IsEnum(RecordStatus)
-  status?: RecordStatus;
+// The generic /permissions resource is backed by public.permissions.
+export class CreatePermissionDto {
+  @IsString() @IsNotEmpty() featureId!: string;
+  @IsString() @IsNotEmpty() @MaxLength(100) permissionKey!: string;
+  @IsString() @IsOptional() @MaxLength(100) key?: string;
+  @IsString() @IsNotEmpty() @MaxLength(150) name!: string;
+  @IsString() @IsOptional() description?: string;
+  @IsEnum(PermissionStatus) @IsOptional() status?: PermissionStatus;
 }
 
-export class UpdateRoleTemplatePermissionDto extends AuditInputDto {
-  @IsOptional()
-  @IsUUID()
-  roleTemplateId?: string;
+export class UpdatePermissionDto {
+  @IsString() @IsOptional() @MaxLength(100) permissionKey?: string;
+  @IsString() @IsOptional() @MaxLength(100) key?: string;
+  @IsString() @IsOptional() featureId?: string;
+  @IsString() @IsNotEmpty() @IsOptional() @MaxLength(150) name?: string;
+  @IsString() @IsOptional() description?: string;
+  @IsEnum(PermissionStatus) @IsOptional() status?: PermissionStatus;
+}
 
-  @IsOptional()
-  @IsUUID()
-  permissionId?: string;
+// Feature scoped APIs are backed by public.feature_permissions.
+export class CreateFeaturePermissionDto {
+  @IsString() @IsOptional() feature_id?: string;
+  @IsString() @IsNotEmpty() @MaxLength(100) permission_code!: string;
+  @IsEnum(PermissionType) permission_type!: PermissionType;
+  @IsString() @IsNotEmpty() @MaxLength(150) name!: string;
+  @IsString() @IsOptional() description?: string;
+  @IsEnum(PermissionStatus) @IsOptional() status?: PermissionStatus;
+}
 
-  @IsOptional()
-  @IsBoolean()
-  defaultAllowed?: boolean;
-
-  @IsOptional()
-  @IsEnum(RecordStatus)
-  status?: RecordStatus;
+export class UpdateFeaturePermissionDto {
+  @IsString() @IsOptional() @MaxLength(100) permission_code?: string;
+  @IsEnum(PermissionType) @IsOptional() permission_type?: PermissionType;
+  @IsString() @IsOptional() feature_id?: string;
+  @IsString() @IsNotEmpty() @IsOptional() @MaxLength(150) name?: string;
+  @IsString() @IsOptional() description?: string;
+  @IsEnum(PermissionStatus) @IsOptional() status?: PermissionStatus;
 }

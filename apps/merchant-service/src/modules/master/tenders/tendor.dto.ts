@@ -25,11 +25,10 @@ const tendorNameFrom = ({ obj, value }: { obj: Record<string, unknown>; value: u
 
 export class CreateTendorDto extends AuditInputDto {
   @Transform(tendorCodeFrom)
-  @IsOptional()
   @IsString()
   @Matches(/\S/)
   @MaxLength(50)
-  tendorCode?: string;
+  tendorCode!: string;
 
   @Transform(tendorNameFrom)
   @IsString()
