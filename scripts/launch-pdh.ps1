@@ -21,7 +21,7 @@ function Get-StartupDiagnostics([string]$Name) {
 $services = @(
     @{Name='gateway';Port=3000}, @{Name='connector-service';Port=3001},
     @{Name='order-service';Port=3002}, @{Name='merchant-service';Port=3003},
-    @{Name='menu-service';Port=3004}, @{Name='inventory-service';Port=3005},
+    @{Name='inventory-service';Port=3005},
     @{Name='analytics-service';Port=3006}, @{Name='pos-integration-service';Port=3007},
     @{Name='notification-service';Port=3008}, @{Name='admin-api';Port=3009},
     @{Name='auth-service';Port=3010}
@@ -91,7 +91,7 @@ SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_da
         }
         Write-Host "$($service.Name): ready on $($service.Port) (PID $($started.Id))."
     }
-    Write-Host 'Backend ready: ports 3000-3010. Docker PostgreSQL is published on port 5432.'
+    Write-Host 'Backend ready: configured services on ports 3000-3010 (3004 reserved for catalog-service). Docker PostgreSQL is published on port 5432.'
     Write-Host 'React: http://localhost:5173 (start npm run dev in pinaka-commerce-hub-web).'
     Write-Host 'Re-running this command reuses existing services. Add -Restart to reload backend services.'
 } finally {

@@ -2410,7 +2410,7 @@ export class MerchantRepository implements OnModuleInit {
           status: input.status || RecordStatus.ACTIVE,
           createdBy: input.createdBy,
           updatedBy: input.updatedBy,
-          isDeleted: false,
+          isDeleted: (input.status || RecordStatus.ACTIVE) === RecordStatus.INACTIVE,
         });
         return repo.save(permission);
       });
@@ -2441,9 +2441,7 @@ export class MerchantRepository implements OnModuleInit {
     if (fields.description !== undefined) existing.description = fields.description.trim();
     if (fields.status !== undefined) {
       existing.status = fields.status;
-      // Feature permission deletion is a soft deactivation. Keep the record
-      // queryable so it remains visible in the permissions list as INACTIVE.
-      existing.isDeleted = false;
+      existing.isDeleted = fields.status === RecordStatus.INACTIVE;
     }
     if (fields.updatedBy !== undefined) existing.updatedBy = fields.updatedBy;
     const repo = this.dataSource.getRepository(FeaturePermissionEntity);
