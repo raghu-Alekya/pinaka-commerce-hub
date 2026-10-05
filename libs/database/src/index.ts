@@ -105,6 +105,37 @@ async function databaseHasTables(dataSource: DataSource): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * PostgreSQL counts dropped columns toward the 1600-column limit.
+ * VACUUM FULL rewrites the table and discards those dropped columns.
+ * It cannot run inside a transaction.
+ */
+async function compactDroppedColumns(dataSource: DataSource): Promise<void> {
+  const rows: Array<{ table_name: string; total: string; dropped: string }> = await dataSource.query(`
+    SELECT c.relname AS table_name,
+           count(*) FILTER (WHERE a.attnum > 0)::text AS total,
+           count(*) FILTER (WHERE a.attnum > 0 AND a.attisdropped)::text AS dropped
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a ON a.attrelid = c.oid
+     WHERE n.nspname = 'public'
+       AND c.relkind = 'r'
+     GROUP BY c.relname
+    HAVING count(*) FILTER (WHERE a.attnum > 0) >= 1400
+  `);
+  if (!rows.length) return;
+  const runner = dataSource.createQueryRunner();
+  await runner.connect();
+  try {
+    for (const row of rows) {
+      console.log(`🐘 Compacting public.${row.table_name}: ${row.total} columns, ${row.dropped} dropped, to stay under the 1600-column limit`);
+      await runner.query(`VACUUM FULL public.${quoteIdent(row.table_name)}`);
+    }
+  } finally {
+    await runner.release();
+  }
+}
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -906,22 +937,15 @@ async function ensureEnumTypes(
 
 /**
  * Create entity tables that are not in the database yet.
- * A brand-new database is synchronized once. An existing database only gets
- * CREATE TABLE for gaps, because TypeORM synchronize drops and re-adds columns
- * and PostgreSQL keeps every dropped column until the 1600-column limit.
+ * Existing tables are never altered. TypeORM synchronize drops and re-adds
+ * columns, and PostgreSQL keeps every dropped column until the 1600-column limit.
  */
 export async function createMissingTables(dataSource: DataSource): Promise<string[]> {
   const missing = [];
-  let existing = 0;
   for (const entity of dataSource.entityMetadatas) {
-    if (await tableExists(dataSource, entity.tableName)) existing += 1;
-    else missing.push(entity);
+    if (!(await tableExists(dataSource, entity.tableName))) missing.push(entity);
   }
   if (!missing.length) return [];
-  if (existing === 0) {
-    await dataSource.synchronize();
-    return missing.map(entity => entity.tableName);
-  }
 
   const created: string[] = [];
   for (const entity of missing) {
@@ -976,40 +1000,14 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      // synchronize:false from the caller always wins, including when
-      // TYPEORM_SYNCHRONIZE=true. An existing database is never synchronized:
-      // TypeORM drops and re-adds columns, and PostgreSQL keeps the dropped
-      // ones until ALTER TABLE dies with "tables can have at most 1600 columns".
-      const synchronizeExisting = settings.synchronize !== false && options.synchronize === true;
-      if (synchronizeExisting && !(await databaseHasTables(dataSource))) {
-        // Repositories initialize concurrently, including across service processes.
-        // Keep a dedicated connection so the session lock covers every schema query.
-        const schemaLock = dataSource.createQueryRunner();
-        await schemaLock.connect();
-        try {
-          await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
-          try {
-            await dropEntityForeignKeys(dataSource);
-            await alignLegacyCamelCaseColumns(dataSource);
-            await backfillRequiredColumnsBeforeSync(dataSource);
-            await dedupeUniqueColumns(dataSource);
-            await clearOrphanForeignKeys(dataSource);
-            await backfillOptionalUniqueColumns(dataSource);
-            await dropIndexesOutsideEntities(dataSource);
-            await dataSource.synchronize();
-            if (await tableExists(dataSource, 'stores')) {
-              await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
-              await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
-            }
-            if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
-          } finally {
-            await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
-          }
-        } finally {
-          await schemaLock.release();
-        }
-      } else if (options.synchronize) {
-        console.log(`🐘 [${serviceName}] Skipping schema synchronize. Existing tables are left unchanged so PostgreSQL does not hit the 1600-column limit.`);
+      // Never TypeORM-synchronize here. Repeated sync drops and re-adds columns,
+      // and PostgreSQL keeps every dropped column until startup dies with
+      // "tables can have at most 1600 columns".
+      if (await databaseHasTables(dataSource)) {
+        await compactDroppedColumns(dataSource);
+      }
+      if (options.synchronize || settings.legacyQueryColumns) {
+        console.log(`🐘 [${serviceName}] Schema synchronize is disabled. Existing tables are not altered.`);
       }
       console.log(`🐘 [${serviceName}] Connected to PostgreSQL ${describeTarget(options)}`);
       return dataSource;
