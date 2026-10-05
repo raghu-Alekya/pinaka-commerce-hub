@@ -781,6 +781,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('tendors', 'tendor_code', `
+    DROP TRIGGER IF EXISTS tendors_legacy_cols ON public.tendors;
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "deletedAt" timestamptz;
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorName" varchar(150);
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorCode" varchar(50);
@@ -967,7 +968,7 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      if (options.synchronize) {
+      if (options.synchronize || settings.legacyQueryColumns) {
         // Repositories initialize concurrently, including across service processes.
         // Keep a dedicated connection so the session lock covers every schema query.
         const schemaLock = dataSource.createQueryRunner();
@@ -975,17 +976,19 @@ export async function connectPostgres(
         try {
           await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
           try {
-            await dropEntityForeignKeys(dataSource);
-            await alignLegacyCamelCaseColumns(dataSource);
-            await backfillRequiredColumnsBeforeSync(dataSource);
-            await dedupeUniqueColumns(dataSource);
-            await clearOrphanForeignKeys(dataSource);
-            await backfillOptionalUniqueColumns(dataSource);
-            await dropIndexesOutsideEntities(dataSource);
-            await dataSource.synchronize();
-            if (await tableExists(dataSource, 'stores')) {
-              await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
-              await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
+            if (options.synchronize) {
+              await dropEntityForeignKeys(dataSource);
+              await alignLegacyCamelCaseColumns(dataSource);
+              await backfillRequiredColumnsBeforeSync(dataSource);
+              await dedupeUniqueColumns(dataSource);
+              await clearOrphanForeignKeys(dataSource);
+              await backfillOptionalUniqueColumns(dataSource);
+              await dropIndexesOutsideEntities(dataSource);
+              await dataSource.synchronize();
+              if (await tableExists(dataSource, 'stores')) {
+                await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
+                await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
+              }
             }
             if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
           } finally {
