@@ -139,9 +139,14 @@ export class StoreTypeController {
     @Param('idOrCode') idOrCode: string,
     @Req() request: AuthenticatedRequest,
   ) {
-    const deleted = await this.repository.softDelete(idOrCode, this.loginUserId(request));
-    if (!deleted) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type deleted successfully', isDeleted: true };
+    const storeType = await this.repository.deactivate(idOrCode, this.loginUserId(request));
+    if (!storeType) throw new NotFoundException(`Store type '${idOrCode}' not found`);
+    return {
+      success: true,
+      message: 'Store type deactivated successfully',
+      isDeleted: false,
+      storeType,
+    };
   }
 
   @Post('dummy-test')
