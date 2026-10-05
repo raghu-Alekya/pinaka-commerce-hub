@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
+import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { DynamicQueryModule } from './modules/dynamic-query/dynamic-query.module';
 import { EmployeeModule } from './modules/employee/employee.module';
 import { MasterModule } from './modules/master/master.module';
@@ -6,6 +8,7 @@ import { MerchantModule } from './modules/merchant/merchant.module';
 import { PosModule } from './pos/pos.module';
 import { RelationshipsModule } from './modules/shared/relationships.module';
 import { StoreModule } from './modules/store/store.module';
+import { StorePosConfigurationModule } from './modules/store-pos-configuration/store-pos-configuration.module';
 import { VendorModule } from './modules/vendor/vendor.module';
 
 /**
@@ -19,6 +22,7 @@ import { VendorModule } from './modules/vendor/vendor.module';
  * - Vendor
  * - Dynamic Query
  * - POS
+ * - Store POS configuration
  * - Shared relationship infrastructure
  *
  * Existing controllers/services/repositories were moved into these modules;
@@ -34,6 +38,13 @@ import { VendorModule } from './modules/vendor/vendor.module';
     RelationshipsModule,
     DynamicQueryModule,
     PosModule,
+    StorePosConfigurationModule,
+  ],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: AllExceptionsFilter,
+    },
   ],
 })
 export class AppModule {}

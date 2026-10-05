@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { COUNTRIES, nationalPhone } from './countries';
 import { MerchantCrudService, withPlanLicenseCounts } from './merchant-crud.service';
@@ -8,9 +8,10 @@ import { MerchantRepository } from './merchant.repository';
 
 const fields = [
   'merchantName', 'merchantEmail', 'merchantPhoneNumber', 'businessName', 'businessDisplayName',
+  'firstName', 'lastName', 'alternatePhone', 'taxId',
   'storeTypeId', 'addressLine1', 'addressLine2', 'city', 'state', 'pinCode',
   'country', 'planId', 'billingCycle', 'startDate', 'renewalDate', 'agreementPrice',
-  'roleIds', 'tax', 'totalDueToday', 'paymentMethod',
+  'roleIds', 'tax', 'totalDueToday', 'paymentMethod', 'autoRenew', 'createdBy',
 ] as const;
 const required = [
   'merchantName', 'merchantEmail', 'merchantPhoneNumber', 'businessName',
@@ -19,6 +20,16 @@ const required = [
 ] as const;
 const removed = ['initialStatus', 'roleIds', 'merchantCode', 'merchantId'] as const;
 type Input = Record<string, unknown>;
+type ActorRequest = { user?: { id?: string } };
+const actorUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function actorId(input: Input, sessionUserId?: string): string | null {
+  const raw = input.createdBy ?? input.created_by ?? sessionUserId;
+  if (raw == null || raw === '') return null;
+  const value = String(raw).trim();
+  if (!actorUuid.test(value)) throw new BadRequestException('createdBy must be a UUID');
+  return value;
+}
 
 @Controller(['api/v1/merchants', 'connector/api/v1/merchants', 'merchants'])
 export class CompactMerchantController {
@@ -166,7 +177,7 @@ export class CompactMerchantController {
   }
 
   @Post('create-merchant')
-  async createFromOnboarding(@Body() body: Record<string, any>) {
+  async createFromOnboarding(@Body() body: Record<string, any>, @Req() request: ActorRequest) {
     const merchant = body?.merchant && typeof body.merchant === 'object' ? body.merchant : {};
     const subscription = body?.subscription && typeof body.subscription === 'object' ? body.subscription : {};
     const flat: Input = { ...body };
@@ -198,13 +209,14 @@ export class CompactMerchantController {
       paymentMethod: flat.paymentMethod ?? merchant.paymentMethod,
     };
     for (const key of Object.keys(mapped)) if (mapped[key] === undefined) delete mapped[key];
-    return this.create(mapped);
+    return this.create(mapped, request);
   }
 
   @Post()
-  async create(@Body() body: Input) {
+  async create(@Body() body: Input, @Req() request?: ActorRequest) {
     const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, true);
+    const createdBy = actorId(input, request?.user?.id);
     let savedId = '';
     try {
       await this.db.transaction(async manager => {
@@ -222,9 +234,17 @@ export class CompactMerchantController {
         setCol('merchant_id', merchantBusinessId);
         setCol('merchantId', merchantBusinessId);
         setCol('businessName', input.businessName);
+        const nameParts = String(input.merchantName || '').trim().split(/\s+/).filter(Boolean);
+        const firstName = String(input.firstName || nameParts[0] || '').trim();
+        const lastName = String(input.lastName || nameParts.slice(1).join(' ') || '').trim();
         setCol('business_display_name', input.businessDisplayName || input.businessName);
         setCol('businessDisplayName', input.businessDisplayName || input.businessName);
-        setCol('first_name', input.merchantName);
+        setCol('first_name', firstName || null);
+        setCol('last_name', lastName || null);
+        setCol('alternate_phone', input.alternatePhone ? String(input.alternatePhone) : null);
+        setCol('tax_id', input.taxId ? String(input.taxId) : null);
+        setCol('onboarding_step', 'COMPLETED');
+        setCol('is_deleted', false);
         setCol('address_line1', input.addressLine1);
         setCol('address_line2', input.addressLine2 ?? null);
         setCol('postal_code', input.pinCode);
@@ -255,6 +275,12 @@ export class CompactMerchantController {
         setCol('paymentMethod', input.paymentMethod);
         setCol('roleIds', JSON.stringify(input.roleIds || []));
         setCol('status', 'ACTIVE');
+        if (createdBy) {
+          setCol('created_by', createdBy);
+          setCol('updated_by', createdBy);
+          setCol('createdBy', createdBy);
+          setCol('updatedBy', createdBy);
+        }
         setCol('createdDate', new Date());
         setCol('updatedDate', new Date());
         setCol('created_at', new Date());
@@ -299,6 +325,14 @@ export class CompactMerchantController {
         setSubCol('agreement_price', input.agreementPrice);
         setSubCol('agreementPrice', input.agreementPrice);
         setSubCol('price', input.agreementPrice ?? 0);
+        setSubCol('auto_renew', input.autoRenew !== false);
+        setSubCol('is_deleted', false);
+        if (createdBy) {
+          setSubCol('created_by', createdBy);
+          setSubCol('updated_by', createdBy);
+          setSubCol('createdBy', createdBy);
+          setSubCol('updatedBy', createdBy);
+        }
         setSubCol('currency', 'USD');
         setSubCol('status', 'ACTIVE');
         setSubCol('created_at', new Date());
@@ -505,14 +539,16 @@ export class CompactMerchantController {
   }
 
   @Put(':id')
-  async replace(@Param('id') id: string, @Body() body: Input) { return this.update(id, body, true); }
+  async replace(@Param('id') id: string, @Body() body: Input, @Req() request: ActorRequest) { return this.update(id, body, true, request); }
 
   @Patch(':id')
-  async patch(@Param('id') id: string, @Body() body: Input) { return this.update(id, body, false); }
+  async patch(@Param('id') id: string, @Body() body: Input, @Req() request: ActorRequest) { return this.update(id, body, false, request); }
 
-  private async update(id: string, body: Input, replace: boolean) {
+  private async update(id: string, body: Input, replace: boolean, request?: ActorRequest) {
     const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, false);
+    const createdBy = actorId(input, request?.user?.id);
+    if (createdBy) input.createdBy = createdBy;
     if (!Object.keys(input).length) throw new BadRequestException('Provide at least one field');
     if (replace) {
       const missing = required.filter(key => input[key] === undefined);
@@ -546,6 +582,14 @@ export class CompactMerchantController {
       setCol('ownerName', input.merchantName ?? existing.ownerName ?? existing.merchantName);
       setCol('merchantEmail', input.merchantEmail ?? existing.merchantEmail ?? existing.email);
       setCol('email', input.merchantEmail ?? existing.email ?? existing.merchantEmail);
+      setCol('first_name', input.firstName ?? existing.first_name);
+      setCol('last_name', input.lastName ?? existing.last_name);
+      setCol('alternate_phone', input.alternatePhone !== undefined ? (input.alternatePhone ? String(input.alternatePhone) : null) : existing.alternate_phone);
+      setCol('tax_id', input.taxId !== undefined ? (input.taxId ? String(input.taxId) : null) : existing.tax_id);
+      setCol('business_display_name', input.businessDisplayName ?? existing.business_display_name ?? existing.businessDisplayName);
+      setCol('address_line1', input.addressLine1 ?? existing.address_line1 ?? existing.addressLine1);
+      setCol('address_line2', input.addressLine2 ?? existing.address_line2 ?? existing.addressLine2);
+      setCol('postal_code', input.pinCode ?? existing.postal_code ?? existing.pinCode);
       setCol('merchantPhoneNumber', input.merchantPhoneNumber ?? existing.merchantPhoneNumber ?? existing.phone);
       setCol('phone', input.merchantPhoneNumber ?? existing.phone ?? existing.merchantPhoneNumber);
       setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
@@ -570,8 +614,17 @@ export class CompactMerchantController {
       setCol('totalDueToday', input.totalDueToday ?? existing.totalDueToday);
       setCol('paymentMethod', input.paymentMethod ?? existing.paymentMethod);
       setCol('status', 'ACTIVE');
+      if (createdBy) {
+        setCol('updated_by', createdBy);
+        setCol('updatedBy', createdBy);
+        if (!existing.created_by && !existing.createdBy) {
+          setCol('created_by', createdBy);
+          setCol('createdBy', createdBy);
+        }
+      }
       setCol('updatedDate', new Date());
       setCol('updatedAt', new Date());
+      setCol('updated_at', new Date());
       if (!assignments.length) throw new BadRequestException('No merchant columns available to update');
       values.push(existing.id);
       await manager.query(
@@ -633,7 +686,7 @@ export class CompactMerchantController {
       setSubCol('created_at', new Date());
     }
     setSubCol('merchantId', merchantKey);
-    setSubCol('merchant_id', merchantKey);
+    setSubCol('merchant_id', existing.id);
     setSubCol('plan_id', planId);
     setSubCol('planId', planId);
     setSubCol('planName', planName);
@@ -661,6 +714,16 @@ export class CompactMerchantController {
     setSubCol('agreement_price', nextPrice);
     setSubCol('agreementPrice', nextPrice);
     setSubCol('price', nextPrice);
+    setSubCol('auto_renew', input.autoRenew !== false);
+    setSubCol('is_deleted', false);
+    if (input.createdBy) {
+      setSubCol('updated_by', input.createdBy);
+      setSubCol('updatedBy', input.createdBy);
+      if (!current?.created_by && !current?.createdBy) {
+        setSubCol('created_by', input.createdBy);
+        setSubCol('createdBy', input.createdBy);
+      }
+    }
     setSubCol('currency', 'USD');
     setSubCol('status', 'ACTIVE');
     setSubCol('updatedAt', new Date());

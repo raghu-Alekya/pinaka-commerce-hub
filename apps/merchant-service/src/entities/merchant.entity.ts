@@ -1,5 +1,5 @@
 import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
-import { Audited, AuditColumns, MerchantStatus } from './commerce-enums';
+import { MerchantStatus } from './commerce-enums';
 
 export { MerchantStatus } from './commerce-enums';
 
@@ -30,39 +30,98 @@ export interface KycDocument {
 
 @Check('merchants_distinct_identity_code', `"merchant_code" <> "merchant_id"`)
 @Entity('merchants')
-@Audited()
-export class MerchantEntity extends AuditColumns {
-  @PrimaryColumn({ name: 'merchant_code', type: 'varchar', length: 100 })
-  merchantCode!: string;
+export class MerchantEntity {
+  // =========================================================
+  // IDENTITY
+  // =========================================================
 
-  @Column({ name: 'id', type: 'uuid', unique: true, default: () => 'gen_random_uuid()' })
+  @Column({
+    name: 'id',
+    type: 'uuid',
+    unique: true,
+    default: () => 'gen_random_uuid()',
+  })
   id!: string;
 
-  @Column({ name: 'merchant_id', type: 'varchar', length: 100, unique: true })
+  @PrimaryColumn({
+    name: 'merchant_code',
+    type: 'varchar',
+    length: 100,
+  })
+  merchantCode!: string;
+
+  @Column({
+    name: 'merchant_id',
+    type: 'varchar',
+    length: 100,
+    unique: true,
+  })
   merchantId!: string;
 
-  @Column({ name: 'first_name', type: 'varchar', length: 100, nullable: true })
+  // =========================================================
+  // MERCHANT DETAILS
+  // =========================================================
+
+  @Column({
+    name: 'first_name',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   firstName?: string | null;
 
-  @Column({ name: 'last_name', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'last_name',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   lastName?: string | null;
 
-  @Column({ name: 'email', type: 'varchar', length: 255 })
+  @Column({
+    name: 'email',
+    type: 'varchar',
+    length: 255,
+  })
   email!: string;
 
-  @Column({ name: 'phone', type: 'varchar', length: 50 })
+  @Column({
+    name: 'phone',
+    type: 'varchar',
+    length: 50,
+  })
   phone!: string;
 
-  @Column({ name: 'alternate_phone', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'alternate_phone',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   alternatePhone?: string | null;
 
-  @Column({ name: 'tax_id', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'tax_id',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   taxId?: string | null;
 
-  @Column({ name: 'onboarding_step', type: 'varchar', length: 50, default: 'STEP1_BUSINESS' })
+  @Column({
+    name: 'onboarding_step',
+    type: 'varchar',
+    length: 50,
+    default: 'STEP1_BUSINESS',
+  })
   onboardingStep!: string;
 
-  @Column({ name: 'business_display_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'business_display_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   businessDisplayName?: string | null;
 
   get businessName(): string | null | undefined {
@@ -70,26 +129,64 @@ export class MerchantEntity extends AuditColumns {
   }
 
   set businessName(value: string | null | undefined) {
-    if (value !== undefined) this.businessDisplayName = value;
+    if (value !== undefined) {
+      this.businessDisplayName = value;
+    }
   }
 
-  @Column({ name: 'address_line1', type: 'text', nullable: true })
+  // =========================================================
+  // ADDRESS
+  // =========================================================
+
+  @Column({
+    name: 'address_line1',
+    type: 'text',
+    nullable: true,
+  })
   addressLine1?: string | null;
 
-  @Column({ name: 'address_line2', type: 'text', nullable: true })
+  @Column({
+    name: 'address_line2',
+    type: 'text',
+    nullable: true,
+  })
   addressLine2?: string | null;
 
-  @Column({ name: 'postal_code', type: 'varchar', length: 30, nullable: true })
+  @Column({
+    name: 'postal_code',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
   postalCode?: string | null;
 
-  @Column({ name: 'state', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'state',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   state?: string | null;
 
-  @Column({ name: 'city', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'city',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   city?: string | null;
 
-  @Column({ name: 'country', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'country',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   country?: string | null;
+
+  // =========================================================
+  // STATUS
+  // =========================================================
 
   @Column({
     name: 'status',
@@ -99,4 +196,43 @@ export class MerchantEntity extends AuditColumns {
     default: MerchantStatus.ACTIVE,
   })
   status!: MerchantStatus;
+
+  // =========================================================
+  // AUDIT COLUMNS - KEEP THESE LAST
+  // =========================================================
+
+  @Column({
+    name: 'is_deleted',
+    type: 'boolean',
+    default: false,
+  })
+  isDeleted!: boolean;
+
+  @Column({
+    name: 'created_by',
+    type: 'uuid',
+    nullable: true,
+  })
+  createdBy?: string | null;
+
+  @Column({
+    name: 'updated_by',
+    type: 'uuid',
+    nullable: true,
+  })
+  updatedBy?: string | null;
+
+  @Column({
+    name: 'created_at',
+    type: 'timestamp with time zone',
+    default: () => 'now()',
+  })
+  createdAt!: Date;
+
+  @Column({
+    name: 'updated_at',
+    type: 'timestamp with time zone',
+    default: () => 'now()',
+  })
+  updatedAt!: Date;
 }

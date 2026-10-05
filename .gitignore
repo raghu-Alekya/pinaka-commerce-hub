@@ -106,3 +106,7 @@ tsconfig.tsbuildinfo
 apps.zip
 db.dump
 *.dump
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

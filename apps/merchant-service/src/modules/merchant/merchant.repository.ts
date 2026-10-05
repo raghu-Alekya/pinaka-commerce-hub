@@ -27,6 +27,8 @@ import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/datab
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
 import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from '../../entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from '../../entities/store.entity';
+import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
+import { ensureStorePosConfigurationSchema } from '../store-pos-configuration/store-pos-configuration.schema';
 import { SubscriptionEntity, PlanCode, SubscriptionStatus, BillingCycle } from '../../entities/subscription.entity';
 import { OnboardingAuditEntity } from '../../entities/onboarding-audit.entity';
 import { SubscriptionPlanEntity } from '../../entities/subscription-plan.entity';
@@ -353,6 +355,7 @@ export class MerchantRepository implements OnModuleInit {
     this.dataSource = await connectPostgres('PCH Merchant DB', [
       MerchantEntity,
       StoreEntity,
+      StorePosConfigurationEntity,
       StoreTypeEntity,
       FeatureEntity,
       PermissionEntity,
@@ -403,6 +406,7 @@ export class MerchantRepository implements OnModuleInit {
     if (createdTables.length) {
       console.log(`🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`);
     }
+    await ensureStorePosConfigurationSchema(this.dataSource);
 
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
@@ -688,18 +692,31 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async resolveMerchantId(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT "merchantId" FROM public.merchants WHERE "merchantId"=$1 OR "merchantCode"=$1 OR id::text=$1 LIMIT 1', [idOrUuid]);
+    const rows = await this.dataSource.query(
+      `SELECT merchant_id AS "merchantId" FROM public.merchants
+       WHERE merchant_id = $1 OR merchant_code = $1 OR id::text = $1
+       LIMIT 1`,
+      [idOrUuid],
+    );
     return rows[0]?.merchantId || null;
   }
 
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [idOrUuid]);
+    const rows = await this.dataSource.query(
+      `SELECT id FROM public.merchants
+       WHERE merchant_id = $1 OR merchant_code = $1 OR id::text = $1
+       LIMIT 1`,
+      [idOrUuid],
+    );
     return rows[0]?.id || null;
   }
 
   private async merchantIdentity(idOrUuid: string): Promise<{ merchantId: string; merchantUuid: string; aliases: string[] } | null> {
     const rows = await this.dataSource.query(
-      'SELECT "merchantId", "merchantCode", id::text AS uuid FROM public.merchants WHERE "merchantId"=$1 OR "merchantCode"=$1 OR id::text=$1 LIMIT 1',
+      `SELECT merchant_id AS "merchantId", merchant_code AS "merchantCode", id::text AS uuid
+       FROM public.merchants
+       WHERE merchant_id = $1 OR merchant_code = $1 OR id::text = $1
+       LIMIT 1`,
       [idOrUuid],
     );
     const row = rows[0];

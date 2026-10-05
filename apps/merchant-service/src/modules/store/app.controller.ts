@@ -460,8 +460,10 @@ export class AppController {
     if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
-      id: s.uuid, storeCode: s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
-      storeName: s.storeName, storeType: s.storeType, address: s.address,
+      id: s.id, storeCode: s.storeCode || s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
+      storeName: s.storeName, storeType: s.storeTypeId,
+      address: [s.addressLine1, s.addressLine2, s.city, s.state, s.postalCode, s.country].filter(Boolean).join(', '),
+      city: s.city, state: s.state,
       status: s.status, currency: s.currency, timezone: s.timezone,
       createdAt: s.createdAt, updatedAt: s.updatedAt,
       deviceCount: null, lastSyncAt: null,
