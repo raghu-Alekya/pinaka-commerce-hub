@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { ILike, Repository } from 'typeorm';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { TendorEntity, TendorStatus } from '../../../entities/tendor.entity';
@@ -192,7 +193,7 @@ export class TendorRepository {
   }
 
   async create(dto: CreateTendorDto): Promise<TendorEntity> {
-    const tendorCode = this.requireText(dto.tendorCode, 'tendorCode');
+    const tendorCode = normalizeText(dto.tendorCode) ?? `TND-${randomUUID()}`;
     const tendorName = this.requireText(dto.tendorName, 'tendorName');
     await this.assertUniqueFields(tendorCode, tendorName);
     const entity = this.store().create({
@@ -231,8 +232,8 @@ export class TendorRepository {
     }
   }
 
-  async softDelete(id: string): Promise<void> {
+  async deactivate(id: string): Promise<void> {
     await this.getById(id);
-    await this.store().update({ id, isDeleted: false }, { isDeleted: true });
+    await this.store().update({ id, isDeleted: false }, { status: TendorStatus.INACTIVE });
   }
 }
