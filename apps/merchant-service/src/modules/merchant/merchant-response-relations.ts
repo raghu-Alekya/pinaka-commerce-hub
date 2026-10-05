@@ -119,6 +119,10 @@ export class MerchantResponseRelations {
       const isSubscriptionRow = (row: Row) =>
         ('billingCycle' in row || 'billing_cycle' in row || 'maxStoresAllowed' in row || 'licensedDeviceCount' in row || 'licensedStoreCount' in row)
         && !('ownerName' in row && 'businessName' in row);
+      const isStoreTypeMasterRow = (row: Row) =>
+        ('storeTypeCode' in row || 'store_type_code' in row)
+        && 'name' in row
+        && !('storeTypeId' in row || 'store_type_id' in row);
       const attachPlanStoreType = (plan: Row | null, fallback: Row | null) => {
         if (!plan || isRecord(plan.storeType)) return plan;
         const storeType = storeTypeFrom(plan) || fallback;
@@ -160,7 +164,9 @@ export class MerchantResponseRelations {
           result[name]=isRecord(result[name]) ? {...details,...result[name]} : details;
         }
         const plan = isRecord(result.plan) ? result.plan : null;
-        const storeType = isRecord(result.storeType) ? result.storeType : storeTypeFrom(result, plan);
+        const storeType = isStoreTypeMasterRow(result)
+          ? null
+          : isRecord(result.storeType) ? result.storeType : storeTypeFrom(result, plan);
         if (storeType) {
           result.storeType = storeType;
           if (!result.storeTypeId) result.storeTypeId = storeType.id;

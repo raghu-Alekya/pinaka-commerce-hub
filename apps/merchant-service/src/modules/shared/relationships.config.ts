@@ -6,9 +6,12 @@ export type Relationship = {
   tenantColumn?: boolean; timestamps?: boolean; fields: Record<string, Field>;
   tenantField?: string; childOwnerColumn?: string; createdColumn?: string; updatedColumn?: string;
 };
-const storeTypeDefaults: Record<string, Field> = {
-  defaultEnabled: { column: 'default_enabled', kind: 'boolean', default: false },
+const storeTypeFeatureFields: Record<string, Field> = {
   required: { column: 'required', kind: 'boolean', default: false },
+  status: { column: 'status', kind: 'status', default: 'ACTIVE' },
+};
+const storeTypeRoleTemplateFields: Record<string, Field> = {
+  status: { column: 'status', kind: 'status', default: 'ACTIVE' },
 };
 const entitlement: Record<string, Field> = {
   enabled: { column: 'enabled', kind: 'boolean', default: false },
@@ -27,22 +30,20 @@ export const RELATIONSHIPS: Relationship[] = [
     parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'store_type_id', parentUuid: true,
     childTable: 'features', childKey: 'featureId', childColumn: 'feature_id', childUuid: true, timestamps: true,
     createdColumn: 'created_at', updatedColumn: 'updated_at',
-    fields: { ...storeTypeDefaults, displayOrder: { column: 'display_order', kind: 'integer', nullable: true, default: null },
-      configurationJson: { column: 'configuration_json', kind: 'object', nullable: true, default: null } } },
-  { name: 'FeatureStoreTypes', path: 'api/v1/features/:feature_id/store-types', table: 'store_type_features',
-    parentTable: 'features', parentParam: 'feature_id', parentColumn: 'feature_id', parentUuid: true,
+    fields: storeTypeFeatureFields },
+  { name: 'FeatureStoreTypes', path: 'api/v1/features/:featureId/store-types', table: 'store_type_features',
+    parentTable: 'features', parentParam: 'featureId', parentColumn: 'feature_id', parentUuid: true,
     childTable: 'store_types', childKey: 'storeTypeId', childColumn: 'store_type_id', childUuid: true, timestamps: true,
     createdColumn: 'created_at', updatedColumn: 'updated_at',
-    fields: { ...storeTypeDefaults, displayOrder: { column: 'display_order', kind: 'integer', nullable: true, default: null },
-      configurationJson: { column: 'configuration_json', kind: 'object', nullable: true, default: null } } },
+    fields: storeTypeFeatureFields },
   { name: 'StoreTypeRoleTemplates', path: 'api/v1/store-types/:storeTypeId/role-templates', table: 'store_type_role_templates',
     parentTable: 'store_types', parentParam: 'storeTypeId', parentColumn: 'store_type_id', parentUuid: true,
     childTable: 'role_templates', childKey: 'roleTemplateId', childColumn: 'role_template_id', childUuid: true, timestamps: true,
-    createdColumn: 'created_at', updatedColumn: 'updated_at', fields: storeTypeDefaults },
+    createdColumn: 'created_at', updatedColumn: 'updated_at', fields: storeTypeRoleTemplateFields },
   { name: 'RoleTemplateStoreTypes', path: 'api/v1/role-templates/:roleTemplateId/store-types', table: 'store_type_role_templates',
     parentTable: 'role_templates', parentParam: 'roleTemplateId', parentColumn: 'role_template_id', parentUuid: true,
     childTable: 'store_types', childKey: 'storeTypeId', childColumn: 'store_type_id', childUuid: true, timestamps: true,
-    createdColumn: 'created_at', updatedColumn: 'updated_at', fields: storeTypeDefaults },
+    createdColumn: 'created_at', updatedColumn: 'updated_at', fields: storeTypeRoleTemplateFields },
   { name: 'PlanEntitlements', path: 'api/v1/plans/:planId/entitlements', table: 'plan_entitlements',
     parentTable: 'plans', parentParam: 'planId', parentColumn: 'planId', parentUuid: true,
     childTable: 'features', childKey: 'featureId', childColumn: 'featureId', childUuid: true, timestamps: true,

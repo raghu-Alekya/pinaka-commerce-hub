@@ -29,7 +29,7 @@ export class StoreTypeFeatureCatalogController {
   async byCategory(@Param('storeTypeId') storeTypeId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(storeTypeFeatures, 'list', { storeTypeId });
     const mappedIds = new Set((mapped.items as { featureId: string }[]).map(item => item.featureId.toLowerCase()));
-    const masterFeatures = (filterMasterList(await this.merchants.masterData('features', 'list'), query) || []) as Record<string, any>[];
+    const masterFeatures = (filterMasterList(await this.merchants.listFeatures(), query) || []) as Record<string, any>[];
     const features = masterFeatures.map(feature => ({ ...feature, mapped: mappedIds.has(String(feature.id).toLowerCase()) }));
     const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
     const visible = unmappedOnly ? features.filter(feature => !feature.mapped) : features;
@@ -57,7 +57,7 @@ export class FeatureStoreTypeCatalogController {
   @Get()
   async available(@Param('featureId') featureId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(featureStoreTypes, 'list', { featureId });
-    const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean; displayOrder: number | null; configurationJson: object | null }[])
+    const mappings = new Map((mapped.items as { id: string; storeTypeId: string; required: boolean; status: string }[])
       .map(item => [item.storeTypeId.toLowerCase(), item]));
     const masterStoreTypes = (filterMasterList(await this.merchants.masterData('store_types', 'list'), query) || []) as Record<string, any>[];
     const storeTypes = masterStoreTypes.map((storeType: Record<string, any>) => {
@@ -66,10 +66,8 @@ export class FeatureStoreTypeCatalogController {
           ...storeType,
           mapped: Boolean(mapping),
           mappingId: mapping?.id || null,
-          defaultEnabled: mapping?.defaultEnabled ?? false,
           required: mapping?.required ?? false,
-          displayOrder: mapping?.displayOrder ?? null,
-          configurationJson: mapping?.configurationJson ?? null,
+          mappingStatus: mapping?.status ?? null,
         };
       });
     const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
