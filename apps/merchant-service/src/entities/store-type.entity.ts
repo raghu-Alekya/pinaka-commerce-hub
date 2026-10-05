@@ -1,11 +1,10 @@
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
-import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
+import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { RecordStatus } from './commerce-enums';
 
 export { RecordStatus as StoreTypeStatus } from './commerce-enums';
 
 @Entity('store_types')
-@Audited()
-export class StoreTypeEntity extends AuditColumns {
+export class StoreTypeEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
@@ -17,6 +16,14 @@ export class StoreTypeEntity extends AuditColumns {
   })
   storeTypeCode!: string;
 
+  get code(): string {
+    return this.storeTypeCode;
+  }
+
+  set code(value: string) {
+    if (value) this.storeTypeCode = value;
+  }
+
   @Column({ name: 'name', type: 'varchar', length: 100 })
   name!: string;
 
@@ -25,10 +32,24 @@ export class StoreTypeEntity extends AuditColumns {
 
   @Column({
     name: 'status',
-    type: 'enum',
-    enum: RecordStatus,
-    enumName: 'record_status',
+    type: 'varchar',
+    length: 20,
     default: RecordStatus.ACTIVE,
   })
   status!: RecordStatus;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  updatedAt!: Date;
+
+  @Column({ name: 'is_deleted', type: 'boolean', default: false, nullable: true })
+  isDeleted?: boolean;
+
+  @Column({ name: 'created_by', type: 'uuid', nullable: true })
+  createdBy?: string | null;
+
+  @Column({ name: 'updated_by', type: 'uuid', nullable: true })
+  updatedBy?: string | null;
 }

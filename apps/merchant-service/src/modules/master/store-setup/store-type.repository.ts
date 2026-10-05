@@ -1,54 +1,117 @@
+import * as crypto from 'crypto';
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
-import { Repository } from 'typeorm';
-import {
-  StoreTypeEntity,
-  StoreTypeStatus,
-} from '../../../entities/store-type.entity';
+import { StoreTypeStatus } from '../../../entities/store-type.entity';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { CreateStoreTypeDto, UpdateStoreTypeDto } from './store-type.dto';
 
 @Injectable()
 export class StoreTypeRepository {
+  private cachedCols: string[] | null = null;
+
   constructor(
     @Inject(MerchantRepository)
     private readonly merchants: MerchantRepository,
   ) {}
 
-  private repository(): Repository<StoreTypeEntity> {
-    return this.merchants
-      .requireDataSource()
-      .getRepository(StoreTypeEntity);
+  private async ensureTable(): Promise<string[]> {
+    if (this.cachedCols && this.cachedCols.length > 0) {
+      return this.cachedCols;
+    }
+    const ds = this.merchants.requireDataSource();
+    try {
+      await ds.query(`
+        CREATE TABLE IF NOT EXISTS public.store_types (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          store_type_code VARCHAR(50) NOT NULL UNIQUE,
+          name VARCHAR(100) NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
+      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS created_by UUID`);
+      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS updated_by UUID`);
+    } catch {
+      // ignore
+    }
+    try {
+      const colRes = await ds.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_types'"
+      );
+      this.cachedCols = (colRes || []).map((r: any) => String(r.column_name).toLowerCase());
+      return this.cachedCols;
+    } catch {
+      return ['id', 'store_type_code', 'name', 'description', 'status', 'created_at', 'updated_at'];
+    }
   }
 
-  async list(status?: string): Promise<StoreTypeEntity[]> {
-    const repository = this.repository();
-    let qb = repository.createQueryBuilder('st')
-      .where('(st.isDeleted = false OR st.isDeleted IS NULL)');
+  private quote(name: string): string {
+    return `"${name.replace(/"/g, '""')}"`;
+  }
+
+  private getProjection(cols: string[]): { projection: string; codeDbCol: string; createdDbCol: string; updatedDbCol: string; hasIsDeleted: boolean; hasCreatedBy: boolean; hasUpdatedBy: boolean } {
+    const codeDbCol = cols.find(c => ['store_type_code', 'storetypecode', 'code'].includes(c)) || 'store_type_code';
+    const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c)) || 'created_at';
+    const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c)) || 'updated_at';
+    const hasIsDeleted = cols.includes('is_deleted');
+    const hasCreatedBy = cols.includes('created_by');
+    const hasUpdatedBy = cols.includes('updated_by');
+
+    const projection = [
+      'id',
+      `${this.quote(codeDbCol)} AS "storeTypeCode"`,
+      `${this.quote(codeDbCol)} AS "code"`,
+      'name',
+      'description',
+      'status',
+      `${this.quote(createdDbCol)}::text AS "createdAt"`,
+      `${this.quote(createdDbCol)}::text AS "created_at"`,
+      `${this.quote(updatedDbCol)}::text AS "updatedAt"`,
+      `${this.quote(updatedDbCol)}::text AS "updated_at"`,
+    ].join(', ');
+
+    return { projection, codeDbCol, createdDbCol, updatedDbCol, hasIsDeleted, hasCreatedBy, hasUpdatedBy };
+  }
+
+  async list(status?: string): Promise<any[]> {
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { projection, hasIsDeleted } = this.getProjection(cols);
+
+    let where = hasIsDeleted ? '(is_deleted = false OR is_deleted IS NULL)' : '1=1';
+    const params: any[] = [];
     if (status) {
-      qb = qb.andWhere('UPPER(st.status) = UPPER(:status)', { status });
+      params.push(status.toUpperCase());
+      where += ` AND UPPER(status) = $${params.length}`;
     }
-    const items = await qb.orderBy('st.name', 'ASC').getMany();
-    if (items.length === 0) {
-      try {
-        await this.seedDefaultStoreTypes();
-        return await repository.createQueryBuilder('st')
-          .where('(st.isDeleted = false OR st.isDeleted IS NULL)')
-          .orderBy('st.name', 'ASC')
-          .getMany();
-      } catch {
-        // ignore seed error
-      }
+
+    let items = await ds.query(
+      `SELECT ${projection} FROM public.store_types WHERE ${where} ORDER BY name ASC, id ASC`,
+      params,
+    );
+
+    if (items.length === 0 && !status) {
+      await this.seedDefaultStoreTypes();
+      items = await ds.query(
+        `SELECT ${projection} FROM public.store_types WHERE ${where} ORDER BY name ASC, id ASC`,
+        params,
+      );
     }
     return items;
   }
 
   async seedDefaultStoreTypes(): Promise<void> {
-    const count = await this.repository().count();
-    if (count > 0) return;
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { codeDbCol } = this.getProjection(cols);
     const defaults = [
       { code: 'ST-001', name: 'Retail Store', description: 'General retail and merchandise sales' },
       { code: 'ST-002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
@@ -60,11 +123,11 @@ export class StoreTypeRepository {
     ];
     for (const d of defaults) {
       try {
-        await this.merchants.requireDataSource().query(
-          `INSERT INTO public.store_types (store_type_code, name, description, status)
-           VALUES ($1, $2, $3, 'ACTIVE')
-           ON CONFLICT (store_type_code) DO NOTHING`,
-          [d.code, d.name, d.description],
+        await ds.query(
+          `INSERT INTO public.store_types (id, ${this.quote(codeDbCol)}, name, description, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'ACTIVE', clock_timestamp(), clock_timestamp())
+           ON CONFLICT (${this.quote(codeDbCol)}) DO NOTHING`,
+          [crypto.randomUUID(), d.code, d.name, d.description],
         );
       } catch {
         // ignore
@@ -73,8 +136,9 @@ export class StoreTypeRepository {
   }
 
   async previewNextCode(): Promise<string> {
+    const ds = this.merchants.requireDataSource();
     try {
-      const rows = await this.merchants.requireDataSource().query(
+      const rows = await ds.query(
         `SELECT last_value, is_called FROM public.store_type_code_seq`,
       );
       const sequence = rows[0] as
@@ -85,7 +149,10 @@ export class StoreTypeRepository {
       return `STT_${String(nextValue).padStart(5, '0')}`;
     } catch {
       try {
-        const count = await this.repository().count();
+        const rows = await ds.query(
+          `SELECT COUNT(*)::int AS count FROM public.store_types`,
+        );
+        const count = Number(rows[0]?.count || 0);
         return `ST-${String(count + 1).padStart(3, '0')}`;
       } catch {
         return `ST-001`;
@@ -93,90 +160,208 @@ export class StoreTypeRepository {
     }
   }
 
-  async findByIdOrCode(idOrCode: string): Promise<StoreTypeEntity | null> {
+  async findByIdOrCode(idOrCode: string): Promise<any | null> {
     if (!idOrCode?.trim()) return null;
-    const repository = this.repository();
-    const value = idOrCode.trim();
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        value,
-      );
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { projection, codeDbCol, hasIsDeleted } = this.getProjection(cols);
+
+    const val = idOrCode.trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+    const deletedClause = hasIsDeleted ? ' AND (is_deleted = false OR is_deleted IS NULL)' : '';
+
     if (isUuid) {
-      const byId = await repository.createQueryBuilder('st')
-        .where('st.id = :id AND (st.isDeleted = false OR st.isDeleted IS NULL)', { id: value })
-        .getOne();
-      if (byId) return byId;
+      const rows = await ds.query(
+        `SELECT ${projection} FROM public.store_types WHERE id = $1${deletedClause} LIMIT 1`,
+        [val],
+      );
+      if (rows[0]) return rows[0];
     }
-    return repository.createQueryBuilder('st')
-      .where('(UPPER(st.storeTypeCode) = UPPER(:code) OR UPPER(st.name) = UPPER(:code)) AND (st.isDeleted = false OR st.isDeleted IS NULL)', { code: value })
-      .getOne();
+
+    const rows = await ds.query(
+      `SELECT ${projection} FROM public.store_types WHERE (UPPER(${this.quote(codeDbCol)}) = UPPER($1) OR UPPER(name) = UPPER($1))${deletedClause} LIMIT 1`,
+      [val],
+    );
+    return rows[0] || null;
   }
 
-  async findByName(name: string): Promise<StoreTypeEntity | null> {
+  async findByName(name: string): Promise<any | null> {
     if (!name?.trim()) return null;
-    return this.repository()
-      .createQueryBuilder('storeType')
-      .where('LOWER(TRIM(storeType.name)) = LOWER(TRIM(:name))', { name })
-      .andWhere('(storeType.isDeleted = false OR storeType.isDeleted IS NULL)')
-      .getOne();
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { projection, hasIsDeleted } = this.getProjection(cols);
+
+    let where = `LOWER(TRIM(name)) = LOWER(TRIM($1))`;
+    if (hasIsDeleted) {
+      where += ` AND (is_deleted = false OR is_deleted IS NULL)`;
+    }
+    const rows = await ds.query(
+      `SELECT ${projection} FROM public.store_types WHERE ${where} LIMIT 1`,
+      [name.trim()],
+    );
+    return rows[0] || null;
   }
 
   async create(
     dto: CreateStoreTypeDto,
     loginUserId?: string | null,
-  ): Promise<StoreTypeEntity> {
+  ): Promise<any> {
     const duplicate = await this.findByName(dto.name);
     if (duplicate) {
       throw new ConflictException(
         `Store type name '${dto.name.trim()}' already exists`,
       );
     }
-    const repository = this.repository();
-    const code = (dto as any).code || (dto as any).storeTypeCode || (await this.previewNextCode());
-    const entity = repository.create({
-      storeTypeCode: code,
-      name: dto.name.trim(),
-      description: dto.description?.trim() || '',
-      status: dto.status || StoreTypeStatus.ACTIVE,
-      createdBy: loginUserId || null,
-      updatedBy: null,
-    });
-    const saved = await repository.save(entity);
-    return (await this.findByIdOrCode(saved.id)) || saved;
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { projection, codeDbCol, createdDbCol, updatedDbCol, hasIsDeleted, hasCreatedBy, hasUpdatedBy } = this.getProjection(cols);
+
+    const newId = crypto.randomUUID();
+    const rawCode = (dto as any).code || (dto as any).storeTypeCode || dto.storeTypeCode;
+    const code = (rawCode && String(rawCode).trim())
+      ? String(rawCode).trim().toUpperCase()
+      : await this.previewNextCode();
+    const name = dto.name.trim();
+    const description = dto.description?.trim() || '';
+    const status = String(dto.status || StoreTypeStatus.ACTIVE).toUpperCase();
+
+    const insertData: Record<string, unknown> = {
+      id: newId,
+      [codeDbCol]: code,
+      name,
+      description,
+      status,
+      [createdDbCol]: new Date(),
+      [updatedDbCol]: new Date(),
+    };
+    if (hasIsDeleted) insertData['is_deleted'] = false;
+    if (hasCreatedBy && loginUserId) insertData['created_by'] = loginUserId;
+    if (hasUpdatedBy && loginUserId) insertData['updated_by'] = loginUserId;
+
+    if (cols.includes('storetypecode') && cols.includes('store_type_code')) {
+      insertData['storetypecode'] = code;
+      insertData['store_type_code'] = code;
+    }
+
+    const insertKeys = Object.keys(insertData);
+    const insertValues = Object.values(insertData);
+    const placeholders = insertValues.map((_, i) => `$${i + 1}`).join(', ');
+
+    try {
+      const rows = await ds.query(
+        `INSERT INTO public.store_types (${insertKeys.map(k => this.quote(k)).join(', ')}) VALUES (${placeholders}) RETURNING ${projection}`,
+        insertValues,
+      );
+      return rows[0];
+    } catch (error: any) {
+      const errCode = error.driverError?.code || error.code;
+      if (errCode === '23505') {
+        throw new ConflictException(`Store type with code '${code}' or name '${name}' already exists`);
+      }
+      if (['23502', '23514', '22P02', '22001', '42703'].includes(errCode)) {
+        throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
+      }
+      throw error;
+    }
   }
 
   async update(
     idOrCode: string,
     dto: UpdateStoreTypeDto,
     loginUserId?: string | null,
-  ): Promise<StoreTypeEntity | null> {
+  ): Promise<any | null> {
     const existing = await this.findByIdOrCode(idOrCode);
     if (!existing) return null;
-    if (dto.name !== undefined) {
+
+    if (dto.name !== undefined && dto.name.trim() !== '') {
       const duplicate = await this.findByName(dto.name);
       if (duplicate && duplicate.id !== existing.id) {
         throw new ConflictException(
           `Store type name '${dto.name.trim()}' already exists`,
         );
       }
-      existing.name = dto.name.trim();
+    }
+
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { projection, codeDbCol, updatedDbCol, hasUpdatedBy } = this.getProjection(cols);
+
+    const setClauses: string[] = [];
+    const setValues: unknown[] = [existing.id];
+    let idx = 2;
+
+    if (dto.name !== undefined) {
+      setClauses.push(`name = $${idx++}`);
+      setValues.push(dto.name.trim());
     }
     if (dto.description !== undefined) {
-      existing.description = dto.description.trim();
+      setClauses.push(`description = $${idx++}`);
+      setValues.push(dto.description.trim());
     }
-    if (dto.status !== undefined) existing.status = dto.status;
-    existing.updatedBy = loginUserId || null;
-    existing.updatedAt = new Date();
-    return this.repository().save(existing);
+    if (dto.status !== undefined) {
+      setClauses.push(`status = $${idx++}`);
+      setValues.push(String(dto.status).trim().toUpperCase());
+    }
+    if (dto.storeTypeCode !== undefined || dto.code !== undefined) {
+      setClauses.push(`${this.quote(codeDbCol)} = $${idx++}`);
+      setValues.push(String(dto.storeTypeCode || dto.code).trim().toUpperCase());
+    }
+    if (hasUpdatedBy && loginUserId) {
+      setClauses.push(`updated_by = $${idx++}`);
+      setValues.push(loginUserId);
+    }
+    setClauses.push(`${this.quote(updatedDbCol)} = clock_timestamp()`);
+
+    try {
+      const rows = await ds.query(
+        `UPDATE public.store_types SET ${setClauses.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+        setValues,
+      );
+      return rows[0] || null;
+    } catch (error: any) {
+      const errCode = error.driverError?.code || error.code;
+      if (errCode === '23505') {
+        throw new ConflictException(`Store type name already exists`);
+      }
+      if (['23502', '23514', '22P02', '22001', '42703'].includes(errCode)) {
+        throw new BadRequestException('Store type update failed: ' + (error.driverError?.message || error.message));
+      }
+      throw error;
+    }
   }
 
   async softDelete(idOrCode: string, loginUserId?: string | null): Promise<boolean> {
     const existing = await this.findByIdOrCode(idOrCode);
     if (!existing) return false;
-    existing.isDeleted = true;
-    existing.updatedBy = loginUserId || null;
-    existing.updatedAt = new Date();
-    await this.repository().save(existing);
-    return true;
+
+    const ds = this.merchants.requireDataSource();
+    const cols = await this.ensureTable();
+    const { updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
+
+    if (hasIsDeleted) {
+      const updates = [`is_deleted = true`, `${this.quote(updatedDbCol)} = clock_timestamp()`];
+      const vals: any[] = [existing.id];
+      if (hasUpdatedBy && loginUserId) {
+        updates.push(`updated_by = $2`);
+        vals.push(loginUserId);
+      }
+      await ds.query(`UPDATE public.store_types SET ${updates.join(', ')} WHERE id = $1`, vals);
+      return true;
+    }
+
+    try {
+      await ds.query(`DELETE FROM public.store_types WHERE id = $1`, [existing.id]);
+      return true;
+    } catch (error: any) {
+      const errCode = error.driverError?.code || error.code;
+      if (errCode === '23503') {
+        await ds.query(
+          `UPDATE public.store_types SET status = 'INACTIVE', ${this.quote(updatedDbCol)} = clock_timestamp() WHERE id = $1`,
+          [existing.id],
+        );
+        return true;
+      }
+      throw error;
+    }
   }
 }

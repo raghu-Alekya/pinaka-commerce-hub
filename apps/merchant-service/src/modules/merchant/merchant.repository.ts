@@ -25,7 +25,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
-import { MerchantEntity, BusinessType, RetailSubCategory, MerchantStatus, KycStatus } from '../../entities/merchant.entity';
+import { MerchantEntity, MerchantStatus } from '../../entities/merchant.entity';
 import { StoreEntity, StoreStatus, OperationalStatus, StoreWebsiteConnectorConfig } from '../../entities/store.entity';
 import { SubscriptionEntity, PlanCode, SubscriptionStatus, BillingCycle } from '../../entities/subscription.entity';
 import { OnboardingAuditEntity } from '../../entities/onboarding-audit.entity';
@@ -398,6 +398,118 @@ export class MerchantRepository implements OnModuleInit {
           return { id, status: 'INACTIVE' };
         }
       }
+    if (table === 'store_types') {
+      let cols: string[] = [];
+      try {
+        const colRes = await this.dataSource.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_types'"
+        );
+        cols = (colRes || []).map((r: any) => String(r.column_name).toLowerCase());
+      } catch {
+        // fallback
+      }
+      if (!cols.length) {
+        cols = ['id', 'store_type_code', 'name', 'description', 'status', 'created_at', 'updated_at'];
+      }
+      const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+      const codeDbCol = cols.find(c => ['store_type_code', 'storetypecode', 'code'].includes(c)) || 'store_type_code';
+      const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c)) || 'created_at';
+      const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c)) || 'updated_at';
+
+      const projection = [
+        'id',
+        `${quote(codeDbCol)} AS "storeTypeCode"`,
+        `${quote(codeDbCol)} AS "code"`,
+        'name',
+        'description',
+        'status',
+        `${quote(createdDbCol)}::text AS "createdAt"`,
+        `${quote(createdDbCol)}::text AS "created_at"`,
+        `${quote(updatedDbCol)}::text AS "updatedAt"`,
+        `${quote(updatedDbCol)}::text AS "updated_at"`,
+      ].join(', ');
+
+      if (operation === 'list') {
+        return await this.dataSource.query(`SELECT ${projection} FROM public.store_types ORDER BY name, id`);
+      } else if (operation === 'get') {
+        const rows = await this.dataSource.query(`SELECT ${projection} FROM public.store_types WHERE id = $1`, [id]);
+        if (!rows.length) throw new NotFoundException('Store type not found');
+        return rows[0];
+      } else if (operation === 'create') {
+        const newId = crypto.randomUUID();
+        const codeVal = String(fields.storeTypeCode || fields.code || '').trim() || `ST-${Date.now().toString().slice(-4)}`;
+        const nameVal = String(fields.name || '').trim();
+        const descVal = String(fields.description || '').trim();
+        const statusVal = String(fields.status || 'ACTIVE').trim().toUpperCase();
+        try {
+          const res = await this.dataSource.query(
+            `INSERT INTO public.store_types (id, ${quote(codeDbCol)}, name, description, status, ${quote(createdDbCol)}, ${quote(updatedDbCol)})
+             VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp())
+             RETURNING ${projection}`,
+            [newId, codeVal, nameVal, descVal, statusVal]
+          );
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Store type code or name already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'update') {
+        const setClauses: string[] = [];
+        const setValues: unknown[] = [id];
+        let idx = 2;
+        if (fields.name !== undefined) {
+          setClauses.push(`name = $${idx++}`);
+          setValues.push(String(fields.name).trim());
+        }
+        if (fields.description !== undefined) {
+          setClauses.push(`description = $${idx++}`);
+          setValues.push(String(fields.description).trim());
+        }
+        if (fields.status !== undefined) {
+          setClauses.push(`status = $${idx++}`);
+          setValues.push(String(fields.status).trim().toUpperCase());
+        }
+        if (fields.storeTypeCode !== undefined || fields.code !== undefined) {
+          setClauses.push(`${quote(codeDbCol)} = $${idx++}`);
+          setValues.push(String(fields.storeTypeCode || fields.code).trim());
+        }
+        setClauses.push(`${quote(updatedDbCol)} = clock_timestamp()`);
+        try {
+          const res = await this.dataSource.query(
+            `UPDATE public.store_types SET ${setClauses.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+            setValues
+          );
+          if (!res.length) throw new NotFoundException('Store type not found');
+          return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23505') throw new ConflictException('Store type code already exists');
+          if (['23502', '23514', '22P02', '22001', '42703'].includes(code)) throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
+          throw error;
+        }
+      } else if (operation === 'delete') {
+        try {
+          const res = await this.dataSource.query(
+            `DELETE FROM public.store_types WHERE id = $1 RETURNING ${projection}`,
+            [id]
+          );
+          if (res.length) return res[0];
+        } catch (error: any) {
+          const code = error.driverError?.code || error.code;
+          if (code === '23503') {
+            const res = await this.dataSource.query(
+              `UPDATE public.store_types SET status = 'INACTIVE', ${quote(updatedDbCol)} = clock_timestamp() WHERE id = $1 RETURNING ${projection}`,
+              [id]
+            );
+            return res[0];
+          }
+          throw error;
+        }
+        return { id, status: 'INACTIVE' };
+      }
+    }
     const columns: Record<string, string> = {
       name: 'name', description: 'description', status: 'status',
       ...({
@@ -1940,13 +2052,15 @@ export class MerchantRepository implements OnModuleInit {
     if (!this.storeTypeRepo) {
       throw new ServiceUnavailableException('Store types require PostgreSQL');
     }
+    const rawCode = dto.storeTypeCode || (dto as any).code || '';
+    const code = rawCode ? String(rawCode).trim().toUpperCase() : `ST-${Date.now().toString().slice(-4)}`;
     const entity = this.storeTypeRepo.create({
-      storeTypeCode: dto.storeTypeCode.trim().toUpperCase(),
+      storeTypeCode: code,
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      status: dto.status || StoreTypeStatus.ACTIVE,
+      status: (dto.status || StoreTypeStatus.ACTIVE) as any,
     });
-    return this.storeTypeRepo.save(entity);
+    return (await this.storeTypeRepo.save(entity)) as unknown as StoreTypeEntity;
   }
 
   async updateStoreType(idOrCode: string, dto: UpdateStoreTypeDto): Promise<StoreTypeEntity | null> {
