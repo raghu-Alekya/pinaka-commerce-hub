@@ -60,16 +60,14 @@ if [[ "$FORCE" -eq 1 ]]; then
   rm -f "$LOCK_FILE"
 fi
 
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"$LOCK_FILE"
-  if ! flock -n 9; then
-    echo "The service launcher is already running (lock: $LOCK_FILE)." >&2
-    echo "Holder(s):" >&2
-    lock_holders >&2
-    echo "If nothing useful is running, clear it with:" >&2
-    echo "  bash ./scripts/launch-pdh.sh --force --restart" >&2
-    exit 1
-  fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "The service launcher is already running (lock: $LOCK_FILE)." >&2
+  echo "Holder(s):" >&2
+  lock_holders >&2
+  echo "If nothing useful is running, clear it with:" >&2
+  echo "  bash ./scripts/launch-pdh.sh --force --restart" >&2
+  exit 1
 fi
 
 services=(
@@ -77,13 +75,12 @@ services=(
   "connector-service:3001"
   "order-service:3002"
   "merchant-service:3003"
-  "auth-service:3010"
-  "menu-service:3004"
   "inventory-service:3005"
   "analytics-service:3006"
   "pos-integration-service:3007"
   "notification-service:3008"
   "admin-api:3009"
+  "auth-service:3010"
 )
 
 port_pids() {
@@ -112,35 +109,25 @@ show_logs() {
 }
 
 if [[ "$SKIP_DOCKER" -eq 0 ]]; then
-  if docker info >/dev/null 2>&1; then
-    docker compose --project-directory "$SERVICE_ROOT" -f "$SERVICE_ROOT/docker-compose.yml" up -d
-    pg_ready=0
-    for _ in $(seq 1 30); do
-      if docker compose --project-directory "$SERVICE_ROOT" exec -T postgres pg_isready -U pdh_user >/dev/null 2>&1; then
-        pg_ready=1
-        break
-      fi
-      sleep 1
-    done
-    if [[ "$pg_ready" -ne 1 ]]; then
-      echo "Docker PostgreSQL did not become ready. Check: docker compose logs postgres" >&2
-      exit 1
+  docker compose --project-directory "$SERVICE_ROOT" -f "$SERVICE_ROOT/docker-compose.yml" up -d
+  pg_ready=0
+  for _ in $(seq 1 30); do
+    if docker compose --project-directory "$SERVICE_ROOT" exec -T postgres pg_isready -U pdh_user >/dev/null 2>&1; then
+      pg_ready=1
+      break
     fi
-    if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-      psql -U pdh_user -d template1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub_new'" 2>/dev/null | grep -q 1; then
-      docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
-        psql -U pdh_user -d template1 -c "CREATE DATABASE pinaka_commerce_hub_new;" >/dev/null 2>&1 || true
-    fi
-    echo "PostgreSQL ready: pinaka_commerce_hub_new"
-  else
-    echo "Docker daemon is not running. Checking local PostgreSQL service..."
-    if node -e "const net = require('net'); const c = net.connect(5432, '127.0.0.1', () => process.exit(0)); c.on('error', () => process.exit(1));" >/dev/null 2>&1; then
-      echo "Local PostgreSQL is running on port 5432. Proceeding with local database."
-    else
-      echo "Docker daemon is not running and local PostgreSQL on port 5432 is not accessible." >&2
-      exit 1
-    fi
+    sleep 1
+  done
+  if [[ "$pg_ready" -ne 1 ]]; then
+    echo "Docker PostgreSQL did not become ready. Check: docker compose logs postgres" >&2
+    exit 1
   fi
+  if ! docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+    psql -U pdh_user -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'pinaka_commerce_hub'" 2>/dev/null | grep -q 1; then
+    docker compose --project-directory "$SERVICE_ROOT" exec -T postgres \
+      psql -U pdh_user -d postgres -c "CREATE DATABASE pinaka_commerce_hub;" >/dev/null 2>&1 || true
+  fi
+  echo "PostgreSQL ready: pinaka_commerce_hub"
 fi
 
 for item in "${services[@]}"; do
@@ -159,14 +146,8 @@ for item in "${services[@]}"; do
     for pid in "${pids[@]}"; do
       cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
       if [[ "$cmd" != *"$relative_entry"* && "$cmd" != *"$entry"* ]]; then
-        # --restart replaces a leftover service from this repo, such as loyalty-service on 3007.
-        if [[ "$RESTART" -eq 1 && "$cmd" == *"$SERVICE_ROOT"* && "$cmd" == *"apps/"* ]]; then
-          echo "Port $port is held by another repo service (PID $pid). Stopping it."
-          kill "$pid" 2>/dev/null || true
-        else
-          echo "Port $port belongs to another process (PID $pid): $cmd" >&2
-          exit 1
-        fi
+        echo "Port $port belongs to another process (PID $pid): $cmd" >&2
+        exit 1
       fi
       if [[ "$RESTART" -eq 1 ]]; then
         kill "$pid" 2>/dev/null || true
@@ -226,5 +207,5 @@ for item in "${services[@]}"; do
   echo "$name: ready on $port (PID $pid)."
 done
 
-echo "Backend ready: ports 3000-3010."
+echo "Backend ready: configured services on ports 3000-3010 (3004 reserved for catalog-service)."
 echo "Re-run without --restart to reuse running services. Use --restart to reload them."

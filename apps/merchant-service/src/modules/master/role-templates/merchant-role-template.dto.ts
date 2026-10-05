@@ -1,5 +1,15 @@
-import { IsString, IsOptional, IsEnum, IsUUID, MaxLength, IsNotEmpty } from 'class-validator';
-import { RoleScopeType, RoleTemplateStatus } from '../../../entities/role-template.entity';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsUUID,
+  MaxLength,
+  IsNotEmpty,
+} from 'class-validator';
+import {
+  RoleScopeType,
+  RoleTemplateStatus,
+} from '../../../entities/role-template.entity';
 
 export class CreateMerchantRoleTemplateDto {
   @IsUUID()
