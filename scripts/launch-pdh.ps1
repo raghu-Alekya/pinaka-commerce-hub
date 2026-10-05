@@ -31,22 +31,111 @@ $launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHu
 if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
 try {
     if (-not $SkipDocker) {
-        & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d
-        if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed.' }
-        $pgReady = $false
-        for ($attempt = 1; $attempt -le 30; $attempt++) {
-            & docker compose --project-directory $serviceRoot exec -T postgres pg_isready -U pdh_user | Out-Null
-            if ($LASTEXITCODE -eq 0) { $pgReady = $true; break }
-            Start-Sleep -Seconds 1
+        $dockerRunning = $false
+        try {
+            & docker info 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $dockerRunning = $true }
+        } catch {}
+
+        if ($dockerRunning) {
+            $composeProjectDirectory = $serviceRoot
+            $composeFiles = @((Join-Path $serviceRoot 'docker-compose.yml'))
+            $composeProjectName = Split-Path -Leaf $serviceRoot
+
+            $redisLabelsJson = & docker inspect --format '{{json .Config.Labels}}' pdh-redis 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $redisLabels = ($redisLabelsJson -join [Environment]::NewLine) | ConvertFrom-Json
+                $existingProject = $redisLabels.'com.docker.compose.project'
+                $existingDirectory = $redisLabels.'com.docker.compose.project.working_dir'
+                $existingComposeFiles = @($redisLabels.'com.docker.compose.project.config_files' -split ',')
+                $canReuseExistingProject = -not [string]::IsNullOrWhiteSpace($existingProject) -and
+                    -not [string]::IsNullOrWhiteSpace($existingDirectory) -and
+                    $existingComposeFiles.Count -gt 0
+
+                foreach ($containerName in @('pdh-postgres', 'pdh-rabbitmq', 'pdh-redis-commander', 'pdh-pgadmin')) {
+                    $containerLabelsJson = & docker inspect --format '{{json .Config.Labels}}' $containerName 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        $canReuseExistingProject = $false
+                        break
+                    }
+                    $containerLabels = ($containerLabelsJson -join [Environment]::NewLine) | ConvertFrom-Json
+                    if ($containerLabels.'com.docker.compose.project' -ne $existingProject -or
+                        $containerLabels.'com.docker.compose.project.working_dir' -ne $existingDirectory -or
+                        $containerLabels.'com.docker.compose.project.config_files' -ne $redisLabels.'com.docker.compose.project.config_files') {
+                        $canReuseExistingProject = $false
+                        break
+                    }
+                }
+
+                foreach ($composeFile in $existingComposeFiles) {
+                    if (-not (Test-Path -LiteralPath $composeFile -PathType Leaf)) {
+                        $canReuseExistingProject = $false
+                        break
+                    }
+                }
+
+                if ($existingDirectory -ne $serviceRoot) {
+                    if (-not $canReuseExistingProject) {
+                        throw "A pdh-redis container already exists outside this Compose project, and its complete owning project could not be verified. It was left untouched. Start or stop that project explicitly, then retry."
+                    }
+                    $composeProjectDirectory = $existingDirectory
+                    $composeFiles = $existingComposeFiles
+                    $composeProjectName = $existingProject
+                    Write-Host "Reusing existing PCH Docker project '$composeProjectName' from $composeProjectDirectory."
+                }
+            }
+
+            $composeArgs = @('--project-directory', $composeProjectDirectory, '-p', $composeProjectName)
+            foreach ($composeFile in $composeFiles) {
+                $composeArgs += @('-f', $composeFile)
+            }
+
+            & docker compose @composeArgs up -d
+            if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed. Existing containers were not removed; check the Compose error above.' }
+            $pgReady = $false
+            for ($attempt = 1; $attempt -le 30; $attempt++) {
+                & docker compose @composeArgs exec -T postgres pg_isready -U pdh_user | Out-Null
+                if ($LASTEXITCODE -eq 0) { $pgReady = $true; break }
+                Start-Sleep -Seconds 1
+            }
+            if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
+            $ensureDbSql = "SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub') \gexec"
+            $ensureDbSql | & docker compose @composeArgs exec -T postgres psql -U pdh_user -d template1 -v ON_ERROR_STOP=1 | Out-Null
+            $ensureDbNewSql = "SELECT 'CREATE DATABASE pinaka_commerce_hub_new' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub_new') \gexec"
+            $ensureDbNewSql | & docker compose @composeArgs exec -T postgres psql -U pdh_user -d template1 -v ON_ERROR_STOP=1 | Out-Null
+
+            $syncScript = Join-Path $serviceRoot 'scripts/sync-all-entities.ts'
+            if (Test-Path -LiteralPath $syncScript -PathType Leaf) {
+                Write-Host 'Synchronizing all entity schemas into pinaka_commerce_hub_new database...'
+                pnpm exec tsx $syncScript
+                if ($LASTEXITCODE -ne 0) { throw 'Entity schema synchronization failed.' }
+            } else {
+                Write-Warning "Entity schema synchronization skipped; script not found: $syncScript"
+            }
+
+            $seedScript = Join-Path $serviceRoot 'scripts/seed-via-typeorm.ts'
+            if (Test-Path -LiteralPath $seedScript -PathType Leaf) {
+                pnpm exec tsx $seedScript
+                if ($LASTEXITCODE -ne 0) { throw 'Database seeding failed.' }
+            } else {
+                Write-Warning "Database seeding skipped; script not found: $seedScript"
+            }
+            Write-Host 'PostgreSQL ready: pinaka_commerce_hub & pinaka_commerce_hub_new (pgAdmin http://localhost:5050).'
+        } else {
+            Write-Host 'Docker daemon is not running. Checking local PostgreSQL service...'
+            $pgLocalReady = $false
+            try {
+                $tcp = New-Object System.Net.Sockets.TcpClient
+                $tcp.Connect('127.0.0.1', 5432)
+                $tcp.Close()
+                $pgLocalReady = $true
+            } catch {}
+            if ($pgLocalReady) {
+                Write-Host 'Local PostgreSQL is running on port 5432. Proceeding with local database.'
+            } else {
+                throw 'Docker daemon is not running and local PostgreSQL (port 5432) is not accessible. Please start Docker Desktop or local PostgreSQL service.'
+            }
         }
-        if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
-        $ensureDatabaseSql = @'
-SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')
-\gexec
-'@
-        $ensureDatabaseSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -v ON_ERROR_STOP=1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL database initialization failed.' }
-        Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
     }
     foreach ($service in $services) {
         $entry = Join-Path $serviceRoot "apps/$($service.Name)/src/main.ts"
@@ -59,7 +148,7 @@ SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_da
                 $absoluteEntry = $entry -replace '\\', '/'
                 # Relative entry points are also used by this project's original launcher.
                 $relativeEntry = "apps/$($service.Name)/src/main.ts"
-                $matchesService = $process.Name -eq 'node.exe' -and ($normalized.Contains($absoluteEntry) -or $normalized -match ('(?:\s|"|\x27)' + [regex]::Escape($relativeEntry) + '(?:\s|"|\x27|$)'))
+                $matchesService = $process.Name -eq 'node.exe' -and ($normalized.Contains($absoluteEntry) -or $normalized -match ('(?:/|\\|\s|"|\x27)' + [regex]::Escape($relativeEntry) + '(?:\s|"|\x27|$)'))
                 if (-not $matchesService) { throw "Port $($service.Port) belongs to another process (PID $owner). It was not stopped." }
                 if ($Restart) { Stop-Process -Id $owner -ErrorAction Stop }
             }
