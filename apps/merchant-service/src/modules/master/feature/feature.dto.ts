@@ -4,7 +4,7 @@ import { FeatureStatus } from '../../../entities/feature.entity';
 
 export class CreateFeatureDto extends AuditInputDto {
   @IsString() @IsNotEmpty() @MaxLength(100)
-  feature_code!: string;
+  feature_code?: string;
 
   @IsString() @MaxLength(150)
   name!: string;

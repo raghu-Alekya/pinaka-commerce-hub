@@ -4,6 +4,7 @@ import { BadRequestException, Body, ConflictException, Controller, Delete, Get, 
 import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { CreateFeaturePermissionDto, UpdateFeaturePermissionDto } from '../../../feature-permission.dto';
+import { FeaturePermissionEntity } from '../../../entities/feature-permission.entity';
 import { PermissionType, RecordStatus } from '../../../entities/commerce-enums';
 import { MasterFormValidationPipe } from '../common/master-form.pipe';
 import { parsePage, permissionRequestToInternal, toSnakeCaseResponse } from './permission-api-mapping';
@@ -101,7 +102,7 @@ export class FeaturePermissionController {
 
   @Get(':id_or_code')
   async get(@Param('feature_id') featureId: string, @Param('id_or_code') idOrCode: string) {
-    const permission = await this.repository.getFeaturePermissionByIdOrCode(idOrCode, featureId);
+    const permission = await this.repository.getFeaturePermissionByIdOrCode(idOrCode, featureId, true);
     if (!permission) throw new NotFoundException(`Permission '${idOrCode}' not found`);
     return { success: true, permission: toSnakeCaseResponse(permission) };
   }
@@ -111,14 +112,14 @@ export class FeaturePermissionController {
     const userId = auditUserId(request);
     const payload = this.bulkItems(body);
     const skipExisting = (body as { skip_existing?: unknown })?.skip_existing === true;
-    const permissions = [];
+    const permissions: FeaturePermissionEntity[] = [];
     for (const item of payload) {
       const allowed = ['feature_id', 'permission_code', 'permission_type', 'name', 'description', 'status'];
       if (Object.keys(item).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown or immutable field');
-      if (typeof item.permission_code !== 'string' || !item.permission_code.trim() ||
-          typeof item.permission_type !== 'string' || !Object.values(PermissionType).includes(item.permission_type as PermissionType) ||
+      if ((item.permission_code !== undefined && typeof item.permission_code !== 'string') ||
+          (typeof item.permission_type !== 'string' || !Object.values(PermissionType).includes(item.permission_type as PermissionType)) ||
           typeof item.name !== 'string' || !item.name.trim()) {
-        throw new BadRequestException('Each item requires permission_code, permission_type, and name');
+        throw new BadRequestException('Each item requires permission_type and name; permission_code is generated on save');
       }
       if (item.status !== undefined && !Object.values(RecordStatus).includes(item.status as RecordStatus)) {
         throw new BadRequestException('Invalid status');
@@ -130,7 +131,6 @@ export class FeaturePermissionController {
       try {
         permissions.push(await this.repository.createFeaturePermission({
           featureId,
-          permissionCode: String(item.permission_code).trim(),
           permissionType: item.permission_type as PermissionType,
           name: String(item.name).trim(),
           description: typeof item.description === 'string' ? item.description : undefined,
@@ -149,7 +149,7 @@ export class FeaturePermissionController {
   async saveBulk(@Param('feature_id') featureId: string, @Body() body: unknown, @Req() request: AuthenticatedRequest) {
     const userId = auditUserId(request);
     const payload = this.bulkItems(body);
-    const permissions = [];
+    const permissions: FeaturePermissionEntity[] = [];
     for (const item of payload) {
       const allowed = ['id', 'feature_id', 'permission_code', 'permission_type', 'name', 'description', 'status'];
       if (Object.keys(item).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown or immutable field');
@@ -198,7 +198,6 @@ export class FeaturePermissionController {
     const userId = auditUserId(request);
     const permission = await this.repository.createFeaturePermission({
       featureId,
-      permissionCode: body.permissionCode,
       permissionType: body.permissionType,
       name: body.name,
       description: body.description,
@@ -224,7 +223,7 @@ export class FeaturePermissionController {
       ...fields,
       featureId: targetFeatureId,
       updatedBy: auditUserId(request),
-    });
+    }, true);
     if (!permission) {
       throw new NotFoundException(`Permission '${idOrCode}' not found`);
     }
@@ -258,8 +257,13 @@ export class FeaturePermissionController {
     @Body(statusValidation) body: PermissionStatusDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    await this.scoped(featureId, idOrCode);
-    const permission = await this.repository.updateFeaturePermission(idOrCode, featureId, { status: body.status, updatedBy: auditUserId(request) });
+    const permission = await this.repository.updateFeaturePermission(
+      idOrCode,
+      featureId,
+      { status: body.status, updatedBy: auditUserId(request) },
+      true,
+    );
+    if (!permission) throw new NotFoundException(`Permission '${idOrCode}' not found`);
     return { success: true, message: `Permission status updated to ${body.status}`, permission: toSnakeCaseResponse(permission) };
   }
 

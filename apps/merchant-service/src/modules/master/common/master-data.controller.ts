@@ -1,10 +1,11 @@
 import { Public } from '@pinaka-delivery-hub/auth';
 import { IsIn } from 'class-validator';
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query, Req, UnauthorizedException } from '@nestjs/common';
 import { filterMasterList, groupFeaturesByCategory } from './master-list';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { FeatureDto, StoreTypeDto, RoleTemplateDto, PlanDto } from './master-data.dto';
 import { MasterFormValidationPipe } from './master-form.pipe';
+import { RequireAuth } from '../../shared/session-auth.guard';
 
 const defined = (body: object) => Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 
@@ -25,6 +26,11 @@ const statusValidation = new MasterFormValidationPipe({
 @Controller(['api/v1/features', 'connector/api/v1/features', 'features'])
 export class FeatureController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
+  private auditUser(request: { user?: { id?: string } }) {
+    const id = request.user?.id;
+    if (!id) throw new UnauthorizedException('Authenticated user UUID is unavailable');
+    return id;
+  }
   @Get('categories')
   async categories() {
     const features = await this.repository.masterData('features', 'list');
@@ -42,19 +48,23 @@ export class FeatureController {
   }
   @Get() async list(@Query() query: Record<string, string>) { const features = filterMasterList(await this.repository.masterData('features', 'list'), query); return { success: true, count: features.length, features }; }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, feature: await this.repository.masterData('features', 'get', id) }; }
-  @Post() async create(@Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: 'BOOLEAN', ...defined(body) }) }; }
-  @Put(':id') async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
-  @Patch(':id') async patch(@Param('id') id: string, @Body(validate(FeatureDto, true)) body: FeatureDto) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body) }) }; }
+  @Post() @RequireAuth() async create(@Body(validate(FeatureDto)) body: FeatureDto, @Req() request: { user?: { id?: string } }) { const actor = this.auditUser(request); return { success: true, feature: await this.repository.masterData('features', 'create', undefined, { description: '', status: 'ACTIVE', featureType: body.category ?? body.feature_category ?? body.featureCategory ?? body.feature_type ?? body.type ?? 'TEXT', ...defined(body), created_by: actor, updated_by: actor }) }; }
+  @Put(':id') @RequireAuth() async replace(@Param('id') id: string, @Body(validate(FeatureDto)) body: FeatureDto, @Req() request: { user?: { id?: string } }) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body), updated_by: this.auditUser(request) }) }; }
+  @Patch(':id') @RequireAuth() async patch(@Param('id') id: string, @Body(validate(FeatureDto, true)) body: FeatureDto, @Req() request: { user?: { id?: string } }) { return { success: true, feature: await this.repository.masterData('features', 'update', id, { ...defined(body), updated_by: this.auditUser(request) }) }; }
    @Put(':id/status')
+  @RequireAuth()
   async replaceStatus(
     @Param('id') id: string,
     @Body(statusValidation) body: StatusDto,
-  ) { return this.updateStatus(id, body); }
+    @Req() request: { user?: { id?: string } },
+  ) { return this.updateStatus(id, body, request); }
 
   @Patch(':id/status')
+  @RequireAuth()
   async updateStatus(
     @Param('id') id: string,
     @Body(statusValidation) body: StatusDto,
+    @Req() request: { user?: { id?: string } },
   ) {
     const feature = await this.repository.masterData(
       'features',
@@ -62,6 +72,7 @@ export class FeatureController {
       id,
       {
         status: body.status,
+        updated_by: this.auditUser(request),
       },
     );
 
@@ -71,7 +82,7 @@ export class FeatureController {
       feature,
     };
   }
-  @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('features', 'delete', id); return { success: true, message: 'Feature deleted' }; }
+  @Delete(':id') @RequireAuth() async remove(@Param('id') id: string, @Req() request: { user?: { id?: string } }) { const actor = this.auditUser(request); const feature = await this.repository.masterData('features', 'delete', id, { updated_by: actor }); return { success: true, message: 'Feature deactivated', feature }; }
 }
 
 
