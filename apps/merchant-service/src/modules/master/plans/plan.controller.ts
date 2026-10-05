@@ -1,7 +1,7 @@
 import { ArgumentMetadata, BadRequestException, ValidationPipe, CanActivate, ExecutionContext, Injectable, UnauthorizedException, Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { PlanRepository } from './plan.repository';
 import { Transform } from 'class-transformer';
-import { IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsNumber, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsISO8601, IsNumber, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 
 class PlanSchemaDto {
@@ -29,7 +29,6 @@ class PlanSchemaDto {
   @ValidateIf((_, value) => value !== undefined && value !== null) @IsISO8601() effective_from?: string | null;
   @ValidateIf((_, value) => value !== undefined) @IsArray() @IsString({ each: true }) included_features?: string[];
   @ValidateIf((_, value) => value !== undefined && value !== null) @IsISO8601() plan_end_date?: string | null;
-  @ValidateIf((_, value) => value !== undefined) @IsBoolean() is_deleted?: boolean;
 }
 
 const aliases: Record<string, Record<string, string>> = {
@@ -150,5 +149,5 @@ export class PlanController {
   @Post() @UseGuards(PlanWriteGuard) async create(@Req() request: { planUserId: string }, @Body(validate(PlanSchemaDto)) body: PlanSchemaDto | Record<string, unknown>) { return { success: true, plan: await this.repository.execute('create', undefined, defined(body), request.planUserId) }; }
   @Put(':id') @UseGuards(PlanWriteGuard) async replace(@Req() request: { planUserId: string }, @Param('id', new ParseUUIDPipe()) id: string, @Body(validate(PlanSchemaDto)) body: PlanSchemaDto | Record<string, unknown>) { return { success: true, plan: await this.repository.execute('update', id, defined(body), request.planUserId) }; }
   @Patch(':id') @UseGuards(PlanWriteGuard) async patch(@Req() request: { planUserId: string }, @Param('id', new ParseUUIDPipe()) id: string, @Body(validate(PlanSchemaDto, true)) body: PlanSchemaDto | Record<string, unknown>) { return { success: true, plan: await this.repository.execute('update', id, defined(body), request.planUserId) }; }
-  @Delete(':id') @UseGuards(PlanWriteGuard) async remove(@Param('id', new ParseUUIDPipe()) id: string) { await this.repository.execute('delete', id); return { success: true, message: 'Plan deleted' }; }
+  @Delete(':id') @UseGuards(PlanWriteGuard) async remove(@Req() request: { planUserId: string }, @Param('id', new ParseUUIDPipe()) id: string) { await this.repository.execute('delete', id, {}, request.planUserId); return { success: true, message: 'Plan soft-deleted', is_deleted: true }; }
 }
