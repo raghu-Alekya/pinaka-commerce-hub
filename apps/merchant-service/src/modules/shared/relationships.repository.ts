@@ -536,15 +536,8 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
                f.name,
                f.description,
                f.status,
-               COALESCE(
-                 to_jsonb(f)->>'featureKey',
-                 to_jsonb(f)->>'feature_key',
-                 to_jsonb(f)->>'feature_code'
-               ) AS "featureKey",
-               COALESCE(
-                 to_jsonb(f)->>'featureType',
-                 to_jsonb(f)->>'feature_type'
-               ) AS "featureType",
+               COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey",
+               to_jsonb(f)->>'feature_type' AS "featureType",
                ARRAY_AGG(DISTINCT stf.store_type_id) AS "storeTypeIds"
              FROM public.store_type_features stf
              JOIN public.features f ON f.id = stf.feature_id
@@ -696,7 +689,6 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
               feature.name,
               feature.featureKey,
               feature.description,
-              feature.category,
             ].some(value =>
               String(value ?? '')
                 .toLowerCase()
@@ -807,8 +799,8 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'StoreTypeFeatures') {
       const rows = await manager.query(
         `SELECT id, name, status,
-           COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey",
-           COALESCE(to_jsonb(f)->>'category', to_jsonb(f)->>'featureCategory', to_jsonb(f)->>'feature_category') AS category
+           COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey",
+           NULL::text AS category
          FROM public.features f WHERE id = ANY($1::uuid[])`,
         [items.map(item => item.featureId)],
       );
@@ -1066,7 +1058,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     );
     const [feature] = await manager.query(
       `SELECT id::text AS id, name,
-              COALESCE(to_jsonb(f)->>'featureKey', to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS key
+              COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code', '') AS key
        FROM public.features f WHERE id = $1::uuid`,
       [target.featureId],
     );
