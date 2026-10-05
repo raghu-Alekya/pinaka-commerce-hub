@@ -317,20 +317,57 @@ export class MerchantCrudService {
     const columns = new Set((await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
     const merchantColumn = columns.has('merchantId') ? '"merchantId"' : columns.has('merchant_id') ? 'merchant_id' : '';
     const filters = [
-      merchantColumn ? `($1::text IS NULL OR s.${merchantColumn}=$1)` : '$1::text IS NULL',
-      columns.has('status') ? `($2::text IS NULL OR s.status=$2)` : '$2::text IS NULL',
+      merchantColumn ? `($1::text IS NULL OR s.${merchantColumn}::text=$1)` : '$1::text IS NULL',
+      columns.has('status') ? `($2::text IS NULL OR s.status::text=$2)` : '$2::text IS NULL',
     ];
     const merchantKey = merchantColumn === '"merchantId"' ? 's."merchantId"' : merchantColumn ? `s.${merchantColumn}::text` : 'NULL';
     const planIdCol = columns.has('planId') ? 's."planId"' : columns.has('plan_id') ? 's.plan_id' : '';
     const planJoin = planIdCol ? `LEFT JOIN public.plans p ON p.id::text = ${planIdCol}::text` : '';
-    const planSelect = planJoin ? ', p.included_stores AS plan_included_stores, p.included_terminals AS plan_included_terminals' : '';
+    const planColumns = planJoin
+      ? new Set((await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='plans'`)).map((row: {column_name: string}) => row.column_name))
+      : new Set<string>();
+    const planStores = planColumns.has('included_stores')
+      ? 'p.included_stores'
+      : planColumns.has('stores_limit')
+        ? 'p.stores_limit'
+        : planColumns.has('includedStores')
+          ? 'p."includedStores"'
+          : 'NULL';
+    const planTerminals = planColumns.has('included_terminals')
+      ? 'p.included_terminals'
+      : planColumns.has('terminal_limit')
+        ? 'p.terminal_limit'
+        : planColumns.has('includedTerminals')
+          ? 'p."includedTerminals"'
+          : 'NULL';
+    const planSelect = planJoin
+      ? `, ${planStores} AS plan_included_stores, ${planTerminals} AS plan_included_terminals`
+      : '';
+    const createdOrder = columns.has('createdAt')
+      ? 's."createdAt"'
+      : columns.has('created_at')
+        ? 's.created_at'
+        : 's.id';
     const subscriptions = await this.db.query(`SELECT s.*, COALESCE((
-        SELECT m."merchantId" FROM public.merchants m
-        WHERE m."merchantId" = ${merchantKey} OR m."merchantCode" = ${merchantKey} OR m.id::text = ${merchantKey}
+        SELECT COALESCE(
+          to_jsonb(m)->>'merchantId',
+          to_jsonb(m)->>'merchant_id',
+          to_jsonb(m)->>'merchantCode',
+          to_jsonb(m)->>'merchant_code',
+          m.id::text
+        )
+        FROM public.merchants m
+        WHERE ${merchantKey} IN (
+          to_jsonb(m)->>'merchantId',
+          to_jsonb(m)->>'merchant_id',
+          to_jsonb(m)->>'merchantCode',
+          to_jsonb(m)->>'merchant_code',
+          m.id::text
+        )
         LIMIT 1
       ), ${merchantKey}) AS merchant_code${planSelect}
       FROM public.subscriptions s ${planJoin} WHERE ${filters.join(' AND ')}
-      ORDER BY s."createdAt" DESC NULLS LAST`,[merchantId || null,status || null]);
+      ORDER BY ${createdOrder} DESC NULLS LAST`,[merchantId || null,status || null]);
     for (const row of subscriptions) {
       for (const key of ['startDate','renewalDate','start_date','renewal_date']) {
         const value = row[key];
