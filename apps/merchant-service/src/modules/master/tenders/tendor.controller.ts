@@ -58,7 +58,7 @@ export class TendorController {
 
   @Delete(':id')
   async remove(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.repository.softDelete(id);
-    return { success: true, message: 'Tendor deleted' };
+    await this.repository.deactivate(id);
+    return { success: true, message: 'Tendor deactivated' };
   }
 }

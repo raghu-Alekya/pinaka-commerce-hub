@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import { ILike, Repository } from 'typeorm';
+import { EntityManager, ILike, Repository } from 'typeorm';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { VendorEntity, VendorStatus, VendorType } from '../../entities/vendor.entity';
 import { CreateVendorDto, UpdateVendorDto } from './vendor.dto';
@@ -27,8 +26,52 @@ export class VendorRepository {
     }
   }
 
-  async list(query: { vendorType?: string; status?: string; search?: string; isDeleted?: boolean } = {}): Promise<VendorEntity[]> {
-    const where: Record<string, unknown> = { isDeleted: query.isDeleted ?? false };
+  private async generateNextVendorCode(manager: EntityManager): Promise<string> {
+    const rows: Array<{ nextNumber: string }> = await manager.query(`
+      SELECT (COALESCE(MAX(SUBSTRING(vendor_code FROM '^VND_([0-9]+)$')::bigint), 0) + 1)::text AS "nextNumber"
+      FROM public.vendors
+      WHERE vendor_code ~ '^VND_[0-9]+$'
+    `);
+    return `VND_${rows[0].nextNumber.padStart(5, '0')}`;
+  }
+
+  private async assertUniqueEmail(email: string | null | undefined, repository: Repository<VendorEntity>, excludeId?: string): Promise<void> {
+    const normalizedEmail = optionalText(email)?.toLowerCase();
+    if (!normalizedEmail) return;
+
+    const query = repository.createQueryBuilder('vendor').where('vendor.isDeleted = false').andWhere('LOWER(BTRIM(vendor.email)) = :email', {
+      email: normalizedEmail,
+    });
+    if (excludeId) query.andWhere('vendor.id != :excludeId', { excludeId });
+
+    if (await query.getExists()) {
+      throw new ConflictException(`Vendor email '${normalizedEmail}' already exists`);
+    }
+  }
+
+  private uniqueConflict(error: any, vendorCode?: string | null): ConflictException {
+    const detail = String(error?.detail || error?.driverError?.detail || '').toLowerCase();
+    const constraint = String(error?.constraint || error?.driverError?.constraint || '').toLowerCase();
+    if (detail.includes('(email)') || constraint.includes('email')) {
+      return new ConflictException('Vendor email already exists');
+    }
+    if (detail.includes('(vendor_code)') || constraint.includes('vendor_code')) {
+      return new ConflictException(`Vendor code '${vendorCode || 'provided'}' already exists`);
+    }
+    return new ConflictException('Vendor email or code already exists');
+  }
+
+  async list(
+    query: {
+      vendorType?: string;
+      status?: string;
+      search?: string;
+      isDeleted?: boolean;
+    } = {},
+  ): Promise<VendorEntity[]> {
+    const where: Record<string, unknown> = {
+      isDeleted: query.isDeleted ?? false,
+    };
     if (query.vendorType) where.vendorType = query.vendorType;
     if (query.status) where.status = query.status;
     if (query.search?.trim()) {
@@ -43,7 +86,10 @@ export class VendorRepository {
         order: { vendorName: 'ASC', id: 'ASC' },
       });
     }
-    return this.store().find({ where, order: { vendorName: 'ASC', id: 'ASC' } });
+    return this.store().find({
+      where,
+      order: { vendorName: 'ASC', id: 'ASC' },
+    });
   }
 
   async getById(id: string, isDeleted = false): Promise<VendorEntity> {
@@ -54,60 +100,80 @@ export class VendorRepository {
 
   async create(dto: CreateVendorDto, actorId: string): Promise<VendorEntity> {
     this.assertOrganizerContact(dto.vendorType, dto.contactPerson);
-    const entity = this.store().create({
-      vendorName: dto.vendorName.trim(),
-      vendorType: dto.vendorType,
-      vendorCode: optionalText(dto.vendorCode) ?? `VEN-${randomUUID()}`,
-      createdBy: actorId,
-      updatedBy: actorId,
-      contactPerson: optionalText(dto.contactPerson),
-      phone: optionalText(dto.phone),
-      email: optionalText(dto.email)?.toLowerCase(),
-      productCategory: optionalText(dto.productCategory),
-      addressLine1: optionalText(dto.addressLine1),
-      addressLine2: optionalText(dto.addressLine2),
-      city: optionalText(dto.city),
-      state: optionalText(dto.state),
-      zipCode: optionalText(dto.zipCode),
-      country: optionalText(dto.country),
-      status: dto.status || VendorStatus.ACTIVE,
-    });
+    const email = optionalText(dto.email)?.toLowerCase();
+    let vendorCode = optionalText(dto.vendorCode);
     try {
-      return await this.store().save(entity);
+      return await this.merchants.requireDataSource().transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock(724621, 43)');
+        const repository = manager.getRepository(VendorEntity);
+        await this.assertUniqueEmail(email, repository);
+        vendorCode ??= await this.generateNextVendorCode(manager);
+        const entity = repository.create({
+          vendorName: dto.vendorName.trim(),
+          vendorType: dto.vendorType,
+          vendorCode,
+          createdBy: actorId,
+          updatedBy: actorId,
+          contactPerson: optionalText(dto.contactPerson),
+          phone: optionalText(dto.phone),
+          email,
+          productCategory: optionalText(dto.productCategory),
+          addressLine1: optionalText(dto.addressLine1),
+          addressLine2: optionalText(dto.addressLine2),
+          city: optionalText(dto.city),
+          state: optionalText(dto.state),
+          zipCode: optionalText(dto.zipCode),
+          country: optionalText(dto.country),
+          status: dto.status || VendorStatus.ACTIVE,
+        });
+        return repository.save(entity);
+      });
     } catch (error: any) {
       if (error?.code === '23505' || error?.driverError?.code === '23505') {
-        throw new ConflictException(`Vendor code '${dto.vendorCode}' already exists`);
+        throw this.uniqueConflict(error, vendorCode);
       }
       throw error;
     }
   }
 
   async update(id: string, dto: UpdateVendorDto, actorId: string): Promise<VendorEntity> {
-    const existing = await this.getById(id);
-    if (dto.vendorName !== undefined) existing.vendorName = dto.vendorName.trim();
-    if (dto.vendorType !== undefined) existing.vendorType = dto.vendorType;
-    if (dto.vendorCode !== undefined) {
-      const vendorCode = optionalText(dto.vendorCode);
-      if (vendorCode) existing.vendorCode = vendorCode;
-    }
-    if (dto.contactPerson !== undefined) existing.contactPerson = optionalText(dto.contactPerson);
-    if (dto.phone !== undefined) existing.phone = optionalText(dto.phone);
-    if (dto.email !== undefined) existing.email = optionalText(dto.email)?.toLowerCase() ?? null;
-    if (dto.productCategory !== undefined) existing.productCategory = optionalText(dto.productCategory);
-    if (dto.addressLine1 !== undefined) existing.addressLine1 = optionalText(dto.addressLine1);
-    if (dto.addressLine2 !== undefined) existing.addressLine2 = optionalText(dto.addressLine2);
-    if (dto.city !== undefined) existing.city = optionalText(dto.city);
-    if (dto.state !== undefined) existing.state = optionalText(dto.state);
-    if (dto.zipCode !== undefined) existing.zipCode = optionalText(dto.zipCode);
-    if (dto.country !== undefined) existing.country = optionalText(dto.country);
-    if (dto.status !== undefined) existing.status = dto.status;
-    existing.updatedBy = actorId;
-    this.assertOrganizerContact(existing.vendorType, existing.contactPerson);
     try {
-      return await this.store().save(existing);
+      return await this.merchants.requireDataSource().transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock(724621, 43)');
+        const repository = manager.getRepository(VendorEntity);
+        const existing = await repository.findOne({
+          where: { id, isDeleted: false },
+        });
+        if (!existing) throw new NotFoundException(`Vendor '${id}' not found`);
+
+        if (dto.email !== undefined) {
+          const email = optionalText(dto.email)?.toLowerCase();
+          await this.assertUniqueEmail(email, repository, id);
+          existing.email = email ?? null;
+        }
+        if (dto.vendorName !== undefined) existing.vendorName = dto.vendorName.trim();
+        if (dto.vendorType !== undefined) existing.vendorType = dto.vendorType;
+        if (dto.vendorCode !== undefined) {
+          const vendorCode = optionalText(dto.vendorCode);
+          if (vendorCode) existing.vendorCode = vendorCode;
+        }
+        if (dto.contactPerson !== undefined) existing.contactPerson = optionalText(dto.contactPerson);
+        if (dto.phone !== undefined) existing.phone = optionalText(dto.phone);
+        if (dto.productCategory !== undefined) existing.productCategory = optionalText(dto.productCategory);
+        if (dto.addressLine1 !== undefined) existing.addressLine1 = optionalText(dto.addressLine1);
+        if (dto.addressLine2 !== undefined) existing.addressLine2 = optionalText(dto.addressLine2);
+        if (dto.city !== undefined) existing.city = optionalText(dto.city);
+        if (dto.state !== undefined) existing.state = optionalText(dto.state);
+        if (dto.zipCode !== undefined) existing.zipCode = optionalText(dto.zipCode);
+        if (dto.country !== undefined) existing.country = optionalText(dto.country);
+        if (dto.status !== undefined) existing.status = dto.status;
+        existing.updatedBy = actorId;
+        this.assertOrganizerContact(existing.vendorType, existing.contactPerson);
+        return repository.save(existing);
+      });
     } catch (error: any) {
       if (error?.code === '23505' || error?.driverError?.code === '23505') {
-        throw new ConflictException(`Vendor code '${existing.vendorCode}' already exists`);
+        throw this.uniqueConflict(error, dto.vendorCode);
       }
       throw error;
     }
@@ -116,10 +182,7 @@ export class VendorRepository {
   async remove(id: string, actorId: string): Promise<void> {
     await this.getById(id);
     const deletedAt = new Date();
-    await this.store().update(
-      { id, isDeleted: false },
-      { isDeleted: true, deletedAt, updatedAt: deletedAt, updatedBy: actorId },
-    );
+    await this.store().update({ id, isDeleted: false }, { isDeleted: true, deletedAt, updatedAt: deletedAt, updatedBy: actorId });
   }
 
   private async requireMerchantUuid(merchantId: string): Promise<string> {
@@ -128,10 +191,7 @@ export class VendorRepository {
     return uuid;
   }
 
-  async listMerchantVendors(
-    merchantId: string,
-    query: { search?: string; vendorType?: string; status?: string } = {},
-  ): Promise<any[]> {
+  async listMerchantVendors(merchantId: string, query: { search?: string; vendorType?: string; status?: string } = {}): Promise<any[]> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
     const db = this.merchants.requireDataSource();
     const params: unknown[] = [merchantUuid];
@@ -165,10 +225,7 @@ export class VendorRepository {
     return db.query(sql, params);
   }
 
-  async listAllVendorsWithAssignment(
-    merchantId: string,
-    query: { search?: string; vendorType?: string; status?: string } = {},
-  ): Promise<any[]> {
+  async listAllVendorsWithAssignment(merchantId: string, query: { search?: string; vendorType?: string; status?: string } = {}): Promise<any[]> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
     const db = this.merchants.requireDataSource();
     const params: unknown[] = [merchantUuid];
@@ -212,10 +269,7 @@ export class VendorRepository {
     const uniqueIds = [...new Set(vendorIds.map(String))];
     if (!uniqueIds.length) throw new BadRequestException('vendorIds is required');
 
-    const found = await db.query(
-      `SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND is_deleted = false`,
-      [uniqueIds],
-    );
+    const found = await db.query(`SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND is_deleted = false`, [uniqueIds]);
     if (found.length !== uniqueIds.length) {
       throw new NotFoundException('One or more vendors were not found');
     }
