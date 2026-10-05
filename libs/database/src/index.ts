@@ -680,17 +680,9 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
 
   await install('store_types', 'store_type_code', `
     ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" varchar(100);
-    UPDATE public.store_types SET "storeTypeCode" = store_type_code;
-    CREATE OR REPLACE FUNCTION public.sync_store_types_legacy_cols() RETURNS trigger AS $fn$
-    BEGIN
-      NEW.store_type_code := COALESCE(NULLIF(NEW.store_type_code, ''), NULLIF(NEW."storeTypeCode", ''));
-      NEW."storeTypeCode" := COALESCE(NULLIF(NEW."storeTypeCode", ''), NEW.store_type_code);
-      RETURN NEW;
-    END;
-    $fn$ LANGUAGE plpgsql;
-    DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types;
-    CREATE TRIGGER store_types_legacy_cols BEFORE INSERT OR UPDATE ON public.store_types
-      FOR EACH ROW EXECUTE PROCEDURE public.sync_store_types_legacy_cols();
+    UPDATE public.store_types SET "storeTypeCode" = store_type_code WHERE "storeTypeCode" IS NULL;
+    DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types CASCADE;
+    DROP FUNCTION IF EXISTS public.sync_store_types_legacy_cols() CASCADE;
   `);
 
   await install('subscriptions', 'subscription_code', `

@@ -36,6 +36,9 @@ export class StoreTypeRepository {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      await ds.query(`DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types CASCADE`);
+      await ds.query(`DROP FUNCTION IF EXISTS public.sync_store_types_legacy_cols() CASCADE`);
+      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" VARCHAR(100)`);
       await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
       await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS created_by UUID`);
       await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS updated_by UUID`);
