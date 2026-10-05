@@ -1,8 +1,10 @@
 import 'reflect-metadata';
 import '../../../scripts/load-env';
 import { NestFactory } from '@nestjs/core';
+import { HttpAdapterHost } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
+import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { join } from 'node:path';
 import { TracingInterceptor } from '@pinaka-delivery-hub/observability';
 import { AppModule } from './app.module';
@@ -32,6 +34,7 @@ async function bootstrap() {
   });
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+  app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost)));
   app.useGlobalInterceptors(new TracingInterceptor());
   const port = process.env.MERCHANT_SERVICE_PORT || 3003;
   await app.listen(port);

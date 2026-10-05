@@ -1,6 +1,4 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
-import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { DynamicQueryModule } from './modules/dynamic-query/dynamic-query.module';
 import { EmployeeModule } from './modules/employee/employee.module';
 import { MasterModule } from './modules/master/master.module';
@@ -39,12 +37,6 @@ import { VendorModule } from './modules/vendor/vendor.module';
     DynamicQueryModule,
     PosModule,
     StorePosConfigurationModule,
-  ],
-  providers: [
-    {
-      provide: APP_FILTER,
-      useClass: AllExceptionsFilter,
-    },
   ],
 })
 export class AppModule {}
