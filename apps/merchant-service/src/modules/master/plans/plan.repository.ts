@@ -39,7 +39,7 @@ export class PlanRepository {
     if (operation === 'delete' && !userId) throw new UnauthorizedException('Authenticated user is required');
     let sql: string;
     let values: unknown[] = [];
-    if (operation === 'list') sql = `SELECT ${projection} FROM public.plans WHERE is_deleted = false ORDER BY name, id`;
+    if (operation === 'list') sql = `SELECT ${projection} FROM public.plans ORDER BY name, id`;
     else if (operation === 'get') {
       // GET by ID includes deleted plans; list continues to hide them.
       sql = `SELECT ${projection} FROM public.plans WHERE id = $1`;
@@ -54,11 +54,24 @@ export class PlanRepository {
       values = [id, ...entries.map(([, value]) => value)];
       sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
     } else {
-      sql = `UPDATE public.plans SET is_deleted = true, updated_by = $2, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
+      sql = `UPDATE public.plans SET is_deleted = true, status = 'INACTIVE', updated_by = $2, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
       values = [id, userId];
     }
     try {
-      const result = await dataSource.query(sql, values);
+      const result = operation === 'create'
+        ? await dataSource.transaction(async manager => {
+            // Serialize creates for the same normalized name to avoid concurrent duplicates.
+            await manager.query('SELECT pg_advisory_xact_lock(724621, hashtext(lower(btrim($1))))', [fields.name]);
+            const duplicates = await manager.query(
+              'SELECT id FROM public.plans WHERE lower(btrim(name)) = lower(btrim($1)) LIMIT 1',
+              [fields.name],
+            );
+            if (duplicates.length) {
+              throw new ConflictException(`Plan name '${String(fields.name).trim()}' already exists`);
+            }
+            return manager.query(sql, values);
+          })
+        : await dataSource.query(sql, values);
       const rows = operation === 'update' || operation === 'delete' ? result[0] : result;
       if (operation === 'list') return rows;
       if (!rows.length) throw new NotFoundException('Plan not found');

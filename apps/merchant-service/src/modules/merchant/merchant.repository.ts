@@ -2355,8 +2355,7 @@ export class MerchantRepository implements OnModuleInit {
     const feature = await this.getFeatureByIdOrKey(featureId);
     if (!feature) throw new NotFoundException(`Feature '${featureId}' not found`);
     const query = this.dataSource.getRepository(FeaturePermissionEntity).createQueryBuilder('permission')
-      .where('permission.featureId = :featureId', { featureId: feature.id })
-      .andWhere('permission.isDeleted = false');
+      .where('permission.featureId = :featureId', { featureId: feature.id });
     if (filters.status) query.andWhere('permission.status = :status', { status: filters.status.toUpperCase() });
     if (filters.search?.trim()) {
       query.andWhere('(permission.permissionCode ILIKE :search OR permission.name ILIKE :search OR permission.description ILIKE :search)', { search: `%${filters.search.trim()}%` });

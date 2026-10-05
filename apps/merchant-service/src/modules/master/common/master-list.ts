@@ -21,7 +21,7 @@ export function filterMasterList<T extends object>(items: T[], query: Record<str
     return (!status || status === 'ALL STATUSES' || row.status === status)
       && (!query.category || query.category === 'All Categories' || row.category === query.category)
       && (!billingModel || row.billingModel === billingModel)
-      && (!search || ['name', 'description', 'category', 'featureKey', 'storeTypeCode', 'roleCode', 'planCode']
+      && (!search || ['name', 'description', 'category', 'featureKey', 'feature_code', 'storeTypeCode', 'roleCode', 'planCode']
         .some((key) => String(row[key] ?? '').toLowerCase().includes(search)));
   });
 }

@@ -4,7 +4,6 @@ import {
   ConflictException,
   Inject,
   Injectable,
-  NotFoundException,
 } from '@nestjs/common';
 import { StoreTypeStatus } from '../../../entities/store-type.entity';
 import { MerchantRepository } from '../../merchant/merchant.repository';
@@ -55,8 +54,9 @@ export class StoreTypeRepository {
       const colRes = await ds.query(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_types'"
       );
-      this.cachedCols = (colRes || []).map((r: any) => String(r.column_name));
-      return this.cachedCols;
+      const columns = (colRes || []).map((r: any) => String(r.column_name));
+      this.cachedCols = columns;
+      return columns;
     } catch {
       return ['id', 'store_type_code', 'name', 'description', 'status', 'created_at', 'updated_at'];
     }
@@ -85,6 +85,8 @@ export class StoreTypeRepository {
       `${this.quote(createdDbCol)}::text AS "created_at"`,
       `${this.quote(updatedDbCol)}::text AS "updatedAt"`,
       `${this.quote(updatedDbCol)}::text AS "updated_at"`,
+      ...(hasCreatedBy ? ['created_by AS "createdBy"', 'created_by'] : []),
+      ...(hasUpdatedBy ? ['updated_by AS "updatedBy"', 'updated_by'] : []),
     ].join(', ');
 
     return { projection, codeDbCol, createdDbCol, updatedDbCol, hasIsDeleted, hasCreatedBy, hasUpdatedBy };
@@ -122,13 +124,13 @@ export class StoreTypeRepository {
     const cols = await this.ensureTable();
     const { codeDbCol } = this.getProjection(cols);
     const defaults = [
-      { code: 'ST-001', name: 'Retail Store', description: 'General retail and merchandise sales' },
-      { code: 'ST-002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
-      { code: 'ST-003', name: 'Grocery & Supermarket', description: 'Groceries, fresh produce, and essentials' },
-      { code: 'ST-004', name: 'Convenience Store', description: 'Quick-stop retail goods and packaged foods' },
-      { code: 'ST-005', name: 'Fashion & Apparel', description: 'Clothing, footwear, and accessories' },
-      { code: 'ST-006', name: 'Electronics & Gadgets', description: 'Consumer electronics and accessories' },
-      { code: 'ST-007', name: 'Pharmacy & Healthcare', description: 'Medicines, health, and personal care' },
+      { code: 'STT_00001', name: 'Retail Store', description: 'General retail and merchandise sales' },
+      { code: 'STT_00002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
+      { code: 'STT_00003', name: 'Grocery & Supermarket', description: 'Groceries, fresh produce, and essentials' },
+      { code: 'STT_00004', name: 'Convenience Store', description: 'Quick-stop retail goods and packaged foods' },
+      { code: 'STT_00005', name: 'Fashion & Apparel', description: 'Clothing, footwear, and accessories' },
+      { code: 'STT_00006', name: 'Electronics & Gadgets', description: 'Consumer electronics and accessories' },
+      { code: 'STT_00007', name: 'Pharmacy & Healthcare', description: 'Medicines, health, and personal care' },
     ];
     for (const d of defaults) {
       try {
@@ -148,24 +150,12 @@ export class StoreTypeRepository {
     const ds = this.merchants.requireDataSource();
     try {
       const rows = await ds.query(
-        `SELECT last_value, is_called FROM public.store_type_code_seq`,
+        `SELECT COUNT(*)::int + 1 AS next_value FROM public.store_types`,
       );
-      const sequence = rows[0] as
-        | { last_value?: string | number; is_called?: boolean }
-        | undefined;
-      const lastValue = Number(sequence?.last_value || 1);
-      const nextValue = sequence?.is_called ? lastValue + 1 : lastValue;
+      const nextValue = Number(rows[0]?.next_value || 1);
       return `STT_${String(nextValue).padStart(5, '0')}`;
     } catch {
-      try {
-        const rows = await ds.query(
-          `SELECT COUNT(*)::int AS count FROM public.store_types`,
-        );
-        const count = Number(rows[0]?.count || 0);
-        return `ST-${String(count + 1).padStart(3, '0')}`;
-      } catch {
-        return `ST-001`;
-      }
+      return `STT_00001`;
     }
   }
 
@@ -335,38 +325,27 @@ export class StoreTypeRepository {
     }
   }
 
-  async softDelete(idOrCode: string, loginUserId?: string | null): Promise<boolean> {
+  async deactivate(idOrCode: string, loginUserId?: string | null): Promise<any | null> {
     const existing = await this.findByIdOrCode(idOrCode);
-    if (!existing) return false;
+    if (!existing) return null;
 
     const ds = this.merchants.requireDataSource();
     const cols = await this.ensureTable();
-    const { updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
-
-    if (hasIsDeleted) {
-      const updates = [`is_deleted = true`, `${this.quote(updatedDbCol)} = clock_timestamp()`];
-      const vals: any[] = [existing.id];
-      if (hasUpdatedBy && loginUserId) {
-        updates.push(`updated_by = $2`);
-        vals.push(loginUserId);
-      }
-      await ds.query(`UPDATE public.store_types SET ${updates.join(', ')} WHERE id = $1`, vals);
-      return true;
+    const { projection, updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
+    const updates = [
+      `status = 'INACTIVE'`,
+      ...(hasIsDeleted ? ['is_deleted = false'] : []),
+      `${this.quote(updatedDbCol)} = clock_timestamp()`,
+    ];
+    const values: unknown[] = [existing.id];
+    if (hasUpdatedBy && loginUserId) {
+      values.push(loginUserId);
+      updates.push(`updated_by = $${values.length}`);
     }
-
-    try {
-      await ds.query(`DELETE FROM public.store_types WHERE id = $1`, [existing.id]);
-      return true;
-    } catch (error: any) {
-      const errCode = error.driverError?.code || error.code;
-      if (errCode === '23503') {
-        await ds.query(
-          `UPDATE public.store_types SET status = 'INACTIVE', ${this.quote(updatedDbCol)} = clock_timestamp() WHERE id = $1`,
-          [existing.id],
-        );
-        return true;
-      }
-      throw error;
-    }
+    const rows = await ds.query(
+      `UPDATE public.store_types SET ${updates.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+      values,
+    );
+    return rows[0] || null;
   }
 }
