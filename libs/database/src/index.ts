@@ -96,6 +96,15 @@ async function tableExists(dataSource: DataSource, table: string): Promise<boole
   return rows.length > 0;
 }
 
+async function databaseHasTables(dataSource: DataSource): Promise<boolean> {
+  const rows = await dataSource.query(
+    `SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      LIMIT 1`,
+  );
+  return rows.length > 0;
+}
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -967,7 +976,12 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      if (options.synchronize) {
+      // synchronize:false from the caller always wins, including when
+      // TYPEORM_SYNCHRONIZE=true. An existing database is never synchronized:
+      // TypeORM drops and re-adds columns, and PostgreSQL keeps the dropped
+      // ones until ALTER TABLE dies with "tables can have at most 1600 columns".
+      const synchronizeExisting = settings.synchronize !== false && options.synchronize === true;
+      if (synchronizeExisting && !(await databaseHasTables(dataSource))) {
         // Repositories initialize concurrently, including across service processes.
         // Keep a dedicated connection so the session lock covers every schema query.
         const schemaLock = dataSource.createQueryRunner();
@@ -994,6 +1008,8 @@ export async function connectPostgres(
         } finally {
           await schemaLock.release();
         }
+      } else if (options.synchronize) {
+        console.log(`🐘 [${serviceName}] Skipping schema synchronize. Existing tables are left unchanged so PostgreSQL does not hit the 1600-column limit.`);
       }
       console.log(`🐘 [${serviceName}] Connected to PostgreSQL ${describeTarget(options)}`);
       return dataSource;
