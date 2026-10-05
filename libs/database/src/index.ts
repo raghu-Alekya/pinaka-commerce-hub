@@ -96,6 +96,15 @@ async function tableExists(dataSource: DataSource, table: string): Promise<boole
   return rows.length > 0;
 }
 
+async function databaseHasTables(dataSource: DataSource): Promise<boolean> {
+  const rows = await dataSource.query(
+    `SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      LIMIT 1`,
+  );
+  return rows.length > 0;
+}
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
