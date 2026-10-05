@@ -4,7 +4,6 @@ import {
   ConflictException,
   Inject,
   Injectable,
-  NotFoundException,
 } from '@nestjs/common';
 import { StoreTypeStatus } from '../../../entities/store-type.entity';
 import { MerchantRepository } from '../../merchant/merchant.repository';
@@ -24,33 +23,40 @@ export class StoreTypeRepository {
       return this.cachedCols;
     }
     const ds = this.merchants.requireDataSource();
-    try {
-      await ds.query(`
-        CREATE TABLE IF NOT EXISTS public.store_types (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          store_type_code VARCHAR(50) NOT NULL UNIQUE,
-          name VARCHAR(100) NOT NULL,
-          description TEXT NOT NULL DEFAULT '',
-          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      await ds.query(`DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types CASCADE`);
-      await ds.query(`DROP FUNCTION IF EXISTS public.sync_store_types_legacy_cols() CASCADE`);
-      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" VARCHAR(100)`);
-      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
-      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS created_by UUID`);
-      await ds.query(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS updated_by UUID`);
-    } catch {
-      // ignore
-    }
+    const safeExec = async (sql: string) => {
+      try {
+        await ds.query(sql);
+      } catch {
+        // ignore
+      }
+    };
+
+    await safeExec(`
+      CREATE TABLE IF NOT EXISTS public.store_types (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_type_code VARCHAR(50) NOT NULL UNIQUE,
+        name VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await safeExec(`DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types CASCADE`);
+    await safeExec(`DROP TRIGGER IF EXISTS sync_store_types_legacy_cols ON public.store_types CASCADE`);
+    await safeExec(`DROP FUNCTION IF EXISTS public.sync_store_types_legacy_cols() CASCADE`);
+    await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" VARCHAR(100)`);
+    await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
+    await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS created_by UUID`);
+    await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS updated_by UUID`);
+
     try {
       const colRes = await ds.query(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_types'"
       );
-      this.cachedCols = (colRes || []).map((r: any) => String(r.column_name).toLowerCase());
-      return this.cachedCols;
+      const columns = (colRes || []).map((r: any) => String(r.column_name));
+      this.cachedCols = columns;
+      return columns;
     } catch {
       return ['id', 'store_type_code', 'name', 'description', 'status', 'created_at', 'updated_at'];
     }
@@ -61,12 +67,12 @@ export class StoreTypeRepository {
   }
 
   private getProjection(cols: string[]): { projection: string; codeDbCol: string; createdDbCol: string; updatedDbCol: string; hasIsDeleted: boolean; hasCreatedBy: boolean; hasUpdatedBy: boolean } {
-    const codeDbCol = cols.find(c => ['store_type_code', 'storetypecode', 'code'].includes(c)) || 'store_type_code';
-    const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c)) || 'created_at';
-    const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c)) || 'updated_at';
-    const hasIsDeleted = cols.includes('is_deleted');
-    const hasCreatedBy = cols.includes('created_by');
-    const hasUpdatedBy = cols.includes('updated_by');
+    const codeDbCol = cols.find(c => ['store_type_code', 'storetypecode', 'code'].includes(c.toLowerCase())) || 'store_type_code';
+    const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c.toLowerCase())) || 'created_at';
+    const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c.toLowerCase())) || 'updated_at';
+    const hasIsDeleted = cols.some(c => c.toLowerCase() === 'is_deleted');
+    const hasCreatedBy = cols.some(c => c.toLowerCase() === 'created_by');
+    const hasUpdatedBy = cols.some(c => c.toLowerCase() === 'updated_by');
 
     const projection = [
       'id',
@@ -79,6 +85,8 @@ export class StoreTypeRepository {
       `${this.quote(createdDbCol)}::text AS "created_at"`,
       `${this.quote(updatedDbCol)}::text AS "updatedAt"`,
       `${this.quote(updatedDbCol)}::text AS "updated_at"`,
+      ...(hasCreatedBy ? ['created_by AS "createdBy"', 'created_by'] : []),
+      ...(hasUpdatedBy ? ['updated_by AS "updatedBy"', 'updated_by'] : []),
     ].join(', ');
 
     return { projection, codeDbCol, createdDbCol, updatedDbCol, hasIsDeleted, hasCreatedBy, hasUpdatedBy };
@@ -116,13 +124,13 @@ export class StoreTypeRepository {
     const cols = await this.ensureTable();
     const { codeDbCol } = this.getProjection(cols);
     const defaults = [
-      { code: 'ST-001', name: 'Retail Store', description: 'General retail and merchandise sales' },
-      { code: 'ST-002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
-      { code: 'ST-003', name: 'Grocery & Supermarket', description: 'Groceries, fresh produce, and essentials' },
-      { code: 'ST-004', name: 'Convenience Store', description: 'Quick-stop retail goods and packaged foods' },
-      { code: 'ST-005', name: 'Fashion & Apparel', description: 'Clothing, footwear, and accessories' },
-      { code: 'ST-006', name: 'Electronics & Gadgets', description: 'Consumer electronics and accessories' },
-      { code: 'ST-007', name: 'Pharmacy & Healthcare', description: 'Medicines, health, and personal care' },
+      { code: 'STT_00001', name: 'Retail Store', description: 'General retail and merchandise sales' },
+      { code: 'STT_00002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
+      { code: 'STT_00003', name: 'Grocery & Supermarket', description: 'Groceries, fresh produce, and essentials' },
+      { code: 'STT_00004', name: 'Convenience Store', description: 'Quick-stop retail goods and packaged foods' },
+      { code: 'STT_00005', name: 'Fashion & Apparel', description: 'Clothing, footwear, and accessories' },
+      { code: 'STT_00006', name: 'Electronics & Gadgets', description: 'Consumer electronics and accessories' },
+      { code: 'STT_00007', name: 'Pharmacy & Healthcare', description: 'Medicines, health, and personal care' },
     ];
     for (const d of defaults) {
       try {
@@ -142,24 +150,12 @@ export class StoreTypeRepository {
     const ds = this.merchants.requireDataSource();
     try {
       const rows = await ds.query(
-        `SELECT last_value, is_called FROM public.store_type_code_seq`,
+        `SELECT COUNT(*)::int + 1 AS next_value FROM public.store_types`,
       );
-      const sequence = rows[0] as
-        | { last_value?: string | number; is_called?: boolean }
-        | undefined;
-      const lastValue = Number(sequence?.last_value || 1);
-      const nextValue = sequence?.is_called ? lastValue + 1 : lastValue;
+      const nextValue = Number(rows[0]?.next_value || 1);
       return `STT_${String(nextValue).padStart(5, '0')}`;
     } catch {
-      try {
-        const rows = await ds.query(
-          `SELECT COUNT(*)::int AS count FROM public.store_types`,
-        );
-        const count = Number(rows[0]?.count || 0);
-        return `ST-${String(count + 1).padStart(3, '0')}`;
-      } catch {
-        return `ST-001`;
-      }
+      return `STT_00001`;
     }
   }
 
@@ -241,9 +237,9 @@ export class StoreTypeRepository {
     if (hasCreatedBy && loginUserId) insertData['created_by'] = loginUserId;
     if (hasUpdatedBy && loginUserId) insertData['updated_by'] = loginUserId;
 
-    if (cols.includes('storetypecode') && cols.includes('store_type_code')) {
-      insertData['storetypecode'] = code;
-      insertData['store_type_code'] = code;
+    const alternateCodeCol = cols.find(c => c !== codeDbCol && ['store_type_code', 'storetypecode', 'code'].includes(c.toLowerCase()));
+    if (alternateCodeCol) {
+      insertData[alternateCodeCol] = code;
     }
 
     const insertKeys = Object.keys(insertData);
@@ -257,14 +253,12 @@ export class StoreTypeRepository {
       );
       return rows[0];
     } catch (error: any) {
+      console.error('[StoreTypeRepository.create Error]:', error);
       const errCode = error.driverError?.code || error.code;
       if (errCode === '23505') {
         throw new ConflictException(`Store type with code '${code}' or name '${name}' already exists`);
       }
-      if (['23502', '23514', '22P02', '22001', '42703'].includes(errCode)) {
-        throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message));
-      }
-      throw error;
+      throw new BadRequestException('Store type save failed: ' + (error.driverError?.message || error.message || String(error)));
     }
   }
 
@@ -322,14 +316,12 @@ export class StoreTypeRepository {
       );
       return rows[0] || null;
     } catch (error: any) {
+      console.error('[StoreTypeRepository.update Error]:', error);
       const errCode = error.driverError?.code || error.code;
       if (errCode === '23505') {
         throw new ConflictException(`Store type name already exists`);
       }
-      if (['23502', '23514', '22P02', '22001', '42703'].includes(errCode)) {
-        throw new BadRequestException('Store type update failed: ' + (error.driverError?.message || error.message));
-      }
-      throw error;
+      throw new BadRequestException('Store type update failed: ' + (error.driverError?.message || error.message || String(error)));
     }
   }
 
