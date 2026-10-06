@@ -15,6 +15,7 @@ export class SubscriptionController {
       id: row.id,
       subscriptionCode: row.subscriptionCode || row.subscription_code || row.id,
       merchantId: row.merchantId || row.merchant_id,
+      merchantName: row.merchantName || row.merchant_name || row.merchant?.businessDisplayName || null,
       status: row.status,
       billingCycle: row.billingCycle || row.billing_cycle,
       price: Number(row.price || 0),
