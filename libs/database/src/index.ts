@@ -801,17 +801,22 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       "productCategory" = product_category,
       "deletedAt" = CASE WHEN is_deleted THEN COALESCE("deletedAt", updated_at, now()) ELSE NULL END;
     CREATE OR REPLACE FUNCTION public.sync_vendors_legacy_cols() RETURNS trigger AS $fn$
+    DECLARE
+      legacy jsonb;
     BEGIN
-      NEW.vendor_code := COALESCE(NULLIF(NEW.vendor_code, ''), NULLIF(NEW."vendorCode", ''));
-      NEW."vendorCode" := COALESCE(NULLIF(NEW."vendorCode", ''), NEW.vendor_code);
-      NEW.vendor_name := COALESCE(NULLIF(NEW.vendor_name, ''), NULLIF(NEW."vendorName", ''));
-      NEW."vendorName" := COALESCE(NULLIF(NEW."vendorName", ''), NEW.vendor_name);
-      NEW."vendorType" := COALESCE(NEW.vendor_type::text, NEW."vendorType");
-      NEW.contact_person := COALESCE(NEW.contact_person, NEW."contactPerson");
-      NEW."contactPerson" := COALESCE(NEW."contactPerson", NEW.contact_person);
-      NEW.product_category := COALESCE(NEW.product_category, NEW."productCategory");
-      NEW."productCategory" := COALESCE(NEW."productCategory", NEW.product_category);
-      NEW."deletedAt" := CASE WHEN NEW.is_deleted THEN COALESCE(NEW."deletedAt", now()) ELSE NULL END;
+      legacy := to_jsonb(NEW);
+      NEW.vendor_code := COALESCE(NULLIF(NEW.vendor_code, ''), NULLIF(legacy->>'vendorCode', ''));
+      NEW.vendor_name := COALESCE(NULLIF(NEW.vendor_name, ''), NULLIF(legacy->>'vendorName', ''));
+      NEW.contact_person := COALESCE(NEW.contact_person, legacy->>'contactPerson');
+      NEW.product_category := COALESCE(NEW.product_category, legacy->>'productCategory');
+      NEW := jsonb_populate_record(NEW, jsonb_build_object(
+        'vendorCode', COALESCE(NULLIF(legacy->>'vendorCode', ''), NEW.vendor_code),
+        'vendorName', COALESCE(NULLIF(legacy->>'vendorName', ''), NEW.vendor_name),
+        'vendorType', COALESCE(NEW.vendor_type::text, legacy->>'vendorType'),
+        'contactPerson', COALESCE(legacy->>'contactPerson', NEW.contact_person),
+        'productCategory', COALESCE(legacy->>'productCategory', NEW.product_category),
+        'deletedAt', CASE WHEN NEW.is_deleted THEN COALESCE(legacy->>'deletedAt', now()::text) ELSE NULL END
+      ));
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
@@ -821,6 +826,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('tendors', 'tendor_code', `
+    DROP TRIGGER IF EXISTS tendors_legacy_cols ON public.tendors;
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "deletedAt" timestamptz;
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorName" varchar(150);
     ALTER TABLE public.tendors ADD COLUMN IF NOT EXISTS "tendorCode" varchar(50);
@@ -1000,14 +1006,37 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      // Never TypeORM-synchronize here. Repeated sync drops and re-adds columns,
-      // and PostgreSQL keeps every dropped column until startup dies with
-      // "tables can have at most 1600 columns".
-      if (await databaseHasTables(dataSource)) {
-        await compactDroppedColumns(dataSource);
-      }
       if (options.synchronize || settings.legacyQueryColumns) {
-        console.log(`🐘 [${serviceName}] Schema synchronize is disabled. Existing tables are not altered.`);
+        // Repositories initialize concurrently, including across service processes.
+        // Keep a dedicated connection so the session lock covers every schema query.
+        const schemaLock = dataSource.createQueryRunner();
+        await schemaLock.connect();
+        try {
+          await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
+          try {
+            if (options.synchronize) {
+              await dropEntityForeignKeys(dataSource);
+              await alignLegacyCamelCaseColumns(dataSource);
+              await backfillRequiredColumnsBeforeSync(dataSource);
+              await dedupeUniqueColumns(dataSource);
+              await clearOrphanForeignKeys(dataSource);
+              await backfillOptionalUniqueColumns(dataSource);
+              await dropIndexesOutsideEntities(dataSource);
+              await dataSource.synchronize();
+              if (await tableExists(dataSource, 'stores')) {
+                await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
+                await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
+              }
+            }
+            if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
+          } finally {
+            await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
+          }
+        } finally {
+          await schemaLock.release();
+        }
+      } else if (settings.legacyQueryColumns) {
+        await ensureLegacyQueryColumns(dataSource);
       }
       console.log(`🐘 [${serviceName}] Connected to PostgreSQL ${describeTarget(options)}`);
       return dataSource;
