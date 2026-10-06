@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, IsUUID, ValidateNested } from 'class-validator';
+import { Allow, IsString, IsNotEmpty, IsOptional, IsEnum, IsEmail, MaxLength, MinLength, IsDateString, IsBoolean, Matches, IsArray, IsUUID, ValidateNested } from 'class-validator';
 import { AuditInputDto } from '../../audit.dto';
 import { EmployeeStatus } from '../../entities/employee.entity';
 
@@ -28,7 +28,7 @@ export class CreateEmployeeDto extends AuditInputDto {
   @Type(() => EmployeeStoreAssignmentDto)
   storeAssignments?: EmployeeStoreAssignmentDto[];
 
-  @IsUUID()
+  @Allow()
   merchantId!: string;
 
   @IsOptional()
@@ -40,9 +40,7 @@ export class CreateEmployeeDto extends AuditInputDto {
   @MaxLength(50)
   employeeCode?: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
+  @Allow()
   firstName!: string;
 
   @IsString()
@@ -87,7 +85,7 @@ export class CreateEmployeeDto extends AuditInputDto {
   @IsString() @IsOptional() @MaxLength(50) country?: string;
   @IsOptional() @IsString() @MaxLength(30) username?: string;
   @IsString() @IsOptional() @Matches(/^\d{6}$/) loginPin?: string;
-  @IsString() @MinLength(8) @MaxLength(128) temporaryPassword!: string;
+  @Allow() temporaryPassword!: string;
   @IsBoolean() @IsOptional() sendCredentials?: boolean;
 
   @IsEnum(EmployeeStatus)
