@@ -252,6 +252,8 @@ export class MerchantRepository implements OnModuleInit {
           'status',
           `${quote(keyDbCol)} AS "feature_code"`,
           `${quote(typeDbCol)} AS "feature_type"`,
+          `${quote(createdDbCol)} AS "created_at"`,
+          `${quote(updatedDbCol)} AS "updated_at"`,
           `${createdByDbCol ? quote(createdByDbCol) : 'NULL::uuid'} AS "created_by"`,
           `${updatedByDbCol ? quote(updatedByDbCol) : 'NULL::uuid'} AS "updated_by"`,
         ].join(', ');
