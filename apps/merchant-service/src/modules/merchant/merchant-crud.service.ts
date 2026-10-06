@@ -36,6 +36,42 @@ export function withPlanLicenseCounts(row: Input, plan?: Input | null): Input {
 export class MerchantCrudService {
   constructor(private readonly db: DataSource) {}
 
+  private presentSubscription(row: Input): Input {
+    const plan = row.plan_details
+      ? {
+          id: row.plan_details.id,
+          planCode: row.plan_details.planCode,
+          name: row.plan_details.name,
+          description: row.plan_details.description,
+          basePrice: Number(row.plan_details.basePrice),
+          currency: row.plan_details.currency,
+          billingCycle: row.plan_details.billingCycle,
+          storeTypeId: row.plan_details.storeTypeId,
+          includedStores: Number(row.plan_details.includedStores || 0),
+          includedTerminals: Number(row.plan_details.includedTerminals || 0),
+          includedEmployees: Number(row.plan_details.includedEmployees || 0),
+          includedFeatures: row.plan_details.includedFeatures || [],
+          trialPeriod: Number(row.plan_details.trialPeriod || 0),
+        }
+      : null;
+
+    return {
+      id: row.id,
+      subscriptionCode: row.subscription_code ?? row.subscriptionCode ?? row.id,
+      merchantId: row.merchant_code ?? row.merchant_id ?? row.merchantId ?? null,
+      merchantName: row.merchant_name ?? null,
+      status: row.status,
+      billingCycle: row.billing_cycle ?? row.billingCycle ?? null,
+      price: row.price == null ? null : Number(row.price),
+      autoRenew: row.auto_renew ?? row.autoRenew ?? false,
+      startDate: row.start_date ?? row.startDate ?? null,
+      renewalDate: row.renewal_date ?? row.renewalDate ?? null,
+      trialEndDate: row.trial_end_date ?? row.trialEndDate ?? null,
+      plan,
+      storeType: row.plan_store_type || null,
+    };
+  }
+
   private validate(input: Input, allowed: string[]) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide an object');
     const unknown = Object.keys(input).filter(key => !allowed.includes(key));
@@ -136,13 +172,13 @@ export class MerchantCrudService {
   }
 
   private async subscriptionRow(manager: Pick<EntityManager,'query'>, id: string) {
-    const [row] = await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",
-      to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE id=$1`,[id]);
+    const [row] = await manager.query(`SELECT *,to_char(start_date,'YYYY-MM-DD') AS start_date,
+      to_char(renewal_date,'YYYY-MM-DD') AS renewal_date FROM public.subscriptions WHERE id=$1`,[id]);
     return row;
   }
 
   private subscriptionSnapshot(sub: Input): Input {
-    return {planId:sub.planId,billingCycle:sub.billingCycle,startDate:sub.startDate,renewalDate:sub.renewalDate,agreementPrice:Number(sub.price)};
+    return {planId:sub.plan_id,billingCycle:sub.billing_cycle,startDate:sub.start_date,renewalDate:sub.renewal_date,agreementPrice:Number(sub.price)};
   }
 
   private async saveMerchantRecord(manager: EntityManager, root: string, current: Input, changes: Input, version: boolean) {
@@ -172,12 +208,14 @@ export class MerchantCrudService {
 
   private async writeSubscription(manager: EntityManager, code: string, input: Input, current?: Input, forceNew=false) {
     const merged = {...current,...input};
-    this.required(merged,['planId']);
-    const planChanged = !current || current.planId !== merged.planId;
-    const [plan] = await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[merged.planId]);
+    const planId = merged.planId ?? merged.plan_id;
+    this.required({planId},['planId']);
+    const currentPlanId = current?.plan_id ?? current?.planId;
+    const planChanged = !current || currentPlanId !== planId;
+    const [plan] = await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[planId]);
     if (!plan || ((planChanged || forceNew) && plan.status !== 'ACTIVE')) throw new BadRequestException('Select an active planId');
-    if (planChanged && current?.planId) {
-      const currentType = await this.storeTypeName(manager, (await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[current.planId]))[0] || {});
+    if (planChanged && currentPlanId) {
+      const currentType = await this.storeTypeName(manager, (await manager.query(`SELECT * FROM public.plans WHERE id=$1`,[currentPlanId]))[0] || {});
       const nextType = await this.storeTypeName(manager, plan);
       const currentKey = String(currentType || '').trim().toUpperCase();
       const nextKey = String(nextType || '').trim().toUpperCase();
@@ -185,42 +223,36 @@ export class MerchantCrudService {
         throw new BadRequestException(`Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`);
       }
     }
-    const start = merged.startDate || new Date().toISOString().slice(0,10);
-    const cycle = merged.billingCycle || plan.billingCycle || 'MONTHLY';
+    const start = merged.startDate || merged.start_date || new Date().toISOString().slice(0,10);
+    const cycle = merged.billingCycle || merged.billing_cycle || plan.billing_cycle || 'MONTHLY';
     const date = new Date(`${start}T00:00:00Z`);
     const months = cycle === 'ANNUAL' ? 12 : cycle === 'QUARTERLY' ? 3 : 1;
     const end = new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+months,1));
     end.setUTCDate(Math.min(date.getUTCDate(),new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate()));
-    const renewal = merged.renewalDate || end.toISOString().slice(0,10);
+    const renewal = merged.renewalDate || merged.renewal_date || end.toISOString().slice(0,10);
     if (renewal <= start) throw new BadRequestException('renewalDate must be after startDate');
-    const planCode = plan.planCode || plan.plan_code || 'PRO';
-    const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
-    const basePrice = plan.basePrice ?? plan.base_price ?? 0;
-    const features = plan.included_features || plan.includedFeatures || plan.entitlements || [];
-    const includedStores = licenseCount(plan.included_stores ?? plan.includedStores);
-    const includedTerminals = licenseCount(plan.included_terminals ?? plan.includedTerminals);
-    const fields = {planId:plan.id,planCode,planName,storeTypeName:await this.storeTypeName(manager, plan),
-      billingCycle:cycle,startDate:start,renewalDate:renewal,price:merged.price ?? Number(basePrice),
-      currency:planChanged ? (plan.currency || 'USD') : current?.currency || plan.currency || 'USD',
-      entitlements:JSON.stringify(planChanged ? features : current?.entitlements || features),
-      maxStoresAllowed:planChanged ? includedStores : licenseCount(current?.maxStoresAllowed ?? includedStores),
-      licensedStoreCount:planChanged ? includedStores : licenseCount(current?.licensedStoreCount ?? current?.maxStoresAllowed ?? includedStores),
-      licensedDeviceCount:planChanged ? includedTerminals : licenseCount(current?.licensedDeviceCount ?? includedTerminals),
-      status:input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE')};
+    const basePrice = plan.base_price ?? 0;
+    const fields = {
+      plan_id: plan.id,
+      billing_cycle: cycle,
+      start_date: start,
+      renewal_date: renewal,
+      price: merged.price ?? Number(basePrice),
+      auto_renew: input.autoRenew ?? current?.auto_renew ?? true,
+      status: input.status ?? (forceNew ? 'ACTIVE' : current?.status || 'ACTIVE'),
+      updated_at: new Date(),
+    };
     const isNew = !current || forceNew;
-    if (fields.status === 'ACTIVE' && isNew) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',"updatedAt"=clock_timestamp()
-      WHERE "merchantId"=$1 AND status='ACTIVE'`,[code]);
+    if (fields.status === 'ACTIVE' && isNew) await manager.query(`UPDATE public.subscriptions SET status='INACTIVE',updated_at=clock_timestamp()
+      WHERE merchant_id=$1 AND status='ACTIVE'`,[code]);
     const id = isNew ? `SUB-${randomUUID()}` : current!.id;
-    const columns = new Set((await manager.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
-    const keys = Object.keys(fields).filter(key => columns.has(key) && (fields as Record<string, unknown>)[key] != null);
+    const keys = Object.keys(fields).filter(key => (fields as Record<string, unknown>)[key] != null);
     const values = keys.map(key => (fields as Record<string, unknown>)[key]);
     if (isNew) {
-      if (columns.has('createdAt')) { keys.push('createdAt'); values.push(new Date()); }
-      if (columns.has('created_at')) { keys.push('created_at'); values.push(new Date()); }
-      await manager.query(`INSERT INTO public.subscriptions (id,"merchantId","subscriptionCode",${keys.map(quote).join(',')})
-        VALUES ($1,$2,$1,${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
+      await manager.query(`INSERT INTO public.subscriptions (id,merchant_id,subscription_code,created_at,${keys.map(quote).join(',')})
+        VALUES ($1,$2,$1,clock_timestamp(),${keys.map((_,i)=>`$${i+3}`).join(',')})`,[id,code,...values]);
     }
-    else await manager.query(`UPDATE public.subscriptions SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=now() WHERE id=$1`,[id,...values]);
+    else await manager.query(`UPDATE public.subscriptions SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')} WHERE id=$1`,[id,...values]);
     return id;
   }
 
@@ -240,7 +272,7 @@ export class MerchantCrudService {
         VALUES ($1,${fields.map((_,i)=>`$${i+2}`).join(',')}) RETURNING *`,[code,...this.values(input,fields)]);
       if (input.status === undefined) await manager.query(`UPDATE public.merchants SET status='ACTIVE' WHERE "merchantCode"=$1`,[code]);
       await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[code]);
-      const sub = await this.writeSubscription(manager,input.merchantId,{...input,price:input.agreementPrice,status:'ACTIVE'});
+      const sub = await this.writeSubscription(manager,merchant.id,{...input,price:input.agreementPrice,status:'ACTIVE'});
       await this.saveMerchantRecord(manager,input.merchantId,merchant,this.subscriptionSnapshot(await this.subscriptionRow(manager,sub)),false);
       await this.extras(manager,input.merchantId,input);
       await this.audit(manager,input.merchantId,'MERCHANT_CREATED',{merchant:{...merchant,status:input.status || 'ACTIVE'}});
@@ -275,13 +307,13 @@ export class MerchantCrudService {
       if (input.merchantId!==undefined && input.merchantId!==merchant.merchantId) throw new BadRequestException('merchantId cannot be changed');
       const planChanged = input.planId !== undefined && input.planId !== merchant.planId;
       await this.audit(manager,root,planChanged ? 'MERCHANT_PLAN_CHANGED' : 'MERCHANT_UPDATED',{merchant});
-      const [current] = await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC,id DESC LIMIT 1 FOR UPDATE`,[root]);
+      const [current] = await manager.query(`SELECT *,to_char(start_date,'YYYY-MM-DD') AS start_date,to_char(renewal_date,'YYYY-MM-DD') AS renewal_date FROM public.subscriptions WHERE merchant_id=$1 AND status='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE`,[merchant.id]);
       const subInput = Object.fromEntries(subscriptionFields.filter(key=>!['status','price'].includes(key) && input[key]!==undefined).map(key=>[key,input[key]]));
       if (input.agreementPrice!==undefined) subInput.price=input.agreementPrice;
       let changes=this.merchantInput(input);
       if (input.addressLine1!==undefined || input.addressLine2!==undefined) changes.businessAddress=[input.addressLine1 ?? merchant.addressLine1,input.addressLine2 ?? merchant.addressLine2].filter(Boolean).join(', ');
       if (Object.keys(subInput).length) {
-        const subId = await this.writeSubscription(manager,root,subInput,current,planChanged);
+        const subId = await this.writeSubscription(manager,merchant.id,subInput,current,planChanged);
         changes={...changes,...this.subscriptionSnapshot(await this.subscriptionRow(manager,subId))};
       }
       await this.extras(manager,root,input);
@@ -302,8 +334,11 @@ export class MerchantCrudService {
     await this.transaction(async manager=>{
       const {root} = await this.lockMerchant(manager,code);
       // Refuse deletion while related business records remain, including tables without FKs.
-      for (const table of ['subscriptions','stores']) if ((await manager.query(`SELECT 1 FROM public.${table} WHERE "merchantId"=$1 OR "merchantId" IN
-        (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) LIMIT 1`,[root])).length) throw new ConflictException(`Merchant has ${table}; remove them first`);
+      if ((await manager.query(`SELECT 1 FROM public.subscriptions WHERE merchant_id=(SELECT id FROM public.merchants WHERE "merchantId"=$1 LIMIT 1) LIMIT 1`,[root])).length) {
+        throw new ConflictException('Merchant has subscriptions; remove them first');
+      }
+      if ((await manager.query(`SELECT 1 FROM public.stores WHERE "merchantId"=$1 OR "merchantId" IN
+        (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) LIMIT 1`,[root])).length) throw new ConflictException('Merchant has stores; remove them first');
       const records=await manager.query('DELETE FROM public.merchant_record_versions WHERE record_code IN (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) RETURNING record_code',[root]);
       const rows=Array.isArray(records[0]) ? records[0] : records;
       await manager.query('DELETE FROM public.merchants WHERE "merchantCode"=ANY($1::varchar[])',[rows.map((row: Input)=>row.record_code)]);
@@ -313,16 +348,32 @@ export class MerchantCrudService {
 
   async listSubscriptions(merchantId?: string, status?: string) {
     if (status) this.validate({status},['status']);
-    if (merchantId) merchantId=await this.identity(this.db,merchantId);
     const columns = new Set((await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`)).map((row: {column_name: string}) => row.column_name));
-    const merchantColumn = columns.has('merchantId') ? '"merchantId"' : columns.has('merchant_id') ? 'merchant_id' : '';
+    const merchantColumn = columns.has('merchant_id') ? 'merchant_id' : columns.has('merchantId') ? '"merchantId"' : '';
+    const merchantFilter = merchantColumn === 'merchant_id'
+      ? `($1::text IS NULL OR s.merchant_id::text=$1 OR EXISTS (
+          SELECT 1 FROM public.merchants filter_merchant
+          WHERE filter_merchant.id=s.merchant_id
+            AND $1 IN (
+              filter_merchant.id::text,
+              COALESCE(to_jsonb(filter_merchant)->>'merchant_code', ''),
+              COALESCE(to_jsonb(filter_merchant)->>'merchantCode', ''),
+              COALESCE(to_jsonb(filter_merchant)->>'merchant_id', ''),
+              COALESCE(to_jsonb(filter_merchant)->>'merchantId', '')
+            )
+        ))`
+      : merchantColumn
+        ? `($1::text IS NULL OR s.${merchantColumn}::text=$1)`
+        : '$1::text IS NULL';
     const filters = [
-      merchantColumn ? `($1::text IS NULL OR s.${merchantColumn}::text=$1)` : '$1::text IS NULL',
+      merchantFilter,
       columns.has('status') ? `($2::text IS NULL OR s.status::text=$2)` : '$2::text IS NULL',
+      columns.has('is_deleted') ? 'COALESCE(s.is_deleted, false)=false' : 'TRUE',
     ];
     const merchantKey = merchantColumn === '"merchantId"' ? 's."merchantId"' : merchantColumn ? `s.${merchantColumn}::text` : 'NULL';
-    const planIdCol = columns.has('planId') ? 's."planId"' : columns.has('plan_id') ? 's.plan_id' : '';
-    const planJoin = planIdCol ? `LEFT JOIN public.plans p ON p.id::text = ${planIdCol}::text` : '';
+    const planIdCol = columns.has('plan_id') ? 's.plan_id' : columns.has('planId') ? 's."planId"' : '';
+    const planJoin = planIdCol ? `LEFT JOIN public.plans p ON p.id::text = ${planIdCol}::text
+      LEFT JOIN public.store_types st ON st.id::text = COALESCE(to_jsonb(p)->>'store_type_id', to_jsonb(p)->>'storeTypeId', '')` : '';
     const planColumns = planJoin
       ? new Set((await this.db.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='plans'`)).map((row: {column_name: string}) => row.column_name))
       : new Set<string>();
@@ -340,8 +391,45 @@ export class MerchantCrudService {
         : planColumns.has('includedTerminals')
           ? 'p."includedTerminals"'
           : 'NULL';
+    const planEmployees = planColumns.has('employees_limit')
+      ? 'p.employees_limit'
+      : planColumns.has('included_employees')
+        ? 'p.included_employees'
+        : planColumns.has('includedEmployees')
+          ? 'p."includedEmployees"'
+          : 'NULL';
+    const planFeatures = planColumns.has('included_features')
+      ? 'p.included_features'
+      : planColumns.has('includedFeatures')
+        ? 'p."includedFeatures"'
+        : "'{}'::text[]";
+    const planTrialPeriod = planColumns.has('trial_period')
+      ? 'p.trial_period'
+      : planColumns.has('trialPeriod')
+        ? 'p."trialPeriod"'
+        : '0';
     const planSelect = planJoin
-      ? `, ${planStores} AS plan_included_stores, ${planTerminals} AS plan_included_terminals`
+      ? `, ${planStores} AS plan_included_stores, ${planTerminals} AS plan_included_terminals,
+          jsonb_build_object(
+            'id', p.id,
+            'planCode', COALESCE(to_jsonb(p)->>'plan_code', to_jsonb(p)->>'planCode', ''),
+            'name', p.name,
+            'description', COALESCE(p.description, ''),
+            'basePrice', COALESCE(to_jsonb(p)->>'base_price', to_jsonb(p)->>'basePrice', '0')::numeric,
+            'currency', p.currency,
+            'billingCycle', COALESCE(to_jsonb(p)->>'billing_cycle', to_jsonb(p)->>'billingCycle', ''),
+            'storeTypeId', NULLIF(COALESCE(to_jsonb(p)->>'store_type_id', to_jsonb(p)->>'storeTypeId', ''), ''),
+            'includedStores', COALESCE(${planStores}, 0),
+            'includedTerminals', COALESCE(${planTerminals}, 0),
+            'includedEmployees', COALESCE(${planEmployees}, 0),
+            'includedFeatures', COALESCE(${planFeatures}, '{}'),
+            'trialPeriod', COALESCE(${planTrialPeriod}, 0)
+          ) AS plan_details,
+          CASE WHEN st.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'id', st.id,
+            'code', COALESCE(to_jsonb(st)->>'code', to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', ''),
+            'name', st.name
+          ) END AS plan_store_type`
       : '';
     const createdOrder = columns.has('createdAt')
       ? 's."createdAt"'
@@ -365,7 +453,23 @@ export class MerchantCrudService {
           m.id::text
         )
         LIMIT 1
-      ), ${merchantKey}) AS merchant_code${planSelect}
+      ), ${merchantKey}) AS merchant_code,
+      (
+        SELECT COALESCE(
+          NULLIF(BTRIM(COALESCE(to_jsonb(m)->>'business_display_name', to_jsonb(m)->>'businessDisplayName', '')), ''),
+          NULLIF(BTRIM(CONCAT_WS(' ', to_jsonb(m)->>'first_name', to_jsonb(m)->>'last_name')), ''),
+          NULLIF(COALESCE(to_jsonb(m)->>'merchant_code', to_jsonb(m)->>'merchantCode', ''), '')
+        )
+        FROM public.merchants m
+        WHERE ${merchantKey} IN (
+          to_jsonb(m)->>'merchantId',
+          to_jsonb(m)->>'merchant_id',
+          to_jsonb(m)->>'merchantCode',
+          to_jsonb(m)->>'merchant_code',
+          m.id::text
+        )
+        LIMIT 1
+      ) AS merchant_name${planSelect}
       FROM public.subscriptions s ${planJoin} WHERE ${filters.join(' AND ')}
       ORDER BY ${createdOrder} DESC NULLS LAST`,[merchantId || null,status || null]);
     for (const row of subscriptions) {
@@ -377,24 +481,22 @@ export class MerchantCrudService {
           row[key] = `${value.getFullYear()}-${month}-${day}`;
         }
       }
-      for (const [source, target] of [['planId', 'plan_id'], ['planName', 'plan_name'], ['planCode', 'plan_code'], ['billingCycle', 'billing_cycle'], ['storeTypeName', 'store_type_name']] as const) {
-        if (row[source] != null && row[source] !== '') row[target] = row[source];
-      }
-      const plan = row.plan_included_stores != null || row.plan_included_terminals != null
-        ? { included_stores: row.plan_included_stores, included_terminals: row.plan_included_terminals }
-        : null;
-      withPlanLicenseCounts(row, plan);
-      delete row.plan_included_stores;
-      delete row.plan_included_terminals;
     }
-    return {success:true,count:subscriptions.length,subscriptions};
+    const compactSubscriptions = subscriptions.map((row: Input) => this.presentSubscription(row));
+    return {success:true,count:compactSubscriptions.length,subscriptions:compactSubscriptions};
   }
 
   async getSubscription(id: string) {
-    const [row] = await this.db.query('SELECT "merchantId" FROM public.subscriptions WHERE id=$1',[id]);
+    const [row] = await this.db.query(`SELECT COALESCE(
+      to_jsonb(s)->>'merchant_id',
+      to_jsonb(s)->>'merchantId'
+    ) AS merchant_id FROM public.subscriptions s
+      WHERE id=$1 AND status='ACTIVE' AND COALESCE(is_deleted, false)=false`,[id]);
     if (!row) throw new NotFoundException('Subscription not found');
-    const result = await this.listSubscriptions(row.merchantId);
-    return {success:true,subscription:result.subscriptions.find((sub: Input)=>sub.id===id)};
+    const result = await this.listSubscriptions(row.merchant_id, 'ACTIVE');
+    const subscription = result.subscriptions.find((sub: Input)=>sub.id===id);
+    if (!subscription) throw new NotFoundException('Subscription not found');
+    return {success:true,subscription};
   }
 
   async saveSubscription(input: Input, id?: string, replace=false) {
@@ -402,30 +504,28 @@ export class MerchantCrudService {
     if (!id) this.required(input,['merchantId','planId']);
     if (replace) this.required(input,['planId','billingCycle','startDate','renewalDate','price','status']);
     const resultId = await this.transaction(async manager=>{
-      const [found] = id ? await manager.query('SELECT "merchantId" FROM public.subscriptions WHERE id=$1',[id]) : [{merchantId:input.merchantId}];
+      const [found] = id
+        ? await manager.query('SELECT merchant_id FROM public.subscriptions WHERE id=$1',[id])
+        : await manager.query(`SELECT id AS merchant_id FROM public.merchants
+            WHERE id::text=$1
+               OR merchant_code=$1
+               OR COALESCE(to_jsonb(merchants)->>'merchant_id', to_jsonb(merchants)->>'merchantId', '')=$1
+            LIMIT 1`,[input.merchantId]);
       if (!found) throw new NotFoundException('Subscription not found');
-      const {merchant,root} = await this.lockMerchant(manager,found.merchantId);
+      const merchantId = String(found.merchant_id);
     const [current] = id
-      ? await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE id=$1 FOR UPDATE`,[id])
-      : await manager.query(`SELECT *,to_char("startDate",'YYYY-MM-DD') AS "startDate",to_char("renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1 FOR UPDATE`,[found.merchantId]);
+      ? await manager.query(`SELECT *,to_char(start_date,'YYYY-MM-DD') AS start_date,to_char(renewal_date,'YYYY-MM-DD') AS renewal_date FROM public.subscriptions WHERE id=$1 FOR UPDATE`,[id])
+      : await manager.query(`SELECT *,to_char(start_date,'YYYY-MM-DD') AS start_date,to_char(renewal_date,'YYYY-MM-DD') AS renewal_date FROM public.subscriptions WHERE merchant_id=$1 AND status='ACTIVE' ORDER BY created_at DESC NULLS LAST LIMIT 1 FOR UPDATE`,[merchantId]);
     if (id && !current) throw new NotFoundException('Subscription not found');
-    const result = await this.writeSubscription(manager,root,input,current,!current);
-      const sub = await this.subscriptionRow(manager,result);
-      if (sub.status==='ACTIVE') {
-        const changed=merchant.planId!==sub.planId;
-        if (changed) await this.audit(manager,root,'MERCHANT_PLAN_CHANGED',{merchant});
-        await this.saveMerchantRecord(manager,root,merchant,this.subscriptionSnapshot(sub),changed);
-      }
-      return result;
+      return this.writeSubscription(manager,merchantId,input,current,!current);
     });
     return this.getSubscription(resultId);
   }
 
   async deleteSubscription(id: string) {
     await this.transaction(async manager=>{
-      const [row] = await manager.query('SELECT "merchantId" FROM public.subscriptions WHERE id=$1',[id]);
+      const [row] = await manager.query('SELECT merchant_id FROM public.subscriptions WHERE id=$1',[id]);
       if (!row) throw new NotFoundException('Subscription not found');
-      await this.lockMerchant(manager,row.merchantId);
       await manager.query('DELETE FROM public.subscriptions WHERE id=$1',[id]);
     });
     return {success:true,id};

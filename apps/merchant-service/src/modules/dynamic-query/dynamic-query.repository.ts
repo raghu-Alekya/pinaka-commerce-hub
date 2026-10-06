@@ -349,9 +349,6 @@ export class DynamicQueryRepository {
 
   private async featureIdsForSubscriptions(subscriptions: SubscriptionEntity[], plans: PlanEntity[]): Promise<{ ids: string[]; keys: string[] }> {
     const tokens = new Set<string>();
-    for (const subscription of subscriptions) {
-      for (const item of subscription.entitlements || []) if (item) tokens.add(String(item).trim());
-    }
     for (const plan of plans) {
       for (const item of plan.includedFeatures || []) if (item) tokens.add(String(item).trim());
     }

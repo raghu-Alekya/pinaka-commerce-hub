@@ -1,3 +1,4 @@
+import { EmployeeResponseInterceptor } from '../employee/workforce-validation.pipe';
 import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
@@ -249,6 +250,8 @@ export class CompactMerchantController {
     if (merchant && typeof merchant === 'object' && !Array.isArray(merchant)) {
       const code = this.merchantCodeValue(merchant as Input);
       if (code) (merchant as Input).merchant_code = code;
+      const values = merchant as Input;
+      if (values.ein == null) values.ein = values.taxId ?? values.tax_id ?? null;
     }
     const subscription = record?.subscription;
     if (
@@ -510,35 +513,19 @@ export class CompactMerchantController {
             [],
         );
         setSubCol('id', subId);
-        setSubCol('subscriptionId', subId);
         setSubCol('subscription_code', subId);
-        setSubCol('merchantId', merchantBusinessId);
         setSubCol('merchant_id', rowId);
         setSubCol('plan_id', input.planId);
-        setSubCol('planId', input.planId);
-        setSubCol('planName', planName);
-        setSubCol('plan_name', planName);
-        setSubCol('storeTypeName', storeTypeName);
-        setSubCol('store_type_name', storeTypeName);
-        setSubCol('entitlements', entitlements);
         setSubCol('billing_cycle', input.billingCycle);
-        setSubCol('billingCycle', input.billingCycle);
         setSubCol('start_date', input.startDate);
-        setSubCol('startDate', input.startDate);
         setSubCol('renewal_date', input.renewalDate);
-        setSubCol('renewalDate', input.renewalDate);
-        setSubCol('agreement_price', input.agreementPrice);
-        setSubCol('agreementPrice', input.agreementPrice);
         setSubCol('price', input.agreementPrice ?? 0);
         setSubCol('auto_renew', input.autoRenew !== false);
         setSubCol('is_deleted', false);
         if (createdBy) {
           setSubCol('created_by', createdBy);
           setSubCol('updated_by', createdBy);
-          setSubCol('createdBy', createdBy);
-          setSubCol('updatedBy', createdBy);
         }
-        setSubCol('currency', 'USD');
         setSubCol('status', 'ACTIVE');
         setSubCol('created_at', new Date());
         setSubCol('updated_at', new Date());
@@ -684,7 +671,14 @@ export class CompactMerchantController {
 
   @Post('subscriptions/subscription-plan-changes')
   subscriptionPlanChange(@Body() body: Input) {
-    return new SubscriptionPlanChangeController(this.repository).change(body);
+    const merchantId = String(body.merchantId || '').trim();
+    if (!merchantId) throw new BadRequestException('merchantId is required');
+    const billingCycle = String(body.billingCycle || 'MONTHLY').toUpperCase() === 'YEARLY'
+      ? 'ANNUAL'
+      : body.billingCycle;
+    const changes: Input = { ...body, billingCycle };
+    delete changes.merchantId;
+    return this.update(merchantId, changes, false);
   }
 
   @Get(':id/store-types')
@@ -761,6 +755,15 @@ export class CompactMerchantController {
       [merchant.id],
     );
     return { success: true, count: storeTypes.length, storeTypes };
+  }
+
+  // Register the reserved employees path before the merchant identifier route.
+  @Get('employees')
+  @UseInterceptors(EmployeeResponseInterceptor)
+  async listEmployees(@Query('status') status?: string) {
+    const employees = await this.repository.listEmployees(undefined, status);
+    const statistics = await this.repository.employeeStatistics(undefined);
+    return { success: true, count: employees.length, statistics, employees };
   }
 
   @Get(':id')
@@ -1274,15 +1277,12 @@ export class CompactMerchantController {
     const price =
       input.agreementPrice ?? plan.basePrice ?? plan.base_price ?? 0;
     const fields: Record<string, unknown> = {
-      merchantId,
-      planId: input.planId,
-      planCode,
-      planName,
-      billingCycle: input.billingCycle ?? plan.billingCycle ?? 'MONTHLY',
-      startDate: input.startDate ?? null,
-      renewalDate: input.renewalDate ?? null,
+      merchant_id: merchantId,
+      plan_id: input.planId,
+      billing_cycle: input.billingCycle ?? plan.billing_cycle ?? 'MONTHLY',
+      start_date: input.startDate ?? null,
+      renewal_date: input.renewalDate ?? null,
       price,
-      currency: plan.currency || 'USD',
       status: 'ACTIVE',
       entitlements: JSON.stringify(
         plan.included_features ||
@@ -1301,14 +1301,14 @@ export class CompactMerchantController {
       ).map((row: { column_name: string }) => row.column_name),
     );
     const [current] = await manager.query(
-      `SELECT id, "planId" FROM public.subscriptions WHERE "merchantId"=$1 AND status='ACTIVE' ORDER BY "createdAt" DESC NULLS LAST LIMIT 1`,
+      `SELECT id, plan_id FROM public.subscriptions WHERE merchant_id=$1 AND status='ACTIVE' ORDER BY created_at DESC NULLS LAST LIMIT 1`,
       [merchantId],
     );
     const planChanged =
       !current?.id || String(current.planId || '') !== String(input.planId);
     if (current?.id && planChanged) {
       await manager.query(
-        `UPDATE public.subscriptions SET status='INACTIVE', "updatedAt"=now() WHERE "merchantId"=$1 AND status='ACTIVE'`,
+        `UPDATE public.subscriptions SET status='INACTIVE', updated_at=now() WHERE merchant_id=$1 AND status='ACTIVE'`,
         [merchantId],
       );
     }
@@ -1317,16 +1317,9 @@ export class CompactMerchantController {
       const now = new Date();
       const insert = {
         id: subId,
-        subscriptionCode: subId,
-        subscriptionId: subId,
+        subscription_code: subId,
         ...fields,
-        plan_id: input.planId,
-        plan_name: planName,
-        plan_code: planCode,
-        billing_cycle: fields.billingCycle,
-        createdAt: now,
         created_at: now,
-        updated_at: now,
       };
       const keys = Object.keys(insert).filter(
         (key) => columns.has(key) && insert[key as keyof typeof insert] != null,

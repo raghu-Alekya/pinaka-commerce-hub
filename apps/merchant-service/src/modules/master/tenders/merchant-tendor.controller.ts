@@ -35,7 +35,7 @@ export class MerchantTendorController {
   @HttpCode(HttpStatus.CREATED)
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   async add(@Param('merchantId') merchantId: string, @Body() body: AddMerchantTendorsDto) {
-    const result = await this.repository.addMerchantTendors(merchantId, body.tendorIds);
+    const result = await this.repository.addMerchantTendors(merchantId, body.tendorIds ?? [], body.tendorCodes ?? []);
     return { success: true, message: 'Tendors mapped to merchant', ...result };
   }
 

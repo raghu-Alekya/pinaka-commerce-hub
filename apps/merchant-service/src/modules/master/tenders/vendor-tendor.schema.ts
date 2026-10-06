@@ -15,18 +15,35 @@ export async function ensureVendorTendorSchema(db: DataSource): Promise<void> {
     CREATE INDEX IF NOT EXISTS pch_merchant_vendors_merchant ON public.merchant_vendors(merchant_id);
   `);
   await db.query(`
-    CREATE TABLE IF NOT EXISTS public.merchant_tendors (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      merchant_id UUID NOT NULL,
-      tendor_id UUID NOT NULL,
-      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT merchant_tendors_merchant_tendor_uidx UNIQUE (merchant_id, tendor_id)
-    );
-    CREATE INDEX IF NOT EXISTS pch_merchant_tendors_tendor ON public.merchant_tendors(tendor_id);
-    CREATE INDEX IF NOT EXISTS pch_merchant_tendors_merchant ON public.merchant_tendors(merchant_id);
-  `);
+  CREATE TABLE IF NOT EXISTS public.merchant_tendors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id UUID NOT NULL,
+    tendor_id UUID NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT merchant_tendors_merchant_tendor_uidx
+      UNIQUE (merchant_id, tendor_id)
+  );
+`);
+
+await db.query(`
+  CREATE UNIQUE INDEX IF NOT EXISTS
+    merchant_tendors_merchant_tendor_unique_idx
+  ON public.merchant_tendors (merchant_id, tendor_id);
+`);
+
+await db.query(`
+  CREATE INDEX IF NOT EXISTS
+    pch_merchant_tendors_tendor
+  ON public.merchant_tendors(tendor_id);
+`);
+
+await db.query(`
+  CREATE INDEX IF NOT EXISTS
+    pch_merchant_tendors_merchant
+  ON public.merchant_tendors(merchant_id);
+`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS public.vendors (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
