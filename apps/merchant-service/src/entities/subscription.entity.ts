@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn, Unique } from 'typeorm';
 import { Audited, AuditColumns, BillingCycle, SubscriptionStatus } from './commerce-enums';
 import { MerchantEntity } from './merchant.entity';
 import { PlanEntity } from './plan.entity';
@@ -19,25 +19,26 @@ const numericPrice = {
 
 @Entity('subscriptions')
 @Audited()
+@Unique('subscriptions_subscription_code_key', ['subscriptionCode'])
 export class SubscriptionEntity extends AuditColumns {
-  @PrimaryColumn({ name: 'id', type: 'varchar', length: 100 })
+  @PrimaryColumn({ name: 'id', type: 'varchar', length: 100, primaryKeyConstraintName: 'subscriptions_pkey' })
   id!: string;
 
   @Column({ name: 'merchant_id', type: 'uuid' })
   merchantId!: string;
 
   @ManyToOne(() => MerchantEntity)
-  @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id' })
+  @JoinColumn({ name: 'merchant_id', referencedColumnName: 'id', foreignKeyConstraintName: 'subscriptions_merchant_id_fkey' })
   merchant?: MerchantEntity;
 
-  @Column({ name: 'subscription_code', type: 'varchar', length: 100, unique: true })
+  @Column({ name: 'subscription_code', type: 'varchar', length: 100 })
   subscriptionCode!: string;
 
   @Column({ name: 'plan_id', type: 'uuid', nullable: true })
   planId?: string | null;
 
   @ManyToOne(() => PlanEntity, { nullable: true })
-  @JoinColumn({ name: 'plan_id' })
+  @JoinColumn({ name: 'plan_id', foreignKeyConstraintName: 'subscriptions_plan_id_fkey' })
   plan?: PlanEntity;
 
   @Column({ name: 'start_date', type: 'date', nullable: true })
@@ -51,9 +52,6 @@ export class SubscriptionEntity extends AuditColumns {
 
   @Column({ name: 'cancelled_at', type: 'timestamptz', nullable: true })
   cancelledAt?: Date | null;
-
-  @Column({ name: 'entitlements', type: 'jsonb', default: () => "'[]'" })
-  entitlements!: unknown[];
 
   @Column({
     name: 'billing_cycle',

@@ -691,7 +691,6 @@ export class MerchantRepository implements OnModuleInit {
             startDate: body.subscription.startDate ?? subscription?.startDate,
             renewalDate: body.subscription.renewalDate ?? subscription?.renewalDate,
             trialEndDate: body.subscription.trialEndDate ?? subscription?.trialEndDate,
-            entitlements: body.subscription.entitlements || subscription?.entitlements || [],
           }));
         }
         if (!subscription && incoming.length) throw new BadRequestException('Create a merchant subscription before adding stores');
@@ -1396,7 +1395,7 @@ export class MerchantRepository implements OnModuleInit {
             return {
               success: true,
               store: activeStore,
-              entitlements: subscription?.entitlements || ['POS'],
+              entitlements: subscription?.plan?.includedFeatures || ['POS'],
             };
           }
           await this.redisClient.del(`pin:${pin}`);
@@ -1414,7 +1413,7 @@ export class MerchantRepository implements OnModuleInit {
     return {
       success: true,
       store,
-      entitlements: subscription?.entitlements || ['POS', 'BARCODE_SCANNING'],
+      entitlements: subscription?.plan?.includedFeatures || ['POS', 'BARCODE_SCANNING'],
     };
   }
 
@@ -1433,7 +1432,7 @@ export class MerchantRepository implements OnModuleInit {
     sub.subscriptionCode ||= sub.id;
     const saved = previous ? await this.updateSubscription(previous.id, fields) : await this.insertSubscription(sub);
     if (!saved) throw new NotFoundException('Subscription not found');
-    await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planCode: saved.planCode, entitlements: saved.entitlements });
+    await this.recordAuditLog('SUBSCRIPTION_UPDATED', merchantId, undefined, 'system', { planId: saved.planId });
     return saved;
   }
 
@@ -1444,20 +1443,59 @@ export class MerchantRepository implements OnModuleInit {
     const planIds = [...new Set(sorted.map(row => row.planId).filter((id): id is string => Boolean(id)))];
     if (planIds.length && this.dataSource?.isInitialized) {
       const plans = await this.dataSource.query(
-        `SELECT id::text AS id, included_stores, included_terminals FROM public.plans WHERE id::text = ANY($1::text[])`,
+        `SELECT p.id::text AS id,
+          COALESCE(to_jsonb(p)->>'plan_code', to_jsonb(p)->>'planCode', '') AS plan_code,
+          p.name,
+          COALESCE(to_jsonb(p)->>'base_price', to_jsonb(p)->>'basePrice', '0')::numeric AS base_price,
+          p.currency,
+          COALESCE(to_jsonb(p)->>'billing_cycle', to_jsonb(p)->>'billingCycle', '') AS billing_cycle,
+          COALESCE(to_jsonb(p)->>'store_type_id', to_jsonb(p)->>'storeTypeId', '') AS store_type_id,
+          COALESCE(to_jsonb(p)->>'included_stores', to_jsonb(p)->>'stores_limit', to_jsonb(p)->>'includedStores', '0')::integer AS included_stores,
+          COALESCE(to_jsonb(p)->>'included_terminals', to_jsonb(p)->>'terminal_limit', to_jsonb(p)->>'includedTerminals', '0')::integer AS included_terminals,
+          CASE WHEN st.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'id', st.id,
+            'code', COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', ''),
+            'name', st.name
+          ) END AS store_type
+         FROM public.plans p
+         LEFT JOIN public.store_types st
+           ON st.id::text = COALESCE(to_jsonb(p)->>'store_type_id', to_jsonb(p)->>'storeTypeId', '')
+         WHERE p.id::text = ANY($1::text[])`,
         [planIds],
       );
-      const byId = new Map(plans.map((plan: { id: string; included_stores: number; included_terminals: number }) => [plan.id, plan]));
+      const byId = new Map<string, Record<string, any>>(
+        plans.map((plan: Record<string, any>) => [String(plan.id), plan] as const),
+      );
       for (const row of sorted) {
         const plan = row.planId ? byId.get(row.planId) : undefined;
-        withPlanLicenseCounts(row as Record<string, any>, plan as Record<string, any> | undefined);
+        if (plan) {
+          (row as any).plan = {
+            id: plan.id,
+            planCode: plan.plan_code,
+            name: plan.name,
+            basePrice: Number(plan.base_price),
+            currency: plan.currency,
+            billingCycle: plan.billing_cycle,
+            storeTypeId: plan.store_type_id || null,
+            storeType: plan.store_type,
+            includedStores: Number(plan.included_stores),
+            includedTerminals: Number(plan.included_terminals),
+          };
+          if (plan.store_type) {
+            (row as any).storeTypeId = plan.store_type.id;
+            (row as any).storeType = plan.store_type;
+          }
+        }
+        withPlanLicenseCounts(row as Record<string, any>, plan);
       }
     }
     return sorted;
   }
 
   async getSubscription(id: string): Promise<SubscriptionEntity | null> {
-    return this.subRepo.findOneBy({ id });
+    const subscription = await this.subRepo.findOneBy({ id });
+    if (!subscription) return null;
+    return (await this.listSubscriptions(subscription.merchantId)).find(row => row.id === id) || null;
   }
 
   async insertSubscription(subscription: SubscriptionEntity): Promise<SubscriptionEntity> {
@@ -1518,7 +1556,6 @@ export class MerchantRepository implements OnModuleInit {
       fields.billingCycle = input.billingCycle ?? plan.billingCycle;
       fields.price = input.price ?? Number(plan.basePrice); fields.currency = input.currency ?? plan.currency;
       const entitlements = await this.dataSource.query('SELECT f.feature_key, e.enabled, e.limit_value FROM public.plan_entitlements e JOIN public.features f ON f.id=e.feature_id WHERE e.plan_id=$1', [plan.id]);
-      fields.entitlements = entitlements.filter((row: any) => row.enabled).map((row: any) => row.feature_key);
       const entitlementLimit = (feature: string) => {
         const value = entitlements.find((row: any) => row.feature_key === feature && row.enabled)?.limit_value;
         return value != null && /^\d+$/.test(value) && Number(value) <= 2147483647 ? Number(value) : null;
