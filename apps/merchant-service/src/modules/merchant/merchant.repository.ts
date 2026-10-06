@@ -3508,7 +3508,8 @@ export class MerchantRepository implements OnModuleInit {
        FROM public.store_type_role_templates mapping
        JOIN public.role_templates rt ON rt.id=mapping.role_template_id AND rt.status='ACTIVE'
        LEFT JOIN public.roles r ON r.merchant_id::text=$1 AND r.source_role_template_id=rt.id
-       WHERE mapping.store_type_id::text=$2 AND mapping.default_enabled=true
+       WHERE mapping.store_type_id::text=$2
+         AND COALESCE(NULLIF(to_jsonb(mapping)->>'default_enabled', '')::boolean, false)=true
        ORDER BY rt.name`,
       [merchantId, storeTypeId, stores[0].merchantUuid, stores[0].storeUuid],
     );
@@ -3620,7 +3621,9 @@ export class MerchantRepository implements OnModuleInit {
         }
         const roles = await manager.query(
           `SELECT r.id FROM public.roles r
-             JOIN public.store_type_role_templates mapping ON mapping.role_template_id=r.source_role_template_id AND mapping.default_enabled=true
+             JOIN public.store_type_role_templates mapping
+               ON mapping.role_template_id=r.source_role_template_id
+              AND COALESCE(NULLIF(to_jsonb(mapping)->>'default_enabled', '')::boolean, false)=true
              JOIN public.store_types st ON st.id=mapping.store_type_id
              WHERE r.merchant_id=$1 AND r.id=$2::uuid AND r.status='ACTIVE'
                AND (st.id::text=$3 OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($3)) LIMIT 1`,
