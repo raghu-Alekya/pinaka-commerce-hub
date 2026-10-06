@@ -15,6 +15,7 @@ import {
   Put,
   Query,
   Req,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { COUNTRIES, nationalPhone } from './countries';
@@ -104,6 +105,23 @@ export class CompactMerchantController {
   private validate(input: Input, create: boolean): Input {
     if (!input || typeof input !== 'object' || Array.isArray(input))
       throw new BadRequestException('Provide a merchant object');
+    if (input.ein !== undefined) {
+      if (input.taxId !== undefined && input.taxId !== input.ein)
+        throw new BadRequestException('Supply either ein or taxId, not conflicting values');
+      input.taxId = input.ein;
+      delete input.ein;
+    }
+    if (input.legalBusinessName !== undefined) {
+      if (
+        input.businessName !== undefined &&
+        input.businessName !== input.legalBusinessName
+      )
+        throw new BadRequestException(
+          'Supply either legalBusinessName or businessName, not conflicting values',
+        );
+      input.businessName = input.legalBusinessName;
+      delete input.legalBusinessName;
+    }
     delete input.storeTypeId;
     const allowed = new Set<string>(fields);
     const blocked = removed.filter((key) =>
@@ -205,7 +223,7 @@ export class CompactMerchantController {
              COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
              OR m.id::text = $1
            )
-           AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'`,
+           `,
         [id],
       );
       if (rows.length) return this.showMerchantCode(rows[0]);
@@ -586,7 +604,6 @@ export class CompactMerchantController {
          ) s ON true
          LEFT JOIN public.plans mp
            ON mp.id::text = COALESCE(to_jsonb(m)->>'planId', to_jsonb(m)->>'plan_id')
-         WHERE COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
          ORDER BY COALESCE(
            (to_jsonb(m)->>'createdDate')::timestamptz,
            (to_jsonb(m)->>'created_at')::timestamptz,
@@ -607,7 +624,6 @@ export class CompactMerchantController {
       try {
         const rows = await this.db.query(
           `SELECT row_to_json(m) AS merchant FROM public.merchants m
-           WHERE COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
            ORDER BY COALESCE(
              (to_jsonb(m)->>'createdDate')::timestamptz,
              (to_jsonb(m)->>'created_at')::timestamptz,
@@ -652,7 +668,7 @@ export class CompactMerchantController {
   ) {
     return new MerchantCrudService(this.db).listSubscriptions(
       merchantId,
-      status?.trim() || 'ACTIVE',
+      status?.trim() || undefined,
     );
   }
 
@@ -999,7 +1015,7 @@ export class CompactMerchantController {
           if (requestedStoreTypeId) input.storeTypeId = requestedStoreTypeId;
           await this.saveSubscription(
             manager,
-            String(existing.merchantId || existing.id),
+            String(existing.id),
             input,
           );
         }
@@ -1195,10 +1211,12 @@ export class CompactMerchantController {
   async updateStatus(
     @Param('id') id: string,
     @Body() body: { status?: string },
+    @Req() request: ActorRequest,
   ) {
     if (!body || !['ACTIVE', 'INACTIVE'].includes(String(body.status))) {
       throw new BadRequestException('status must be ACTIVE or INACTIVE');
     }
+    const updatedBy = actorId({}, request?.user?.id);
     let targetRowId = '';
     let targetMerchantId = '';
     await this.db.transaction(async (manager) => {
@@ -1227,34 +1245,110 @@ export class CompactMerchantController {
           [target.merchantId, target.id],
         );
       }
-      await manager.query(`UPDATE public.merchants SET status=$2 WHERE id=$1`, [
-        target.id,
-        body.status,
-      ]);
+      await manager.query(
+        `UPDATE public.merchants
+         SET status=$2,
+             is_deleted=$3,
+             updated_by=COALESCE($4::uuid, updated_by),
+             updated_at=clock_timestamp()
+         WHERE id=$1`,
+        [target.id, body.status, body.status === 'INACTIVE', updatedBy],
+      );
+      if (body.status === 'INACTIVE') {
+        await manager.query(
+          `UPDATE public.subscriptions
+           SET status='INACTIVE',
+               updated_by=COALESCE($2::uuid, updated_by),
+               updated_at=clock_timestamp()
+           WHERE merchant_id=$1
+             AND status='ACTIVE'
+             AND COALESCE(is_deleted, false)=false`,
+          [target.id, updatedBy],
+        );
+      } else {
+        await manager.query(
+          `UPDATE public.subscriptions
+           SET status='INACTIVE',
+               updated_by=COALESCE($2::uuid, updated_by),
+               updated_at=clock_timestamp()
+           WHERE merchant_id=$1
+             AND status='ACTIVE'
+             AND COALESCE(is_deleted, false)=false`,
+          [target.id, updatedBy],
+        );
+        await manager.query(
+          `UPDATE public.subscriptions
+           SET status='ACTIVE',
+               updated_by=COALESCE($2::uuid, updated_by),
+               updated_at=clock_timestamp()
+           WHERE id=(
+             SELECT id
+             FROM public.subscriptions
+             WHERE merchant_id=$1
+               AND COALESCE(is_deleted, false)=false
+             ORDER BY created_at DESC NULLS LAST, id DESC
+             LIMIT 1
+           )`,
+          [target.id, updatedBy],
+        );
+      }
     });
     return {
       success: true,
       id: targetRowId,
       merchantId: targetMerchantId,
       status: body.status,
+      is_deleted: body.status === 'INACTIVE',
     };
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string, @Req() request: ActorRequest) {
+    const updatedBy = actorId({}, request?.user?.id);
     try {
-      await this.db.query(
-        `UPDATE public.merchants m SET status='INACTIVE'
-         WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
-            OR m.id::text = $1`,
-        [id],
-      );
-      await this.db.query(
-        `UPDATE public.subscriptions s SET status='INACTIVE'
-         WHERE COALESCE(to_jsonb(s)->>'merchantId', to_jsonb(s)->>'merchant_id') = $1`,
-        [id],
-      );
-      return { success: true, merchantId: id };
+      let merchantId = id;
+      let rowId = '';
+      await this.db.transaction(async (manager) => {
+        const [merchant] = await manager.query(
+          `SELECT m.id,
+                  COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) AS "merchantId"
+           FROM public.merchants m
+           WHERE m.id::text=$1
+              OR COALESCE(to_jsonb(m)->>'merchantId', '')=$1
+              OR COALESCE(to_jsonb(m)->>'merchantCode', '')=$1
+           ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END
+           LIMIT 1
+           FOR UPDATE`,
+          [id],
+        );
+        if (!merchant) throw new NotFoundException('Merchant not found');
+        merchantId = merchant.merchantId;
+        rowId = merchant.id;
+        await manager.query(
+          `UPDATE public.merchants
+           SET status='INACTIVE',
+               is_deleted=true,
+               updated_by=COALESCE($2::uuid, updated_by),
+               updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [merchant.id, updatedBy],
+        );
+        await manager.query(
+          `UPDATE public.subscriptions
+           SET status='INACTIVE',
+               updated_by=COALESCE($2::uuid, updated_by),
+               updated_at=clock_timestamp()
+           WHERE merchant_id=$1 AND status='ACTIVE'`,
+          [merchant.id, updatedBy],
+        );
+      });
+      return {
+        success: true,
+        id: rowId,
+        merchantId,
+        status: 'INACTIVE',
+        is_deleted: true,
+      };
     } catch (error: any) {
       if ((error.driverError?.code || error.code) === '23503')
         throw new ConflictException('Merchant is referenced by other records');
@@ -1272,8 +1366,6 @@ export class CompactMerchantController {
       [String(input.planId)],
     );
     const plan = planRow?.plan || {};
-    const planName = plan.name || plan.planName || plan.plan_name || 'Plan';
-    const planCode = plan.planCode || plan.plan_code || 'PRO';
     const price =
       input.agreementPrice ?? plan.basePrice ?? plan.base_price ?? 0;
     const fields: Record<string, unknown> = {
@@ -1283,15 +1375,10 @@ export class CompactMerchantController {
       start_date: input.startDate ?? null,
       renewal_date: input.renewalDate ?? null,
       price,
+      auto_renew: input.autoRenew !== false,
       status: 'ACTIVE',
-      entitlements: JSON.stringify(
-        plan.included_features ||
-          plan.includedFeatures ||
-          plan.entitlements ||
-          [],
-      ),
-      storeTypeName: await storeTypeNameForPlan(manager, String(input.planId)),
-      updatedAt: new Date(),
+      is_deleted: false,
+      updated_at: new Date(),
     };
     const columns = new Set(
       (
@@ -1305,7 +1392,7 @@ export class CompactMerchantController {
       [merchantId],
     );
     const planChanged =
-      !current?.id || String(current.planId || '') !== String(input.planId);
+      !current?.id || String(current.plan_id || '') !== String(input.planId);
     if (current?.id && planChanged) {
       await manager.query(
         `UPDATE public.subscriptions SET status='INACTIVE', updated_at=now() WHERE merchant_id=$1 AND status='ACTIVE'`,
