@@ -1,7 +1,7 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 
-export { RecordStatus as FeatureStatus, FeatureType } from './commerce-enums';
+export { RecordStatus as FeatureStatus } from './commerce-enums';
 
 @Entity('features')
 @Audited()

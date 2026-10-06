@@ -4,7 +4,7 @@ import { storeSetup } from '../master/store-setup/store-setup';
 import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
 import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
-import { FeatureEntity, FeatureStatus, FeatureType } from '../../entities/feature.entity';
+import { FeatureEntity, FeatureStatus } from '../../entities/feature.entity';
 import { PermissionEntity, PermissionStatus } from '../../entities/permission.entity';
 import { RoleTemplateEntity, RoleTemplateStatus, RoleScopeType } from '../../entities/role-template.entity';
 import { PlanEntity, PlanStatus, PlanBillingModel, PlanBillingCycle } from '../../entities/plan.entity';
@@ -133,18 +133,18 @@ export class MerchantRepository implements OnModuleInit {
       `SELECT to_regclass('public.store_type_features') AS store_type_features`);
     const mapped = tables[0]?.store_type_features
       ? await this.dataSource.query(
-        `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+        `SELECT f.feature_code AS "featureKey", f.id, f.name, f.description, f.feature_type AS "featureType", f.status,
                 stf.default_enabled AS "defaultEnabled", stf.required, stf.display_order AS "displayOrder"
          FROM public.store_type_features stf JOIN public.features f ON f.id=stf.feature_id
          WHERE stf.store_type_id=$1 AND f.status='ACTIVE'
-         ORDER BY stf.display_order NULLS LAST, f.category NULLS LAST, f.name`, [featureStoreType.id])
+         ORDER BY stf.display_order NULLS LAST, f.name`, [featureStoreType.id])
       : [];
     const catalog: Array<Record<string, any>> = mapped.length ? mapped : await this.dataSource.query(
-      `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+      `SELECT f.feature_code AS "featureKey", f.id, f.name, f.description, f.feature_type AS "featureType", f.status,
               NULL::boolean AS "defaultEnabled", NULL::boolean AS required, NULL::integer AS "displayOrder"
        FROM public.features f
        WHERE f.status='ACTIVE'
-       ORDER BY f.category NULLS LAST, f.name`);
+       ORDER BY f.name`);
     const tokens: string[] = [];
     const collect = (item: unknown) => {
       if (Array.isArray(item)) { item.forEach(collect); return; }
@@ -164,13 +164,13 @@ export class MerchantRepository implements OnModuleInit {
     if (activePlan) collect(activePlan.included_features);
     const uniqueTokens = [...new Set(tokens)];
     const resolved = uniqueTokens.length ? await this.dataSource.query(
-      `SELECT f.id, f."featureKey", f.name, f.description, f.category, f."featureType", f.status,
+      `SELECT f.feature_code AS "featureKey", f.id, f.name, f.description, f.feature_type AS "featureType", f.status,
               NULL::boolean AS "defaultEnabled", NULL::boolean AS required, NULL::integer AS "displayOrder"
        FROM public.features f
        WHERE f.status='ACTIVE'
          AND (
            f.id::text = ANY($1::text[])
-           OR lower(f."featureKey") = ANY($2::text[])
+           OR lower(f.feature_code) = ANY($2::text[])
            OR lower(btrim(f.name)) = ANY($2::text[])
          )`,
       [uniqueTokens, uniqueTokens.map(token => token.toLowerCase())],
@@ -232,35 +232,28 @@ export class MerchantRepository implements OnModuleInit {
           // fallback
         }
         if (!cols.length) {
-          cols = ['id', 'feature_key', 'name', 'description', 'category', 'feature_type', 'status', 'created_at', 'updated_at'];
+          cols = ['id', 'feature_code', 'name', 'description', 'feature_type', 'status', 'created_at', 'updated_at'];
         }
 
         const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
         // Resolve actual database column names
-        const keyDbCol = cols.find(c => ['feature_key', 'featurekey', 'feature_code'].includes(c.toLowerCase())) || 'feature_key';
-        const catDbCol = cols.find(c => ['category', 'feature_category'].includes(c.toLowerCase()));
-        const typeDbCol = cols.find(c => ['feature_type', 'featuretype'].includes(c.toLowerCase())) || 'feature_type';
+        const keyDbCol = cols.find(c => ['feature_key', 'feature_code'].includes(c.toLowerCase())) || 'feature_code';
+        const typeDbCol = cols.find(c => c.toLowerCase() === 'feature_type') || 'feature_type';
         const createdDbCol = cols.find(c => ['created_at', 'createdat'].includes(c.toLowerCase())) || 'created_at';
         const updatedDbCol = cols.find(c => ['updated_at', 'updatedat'].includes(c.toLowerCase())) || 'updated_at';
+        const createdByDbCol = cols.find(c => ['created_by', 'createdby'].includes(c.toLowerCase()));
+        const updatedByDbCol = cols.find(c => ['updated_by', 'updatedby'].includes(c.toLowerCase()));
 
         const projection = [
           'id',
           'name',
           'description',
           'status',
-          `${quote(keyDbCol)} AS "featureKey"`,
           `${quote(keyDbCol)} AS "feature_code"`,
-          `${quote(keyDbCol)} AS "code"`,
-          `${catDbCol ? quote(catDbCol) : 'NULL::text'} AS "category"`,
-          `${catDbCol ? quote(catDbCol) : 'NULL::text'} AS "feature_category"`,
-          `${catDbCol ? quote(catDbCol) : 'NULL::text'} AS "featureCategory"`,
-          `${quote(typeDbCol)} AS "featureType"`,
           `${quote(typeDbCol)} AS "feature_type"`,
-          `${quote(createdDbCol)}::text AS "createdAt"`,
-          `${quote(createdDbCol)}::text AS "created_at"`,
-          `${quote(updatedDbCol)}::text AS "updatedAt"`,
-          `${quote(updatedDbCol)}::text AS "updated_at"`
+          `${createdByDbCol ? quote(createdByDbCol) : 'NULL::uuid'} AS "created_by"`,
+          `${updatedByDbCol ? quote(updatedByDbCol) : 'NULL::uuid'} AS "updated_by"`,
         ].join(', ');
 
         if (operation === 'list') {
@@ -276,11 +269,9 @@ export class MerchantRepository implements OnModuleInit {
           return rows[0];
         } else if (operation === 'create') {
           const newId = crypto.randomUUID();
-          const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code || fields.name || '').trim().toUpperCase().replace(/\s+/g, '_');
           const nameVal = String(fields.name || '').trim();
           const descVal = String(fields.description || '').trim();
-          const catVal = String(fields.category || fields.feature_category || fields.featureCategory || 'Operations').trim();
-          const typeVal = String(fields.featureType || fields.feature_type || fields.type || 'TEXT').trim().toUpperCase();
+          const typeVal = String(fields.featureType ?? fields.feature_type ?? fields.type ?? 'TEXT').trim();
           const statusVal = String(fields.status || 'ACTIVE').trim().toUpperCase();
 
           const insertData: Record<string, unknown> = {
@@ -288,22 +279,12 @@ export class MerchantRepository implements OnModuleInit {
             name: nameVal,
             description: descVal,
             status: statusVal,
-            [keyDbCol]: keyVal,
             [typeDbCol]: typeVal,
             [createdDbCol]: new Date(),
             [updatedDbCol]: new Date(),
           };
-          if (catDbCol) insertData[catDbCol] = catVal;
-
-          if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
-            insertData['feature_category'] = catVal;
-            insertData['category'] = catVal;
-          }
-          if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
-            insertData['feature_code'] = keyVal;
-            insertData['feature_key'] = keyVal;
-          }
-
+          if (createdByDbCol) insertData[createdByDbCol] = fields.created_by ?? null;
+          if (updatedByDbCol) insertData[updatedByDbCol] = fields.updated_by ?? null;
           const insertKeys = Object.keys(insertData);
           const insertValues = Object.values(insertData);
           const placeholders = insertValues.map((_, i) => '$' + (i + 1)).join(', ');
@@ -337,32 +318,16 @@ export class MerchantRepository implements OnModuleInit {
             setClauses.push(`${quote('status')} = $${idx++}`);
             setValues.push(String(fields.status).trim().toUpperCase());
           }
-          if (catDbCol && (fields.category !== undefined || fields.feature_category !== undefined || fields.featureCategory !== undefined)) {
-            const catVal = String(fields.category || fields.feature_category || fields.featureCategory || '').trim();
-            setClauses.push(`${quote(catDbCol)} = $${idx++}`);
-            setValues.push(catVal);
-            if (cols.some(c => c.toLowerCase() === 'feature_category') && cols.some(c => c.toLowerCase() === 'category')) {
-              const otherCat = catDbCol.toLowerCase() === 'category' ? 'feature_category' : 'category';
-              setClauses.push(`${quote(otherCat)} = $${idx++}`);
-              setValues.push(catVal);
-            }
-          }
-          if (fields.featureKey !== undefined || fields.feature_key !== undefined || fields.feature_code !== undefined || fields.code !== undefined) {
-            const keyVal = String(fields.featureKey || fields.feature_key || fields.feature_code || fields.code).trim().toUpperCase().replace(/\s+/g, '_');
-            setClauses.push(`${quote(keyDbCol)} = $${idx++}`);
-            setValues.push(keyVal);
-            if (cols.some(c => c.toLowerCase() === 'feature_code') && cols.some(c => c.toLowerCase() === 'feature_key')) {
-              const otherKey = keyDbCol.toLowerCase() === 'feature_key' ? 'feature_code' : 'feature_key';
-              setClauses.push(`${quote(otherKey)} = $${idx++}`);
-              setValues.push(keyVal);
-            }
-          }
           if (fields.featureType !== undefined || fields.feature_type !== undefined || fields.type !== undefined) {
-            const typeVal = String(fields.featureType || fields.feature_type || fields.type).trim().toUpperCase();
+            const typeVal = String(fields.featureType ?? fields.feature_type ?? fields.type).trim();
             setClauses.push(`${quote(typeDbCol)} = $${idx++}`);
             setValues.push(typeVal);
           }
           setClauses.push(`${quote(updatedDbCol)} = clock_timestamp()`);
+          if (updatedByDbCol && fields.updated_by !== undefined) {
+            setClauses.push(`${quote(updatedByDbCol)} = $${idx++}`);
+            setValues.push(fields.updated_by);
+          }
 
           try {
             const res = await this.dataSource.query(
@@ -402,7 +367,7 @@ export class MerchantRepository implements OnModuleInit {
       name: 'name', description: 'description', status: 'status',
       ...({
         store_types: { storeTypeCode: 'storeTypeCode' },
-        features: { featureKey: 'featureKey', category: 'category', featureType: 'featureType' },
+        features: { featureKey: 'feature_code', featureType: 'feature_type' },
         role_templates: { roleCode: 'role_code', scopeType: 'scope_type' },
         plans: {
           planCode: 'planCode', billingModel: 'billingModel', basePrice: 'basePrice', currency: 'currency', billingCycle: 'billingCycle',
@@ -1988,12 +1953,12 @@ export class MerchantRepository implements OnModuleInit {
     try {
       if ((await this.featureRepo.count()) === 0) {
         const defaults = [
-          { id: 'f1111111-0000-0000-0000-000000000001', featureCode: 'ORDER_MANAGEMENT', name: 'Order Management', description: 'Manage in-store POS and online delivery orders', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000002', featureCode: 'REFUNDS', name: 'Refunds & Returns', description: 'Process full and partial order refunds', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000003', featureCode: 'KDS', name: 'Kitchen Display System', description: 'Live kitchen prep tickets and bump bar tracking', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000004', featureCode: 'LOYALTY', name: 'Loyalty & Rewards', description: 'Earn and redeem loyalty points at checkout', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000005', featureCode: 'SAFE_DROP', name: 'Safe Drop & Cash Management', description: 'Mid-shift safe drops and drawer reconciliations', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
-          { id: 'f1111111-0000-0000-0000-000000000006', featureCode: 'INVENTORY', name: 'Live Stock Tracking', description: 'Real-time multi-location inventory deduction', featureType: FeatureType.BOOLEAN, status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000001', featureCode: 'ORDER_MANAGEMENT', name: 'Order Management', description: 'Manage in-store POS and online delivery orders', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000002', featureCode: 'REFUNDS', name: 'Refunds & Returns', description: 'Process full and partial order refunds', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000003', featureCode: 'KDS', name: 'Kitchen Display System', description: 'Live kitchen prep tickets and bump bar tracking', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000004', featureCode: 'LOYALTY', name: 'Loyalty & Rewards', description: 'Earn and redeem loyalty points at checkout', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000005', featureCode: 'SAFE_DROP', name: 'Safe Drop & Cash Management', description: 'Mid-shift safe drops and drawer reconciliations', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
+          { id: 'f1111111-0000-0000-0000-000000000006', featureCode: 'INVENTORY', name: 'Live Stock Tracking', description: 'Real-time multi-location inventory deduction', featureType: 'BOOLEAN', status: FeatureStatus.ACTIVE },
         ];
         for (const item of defaults) {
           await this.featureRepo.save(this.featureRepo.create(item));
@@ -2070,7 +2035,7 @@ export class MerchantRepository implements OnModuleInit {
       featureCode: dto.feature_code.trim().toUpperCase(),
       name: dto.name.trim(),
       description: dto.description?.trim() || '',
-      featureType: dto.feature_type || FeatureType.TEXT,
+      featureType: dto.feature_type,
       status: dto.status || FeatureStatus.ACTIVE,
     });
     return this.featureRepo.save(entity);

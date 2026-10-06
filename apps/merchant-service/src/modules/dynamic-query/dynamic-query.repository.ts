@@ -237,7 +237,7 @@ export class DynamicQueryRepository {
       qb.andWhere(new Brackets(clause => {
         if (matched.ids.length) clause.where('feature.id IN (:...featureIds)', { featureIds: matched.ids });
         if (matched.keys.length) {
-          const keyMatch = 'UPPER(feature.featureKey) IN (:...featureKeys)';
+          const keyMatch = 'UPPER(feature.featureCode) IN (:...featureKeys)';
           if (matched.ids.length) clause.orWhere(keyMatch, { featureKeys: matched.keys });
           else clause.where(keyMatch, { featureKeys: matched.keys });
         }

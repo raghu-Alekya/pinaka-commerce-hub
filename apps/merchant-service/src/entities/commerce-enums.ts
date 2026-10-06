@@ -55,13 +55,6 @@ export enum OperationalStatus {
   CLOSED = 'CLOSED',
 }
 
-export enum FeatureType {
-  BOOLEAN = 'BOOLEAN',
-  LIMIT = 'LIMIT',
-  CONFIG = 'CONFIG',
-  TEXT = 'TEXT',
-}
-
 export enum PermissionType {
   CREATE = 'CREATE',
   READ = 'READ',
