@@ -138,16 +138,56 @@ export class TendorRepository {
     return this.merchants.requireDataSource().query(sql, params);
   }
 
-  async addMerchantTendors(merchantId: string, tendorIds: string[]): Promise<{ count: number; tendorIds: string[] }> {
+  async addMerchantTendors(
+    merchantId: string,
+    tendorIds: string[] = [],
+    tendorCodes: string[] = [],
+  ): Promise<{ count: number; tendorIds: string[]; tendorCodes: string[] }> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
-    const uniqueIds = [...new Set(tendorIds.map(String))];
-    if (!uniqueIds.length) throw new BadRequestException('tendorIds is required');
+    const uniqueIds = [...new Set((tendorIds ?? []).map(String).filter(Boolean))];
+    const normalizedCodes = [...new Set((tendorCodes ?? []).map(code => code.trim()).filter(Boolean))];
+
+    if (!uniqueIds.length && !normalizedCodes.length) {
+      throw new BadRequestException('tendorIds or tendorCodes is required');
+    }
+
     const db = this.merchants.requireDataSource();
-    const found = await db.query(
-      `SELECT id FROM public.tendors WHERE id = ANY($1::uuid[]) AND is_deleted = FALSE`,
-      [uniqueIds],
-    );
-    if (found.length !== uniqueIds.length) throw new NotFoundException('One or more tendors were not found');
+    const resolvedIds = new Set<string>(uniqueIds);
+    const resolvedCodes = new Set<string>(normalizedCodes.map(code => code.toLowerCase()));
+
+    if (uniqueIds.length) {
+      const found = await db.query(
+        `SELECT id FROM public.tendors WHERE id = ANY($1::uuid[]) AND is_deleted = FALSE`,
+        [uniqueIds],
+      );
+      const foundIds = new Set((found as Array<{ id: string }>).map(row => String(row.id)));
+      const missing = uniqueIds.filter(id => !foundIds.has(id));
+      if (missing.length) {
+        throw new NotFoundException(`One or more tendors were not found: ${missing.join(', ')}`);
+      }
+    }
+
+    if (normalizedCodes.length) {
+      const foundCodes = await db.query(
+        `SELECT id, tendor_code FROM public.tendors WHERE LOWER(BTRIM(tendor_code)) = ANY($1) AND is_deleted = FALSE`,
+        [normalizedCodes.map(code => code.toLowerCase())],
+      );
+      const matchedCodes = new Map(
+        (foundCodes as Array<{ id: string; tendor_code: string }>).map(row => [String(row.tendor_code).trim().toLowerCase(), row.id]),
+      );
+      const missing = normalizedCodes.filter(code => !matchedCodes.has(code.trim().toLowerCase()));
+      if (missing.length) {
+        throw new NotFoundException(`One or more tendor codes were not found: ${missing.join(', ')}`);
+      }
+      for (const [code, id] of matchedCodes.entries()) {
+        resolvedIds.add(id);
+        resolvedCodes.add(code);
+      }
+    }
+
+    const finalIds = [...resolvedIds];
+    if (!finalIds.length) throw new NotFoundException('No valid tendors were resolved for assignment');
+
     await db.query(
       `INSERT INTO public.merchant_tendors (merchant_id, tendor_id, tendor_code, status)
        SELECT $1::uuid, t.id, t.tendor_code, 'ACTIVE'
@@ -155,9 +195,14 @@ export class TendorRepository {
        JOIN public.tendors t ON t.id = x.tendor_id
        ON CONFLICT (merchant_id, tendor_id) DO UPDATE
          SET tendor_code = EXCLUDED.tendor_code, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP`,
-      [merchantUuid, uniqueIds],
+      [merchantUuid, finalIds],
     );
-    return { count: uniqueIds.length, tendorIds: uniqueIds };
+
+    return {
+      count: finalIds.length,
+      tendorIds: finalIds,
+      tendorCodes: [...resolvedCodes].map(code => code.trim()),
+    };
   }
 
   async removeMerchantTendor(merchantId: string, tendorId: string): Promise<void> {

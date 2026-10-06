@@ -698,8 +698,11 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionId" varchar(100);
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionCode" varchar(100);
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS start_date date;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "startDate" date;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS renewal_date date;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "renewalDate" date;
+    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS trial_end_date date;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "trialEndDate" date;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "createdAt" timestamptz;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;
@@ -746,9 +749,9 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     UPDATE public.subscriptions s SET
       "subscriptionId" = s.subscription_code,
       "subscriptionCode" = s.subscription_code,
-      "startDate" = s.start_date,
-      "renewalDate" = s.renewal_date,
-      "trialEndDate" = s.trial_end_date,
+      "startDate" = COALESCE(s."startDate", s.start_date),
+      "renewalDate" = COALESCE(s."renewalDate", s.renewal_date),
+      "trialEndDate" = COALESCE(s."trialEndDate", s.trial_end_date),
       "createdAt" = s.created_at,
       "updatedAt" = s.updated_at;
     UPDATE public.subscriptions s SET "merchantId" = COALESCE(to_jsonb(m)->>'merchant_id', to_jsonb(m)->>'merchantId')
