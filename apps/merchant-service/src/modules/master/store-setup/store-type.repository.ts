@@ -325,38 +325,27 @@ export class StoreTypeRepository {
     }
   }
 
-  async softDelete(idOrCode: string, loginUserId?: string | null): Promise<boolean> {
+  async deactivate(idOrCode: string, loginUserId?: string | null): Promise<any | null> {
     const existing = await this.findByIdOrCode(idOrCode);
-    if (!existing) return false;
+    if (!existing) return null;
 
     const ds = this.merchants.requireDataSource();
     const cols = await this.ensureTable();
-    const { updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
-
-    if (hasIsDeleted) {
-      const updates = [`is_deleted = true`, `${this.quote(updatedDbCol)} = clock_timestamp()`];
-      const vals: any[] = [existing.id];
-      if (hasUpdatedBy && loginUserId) {
-        updates.push(`updated_by = $2`);
-        vals.push(loginUserId);
-      }
-      await ds.query(`UPDATE public.store_types SET ${updates.join(', ')} WHERE id = $1`, vals);
-      return true;
+    const { projection, updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
+    const updates = [
+      `status = 'INACTIVE'`,
+      ...(hasIsDeleted ? ['is_deleted = false'] : []),
+      `${this.quote(updatedDbCol)} = clock_timestamp()`,
+    ];
+    const values: unknown[] = [existing.id];
+    if (hasUpdatedBy && loginUserId) {
+      values.push(loginUserId);
+      updates.push(`updated_by = $${values.length}`);
     }
-
-    try {
-      await ds.query(`DELETE FROM public.store_types WHERE id = $1`, [existing.id]);
-      return true;
-    } catch (error: any) {
-      const errCode = error.driverError?.code || error.code;
-      if (errCode === '23503') {
-        await ds.query(
-          `UPDATE public.store_types SET status = 'INACTIVE', ${this.quote(updatedDbCol)} = clock_timestamp() WHERE id = $1`,
-          [existing.id],
-        );
-        return true;
-      }
-      throw error;
-    }
+    const rows = await ds.query(
+      `UPDATE public.store_types SET ${updates.join(', ')} WHERE id = $1 RETURNING ${projection}`,
+      values,
+    );
+    return rows[0] || null;
   }
 }

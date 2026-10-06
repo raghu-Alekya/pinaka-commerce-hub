@@ -1,8 +1,10 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { AuditInputDto } from '../../../audit.dto';
-import { RoleScopeType, RoleTemplateStatus } from '../../../entities/role-template.entity';
+import {
+  RoleScopeType,
+  RoleTemplateStatus,
+} from '../../../entities/role-template.entity';
 
-export class CreateRoleTemplateDto extends AuditInputDto {
+export class CreateRoleTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(50)
@@ -25,7 +27,7 @@ export class CreateRoleTemplateDto extends AuditInputDto {
   status?: RoleTemplateStatus;
 }
 
-export class UpdateRoleTemplateDto extends AuditInputDto {
+export class UpdateRoleTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(50)

@@ -29,19 +29,7 @@ export class FeatureDto extends MasterFieldsDto {
 
   @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @MaxLength(100) feature_code?: string;
-
-  @ValidateIf((_, value) => value !== undefined)
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(100) feature_type?: string;
-
-  @ValidateIf((_, value) => value !== undefined)
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @MaxLength(100) featureKey?: string;
-
-  @ValidateIf((_, value) => value !== undefined)
-  @Transform(({ value }) => typeof value === "string" ? value.trim() : value)
-  @IsString() @MaxLength(100) feature_key?: string;
 
   @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === "string" ? value.trim() : value)
@@ -51,9 +39,6 @@ export class FeatureDto extends MasterFieldsDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(100) featureType?: string;
 
-  @ValidateIf((_, value) => value !== undefined)
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @MaxLength(100) code?: string;
 }
 
 export class RoleTemplateDto extends MasterFieldsDto {
