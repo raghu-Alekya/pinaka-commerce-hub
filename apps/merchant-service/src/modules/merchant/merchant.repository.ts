@@ -3346,6 +3346,39 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   // --- Employees (Tenant-specific) CRUD ---
+  async employeeStatistics(merchantId?: string): Promise<Record<string, unknown>> {
+    const [row] = await this.dataSource.query(
+      `WITH bounds AS (
+         SELECT date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS month_start,
+                (date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata') - interval '1 month') AT TIME ZONE 'Asia/Kolkata' AS last_month_start,
+                (date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata') + interval '1 month') AT TIME ZONE 'Asia/Kolkata' AS next_month_start
+       )
+       SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE upper(e.status::text) = 'ACTIVE')::int AS active,
+              COUNT(*) FILTER (WHERE upper(e.status::text) = 'INACTIVE')::int AS inactive,
+              COUNT(*) FILTER (WHERE e.created_at >= b.month_start AND e.created_at < b.next_month_start)::int AS current_month,
+              COUNT(*) FILTER (WHERE e.created_at >= b.last_month_start AND e.created_at < b.month_start)::int AS last_month
+       FROM public.employees e CROSS JOIN bounds b
+       WHERE ($1::uuid IS NULL OR e.merchant_id = $1::uuid)`,
+      [merchantId ?? null],
+    );
+    const total = Number(row.total);
+    const currentMonth = Number(row.current_month);
+    const lastMonth = Number(row.last_month);
+    const percentage = (count: number) => total ? Math.round(count / total * 1000) / 10 : 0;
+    return {
+      total_employees: total,
+      active_employees: Number(row.active),
+      inactive_employees: Number(row.inactive),
+      current_month_added_employees: currentMonth,
+      last_month_added_employees: lastMonth,
+      active_employees_percentage: percentage(Number(row.active)),
+      inactive_employees_percentage: percentage(Number(row.inactive)),
+      monthly_growth_percentage: lastMonth ? Math.round((currentMonth - lastMonth) / lastMonth * 1000) / 10 : currentMonth ? 100 : 0,
+      monthly_growth_direction: currentMonth > lastMonth ? 'INCREASE' : currentMonth < lastMonth ? 'DECREASE' : 'UNCHANGED',
+    };
+  }
+
   async listEmployees(merchantId?: string, status?: string): Promise<Record<string, unknown>[]> {
     if (!this.employeeRepo) return [];
     const where: any = {};

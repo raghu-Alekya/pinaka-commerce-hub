@@ -33,7 +33,8 @@ export class MerchantEmployeeController {
   async list(@Param('merchantId') merchantId: string, @Query('status') status?: string) {
     const merchantUuid = await this.requireMerchantId(merchantId);
     const employees = await this.repository.listEmployees(merchantUuid, status);
-    return { success: true, count: employees.length, employees };
+    const statistics = await this.repository.employeeStatistics(merchantUuid);
+    return { success: true, count: employees.length, statistics, employees };
   }
 
   @Get(':idOrCode')
