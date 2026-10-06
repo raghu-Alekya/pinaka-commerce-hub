@@ -794,7 +794,10 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [idOrUuid]);
+    const rows = await this.dataSource.query(`SELECT m.id FROM public.merchants m
+      WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchant_id', '')=$1
+         OR COALESCE(to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', '')=$1
+         OR m.id::text=$1 ORDER BY m.id::text LIMIT 1`, [idOrUuid]);
     return rows[0]?.id || null;
   }
 
@@ -2679,7 +2682,10 @@ export class MerchantRepository implements OnModuleInit {
         const role = await manager.getRepository(RoleEntity).save(entity);
         if (role.sourceRoleTemplateId) {
           const merchantUuid = (await manager.query(
-            'SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1',
+            `SELECT m.id FROM public.merchants m
+             WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchant_id', '')=$1
+                OR COALESCE(to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', '')=$1
+                OR m.id::text=$1 ORDER BY m.id::text LIMIT 1`,
             [dto.merchantId],
           ))[0]?.id || null;
           await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed,merchant_id)
@@ -2717,8 +2723,10 @@ export class MerchantRepository implements OnModuleInit {
 
   private async requireMerchantRecord(idOrCode: string): Promise<{ merchantCode: string; merchantUuid: string }> {
     const rows = await this.dataSource.query(
-      `SELECT m."merchantId" AS "merchantCode", m.id AS "merchantUuid"
-       FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1`,
+      `SELECT COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchant_id', to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', m.id::text) AS "merchantCode", m.id::text AS "merchantUuid"
+       FROM public.merchants m WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchant_id', '')=$1
+          OR COALESCE(to_jsonb(m)->>'merchantCode', to_jsonb(m)->>'merchant_code', '')=$1 OR m.id::text=$1
+       ORDER BY m.id::text LIMIT 1`,
       [idOrCode],
     );
     if (!rows.length) throw new NotFoundException(`Merchant '${idOrCode}' not found`);
@@ -3028,15 +3036,17 @@ export class MerchantRepository implements OnModuleInit {
     }
     if (options.defaultEnabled !== undefined) {
       params.push(options.defaultEnabled);
-      filters.push(`mapping.default_enabled = $${params.length}`);
+      filters.push(
+        `COALESCE(NULLIF(to_jsonb(mapping)->>'default_enabled', '')::boolean, false) = $${params.length}`,
+      );
     }
 
     return this.dataSource.query(
       `SELECT rt.id, rt.role_code AS "roleCode", rt.name, rt.description,
               rt.scope_type AS "scopeType", rt.status,
               mapping.id AS "mappingId",
-              mapping.default_enabled AS "defaultEnabled",
-              mapping.required,
+              COALESCE(NULLIF(to_jsonb(mapping)->>'default_enabled', '')::boolean, false) AS "defaultEnabled",
+              COALESCE(NULLIF(to_jsonb(mapping)->>'required', '')::boolean, false) AS required,
               mapping.created_at AS "mappedAt"
        FROM public.store_type_role_templates mapping
        JOIN public.role_templates rt ON rt.id = mapping.role_template_id
@@ -3560,7 +3570,10 @@ export class MerchantRepository implements OnModuleInit {
     employeeId: string,
     assignments?: Array<{ store: string; roles?: string[]; loginPin?: string }>,
   ): Promise<void> {
-    const merchants = await manager.query('SELECT m.id,m."merchantId" AS "merchantCode" FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [merchantId]);
+    const merchants = await manager.query(`SELECT m.id, COALESCE(to_jsonb(m)->>'merchantId',to_jsonb(m)->>'merchant_id',to_jsonb(m)->>'merchantCode',to_jsonb(m)->>'merchant_code',m.id::text) AS "merchantCode"
+      FROM public.merchants m WHERE COALESCE(to_jsonb(m)->>'merchantId',to_jsonb(m)->>'merchant_id','')=$1
+         OR COALESCE(to_jsonb(m)->>'merchantCode',to_jsonb(m)->>'merchant_code','')=$1 OR m.id::text=$1
+      ORDER BY m.id::text LIMIT 1`, [merchantId]);
     if (!merchants[0]) throw new NotFoundException('Merchant not found');
     const merchantUuid = merchants[0].id;
     const merchantCode = merchants[0].merchantCode;
