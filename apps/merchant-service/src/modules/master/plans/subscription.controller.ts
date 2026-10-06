@@ -43,7 +43,7 @@ export class SubscriptionController {
   @Get()
   async list(@Query('merchantId') merchantId?: string) {
     const subscriptions = (await this.repository.listSubscriptions(merchantId))
-      .filter(row => String(row.status || '').trim().toUpperCase() === 'ACTIVE')
+      .filter(row => !row.isDeleted)
       .map(row => this.present(row));
     return { success:true, count:subscriptions.length, subscriptions };
   }
