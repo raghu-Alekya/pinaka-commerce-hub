@@ -519,7 +519,8 @@ export class CompactMerchantController {
   @UseInterceptors(EmployeeResponseInterceptor)
   async listEmployees(@Query('status') status?: string) {
     const employees = await this.repository.listEmployees(undefined, status);
-    return { success: true, count: employees.length, employees };
+    const statistics = await this.repository.employeeStatistics(undefined);
+    return { success: true, count: employees.length, statistics, employees };
   }
 
   @Get(':id')
