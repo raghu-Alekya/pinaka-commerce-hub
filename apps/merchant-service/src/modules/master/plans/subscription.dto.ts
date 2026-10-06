@@ -1,4 +1,4 @@
-import { ArrayUnique, IsArray, IsBoolean, IsEnum, IsISO8601, IsNumber, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsISO8601, IsNumber, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { AuditInputDto } from '../../../audit.dto';
 import { BillingCycle, SubscriptionStatus } from '../../../entities/subscription.entity';
 
@@ -9,6 +9,12 @@ export class SubscriptionFieldsDto extends AuditInputDto {
   @ValidateIf(nonNull)
   @IsUUID()
   planId?: string | null;
+
+  @ValidateIf(supplied)
+  @IsString()
+  @Matches(/\S/)
+  @MaxLength(50)
+  planCode?: string;
 
   @ValidateIf(supplied)
   @IsString()
@@ -53,10 +59,6 @@ export class SubscriptionFieldsDto extends AuditInputDto {
   @IsISO8601()
   cancelledAt?: string | null;
 
-  @ValidateIf(supplied)
-  @IsArray()
-  @ArrayUnique()
-  entitlements?: unknown[];
 }
 
 export class CreateSubscriptionDto extends SubscriptionFieldsDto {

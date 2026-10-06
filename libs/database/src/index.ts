@@ -45,18 +45,6 @@ const LEGACY_COLUMN_RENAMES: Array<{ table: string; from: string; to: string }> 
   { table: 'stores', from: 'woocommerce_store_id', to: 'woocommerceStoreId' },
   { table: 'stores', from: 'created_at', to: 'createdAt' },
   { table: 'stores', from: 'updated_at', to: 'updatedAt' },
-  { table: 'subscriptions', from: 'merchant_id', to: 'merchantId' },
-  { table: 'subscriptions', from: 'subscription_code', to: 'subscriptionCode' },
-  { table: 'subscriptions', from: 'plan_id', to: 'planId' },
-  { table: 'subscriptions', from: 'start_date', to: 'startDate' },
-  { table: 'subscriptions', from: 'renewal_date', to: 'renewalDate' },
-  { table: 'subscriptions', from: 'trial_end_date', to: 'trialEndDate' },
-  { table: 'subscriptions', from: 'licensed_store_count', to: 'licensedStoreCount' },
-  { table: 'subscriptions', from: 'licensed_device_count', to: 'licensedDeviceCount' },
-  { table: 'subscriptions', from: 'cancelled_at', to: 'cancelledAt' },
-  { table: 'subscriptions', from: 'billing_cycle', to: 'billingCycle' },
-  { table: 'subscriptions', from: 'created_at', to: 'createdAt' },
-  { table: 'subscriptions', from: 'updated_at', to: 'updatedAt' },
   { table: 'plans', from: 'plan_code', to: 'planCode' },
   { table: 'plans', from: 'billing_model', to: 'billingModel' },
   { table: 'plans', from: 'base_price', to: 'basePrice' },
@@ -536,16 +524,6 @@ async function dedupeUniqueColumns(dataSource: DataSource): Promise<void> {
 }
 
 async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<void> {
-  if (
-    (await tableExists(dataSource, 'subscriptions')) &&
-    (await columnExists(dataSource, 'subscriptions', 'subscriptionCode'))
-  ) {
-    // id may be uuid while subscriptionCode is varchar/text — cast to avoid type errors.
-    await dataSource.query(
-      `UPDATE public.subscriptions SET "subscriptionCode" = id::text WHERE "subscriptionCode" IS NULL`,
-    );
-  }
-
   if (await tableExists(dataSource, 'inventory_items')) {
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'storeId');
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productId');
@@ -765,64 +743,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('subscriptions', 'subscription_code', `
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionId" varchar(100);
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionCode" varchar(100);
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "startDate" date;
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "renewalDate" date;
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "trialEndDate" date;
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "createdAt" timestamptz;
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;
-    CREATE OR REPLACE FUNCTION public.sync_subscriptions_legacy_cols() RETURNS trigger AS $fn$
-    BEGIN
-      IF NEW.price IS NULL THEN NEW.price := 0; END IF;
-      NEW.subscription_code := COALESCE(NULLIF(NEW.subscription_code, ''), NULLIF(NEW."subscriptionCode", ''), NULLIF(NEW."subscriptionId", ''), NEW.id::text);
-      NEW."subscriptionCode" := COALESCE(NULLIF(NEW."subscriptionCode", ''), NEW.subscription_code);
-      NEW."subscriptionId" := COALESCE(NULLIF(NEW."subscriptionId", ''), NEW.subscription_code);
-      IF NEW.merchant_id IS NULL AND NEW."merchantId" IS NOT NULL THEN
-        SELECT m.id::text INTO NEW.merchant_id FROM public.merchants m
-         WHERE m.merchant_id = NEW."merchantId" OR m.merchant_code = NEW."merchantId" OR m.id::text = NEW."merchantId"
-         LIMIT 1;
-      END IF;
-      IF NEW.merchant_id IS NOT NULL THEN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'merchant_id'
-        ) THEN
-          EXECUTE 'SELECT merchant_id FROM public.merchants WHERE id::text = $1 LIMIT 1'
-            INTO NEW."merchantId" USING NEW.merchant_id::text;
-        ELSIF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'merchants' AND column_name = 'merchantId'
-        ) THEN
-          EXECUTE 'SELECT "merchantId" FROM public.merchants WHERE id::text = $1 LIMIT 1'
-            INTO NEW."merchantId" USING NEW.merchant_id::text;
-        END IF;
-      END IF;
-      NEW.start_date := COALESCE(NEW.start_date, NEW."startDate");
-      NEW."startDate" := COALESCE(NEW."startDate", NEW.start_date);
-      NEW.renewal_date := COALESCE(NEW.renewal_date, NEW."renewalDate");
-      NEW."renewalDate" := COALESCE(NEW."renewalDate", NEW.renewal_date);
-      NEW.trial_end_date := COALESCE(NEW.trial_end_date, NEW."trialEndDate");
-      NEW."trialEndDate" := COALESCE(NEW."trialEndDate", NEW.trial_end_date);
-      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
-      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
-      RETURN NEW;
-    END;
-    $fn$ LANGUAGE plpgsql;
     DROP TRIGGER IF EXISTS subscriptions_legacy_cols ON public.subscriptions;
-    CREATE TRIGGER subscriptions_legacy_cols BEFORE INSERT OR UPDATE ON public.subscriptions
-      FOR EACH ROW EXECUTE PROCEDURE public.sync_subscriptions_legacy_cols();
-    UPDATE public.subscriptions s SET
-      "subscriptionId" = s.subscription_code,
-      "subscriptionCode" = s.subscription_code,
-      "startDate" = s.start_date,
-      "renewalDate" = s.renewal_date,
-      "trialEndDate" = s.trial_end_date,
-      "createdAt" = s.created_at,
-      "updatedAt" = s.updated_at;
-    UPDATE public.subscriptions s SET "merchantId" = COALESCE(to_jsonb(m)->>'merchant_id', to_jsonb(m)->>'merchantId')
-      FROM public.merchants m WHERE s.merchant_id::text = m.id::text;
+    DROP FUNCTION IF EXISTS public.sync_subscriptions_legacy_cols();
   `);
 
   await install('vendors', 'vendor_code', `

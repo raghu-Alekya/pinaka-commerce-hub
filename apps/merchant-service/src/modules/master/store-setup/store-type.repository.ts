@@ -87,6 +87,7 @@ export class StoreTypeRepository {
       `${this.quote(updatedDbCol)}::text AS "updated_at"`,
       ...(hasCreatedBy ? ['created_by AS "createdBy"', 'created_by'] : []),
       ...(hasUpdatedBy ? ['updated_by AS "updatedBy"', 'updated_by'] : []),
+      ...(hasIsDeleted ? ['is_deleted AS "isDeleted"', 'is_deleted'] : []),
     ].join(', ');
 
     return { projection, codeDbCol, createdDbCol, updatedDbCol, hasIsDeleted, hasCreatedBy, hasUpdatedBy };
@@ -95,9 +96,9 @@ export class StoreTypeRepository {
   async list(status?: string): Promise<any[]> {
     const ds = this.merchants.requireDataSource();
     const cols = await this.ensureTable();
-    const { projection, hasIsDeleted } = this.getProjection(cols);
+    const { projection } = this.getProjection(cols);
 
-    let where = hasIsDeleted ? '(is_deleted = false OR is_deleted IS NULL)' : '1=1';
+    let where = '1=1';
     const params: any[] = [];
     if (status) {
       params.push(status.toUpperCase());
@@ -163,11 +164,12 @@ export class StoreTypeRepository {
     if (!idOrCode?.trim()) return null;
     const ds = this.merchants.requireDataSource();
     const cols = await this.ensureTable();
-    const { projection, codeDbCol, hasIsDeleted } = this.getProjection(cols);
+    const { projection, codeDbCol } = this.getProjection(cols);
 
     const val = idOrCode.trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
-    const deletedClause = hasIsDeleted ? ' AND (is_deleted = false OR is_deleted IS NULL)' : '';
+    // Include soft-deleted rows so an INACTIVE store type can be reactivated.
+    const deletedClause = '';
 
     if (isUuid) {
       const rows = await ds.query(
@@ -233,7 +235,7 @@ export class StoreTypeRepository {
       [createdDbCol]: new Date(),
       [updatedDbCol]: new Date(),
     };
-    if (hasIsDeleted) insertData['is_deleted'] = false;
+    if (hasIsDeleted) insertData['is_deleted'] = status === StoreTypeStatus.INACTIVE;
     if (hasCreatedBy && loginUserId) insertData['created_by'] = loginUserId;
     if (hasUpdatedBy && loginUserId) insertData['updated_by'] = loginUserId;
 
@@ -281,7 +283,7 @@ export class StoreTypeRepository {
 
     const ds = this.merchants.requireDataSource();
     const cols = await this.ensureTable();
-    const { projection, codeDbCol, updatedDbCol, hasUpdatedBy } = this.getProjection(cols);
+    const { projection, codeDbCol, updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
 
     const setClauses: string[] = [];
     const setValues: unknown[] = [existing.id];
@@ -296,8 +298,13 @@ export class StoreTypeRepository {
       setValues.push(dto.description.trim());
     }
     if (dto.status !== undefined) {
+      const status = String(dto.status).trim().toUpperCase();
       setClauses.push(`status = $${idx++}`);
-      setValues.push(String(dto.status).trim().toUpperCase());
+      setValues.push(status);
+      if (hasIsDeleted) {
+        setClauses.push(`is_deleted = $${idx++}`);
+        setValues.push(status === StoreTypeStatus.INACTIVE);
+      }
     }
     if (dto.storeTypeCode !== undefined || dto.code !== undefined) {
       setClauses.push(`${this.quote(codeDbCol)} = $${idx++}`);
@@ -334,7 +341,7 @@ export class StoreTypeRepository {
     const { projection, updatedDbCol, hasIsDeleted, hasUpdatedBy } = this.getProjection(cols);
     const updates = [
       `status = 'INACTIVE'`,
-      ...(hasIsDeleted ? ['is_deleted = false'] : []),
+      ...(hasIsDeleted ? ['is_deleted = true'] : []),
       `${this.quote(updatedDbCol)} = clock_timestamp()`,
     ];
     const values: unknown[] = [existing.id];

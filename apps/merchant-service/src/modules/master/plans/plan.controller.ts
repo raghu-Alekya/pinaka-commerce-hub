@@ -145,6 +145,21 @@ export class PlanController {
     const plans = filterPlans(await this.repository.execute('list'), query);
     return { success: true, count: plans.length, plans };
   }
+  @Get('merchant-form')
+  async merchantFormPlans() {
+    const plans = await this.repository.listActiveForMerchant();
+    const grouped = new Map<string, { storeType: Record<string, any> | null; plans: Array<Record<string, any>> }>();
+    for (const plan of plans) {
+      const storeType = plan.storeType && typeof plan.storeType === 'object'
+        ? plan.storeType as Record<string, any>
+        : null;
+      const key = String(storeType?.id || plan.storeTypeId);
+      const group = grouped.get(key) || { storeType, plans: [] as Array<Record<string, any>> };
+      group.plans.push(plan);
+      grouped.set(key, group);
+    }
+    return { success: true, count: plans.length, planGroups: [...grouped.values()] };
+  }
   @Get(':id') async get(@Param('id', new ParseUUIDPipe()) id: string) { return { success: true, plan: await this.repository.execute('get', id) }; }
   @Post() @UseGuards(PlanWriteGuard) async create(@Req() request: { planUserId: string }, @Body(validate(PlanSchemaDto)) body: PlanSchemaDto | Record<string, unknown>) { return { success: true, plan: await this.repository.execute('create', undefined, defined(body), request.planUserId) }; }
   @Put(':id') @UseGuards(PlanWriteGuard) async replace(@Req() request: { planUserId: string }, @Param('id', new ParseUUIDPipe()) id: string, @Body(validate(PlanSchemaDto)) body: PlanSchemaDto | Record<string, unknown>) { return { success: true, plan: await this.repository.execute('update', id, defined(body), request.planUserId) }; }

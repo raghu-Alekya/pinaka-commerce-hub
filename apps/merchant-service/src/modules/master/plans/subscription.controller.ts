@@ -7,17 +7,52 @@ const validate = (expectedType: typeof SubscriptionFieldsDto) => new ValidationP
 @Controller('api/v1/subscriptions')
 export class SubscriptionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
+
+  private present(row: any) {
+    const plan = row.plan || {};
+    const storeType = row.storeType || plan.storeType || null;
+    return {
+      id: row.id,
+      subscriptionCode: row.subscriptionCode || row.subscription_code || row.id,
+      merchantId: row.merchantId || row.merchant_id,
+      status: row.status,
+      billingCycle: row.billingCycle || row.billing_cycle,
+      price: Number(row.price || 0),
+      autoRenew: row.autoRenew ?? row.auto_renew ?? true,
+      startDate: row.startDate || row.start_date || null,
+      renewalDate: row.renewalDate || row.renewal_date || null,
+      plan: plan.id ? {
+        id: plan.id,
+        planCode: plan.planCode || plan.plan_code,
+        name: plan.name,
+        basePrice: Number(plan.basePrice ?? plan.base_price ?? 0),
+        currency: plan.currency,
+        billingCycle: plan.billingCycle || plan.billing_cycle,
+        includedStores: Number(plan.includedStores ?? plan.included_stores ?? 0),
+        includedTerminals: Number(plan.includedTerminals ?? plan.included_terminals ?? 0),
+      } : null,
+      storeType: storeType ? {
+        id: storeType.id,
+        code: storeType.code || storeType.storeTypeCode || storeType.store_type_code,
+        name: storeType.name,
+      } : null,
+    };
+  }
+
   @Get()
   async list(@Query('merchantId') merchantId?: string) {
     const subscriptions = (await this.repository.listSubscriptions(merchantId))
-      .filter(row => String(row.status || '').toUpperCase() === 'ACTIVE');
+      .filter(row => String(row.status || '').trim().toUpperCase() === 'ACTIVE')
+      .map(row => this.present(row));
     return { success:true, count:subscriptions.length, subscriptions };
   }
   @Get(':id')
   async get(@Param('id') id: string) {
     const subscription = await this.repository.getSubscription(id);
-    if (!subscription) throw new NotFoundException('Subscription not found');
-    return { success:true, subscription };
+    if (!subscription || String(subscription.status).toUpperCase() !== 'ACTIVE' || subscription.isDeleted) {
+      throw new NotFoundException('Active subscription not found');
+    }
+    return { success:true, subscription:this.present(subscription) };
   }
   @Post()
   async create(@Body(validate(CreateSubscriptionDto)) body: CreateSubscriptionDto) {
