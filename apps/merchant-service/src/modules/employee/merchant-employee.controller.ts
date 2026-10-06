@@ -1,25 +1,19 @@
-import { WorkforceValidationPipe } from './workforce-validation.pipe';
-import { BadRequestException, Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { EmployeeValidationPipe, EmployeeResponseInterceptor } from './workforce-validation.pipe';
+import { BadRequestException, Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { RelationshipOwnerGuard } from '../shared/relationships.controller';
+import { RelationshipOwnerGuard, RelationshipRequest, relationshipUserId } from '../shared/relationships.controller';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employee.dto';
 
 const employeeImageDirectory = join(process.cwd(), 'uploads', 'employees');
 mkdirSync(employeeImageDirectory, { recursive: true });
-const { diskStorage } = require('multer');
+const { memoryStorage } = require('multer');
 const employeeImageUpload = FileInterceptor('image', {
-  storage: diskStorage({
-    destination: employeeImageDirectory,
-    filename: (_request: unknown, file: { mimetype: string }, callback: (error: Error | null, filename: string) => void) => {
-      const extension = file.mimetype === 'image/png' ? '.png' : file.mimetype === 'image/webp' ? '.webp' : '.jpg';
-      callback(null, `${randomUUID()}${extension}`);
-    },
-  }),
+  storage: memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024, files: 1 },
   fileFilter: (_request: unknown, file: { mimetype: string }, callback: (error: Error | null, accept: boolean) => void) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
@@ -27,8 +21,9 @@ const employeeImageUpload = FileInterceptor('image', {
   },
 });
 
-type UploadedEmployeeImage = { filename: string; path: string };
+type UploadedEmployeeImage = { buffer: Buffer; mimetype: string };
 
+@UseInterceptors(EmployeeResponseInterceptor)
 @UseGuards(RelationshipOwnerGuard)
 @Controller(['api/v1/merchants/:merchantId/employees', 'connector/api/v1/merchants/:merchantId/employees'])
 export class MerchantEmployeeController {
@@ -50,77 +45,67 @@ export class MerchantEmployeeController {
   }
 
   @Post()
-  async create(
-    @Param('merchantId') merchantId: string,
-    @Body(new WorkforceValidationPipe({ expectedType: CreateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateEmployeeDto,
-  ) {
-    const merchantUuid = await this.requireMerchantId(merchantId);
-    body.merchantId = merchantUuid;
-    const created = await this.repository.createEmployee(body);
-    const employee = await this.repository.getEmployeeDetails(merchantUuid, created.id);
-    return { success: true, message: 'Employee workforce record created successfully', employee };
+  @UseInterceptors(employeeImageUpload)
+  async create(@Param('merchantId') merchantId: string, @Body(new EmployeeValidationPipe({ expectedType: CreateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateEmployeeDto | Record<string, any>, @Req() request: RelationshipRequest, @UploadedFile() file?: UploadedEmployeeImage) {
+    let imageUrl: string | undefined;
+    let saved = false;
+    try {
+      const merchantUuid = await this.requireMerchantId(merchantId);
+      body.merchantId = merchantUuid;
+      body.createdBy = relationshipUserId(request);
+      if (file) { imageUrl = await this.saveImage(file); body.profileImageUrl = imageUrl; }
+      const created = await this.repository.createEmployee(body as CreateEmployeeDto);
+      saved = true;
+      const employee = await this.repository.getEmployeeDetails(merchantUuid, created.id);
+      return { success: true, message: 'Employee workforce record created successfully', employee };
+    } catch (error) {
+      if (!saved && imageUrl) await this.removeLocalImage(imageUrl);
+      throw error;
+    }
   }
 
   @Put(':idOrCode')
-  async update(
-    @Param('merchantId') merchantId: string,
-    @Param('idOrCode') idOrCode: string,
-    @Body(new WorkforceValidationPipe({ expectedType: UpdateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateEmployeeDto,
-  ) {
-    const merchantUuid = await this.requireMerchantId(merchantId);
-    const updated = await this.repository.updateEmployee(merchantUuid, idOrCode, body);
-    if (!updated) throw new NotFoundException(`Employee '${idOrCode}' not found for merchant '${merchantId}'`);
-    const employee = await this.repository.getEmployeeDetails(merchantUuid, updated.id);
-    return { success: true, message: 'Employee record updated successfully', employee };
+  @UseInterceptors(employeeImageUpload)
+  async update(@Param('merchantId') merchantId: string, @Param('idOrCode') idOrCode: string, @Body(new EmployeeValidationPipe({ expectedType: UpdateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateEmployeeDto | Record<string, any>, @Req() request: RelationshipRequest, @UploadedFile() file?: UploadedEmployeeImage) {
+    let imageUrl: string | undefined;
+    let saved = false;
+    try {
+      const merchantUuid = await this.requireMerchantId(merchantId);
+      body.updatedBy = relationshipUserId(request);
+      const current = await this.repository.getEmployeeDetails(merchantUuid, idOrCode);
+      if (!current) throw new NotFoundException(`Employee '${idOrCode}' not found`);
+      if (file) { imageUrl = await this.saveImage(file); body.profileImageUrl = imageUrl; }
+      const updated = await this.repository.updateEmployee(merchantUuid, idOrCode, body as UpdateEmployeeDto);
+      if (!updated) throw new NotFoundException(`Employee '${idOrCode}' not found`);
+      saved = true;
+      if (body.profileImageUrl !== undefined && body.profileImageUrl !== current.profileImageUrl) await this.removeLocalImage(current.profileImageUrl);
+      const employee = await this.repository.getEmployeeDetails(updated.merchantId, updated.id);
+      return { success: true, message: 'Employee record updated successfully', employee };
+    } catch (error) {
+      if (!saved && imageUrl) await this.removeLocalImage(imageUrl);
+      throw error;
+    }
   }
 
   @Patch(':idOrCode')
-  patch(
-    @Param('merchantId') merchantId: string,
-    @Param('idOrCode') idOrCode: string,
-    @Body(new WorkforceValidationPipe({ expectedType: UpdateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateEmployeeDto,
-  ) {
-    return this.update(merchantId, idOrCode, body);
-  }
-
-  @Post(':idOrCode/profile-image')
   @UseInterceptors(employeeImageUpload)
-  async uploadProfileImage(
-    @Param('merchantId') merchantId: string,
-    @Param('idOrCode') idOrCode: string,
-    @UploadedFile() file?: UploadedEmployeeImage,
-  ) {
-    if (!file) throw new BadRequestException('Provide an image file in the image form-data field');
-    const merchantUuid = await this.requireMerchantId(merchantId);
-    const current = await this.repository.getEmployeeDetails(merchantUuid, idOrCode);
-    if (!current) {
-      await unlink(file.path).catch(() => undefined);
-      throw new NotFoundException(`Employee '${idOrCode}' not found for merchant '${merchantId}'`);
-    }
-    const profileImageUrl = `/uploads/employees/${file.filename}`;
-    const updated = await this.repository.updateEmployeeProfileImage(merchantUuid, idOrCode, profileImageUrl);
-    await this.removeLocalImage(current.profileImageUrl);
-    const employee = await this.repository.getEmployeeDetails(merchantUuid, updated!.id);
-    return { success: true, message: 'Employee profile image uploaded successfully', profileImageUrl, employee };
+  patch(@Param('merchantId') merchantId: string, @Param('idOrCode') idOrCode: string, @Body(new EmployeeValidationPipe({ expectedType: UpdateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateEmployeeDto | Record<string, any>, @Req() request: RelationshipRequest, @UploadedFile() file?: UploadedEmployeeImage) {
+    return this.update(merchantId, idOrCode, body, request, file);
   }
 
-  @Delete(':idOrCode/profile-image')
-  async deleteProfileImage(@Param('merchantId') merchantId: string, @Param('idOrCode') idOrCode: string) {
-    const merchantUuid = await this.requireMerchantId(merchantId);
-    const current = await this.repository.getEmployeeDetails(merchantUuid, idOrCode);
-    if (!current) throw new NotFoundException(`Employee '${idOrCode}' not found for merchant '${merchantId}'`);
-    const updated = await this.repository.updateEmployeeProfileImage(merchantUuid, idOrCode, null);
-    await this.removeLocalImage(current.profileImageUrl);
-    const employee = await this.repository.getEmployeeDetails(merchantUuid, updated!.id);
-    return { success: true, message: 'Employee profile image removed successfully', employee };
+  private async saveImage(file: UploadedEmployeeImage): Promise<string> {
+    const extension = file.mimetype === 'image/png' ? '.png' : file.mimetype === 'image/webp' ? '.webp' : '.jpg';
+    const filename = `${randomUUID()}${extension}`;
+    await writeFile(join(employeeImageDirectory, filename), file.buffer);
+    return `/uploads/employees/${filename}`;
   }
 
   @Delete(':idOrCode')
-  async delete(@Param('merchantId') merchantId: string, @Param('idOrCode') idOrCode: string) {
+  async delete(@Param('merchantId') merchantId: string, @Param('idOrCode') idOrCode: string, @Req() request: RelationshipRequest) {
     const merchantUuid = await this.requireMerchantId(merchantId);
-    const deleted = await this.repository.deleteEmployee(merchantUuid, idOrCode);
+    const deleted = await this.repository.deleteEmployee(merchantUuid, idOrCode, relationshipUserId(request));
     if (!deleted) throw new NotFoundException(`Employee '${idOrCode}' not found for merchant '${merchantId}'`);
-    return { success: true, message: 'Employee record deactivated successfully' };
+    return { success: true, message: 'Employee record soft-deleted successfully' };
   }
 
   private async requireMerchantId(identifier: string): Promise<string> {

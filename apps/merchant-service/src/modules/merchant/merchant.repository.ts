@@ -791,7 +791,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
-    const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [idOrUuid]);
+    const rows = await this.dataSource.query('SELECT m.id FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1', [idOrUuid]);
     return rows[0]?.id || null;
   }
 
@@ -2714,7 +2714,7 @@ export class MerchantRepository implements OnModuleInit {
         const role = await manager.getRepository(RoleEntity).save(entity);
         if (role.sourceRoleTemplateId) {
           const merchantUuid = (await manager.query(
-            'SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1',
+            'SELECT m.id FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
             [dto.merchantId],
           ))[0]?.id || null;
           await manager.query(`INSERT INTO public.role_permissions(role_id,permission_id,allowed,merchant_id)
@@ -2752,8 +2752,8 @@ export class MerchantRepository implements OnModuleInit {
 
   private async requireMerchantRecord(idOrCode: string): Promise<{ merchantCode: string; merchantUuid: string }> {
     const rows = await this.dataSource.query(
-      `SELECT m."merchantId" AS "merchantCode", m.id AS "merchantUuid"
-       FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1`,
+      `SELECT m.merchant_id AS "merchantCode", m.id AS "merchantUuid"
+       FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1`,
       [idOrCode],
     );
     if (!rows.length) throw new NotFoundException(`Merchant '${idOrCode}' not found`);
@@ -3359,19 +3359,25 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   private async employeeDetails(employee: EmployeeEntity): Promise<Record<string, unknown>> {
+    // Read every table column, including nullable values, without returning credential hashes.
+    const [row] = await this.dataSource.query(
+      `SELECT to_jsonb(e) - 'login_pin_hash' - 'password_hash' AS details
+       FROM public.employees e WHERE e.id=$1::uuid`,
+      [employee.id],
+    );
+    const details = Object.fromEntries(Object.entries(row?.details || {}).map(([key, value]) =>
+      [key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()), value]));
     const users = employee.userId ? await this.dataSource.query('SELECT username FROM public.users WHERE id=$1', [employee.userId]) : [];
     const merchants = await this.dataSource.query(
-      `SELECT "merchantCode",
-              COALESCE(to_jsonb(m)->>'businessName', to_jsonb(m)->>'business_name', to_jsonb(m)->>'legalBusinessName') AS "merchantName"
-       FROM public.merchants m WHERE id=$1`,
+      `SELECT merchant_code AS "merchantCode", business_display_name AS "merchantName"
+       FROM public.merchants WHERE id=$1::uuid`,
       [employee.merchantId],
     );
-    const { loginPinHash: _loginPinHash, passwordHash: _passwordHash, ...details } = employee as EmployeeEntity & { loginPinHash?: unknown; passwordHash?: unknown };
     return {
       ...details,
       merchantCode: merchants[0]?.merchantCode || null,
       merchantName: merchants[0]?.merchantName || null,
-      username: users[0]?.username || null,
+      username: details.username ?? users[0]?.username ?? null,
     };
   }
 
@@ -3391,7 +3397,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async createEmployee(dto: CreateEmployeeDto): Promise<EmployeeEntity> {
-    if (!(await this.merchantRepo.existsBy({ uuid: dto.merchantId }))) throw new NotFoundException('Merchant not found');
+    if (!(await this.merchantRepo.existsBy({ id: dto.merchantId }))) throw new NotFoundException('Merchant not found');
     try {
       return await this.dataSource.transaction(async manager => {
         const employeeRepo = manager.getRepository(EmployeeEntity);
@@ -3399,15 +3405,14 @@ export class MerchantRepository implements OnModuleInit {
         const username = dto.username.trim().toLowerCase();
         const duplicate = await manager.query('SELECT 1 FROM public.users WHERE lower(email)=lower($1) OR lower(username)=lower($2) LIMIT 1', [email, username]);
         if (duplicate.length) throw new ConflictException('Employee email or username already exists');
-        const employeeCode = dto.employeeCode?.trim()
-          ? dto.employeeCode.trim().toUpperCase()
-          : await this.nextEmployeeCode(manager, dto.merchantId!);
+        const employeeCode = await this.nextEmployeeCode(manager, dto.merchantId!);
         if (await manager.getRepository(EmployeeEntity).existsBy({ merchantId: dto.merchantId, employeeCode })) {
           throw new ConflictException(`Employee code '${employeeCode}' already exists for this merchant`);
         }
         const employee = await employeeRepo.save(employeeRepo.create({
-          merchantId: dto.merchantId, employeeCode,
+          merchantId: dto.merchantId, employeeCode, createdBy: dto.createdBy,
           firstName: dto.firstName.trim(), lastName: dto.lastName?.trim() || '', email,
+          profileImageUrl: dto.profileImageUrl?.trim() || null,
           phone: dto.phone?.trim() || null, dateOfBirth: dto.dateOfBirth || null,
           gender: dto.gender?.trim() || null, addressLine1: dto.addressLine1?.trim() || '',
           addressLine2: dto.addressLine2?.trim() || '', city: dto.city?.trim() || '',
@@ -3443,6 +3448,8 @@ export class MerchantRepository implements OnModuleInit {
   async updateEmployee(merchantId: string | undefined, idOrCode: string, dto: UpdateEmployeeDto): Promise<EmployeeEntity | null> {
     const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!existing) return null;
+    if (dto.updatedBy !== undefined) existing.updatedBy = dto.updatedBy;
+    if (dto.profileImageUrl !== undefined) existing.profileImageUrl = dto.profileImageUrl.trim() || null;
     if (dto.firstName !== undefined) existing.firstName = dto.firstName.trim();
     if (dto.lastName !== undefined) existing.lastName = dto.lastName.trim();
     if (dto.email !== undefined) existing.email = dto.email?.trim().toLowerCase() || null;
@@ -3459,7 +3466,10 @@ export class MerchantRepository implements OnModuleInit {
     if (dto.loginPin !== undefined) existing.loginPinHash = dto.loginPin ? this.hashEmployeePin(dto.loginPin) : null;
     if (dto.temporaryPassword !== undefined) existing.passwordHash = null;
     if (dto.sendCredentials !== undefined) existing.sendCredentials = dto.sendCredentials;
-    if (dto.status !== undefined) existing.status = dto.status;
+    if (dto.status !== undefined) {
+      existing.status = dto.status;
+      if (dto.status === EmployeeStatus.ACTIVE) existing.isDeleted = false;
+    }
     existing.updatedAt = new Date();
     return this.dataSource.transaction(async manager => {
       const saved = await manager.getRepository(EmployeeEntity).save(existing);
@@ -3478,13 +3488,22 @@ export class MerchantRepository implements OnModuleInit {
     });
   }
 
-  async deleteEmployee(merchantId: string | undefined, idOrCode: string): Promise<boolean> {
+  async deleteEmployee(merchantId: string | undefined, idOrCode: string, updatedBy?: string): Promise<boolean> {
     const existing = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
     if (!existing) return false;
     existing.status = EmployeeStatus.INACTIVE;
+    existing.isDeleted = true;
+    if (updatedBy) existing.updatedBy = updatedBy;
     existing.updatedAt = new Date();
-    await this.employeeRepo.save(existing);
-    if (existing.userId) await this.dataSource.query('UPDATE public.users SET status=\'DISABLED\',"updatedAt"=clock_timestamp() WHERE id=$1', [existing.userId]);
+    await this.dataSource.transaction(async manager => {
+      await manager.query(
+        `UPDATE public.employees SET is_deleted = true, status = 'INACTIVE',
+         updated_by = COALESCE($2::uuid, updated_by), updated_at = clock_timestamp()
+         WHERE id = $1::uuid`,
+        [existing.id, updatedBy ?? null],
+      );
+      if (existing.userId) await manager.query('UPDATE public.users SET status=\'DISABLED\',"updatedAt"=clock_timestamp() WHERE id=$1', [existing.userId]);
+    });
     return true;
   }
 
@@ -3539,15 +3558,14 @@ export class MerchantRepository implements OnModuleInit {
     );
   }
 
-  private async nextEmployeeCode(manager: EntityManager, merchantId: string): Promise<string> {
-    const rows = await manager.query(
-      `SELECT employee_code FROM public.employees
-       WHERE merchant_id=$1::uuid AND employee_code ~ '^EMP-[0-9]+$'
-       ORDER BY length(employee_code) DESC, employee_code DESC LIMIT 1`,
-      [merchantId],
+  private async nextEmployeeCode(manager: EntityManager, _merchantId: string): Promise<string> {
+    // Codes are globally unique; keep the lock until the employee transaction commits.
+    await manager.query('SELECT pg_advisory_xact_lock(724621, 43)');
+    const [row] = await manager.query(
+      `SELECT COALESCE(MAX(employee_code::numeric), 0)::text AS last_code
+       FROM public.employees WHERE employee_code ~ '^[0-9]+$'`,
     );
-    const last = Number(String(rows[0]?.employee_code || 'EMP-1000').replace(/\D/g, '')) || 1000;
-    return `EMP-${last + 1}`;
+    return (BigInt(row.last_code) + 1n).toString().padStart(6, '0');
   }
 
   private hashEmployeePin(value: string): string {
@@ -3595,7 +3613,7 @@ export class MerchantRepository implements OnModuleInit {
     employeeId: string,
     assignments?: Array<{ store: string; roles?: string[]; loginPin?: string }>,
   ): Promise<void> {
-    const merchants = await manager.query('SELECT m.id,m."merchantId" AS "merchantCode" FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1', [merchantId]);
+    const merchants = await manager.query('SELECT m.id,m.merchant_id AS "merchantCode" FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1', [merchantId]);
     if (!merchants[0]) throw new NotFoundException('Merchant not found');
     const merchantUuid = merchants[0].id;
     const merchantCode = merchants[0].merchantCode;

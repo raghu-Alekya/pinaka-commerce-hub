@@ -1,5 +1,6 @@
+import { EmployeeResponseInterceptor } from '../employee/workforce-validation.pipe';
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, UseInterceptors } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { COUNTRIES, nationalPhone } from './countries';
 import { MerchantCrudService, withPlanLicenseCounts } from './merchant-crud.service';
@@ -511,6 +512,14 @@ export class CompactMerchantController {
       [merchant.id],
     );
     return { success: true, count: storeTypes.length, storeTypes };
+  }
+
+  // Register the reserved employees path before the merchant identifier route.
+  @Get('employees')
+  @UseInterceptors(EmployeeResponseInterceptor)
+  async listEmployees(@Query('status') status?: string) {
+    const employees = await this.repository.listEmployees(undefined, status);
+    return { success: true, count: employees.length, employees };
   }
 
   @Get(':id')
