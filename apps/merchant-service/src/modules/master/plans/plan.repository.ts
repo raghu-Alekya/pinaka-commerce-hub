@@ -41,7 +41,7 @@ export class PlanRepository {
     let values: unknown[] = [];
     if (operation === 'list') sql = `SELECT ${projection} FROM public.plans ORDER BY name, id`;
     else if (operation === 'get') {
-      // GET by ID includes deleted plans; list continues to hide them.
+      // GET by ID and list include soft-deleted plans.
       sql = `SELECT ${projection} FROM public.plans WHERE id = $1`;
       values = [id];
     } else if (operation === 'create') {
@@ -52,7 +52,8 @@ export class PlanRepository {
       sql = `INSERT INTO public.plans (id, plan_code, ${entries.map(([key]) => quote(key)).join(', ')}) VALUES ($1, ${code}, ${entries.map((_, index) => `$${index + 2}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
-      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
+      const restore = fields.status === 'ACTIVE' ? ', is_deleted = false' : '';
+      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}${restore}, updated_at = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
     } else {
       sql = `UPDATE public.plans SET is_deleted = true, status = 'INACTIVE', updated_by = $2, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
       values = [id, userId];
