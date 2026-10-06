@@ -491,9 +491,9 @@ export class MerchantCrudService {
       to_jsonb(s)->>'merchant_id',
       to_jsonb(s)->>'merchantId'
     ) AS merchant_id FROM public.subscriptions s
-      WHERE id=$1 AND status='ACTIVE' AND COALESCE(is_deleted, false)=false`,[id]);
+      WHERE id=$1 AND COALESCE(is_deleted, false)=false`,[id]);
     if (!row) throw new NotFoundException('Subscription not found');
-    const result = await this.listSubscriptions(row.merchant_id, 'ACTIVE');
+    const result = await this.listSubscriptions(row.merchant_id);
     const subscription = result.subscriptions.find((sub: Input)=>sub.id===id);
     if (!subscription) throw new NotFoundException('Subscription not found');
     return {success:true,subscription};
