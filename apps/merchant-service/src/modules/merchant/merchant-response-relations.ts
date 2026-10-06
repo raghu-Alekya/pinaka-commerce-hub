@@ -1,5 +1,4 @@
 import { DataSource } from 'typeorm';
-import { withPlanLicenseCounts } from './merchant-crud.service';
 
 type Row = Record<string, any>;
 type Kind = 'plan' | 'subscription' | 'merchant' | 'storeType';
@@ -42,7 +41,7 @@ export class MerchantResponseRelations {
         try {
           const rows = await this.db.query(`SELECT s.*,to_char(s."startDate",'YYYY-MM-DD') AS "startDate",
             to_char(s."renewalDate",'YYYY-MM-DD') AS "renewalDate",to_char(s."trialEndDate",'YYYY-MM-DD') AS "trialEndDate"
-            FROM public.subscriptions s WHERE s.id=ANY($1::text[]) OR s."subscriptionId"=ANY($1::text[])`,[[...wanted.subscription]]);
+            FROM public.subscriptions s WHERE s.id=ANY($1::text[])`,[[...wanted.subscription]]);
           for (const row of rows) {records.subscription.set(key(row.id || row.subscriptionId),row);collectRow(row);}
         } catch {}
       }
@@ -117,7 +116,8 @@ export class MerchantResponseRelations {
 
       const lookup = (kind: Kind, value: unknown): Row | null => typeof value==='string' ? records[kind].get(key(value)) || null : null;
       const isSubscriptionRow = (row: Row) =>
-        ('billingCycle' in row || 'billing_cycle' in row || 'maxStoresAllowed' in row || 'licensedDeviceCount' in row || 'licensedStoreCount' in row)
+        ('subscriptionCode' in row || 'subscription_code' in row || 'subscriptionId' in row)
+        && ('billingCycle' in row || 'billing_cycle' in row)
         && !('ownerName' in row && 'businessName' in row);
       const isStoreTypeMasterRow = (row: Row) =>
         ('storeTypeCode' in row || 'store_type_code' in row)
@@ -146,8 +146,7 @@ export class MerchantResponseRelations {
         if (!row) return row;
         const plan = lookup('plan', reference(row, 'plan'));
         const details = { ...withStoreType(row, plan), merchant: merchantDetails(lookup('merchant', reference(row, 'merchant'))) };
-        const detailsPlan = isRecord((details as Row).plan) ? (details as Row).plan : plan;
-        return withPlanLicenseCounts(details, detailsPlan);
+        return details;
       };
       const visit = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(visit);
@@ -155,8 +154,10 @@ export class MerchantResponseRelations {
         const result: Row = Object.fromEntries(Object.entries(value).map(([name,child])=>[name,visit(child)]));
         for (const kind of kinds) {
           if (!aliases[kind].some(alias=>Object.prototype.hasOwnProperty.call(value,alias))) continue;
+          if (isRecord(result[kind])) continue;
+          if (kind==='merchant' && isSubscriptionRow(value)) continue;
           if (kind==='merchant' && ('merchantCode' in value || ('ownerName' in value && 'businessName' in value))) continue;
-          if (kind==='subscription' && value.id===reference(value,kind) && 'billingCycle' in value) continue;
+          if (kind==='subscription' && value.id===reference(value,kind) && isSubscriptionRow(value)) continue;
           const related=lookup(kind,reference(value,kind));
           const details=kind==='merchant'?merchantDetails(related):kind==='subscription'?subscriptionDetails(related):related;
           const name=kind==='storeType' && result.storeType!==undefined && result.storeType!==null && !isRecord(result.storeType)
@@ -172,7 +173,6 @@ export class MerchantResponseRelations {
           if (!result.storeTypeId) result.storeTypeId = storeType.id;
           if (plan) result.plan = attachPlanStoreType(plan, null);
         }
-        if (isSubscriptionRow(result)) withPlanLicenseCounts(result, isRecord(result.plan) ? result.plan : plan);
         return result;
       };
       return visit(payload);
