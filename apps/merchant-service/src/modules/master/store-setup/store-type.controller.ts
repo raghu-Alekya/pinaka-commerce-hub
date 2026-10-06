@@ -144,7 +144,7 @@ export class StoreTypeController {
     return {
       success: true,
       message: 'Store type deactivated successfully',
-      isDeleted: false,
+      isDeleted: true,
       storeType,
     };
   }

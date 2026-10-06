@@ -45,26 +45,12 @@ const LEGACY_COLUMN_RENAMES: Array<{ table: string; from: string; to: string }> 
   { table: 'stores', from: 'woocommerce_store_id', to: 'woocommerceStoreId' },
   { table: 'stores', from: 'created_at', to: 'createdAt' },
   { table: 'stores', from: 'updated_at', to: 'updatedAt' },
-  { table: 'subscriptions', from: 'merchant_id', to: 'merchantId' },
-  { table: 'subscriptions', from: 'subscription_code', to: 'subscriptionCode' },
-  { table: 'subscriptions', from: 'plan_id', to: 'planId' },
-  { table: 'subscriptions', from: 'start_date', to: 'startDate' },
-  { table: 'subscriptions', from: 'renewal_date', to: 'renewalDate' },
-  { table: 'subscriptions', from: 'trial_end_date', to: 'trialEndDate' },
-  { table: 'subscriptions', from: 'licensed_store_count', to: 'licensedStoreCount' },
-  { table: 'subscriptions', from: 'licensed_device_count', to: 'licensedDeviceCount' },
-  { table: 'subscriptions', from: 'cancelled_at', to: 'cancelledAt' },
-  { table: 'subscriptions', from: 'billing_cycle', to: 'billingCycle' },
-  { table: 'subscriptions', from: 'created_at', to: 'createdAt' },
-  { table: 'subscriptions', from: 'updated_at', to: 'updatedAt' },
   { table: 'plans', from: 'plan_code', to: 'planCode' },
   { table: 'plans', from: 'billing_model', to: 'billingModel' },
   { table: 'plans', from: 'base_price', to: 'basePrice' },
   { table: 'plans', from: 'billing_cycle', to: 'billingCycle' },
   { table: 'plans', from: 'created_at', to: 'createdAt' },
   { table: 'plans', from: 'updated_at', to: 'updatedAt' },
-  { table: 'features', from: 'feature_key', to: 'featureKey' },
-  { table: 'features', from: 'feature_type', to: 'featureType' },
   { table: 'features', from: 'created_at', to: 'createdAt' },
   { table: 'features', from: 'updated_at', to: 'updatedAt' },
   { table: 'store_types', from: 'store_type_code', to: 'storeTypeCode' },
@@ -213,8 +199,7 @@ const UUID_TEXT = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 /** Old camelCase columns that do not match the entity property name. */
 const EXTRA_COLUMN_SOURCES: Record<string, string[]> = {
-  feature_code: ['featureKey', 'feature_key'],
-  feature_type: ['featureType'],
+  feature_code: ['feature_key'],
   role_code: ['roleCode'],
   store_type_code: ['storeTypeCode'],
   plan_code: ['planCode'],
@@ -539,16 +524,6 @@ async function dedupeUniqueColumns(dataSource: DataSource): Promise<void> {
 }
 
 async function backfillOptionalUniqueColumns(dataSource: DataSource): Promise<void> {
-  if (
-    (await tableExists(dataSource, 'subscriptions')) &&
-    (await columnExists(dataSource, 'subscriptions', 'subscriptionCode'))
-  ) {
-    // id may be uuid while subscriptionCode is varchar/text — cast to avoid type errors.
-    await dataSource.query(
-      `UPDATE public.subscriptions SET "subscriptionCode" = id::text WHERE "subscriptionCode" IS NULL`,
-    );
-  }
-
   if (await tableExists(dataSource, 'inventory_items')) {
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'storeId');
     await addVarcharColumnIfMissing(dataSource, 'inventory_items', 'productId');
@@ -668,24 +643,97 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('features', 'feature_code', `
-    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS "featureKey" varchar(100);
-    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS "featureType" varchar(50);
-    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS category varchar(100);
-    UPDATE public.features SET
-      "featureKey" = feature_code,
-      "featureType" = feature_type::text;
-    CREATE OR REPLACE FUNCTION public.sync_features_legacy_cols() RETURNS trigger AS $fn$
+    ALTER TABLE public.features ALTER COLUMN feature_type TYPE varchar(100);
+    DO $drop$
+    DECLARE constraint_row record;
     BEGIN
-      NEW.feature_code := COALESCE(NULLIF(NEW.feature_code, ''), NULLIF(NEW."featureKey", ''));
-      NEW."featureKey" := COALESCE(NULLIF(NEW."featureKey", ''), NEW.feature_code);
-      NEW."featureType" := COALESCE(NEW.feature_type::text, NEW."featureType");
+      FOR constraint_row IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'public.features'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ILIKE '%feature_type%'
+      LOOP
+        EXECUTE format('ALTER TABLE public.features DROP CONSTRAINT %I', constraint_row.conname);
+      END LOOP;
+    END;
+    $drop$;
+    ALTER TABLE public.features DROP COLUMN IF EXISTS category;
+    ALTER TABLE public.features DROP COLUMN IF EXISTS feature_category;
+    DROP TRIGGER IF EXISTS features_legacy_cols ON public.features;
+    DROP FUNCTION IF EXISTS public.sync_features_legacy_cols() CASCADE;
+    DO $camel$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='features' AND column_name='featureKey') THEN
+        UPDATE public.features SET feature_code = COALESCE(NULLIF(feature_code, ''), NULLIF("featureKey", ''));
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='features' AND column_name='featureType') THEN
+        UPDATE public.features SET feature_type = COALESCE(NULLIF(feature_type::text, ''), NULLIF("featureType"::text, ''));
+      END IF;
+    END;
+    $camel$;
+    ALTER TABLE public.features DROP COLUMN IF EXISTS "featureKey";
+    ALTER TABLE public.features DROP COLUMN IF EXISTS "featureType";
+  `);
+
+  const featureAuditAndCodeSql = `
+    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS created_by uuid;
+    ALTER TABLE public.features ADD COLUMN IF NOT EXISTS updated_by uuid;
+    CREATE SEQUENCE IF NOT EXISTS public.features_code_seq START WITH 1;
+    CREATE OR REPLACE FUNCTION public.generate_feature_code() RETURNS trigger AS $fn$
+    DECLARE
+      candidate text;
+      duplicate_code boolean;
+      key_name text;
+    BEGIN
+      LOOP
+        candidate := 'FTR_' || lpad(nextval('public.features_code_seq')::text, 3, '0');
+        EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.features WHERE %I = $1 AND id IS DISTINCT FROM $2)', TG_ARGV[0])
+          INTO duplicate_code USING candidate, NEW.id;
+        EXIT WHEN NOT duplicate_code;
+      END LOOP;
+      FOREACH key_name IN ARRAY string_to_array(TG_ARGV[1], ',') LOOP
+        NEW := jsonb_populate_record(NEW, jsonb_build_object(key_name, candidate));
+      END LOOP;
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
-    DROP TRIGGER IF EXISTS features_legacy_cols ON public.features;
-    CREATE TRIGGER features_legacy_cols BEFORE INSERT OR UPDATE ON public.features
-      FOR EACH ROW EXECUTE PROCEDURE public.sync_features_legacy_cols();
-  `);
+    DO $trigger$
+    DECLARE
+      key_column text;
+      key_columns text;
+      max_code bigint;
+      sequence_value bigint;
+      sequence_called boolean;
+    BEGIN
+      SELECT column_name INTO key_column
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'features'
+        AND lower(column_name) IN ('feature_key', 'feature_code')
+      ORDER BY CASE lower(column_name) WHEN 'feature_key' THEN 0 WHEN 'feature_code' THEN 1 ELSE 2 END
+      LIMIT 1;
+      SELECT string_agg(column_name, ',' ORDER BY CASE lower(column_name) WHEN 'feature_key' THEN 0 ELSE 1 END)
+        INTO key_columns
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'features'
+        AND lower(column_name) IN ('feature_key', 'feature_code');
+      IF key_column IS NOT NULL THEN
+        EXECUTE format(
+          'SELECT max((substring(%I from ''^FTR_([0-9]+)$''))::bigint) FROM public.features WHERE %I ~ ''^FTR_[0-9]+$''',
+          key_column, key_column
+        ) INTO max_code;
+        SELECT last_value, is_called INTO sequence_value, sequence_called FROM public.features_code_seq;
+        IF max_code IS NOT NULL THEN
+          PERFORM setval('public.features_code_seq', GREATEST(max_code, sequence_value, 1), true);
+        ELSIF sequence_called THEN
+          PERFORM setval('public.features_code_seq', sequence_value, true);
+        END IF;
+        DROP TRIGGER IF EXISTS features_generate_code ON public.features;
+        EXECUTE format('CREATE TRIGGER features_generate_code BEFORE INSERT ON public.features FOR EACH ROW EXECUTE FUNCTION public.generate_feature_code(%L, %L)', key_column, key_columns);
+      END IF;
+    END;
+    $trigger$;
+  `;
+  await install('features', 'feature_code', featureAuditAndCodeSql);
+  await install('features', 'feature_key', featureAuditAndCodeSql);
 
   await install('store_types', 'store_type_code', `
     ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS "storeTypeCode" varchar(100);

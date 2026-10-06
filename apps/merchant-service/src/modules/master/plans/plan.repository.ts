@@ -22,6 +22,37 @@ export class PlanRepository {
     await this.sequenceReady;
   }
 
+  async listActiveForMerchant(): Promise<Array<Record<string, unknown>>> {
+    return this.merchant.requireDataSource().query(`
+      SELECT
+        p.id,
+        p.plan_code AS "planCode",
+        p.name,
+        p.description,
+        p.base_price::numeric AS "basePrice",
+        p.currency,
+        p.billing_cycle AS "billingCycle",
+        p.stores_limit AS "includedStores",
+        p.terminal_limit AS "includedTerminals",
+        p.employees_limit AS "includedEmployees",
+        p.included_features AS "includedFeatures",
+        p.trial_period AS "trialPeriod",
+        p.store_type_id AS "storeTypeId",
+        jsonb_build_object(
+          'id', st.id,
+          'code', COALESCE(to_jsonb(st)->>'storeTypeCode', to_jsonb(st)->>'store_type_code', ''),
+          'name', st.name
+        ) AS "storeType"
+      FROM public.plans p
+      JOIN public.store_types st ON st.id = p.store_type_id
+      WHERE p.status = 'ACTIVE'
+        AND COALESCE(p.is_deleted, false) = false
+        AND COALESCE(st.status, 'ACTIVE') = 'ACTIVE'
+        AND COALESCE(st.is_deleted, false) = false
+      ORDER BY st.name, p.name, p.id
+    `);
+  }
+
   async execute(operation: 'list' | 'get' | 'create' | 'update' | 'delete', id?: string, fields: Record<string, unknown> = {}, userId?: string): Promise<any> {
     const dataSource = this.merchant.requireDataSource();
     const writable = ['name', 'description', 'status', 'billing_model', 'base_price', 'currency', 'billing_cycle',
@@ -41,7 +72,7 @@ export class PlanRepository {
     let values: unknown[] = [];
     if (operation === 'list') sql = `SELECT ${projection} FROM public.plans ORDER BY name, id`;
     else if (operation === 'get') {
-      // GET by ID includes deleted plans; list continues to hide them.
+      // GET by ID and list include soft-deleted plans.
       sql = `SELECT ${projection} FROM public.plans WHERE id = $1`;
       values = [id];
     } else if (operation === 'create') {
@@ -52,7 +83,8 @@ export class PlanRepository {
       sql = `INSERT INTO public.plans (id, plan_code, ${entries.map(([key]) => quote(key)).join(', ')}) VALUES ($1, ${code}, ${entries.map((_, index) => `$${index + 2}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
-      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
+      const restore = fields.status === 'ACTIVE' ? ', is_deleted = false' : '';
+      sql = `UPDATE public.plans SET ${entries.map(([key], index) => `${quote(key)} = $${index + 2}`).join(', ')}${restore}, updated_at = clock_timestamp() WHERE id = $1 RETURNING ${projection}`;
     } else {
       sql = `UPDATE public.plans SET is_deleted = true, status = 'INACTIVE', updated_by = $2, updated_at = clock_timestamp() WHERE id = $1 AND is_deleted = false RETURNING ${projection}`;
       values = [id, userId];
