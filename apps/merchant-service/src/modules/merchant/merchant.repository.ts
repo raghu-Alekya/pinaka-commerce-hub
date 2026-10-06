@@ -504,6 +504,12 @@ export class MerchantRepository implements OnModuleInit {
       console.log(`🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`);
     }
     await ensureVendorSchema(this.dataSource);
+    // Existing merchant_vendors tables may predate this pairwise key. The
+    // mapping endpoint's ON CONFLICT target requires a matching unique index.
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS merchant_vendors_merchant_vendor_uidx
+      ON public.merchant_vendors (merchant_id, vendor_id)
+    `);
 
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
