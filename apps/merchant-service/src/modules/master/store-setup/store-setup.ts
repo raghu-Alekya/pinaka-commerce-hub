@@ -18,10 +18,10 @@ export function storeSetup(body: StoreSetupDto, previous: Record<string, unknown
       }
     }
   }
-  if (body.devices) {
+ if (body.devices) {
     const serials = body.devices.map(device => String(device.serial || '').trim().toLowerCase());
-    if (body.devices.some(d => typeof d.name !== 'string' || !d.name.trim() || !['POS','KDS','Printer','Scanner'].includes(String(d.type))) || serials.some(s => !s)) {
-      throw new BadRequestException('Devices require a name, serial and supported type');
+    if (body.devices.some(d => typeof d.name !== 'string' || !d.name.trim() || typeof d.type !== 'string' || !d.type.trim() || d.type.trim().length > 100) || serials.some(s => !s)) {
+      throw new BadRequestException('Devices require a name, serial and device type of at most 100 characters');
     }
     if (new Set(serials).size !== serials.length) throw new BadRequestException('Device identifiers must be unique');
   }

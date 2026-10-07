@@ -94,6 +94,7 @@ import { WebsiteConnectionEntity } from '../../entities/website-connection.entit
 import { CategoryEntity } from '../../entities/category.entity';
 import { ProductEntity } from '../../entities/product.entity';
 import { DeviceEntity } from '../../entities/device.entity';
+import { MerchantDeviceEntity } from '../../entities/merchant-device.entity';
 import { VendorEntity } from '../../entities/vendor.entity';
 import { TendorEntity } from '../../entities/tendor.entity';
 import { FeaturePermissionEntity } from '../../entities/feature-permission.entity';
@@ -122,6 +123,8 @@ import { PosSafeDropDenominationEntity } from '../../pos/safe-drop/pos-safe-drop
 import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.entity';
 import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
+import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
+import { ensureMerchantDevicesSchema } from '../device/device.schema';
 
 interface WordPressProductNode {
   id?: number;
@@ -695,6 +698,7 @@ export class MerchantRepository implements OnModuleInit {
         CategoryEntity,
         ProductEntity,
         DeviceEntity,
+        MerchantDeviceEntity,
         PosCurrencyTaxEntity,
         PosTaxClassEntity,
         PosServiceChargeEntity,
@@ -734,6 +738,7 @@ export class MerchantRepository implements OnModuleInit {
         `🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`,
       );
     }
+     await ensureMerchantDevicesSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
@@ -1442,6 +1447,8 @@ export class MerchantRepository implements OnModuleInit {
     serialNumber: string;
     status?: string;
     createdAt?: Date;
+    createdBy: string;
+    updatedBy: string;
   }): Promise<DeviceEntity> {
     if (!this.deviceRepo) {
       throw new ServiceUnavailableException('Database not connected');
@@ -1458,6 +1465,8 @@ export class MerchantRepository implements OnModuleInit {
       serialNumber: data.serialNumber,
       status: data.status || 'Active',
       createdAt: data.createdAt || new Date(),
+      createdBy: data.createdBy,
+      updatedBy: data.updatedBy,
     });
 
     try {
@@ -1471,6 +1480,18 @@ export class MerchantRepository implements OnModuleInit {
       }
       throw error;
     }
+  }
+
+  async findDeviceMerchant(merchantUuid: string): Promise<{ id: string; businessDisplayName: string | null } | null> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    const rows = await this.dataSource.query(
+      `SELECT id::text AS id, business_display_name AS "businessDisplayName"
+       FROM public.merchants
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [merchantUuid],
+    );
+    return rows[0] || null;
   }
 
   async getDevice(id: string): Promise<DeviceEntity | null> {
@@ -1500,106 +1521,58 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
-  async deleteDevice(id: string): Promise<boolean> {
-    if (!this.deviceRepo)
-      throw new ServiceUnavailableException('Database not connected');
-    return (await this.deviceRepo.delete(id)).affected === 1;
+  async deleteDevice(id: string, updatedBy: string): Promise<boolean> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    const result = await this.deviceRepo.update(
+      { id, isDeleted: false },
+      { isDeleted: true, status: RecordStatus.INACTIVE, updatedBy, updatedAt: new Date() },
+    );
+    return result.affected === 1;
   }
 
-  async queryDevices(filters: {
-    page: number;
-    limit: number;
-    search?: string;
-    merchantId?: string;
-    deviceType?: string;
-    status?: string;
-    from?: Date;
-    to?: Date;
-  }): Promise<{
-    devices: DeviceEntity[];
-    total: number;
-    summary: Record<string, number>;
-  }> {
-    if (!this.deviceRepo)
-      throw new ServiceUnavailableException('Database not connected');
+ async queryDevices(filters: {
+    page: number; limit: number; search?: string; merchantId?: string;
+    deviceType?: string; status?: string; from?: Date; to?: Date;
+  }): Promise<{ devices: DeviceEntity[]; total: number; summary: Record<string, number> }> {
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
     if (typeof (this.deviceRepo as any).createQueryBuilder !== 'function') {
-      const all = await this.deviceRepo.find({ order: { createdAt: 'DESC' } });
-      const filtered = all.filter(
-        (device) =>
-          (!filters.merchantId || device.merchantId === filters.merchantId) &&
-          (!filters.deviceType || device.deviceType === filters.deviceType) &&
-          (!filters.search ||
-            [device.deviceName, device.deviceCode, device.serialNumber].some(
-              (value) =>
-                value.toLowerCase().includes(filters.search!.toLowerCase()),
-            )) &&
-          (!filters.from || device.createdAt >= filters.from) &&
-          (!filters.to || device.createdAt < filters.to),
-      );
-      const devices = filtered.slice(
-        (filters.page - 1) * filters.limit,
-        filters.page * filters.limit,
-      );
+      const all = await this.deviceRepo.find({ where: { isDeleted: false }, order: { createdAt: 'DESC' } });
+      const filtered = all.filter(device =>
+        (!filters.merchantId || device.merchantId === filters.merchantId) &&
+        (!filters.deviceType || device.deviceType === filters.deviceType) &&
+        (!filters.search || [device.deviceName, device.deviceCode, device.serialNumber].some(value => value.toLowerCase().includes(filters.search!.toLowerCase()))) &&
+        (!filters.from || device.createdAt >= filters.from) && (!filters.to || device.createdAt < filters.to));
+      const devices = filtered.slice((filters.page - 1) * filters.limit, filters.page * filters.limit);
       return { devices, total: filtered.length, summary: {} };
     }
-    const query = this.deviceRepo.createQueryBuilder('device');
-    if (filters.search)
-      query.andWhere(
-        `(device."deviceName" ILIKE :search OR device."deviceCode" ILIKE :search OR device."serialNumber" ILIKE :search)`,
-        { search: `%${filters.search}%` },
-      );
-    if (filters.merchantId)
-      query.andWhere('device."merchantId" = :merchantId', {
-        merchantId: filters.merchantId,
-      });
-    if (filters.deviceType)
-      query.andWhere('device."deviceType" = :deviceType', {
-        deviceType: filters.deviceType,
-      });
-    if (filters.status?.toLowerCase() === 'active')
-      query.andWhere(`device.status = 'Active'`);
-    if (filters.status?.toLowerCase() === 'inactive')
-      query.andWhere(`device.status = 'Inactive'`);
-    if (filters.status?.toLowerCase() === 'offline')
-      query.andWhere(`device.status = 'Active'`);
+    const query = this.deviceRepo.createQueryBuilder('device').where('device.is_deleted = false');
+    if (filters.search) query.andWhere(`(device.device_name ILIKE :search OR device.device_code ILIKE :search OR device.serial_number ILIKE :search)`, { search: `%${filters.search}%` });
+    if (filters.merchantId) query.andWhere('device.merchant_id = :merchantId', { merchantId: filters.merchantId });
+    if (filters.deviceType) query.andWhere('device.device_type = :deviceType', { deviceType: filters.deviceType });
+    if (filters.status?.toLowerCase() === 'active') query.andWhere(`device.status = 'ACTIVE'`);
+    if (filters.status?.toLowerCase() === 'inactive') query.andWhere(`device.status = 'INACTIVE'`);
+    if (filters.status?.toLowerCase() === 'offline') query.andWhere(`device.status = 'ACTIVE'`);
     if (filters.status?.toLowerCase() === 'online') query.andWhere('1 = 0');
-    if (filters.from)
-      query.andWhere('device."createdAt" >= :from', { from: filters.from });
-    if (filters.to)
-      query.andWhere('device."createdAt" < :to', { to: filters.to });
-    const [devices, total] = await query
-      .orderBy('device."createdAt"', 'DESC')
-      .skip((filters.page - 1) * filters.limit)
-      .take(filters.limit)
-      .getManyAndCount();
-    const summaryRows = await this.deviceRepo
-      .createQueryBuilder('device')
-      .select('device.status', 'status')
-      .addSelect('COUNT(*)', 'count')
-      .groupBy('device.status')
-      .getRawMany();
-    const summary = Object.fromEntries(
-      summaryRows.map((row: any) => [
-        String(row.status).toLowerCase(),
-        Number(row.count),
-      ]),
-    );
+    if (filters.from) query.andWhere('device.created_at >= :from', { from: filters.from });
+    if (filters.to) query.andWhere('device.created_at < :to', { to: filters.to });
+    const [devices, total] = await query.orderBy('device.created_at', 'DESC')
+      .skip((filters.page - 1) * filters.limit).take(filters.limit).getManyAndCount();
+    const summaryRows = await this.deviceRepo.createQueryBuilder('device')
+      .where('device.is_deleted = false')
+      .select('device.status', 'status').addSelect('COUNT(*)', 'count')
+      .groupBy('device.status').getRawMany();
+    const summary = Object.fromEntries(summaryRows.map((row: any) => [String(row.status).toLowerCase(), Number(row.count)]));
     return { devices, total, summary };
   }
 
   async listDevices(): Promise<DeviceEntity[]> {
-    if (!this.deviceRepo)
-      throw new ServiceUnavailableException('Database not connected');
-    return this.deviceRepo.find({ order: { createdAt: 'DESC' } });
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    return this.deviceRepo.find({ where: { isDeleted: false }, order: { createdAt: 'DESC' } });
   }
 
   async listDevicesByMerchantId(merchantId: string): Promise<DeviceEntity[]> {
-    if (!this.deviceRepo)
-      throw new ServiceUnavailableException('Database not connected');
-    return this.deviceRepo.find({
-      where: { merchantId },
-      order: { createdAt: 'DESC' },
-    });
+    if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
+    return this.deviceRepo.find({ where: { merchantId, isDeleted: false }, order: { createdAt: 'DESC' } });
   }
 
   async listStores(merchantId?: string): Promise<StoreEntity[]> {
