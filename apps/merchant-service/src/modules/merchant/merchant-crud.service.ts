@@ -59,6 +59,7 @@ export class MerchantCrudService {
       id: row.id,
       subscriptionCode: row.subscription_code ?? row.subscriptionCode ?? row.id,
       merchantId: row.merchant_code ?? row.merchant_id ?? row.merchantId ?? null,
+      merchantName: row.merchant_name ?? null,
       status: row.status,
       billingCycle: row.billing_cycle ?? row.billingCycle ?? null,
       price: row.price == null ? null : Number(row.price),
@@ -452,7 +453,23 @@ export class MerchantCrudService {
           m.id::text
         )
         LIMIT 1
-      ), ${merchantKey}) AS merchant_code${planSelect}
+      ), ${merchantKey}) AS merchant_code,
+      (
+        SELECT COALESCE(
+          NULLIF(BTRIM(COALESCE(to_jsonb(m)->>'business_display_name', to_jsonb(m)->>'businessDisplayName', '')), ''),
+          NULLIF(BTRIM(CONCAT_WS(' ', to_jsonb(m)->>'first_name', to_jsonb(m)->>'last_name')), ''),
+          NULLIF(COALESCE(to_jsonb(m)->>'merchant_code', to_jsonb(m)->>'merchantCode', ''), '')
+        )
+        FROM public.merchants m
+        WHERE ${merchantKey} IN (
+          to_jsonb(m)->>'merchantId',
+          to_jsonb(m)->>'merchant_id',
+          to_jsonb(m)->>'merchantCode',
+          to_jsonb(m)->>'merchant_code',
+          m.id::text
+        )
+        LIMIT 1
+      ) AS merchant_name${planSelect}
       FROM public.subscriptions s ${planJoin} WHERE ${filters.join(' AND ')}
       ORDER BY ${createdOrder} DESC NULLS LAST`,[merchantId || null,status || null]);
     for (const row of subscriptions) {
@@ -474,9 +491,9 @@ export class MerchantCrudService {
       to_jsonb(s)->>'merchant_id',
       to_jsonb(s)->>'merchantId'
     ) AS merchant_id FROM public.subscriptions s
-      WHERE id=$1 AND status='ACTIVE' AND COALESCE(is_deleted, false)=false`,[id]);
+      WHERE id=$1 AND COALESCE(is_deleted, false)=false`,[id]);
     if (!row) throw new NotFoundException('Subscription not found');
-    const result = await this.listSubscriptions(row.merchant_id, 'ACTIVE');
+    const result = await this.listSubscriptions(row.merchant_id);
     const subscription = result.subscriptions.find((sub: Input)=>sub.id===id);
     if (!subscription) throw new NotFoundException('Subscription not found');
     return {success:true,subscription};

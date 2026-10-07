@@ -15,6 +15,7 @@ export class SubscriptionController {
       id: row.id,
       subscriptionCode: row.subscriptionCode || row.subscription_code || row.id,
       merchantId: row.merchantId || row.merchant_id,
+      merchantName: row.merchantName || row.merchant_name || row.merchant?.businessDisplayName || null,
       status: row.status,
       billingCycle: row.billingCycle || row.billing_cycle,
       price: Number(row.price || 0),
@@ -42,7 +43,7 @@ export class SubscriptionController {
   @Get()
   async list(@Query('merchantId') merchantId?: string) {
     const subscriptions = (await this.repository.listSubscriptions(merchantId))
-      .filter(row => String(row.status || '').trim().toUpperCase() === 'ACTIVE')
+      .filter(row => !row.isDeleted)
       .map(row => this.present(row));
     return { success:true, count:subscriptions.length, subscriptions };
   }

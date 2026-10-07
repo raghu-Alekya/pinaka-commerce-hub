@@ -3,11 +3,20 @@ import { AuditInputDto } from '../../../audit.dto';
 import { RecordStatus } from '../../../entities/commerce-enums';
 
 export class AddMerchantTendorsDto {
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(100)
   @IsUUID('all', { each: true })
-  tendorIds!: string[];
+  tendorIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  tendorCodes?: string[];
 }
 
 export class CreateMerchantTendorDto extends AuditInputDto {
