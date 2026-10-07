@@ -8,6 +8,7 @@ import { RelationshipsModule } from './modules/shared/relationships.module';
 import { StoreModule } from './modules/store/store.module';
 import { StorePosConfigurationModule } from './modules/store-pos-configuration/store-pos-configuration.module';
 import { VendorModule } from './modules/vendor/vendor.module';
+import { DeviceModule } from './modules/device/device.module';
 
 /**
  * Application composition root.
@@ -37,6 +38,7 @@ import { VendorModule } from './modules/vendor/vendor.module';
     DynamicQueryModule,
     PosModule,
     StorePosConfigurationModule,
+    DeviceModule,
   ],
 })
 export class AppModule {}
