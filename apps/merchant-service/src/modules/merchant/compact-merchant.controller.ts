@@ -1228,7 +1228,14 @@ export class CompactMerchantController {
             OR COALESCE(to_jsonb(m)->>'merchantId', '') = $1
             OR COALESCE(to_jsonb(m)->>'merchantCode', '') = $1
          ORDER BY CASE WHEN m.id::text = $1 THEN 0 ELSE 1 END,
-                  COALESCE((to_jsonb(m)->>'createdDate')::timestamptz, (to_jsonb(m)->>'created_at')::timestamptz, now()) DESC
+                  COALESCE(
+                    (to_jsonb(m)->>'updatedAt')::timestamptz,
+                    (to_jsonb(m)->>'updated_at')::timestamptz,
+                    (to_jsonb(m)->>'createdAt')::timestamptz,
+                    (to_jsonb(m)->>'createdDate')::timestamptz,
+                    (to_jsonb(m)->>'created_at')::timestamptz,
+                    '-infinity'::timestamptz
+                  ) DESC
          LIMIT 1
          FOR UPDATE`,
         [id],
@@ -1260,10 +1267,14 @@ export class CompactMerchantController {
            SET status='INACTIVE',
                updated_by=COALESCE($2::uuid, updated_by),
                updated_at=clock_timestamp()
-           WHERE merchant_id=$1
+           WHERE merchant_id IN (
+             SELECT related.id
+             FROM public.merchants related
+             WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+           )
              AND status='ACTIVE'
              AND COALESCE(is_deleted, false)=false`,
-          [target.id, updatedBy],
+          [target.merchantId, updatedBy],
         );
       } else {
         await manager.query(
@@ -1271,10 +1282,14 @@ export class CompactMerchantController {
            SET status='INACTIVE',
                updated_by=COALESCE($2::uuid, updated_by),
                updated_at=clock_timestamp()
-           WHERE merchant_id=$1
+           WHERE merchant_id IN (
+             SELECT related.id
+             FROM public.merchants related
+             WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+           )
              AND status='ACTIVE'
              AND COALESCE(is_deleted, false)=false`,
-          [target.id, updatedBy],
+          [target.merchantId, updatedBy],
         );
         await manager.query(
           `UPDATE public.subscriptions
@@ -1284,12 +1299,16 @@ export class CompactMerchantController {
            WHERE id=(
              SELECT id
              FROM public.subscriptions
-             WHERE merchant_id=$1
+             WHERE merchant_id IN (
+               SELECT related.id
+               FROM public.merchants related
+               WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+             )
                AND COALESCE(is_deleted, false)=false
              ORDER BY created_at DESC NULLS LAST, id DESC
              LIMIT 1
            )`,
-          [target.id, updatedBy],
+          [target.merchantId, updatedBy],
         );
       }
     });

@@ -60,7 +60,12 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
     const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string}>();
     const path=(request.path || request.url || '').split('?')[0];
     const compactSubscriptions = /^(?:\/connector)?\/api\/v1\/(?:subscriptions|merchants\/subscriptions)(?:\/|$)/.test(path);
-    if (request.method === 'GET' && compactSubscriptions) return next.handle();
+    if (request.method === 'GET' && compactSubscriptions) {
+      return next.handle().pipe(mergeMap(async payload => {
+        const named = await featureNames(this.repository.requireDataSource(), payload);
+        return attachMerchantCode(named);
+      }));
+    }
     const related=/^(?:\/connector)?\/api\/v1\/(?:merchants|subscriptions|subscription-plans|plans|stores|store-types|store_types|role-templates|role_templates|employees|devices|countries)(?:\/|$)/.test(path);
     if (!related) return next.handle();
     return next.handle().pipe(mergeMap(async payload => {
