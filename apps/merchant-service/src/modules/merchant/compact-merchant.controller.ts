@@ -267,6 +267,15 @@ export class CompactMerchantController {
   }
 
   private showMerchantCode<T extends Input>(record: T): T {
+    // Keep the assigned-store count as an explicit part of the merchant API
+    // contract. PostgreSQL returns the COUNT alias as `store_count`, while
+    // other query paths/drivers may expose the camelCase equivalent.
+    const rawStoreCount = record?.store_count ?? record?.storeCount;
+    const numericStoreCount = Number(rawStoreCount);
+    (record as Input).store_count = Number.isFinite(numericStoreCount)
+      ? numericStoreCount
+      : 0;
+
     const merchant = record?.merchant;
     if (merchant && typeof merchant === 'object' && !Array.isArray(merchant)) {
       const code = this.merchantCodeValue(merchant as Input);
