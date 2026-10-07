@@ -742,7 +742,8 @@ export class MerchantRepository implements OnModuleInit {
         `🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`,
       );
     }
-     await ensureMerchantDevicesSchema(this.dataSource);
+    await ensureMerchantDevicesSchema(this.dataSource);
+    await ensureStoreDevicesSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
