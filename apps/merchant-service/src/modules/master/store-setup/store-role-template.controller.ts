@@ -42,16 +42,11 @@ export class StoreTypeAssignedRoleTemplatesController {
   async assigned(
     @Param('storeTypeId') storeTypeId: string,
     @Query('status') status?: string,
-    @Query('defaultEnabled') defaultEnabled?: string,
   ) {
     const result = await this.relationships.execute(storeTypeRoleTemplates, 'list', { storeTypeId });
     const expectedStatus = status?.trim().toUpperCase();
-    const expectedEnabled = defaultEnabled === undefined
-      ? undefined
-      : defaultEnabled.trim().toLowerCase() === 'true';
     const roleTemplates = (result.items as Record<string, any>[]).filter(item =>
-      (!expectedStatus || item.templateStatus === expectedStatus)
-      && (expectedEnabled === undefined || (item.status === 'ACTIVE') === expectedEnabled),
+      !expectedStatus || item.templateStatus === expectedStatus,
     );
     return { success: true, count: roleTemplates.length, roleTemplates };
   }

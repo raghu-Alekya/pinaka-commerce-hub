@@ -7,9 +7,8 @@ export async function ensureStoreAccessSchema(db: DataSource): Promise<void> {
     await manager.query(`
       CREATE TABLE IF NOT EXISTS public.store_features (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        merchant_uuid uuid NOT NULL,
+        merchant_id uuid NOT NULL,
         store_id uuid NOT NULL,
-        legacy_store_id varchar(100) NOT NULL,
         feature_id uuid,
         feature_name varchar(255) NOT NULL,
         enabled boolean NOT NULL DEFAULT true,
@@ -19,14 +18,13 @@ export async function ensureStoreAccessSchema(db: DataSource): Promise<void> {
       )
     `);
     await manager.query(`CREATE INDEX IF NOT EXISTS store_features_store_idx ON public.store_features (store_id)`);
-    await manager.query(`CREATE INDEX IF NOT EXISTS store_features_merchant_idx ON public.store_features (merchant_uuid)`);
+    await manager.query(`CREATE INDEX IF NOT EXISTS store_features_merchant_idx ON public.store_features (merchant_id)`);
 
     await manager.query(`
       CREATE TABLE IF NOT EXISTS public.store_roles_permission (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        merchant_uuid uuid NOT NULL,
+        merchant_id uuid NOT NULL,
         store_id uuid NOT NULL,
-        legacy_store_id varchar(100) NOT NULL,
         role_template_id uuid,
         role_name varchar(255) NOT NULL,
         feature_name varchar(255) NOT NULL,
@@ -39,5 +37,7 @@ export async function ensureStoreAccessSchema(db: DataSource): Promise<void> {
     `);
     await manager.query(`CREATE INDEX IF NOT EXISTS store_roles_permission_store_idx ON public.store_roles_permission (store_id)`);
     await manager.query(`CREATE INDEX IF NOT EXISTS store_roles_permission_role_idx ON public.store_roles_permission (store_id, role_template_id)`);
+    await manager.query(`ALTER TABLE public.store_features DROP COLUMN IF EXISTS legacy_store_id`);
+    await manager.query(`ALTER TABLE public.store_roles_permission DROP COLUMN IF EXISTS legacy_store_id`);
   });
 }

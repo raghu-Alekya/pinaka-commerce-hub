@@ -91,6 +91,37 @@ async function databaseHasTables(dataSource: DataSource): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * PostgreSQL counts dropped columns toward the 1600-column limit.
+ * VACUUM FULL rewrites the table and discards those dropped columns.
+ * It cannot run inside a transaction.
+ */
+async function compactDroppedColumns(dataSource: DataSource): Promise<void> {
+  const rows: Array<{ table_name: string; total: string; dropped: string }> = await dataSource.query(`
+    SELECT c.relname AS table_name,
+           count(*) FILTER (WHERE a.attnum > 0)::text AS total,
+           count(*) FILTER (WHERE a.attnum > 0 AND a.attisdropped)::text AS dropped
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a ON a.attrelid = c.oid
+     WHERE n.nspname = 'public'
+       AND c.relkind = 'r'
+     GROUP BY c.relname
+    HAVING count(*) FILTER (WHERE a.attnum > 0) >= 1400
+  `);
+  if (!rows.length) return;
+  const runner = dataSource.createQueryRunner();
+  await runner.connect();
+  try {
+    for (const row of rows) {
+      console.log(`🐘 Compacting public.${row.table_name}: ${row.total} columns, ${row.dropped} dropped, to stay under the 1600-column limit`);
+      await runner.query(`VACUUM FULL public.${quoteIdent(row.table_name)}`);
+    }
+  } finally {
+    await runner.release();
+  }
+}
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -203,7 +234,7 @@ const EXTRA_COLUMN_SOURCES: Record<string, string[]> = {
   role_code: ['roleCode'],
   store_type_code: ['storeTypeCode'],
   plan_code: ['planCode'],
-  store_code: ['storeCode', 'legacy_store_id'],
+  store_code: ['storeCode'],
   store_name: ['storeName'],
   activation_pin: ['activationPin'],
   merchant_code: ['merchantCode'],
@@ -963,22 +994,15 @@ async function ensureEnumTypes(
 
 /**
  * Create entity tables that are not in the database yet.
- * A brand-new database is synchronized once. An existing database only gets
- * CREATE TABLE for gaps, because TypeORM synchronize drops and re-adds columns
- * and PostgreSQL keeps every dropped column until the 1600-column limit.
+ * Existing tables are never altered. TypeORM synchronize drops and re-adds
+ * columns, and PostgreSQL keeps every dropped column until the 1600-column limit.
  */
 export async function createMissingTables(dataSource: DataSource): Promise<string[]> {
   const missing = [];
-  let existing = 0;
   for (const entity of dataSource.entityMetadatas) {
-    if (await tableExists(dataSource, entity.tableName)) existing += 1;
-    else missing.push(entity);
+    if (!(await tableExists(dataSource, entity.tableName))) missing.push(entity);
   }
   if (!missing.length) return [];
-  if (existing === 0) {
-    await dataSource.synchronize();
-    return missing.map(entity => entity.tableName);
-  }
 
   const created: string[] = [];
   for (const entity of missing) {

@@ -25,7 +25,7 @@ export class RoleTemplateStoreTypeCatalogController {
   @Get()
   async available(@Param('roleTemplateId') roleTemplateId: string, @Query() query: Record<string, string>) {
     const mapped = await this.relationships.execute(roleTemplateStoreTypes, 'list', { roleTemplateId });
-    const mappings = new Map((mapped.items as { id: string; storeTypeId: string; defaultEnabled: boolean; required: boolean }[])
+    const mappings = new Map((mapped.items as { id: string; storeTypeId: string; required: boolean }[])
       .map(item => [item.storeTypeId.toLowerCase(), item]));
     const masterStoreTypes = (filterMasterList(await this.merchants.masterData('store_types', 'list'), query) || []) as Record<string, any>[];
     const storeTypes = masterStoreTypes.map((storeType: Record<string, any>) => {
@@ -35,7 +35,6 @@ export class RoleTemplateStoreTypeCatalogController {
         mapped: Boolean(mapping),
         checked: Boolean(mapping),
         mappingId: mapping?.id || null,
-        defaultEnabled: mapping?.defaultEnabled ?? false,
         required: mapping?.required ?? false,
       };
     });

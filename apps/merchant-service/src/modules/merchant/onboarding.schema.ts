@@ -11,7 +11,6 @@ export async function ensureOnboardingSchema(db: DataSource): Promise<void> {
     SET "storeCode" = COALESCE(
       NULLIF(to_jsonb(stores)->>'storeCode', ''),
       NULLIF(to_jsonb(stores)->>'store_code', ''),
-      NULLIF(to_jsonb(stores)->>'legacy_store_id', ''),
       'ST-' || SUBSTRING(REPLACE(COALESCE(to_jsonb(stores)->>'id', '000000'), '-', ''), 1, 6)
     )
     WHERE "storeCode" IS NULL OR "storeCode" = '';

@@ -106,6 +106,9 @@ import { StoreRoleFeatureEntity } from '../../entities/store-role-feature.entity
 import { MerchantVendorEntity } from '../../entities/merchant-vendor.entity';
 import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
 import { ensureVendorSchema } from '../vendor/vendor.schema';
+import { ensureStoreAccessSchema } from '../master/store-setup/store-access.schema';
+import { ensureStoreRoleTemplateSchema } from '../master/store-setup/store-role-template.schema';
+import { ensureEmployeeStoreSchema } from '../store/employee-store.schema';
 import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
 import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
@@ -149,6 +152,9 @@ interface WordPressCategoryNode {
   children?: WordPressCategoryNode[];
 }
 
+/** `required` is optional on older mapping rows. */
+const mappingRequired = `COALESCE((to_jsonb(mapping)->>'required')::boolean, false)`;
+
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
   async getSubscribedFeatures(merchantId: string, storeTypeId: string) {
@@ -169,12 +175,10 @@ export class MerchantRepository implements OnModuleInit {
     if (!storeType) throw new NotFoundException('Store type not found');
     const [subscription] = await this.dataSource.query(
       `SELECT to_jsonb(s) AS data FROM public.subscriptions s
-       WHERE (COALESCE(to_jsonb(s)->>'merchant_uuid', '')=$1
-          OR COALESCE(to_jsonb(s)->>'merchantId', to_jsonb(s)->>'merchant_id')=ANY($2::text[]))
+       WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId')=ANY($1::text[])
          AND s.status IN ('ACTIVE','TRIAL','TRIALING')
        ORDER BY COALESCE(to_jsonb(s)->>'createdAt', to_jsonb(s)->>'created_at') DESC NULLS LAST`,
       [
-        merchant.id,
         [merchant.id, merchant.merchantId, merchant.merchantCode].filter(
           Boolean,
         ),
@@ -740,6 +744,9 @@ export class MerchantRepository implements OnModuleInit {
     }
      await ensureMerchantDevicesSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
+    await ensureStoreAccessSchema(this.dataSource);
+    await ensureStoreRoleTemplateSchema(this.dataSource);
+    await ensureEmployeeStoreSchema(this.dataSource);
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
@@ -1168,9 +1175,9 @@ export class MerchantRepository implements OnModuleInit {
         })
       : null;
     if (!merchant) return { merchant: null, stores: [], subscription: null };
-    const stores = await this.listStores(merchant.merchantId);
+    const stores = await this.listStores(merchant.id);
     const subscription =
-      (await this.listSubscriptions(merchant.merchantId!))[0] || null;
+      (await this.listSubscriptions(merchant.id))[0] || null;
     return {
       merchant: { ...merchant, id: merchant.merchantId! },
       stores,
@@ -1200,7 +1207,11 @@ export class MerchantRepository implements OnModuleInit {
     aliases: string[];
   } | null> {
     const rows = await this.dataSource.query(
-      'SELECT "merchantId", "merchantCode", id::text AS uuid FROM public.merchants WHERE "merchantId"=$1 OR "merchantCode"=$1 OR id::text=$1 LIMIT 1',
+      `SELECT m.merchant_id AS "merchantId", m.merchant_code AS "merchantCode", m.id::text AS uuid
+       FROM public.merchants m
+       WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1
+       ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id
+       LIMIT 1`,
       [idOrUuid],
     );
     const row = rows[0];
@@ -1268,6 +1279,14 @@ export class MerchantRepository implements OnModuleInit {
       postalCode: data.postalCode || address?.zipCode || null,
       country: data.country || address?.country || null,
       phone: data.phone,
+      storeEmail:
+        data.storeEmail ||
+        (data as { email?: string }).email ||
+        null,
+      storeWebsiteUrl:
+        data.storeWebsiteUrl ||
+        (data as { baseUrl?: string }).baseUrl ||
+        null,
       currency: data.currency || 'USD',
       timezone: data.timezone || 'UTC',
       activationPin:
@@ -1290,7 +1309,7 @@ export class MerchantRepository implements OnModuleInit {
     };
   }
 
-  private async resolveStoreTypeId(
+  async resolveStoreTypeId(
     data: Partial<StoreEntity> & { storeType?: string },
   ): Promise<string> {
     if (this.isUuid(data.storeTypeId)) return data.storeTypeId;
@@ -1601,14 +1620,14 @@ export class MerchantRepository implements OnModuleInit {
     if (!store) return null;
     const deletedAt = new Date();
     const result = await this.storeRepo.update(
-      { id, isDeleted: false },
+      { id: store.id, isDeleted: false },
       { isDeleted: true, updatedAt: deletedAt },
     );
     if (!result.affected) return null;
     await this.recordAuditLog(
       'STORE_DELETED',
       store.merchantId,
-      id,
+      store.id,
       'merchant',
       { storeName: store.storeName },
     );
@@ -1621,17 +1640,19 @@ export class MerchantRepository implements OnModuleInit {
   ): Promise<StoreEntity | null> {
     const store = await this.getStoreById(id);
     if (!store) return null;
+    const { id: _ignoredId, merchantId: _ignoredMerchantId, ...safeFields } =
+      fields;
     const updated = {
       ...store,
-      ...fields,
-      id,
+      ...safeFields,
+      id: store.id,
       merchantId: store.merchantId,
       updatedAt: new Date(),
     };
     if (
       !(
-        await this.storeRepo.update(id, {
-          ...fields,
+        await this.storeRepo.update(store.id, {
+          ...safeFields,
           updatedAt: updated.updatedAt,
         })
       ).affected
@@ -1641,7 +1662,7 @@ export class MerchantRepository implements OnModuleInit {
     await this.recordAuditLog(
       'STORE_UPDATED',
       store.merchantId,
-      id,
+      store.id,
       'merchant',
       { storeName: updated.storeName },
     );
@@ -1654,22 +1675,28 @@ export class MerchantRepository implements OnModuleInit {
    * Role permissions were omitted from the create payload entirely.
    */
   async saveStoreFeaturesAndRolePermissions(
-    store: Pick<StoreEntity, 'id' | 'uuid' | 'merchantUuid'>,
+    store: Pick<StoreEntity, 'id' | 'merchantId'> & {
+      uuid?: string;
+      merchantUuid?: string;
+      storeCode?: string;
+    },
     features: string[] = [],
     rolePermissions: Array<Record<string, unknown>> = [],
   ): Promise<void> {
-    const legacyStoreId = store.id;
-    let storeUuid = store.uuid;
-    let merchantUuid = store.merchantUuid;
-    if (!storeUuid || !merchantUuid) {
+    let storeUuid = store.uuid || (this.isUuid(store.id) ? store.id : undefined);
+    let merchantId = store.merchantUuid || store.merchantId;
+    if (!this.isUuid(storeUuid) || !this.isUuid(merchantId)) {
       const [row] = await this.dataSource.query(
-        `SELECT id AS uuid, merchant_uuid AS "merchantUuid" FROM public.stores WHERE legacy_store_id = $1 LIMIT 1`,
-        [legacyStoreId],
+        `SELECT id, merchant_id AS "merchantId"
+         FROM public.stores
+         WHERE id::text = $1 OR store_code = $1
+         LIMIT 1`,
+        [store.id || store.storeCode],
       );
-      storeUuid = storeUuid || row?.uuid;
-      merchantUuid = merchantUuid || row?.merchantUuid;
+      storeUuid = storeUuid || row?.id;
+      merchantId = merchantId || row?.merchantId;
     }
-    if (!storeUuid || !merchantUuid) return;
+    if (!storeUuid || !merchantId) return;
 
     const featureNames = [
       ...new Set(
@@ -1690,12 +1717,11 @@ export class MerchantRepository implements OnModuleInit {
       );
       await this.dataSource.query(
         `INSERT INTO public.store_features
-           (merchant_uuid, store_id, legacy_store_id, feature_id, feature_name, enabled)
-         VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, true)`,
+           (merchant_id, store_id, feature_id, feature_name, enabled)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, true)`,
         [
-          merchantUuid,
+          merchantId,
           storeUuid,
-          legacyStoreId,
           feature?.id || null,
           featureName,
         ],
@@ -1724,9 +1750,9 @@ export class MerchantRepository implements OnModuleInit {
       if (!featureKeys.length) {
         await this.dataSource.query(
           `INSERT INTO public.store_roles_permission
-             (merchant_uuid, store_id, legacy_store_id, role_template_id, role_name, feature_name, permission_action, allowed)
-           VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, '', 'SELECTED', true)`,
-          [merchantUuid, storeUuid, legacyStoreId, templateId, roleName],
+             (merchant_id, store_id, role_template_id, role_name, feature_name, permission_action, allowed)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, '', 'SELECTED', true)`,
+          [merchantId, storeUuid, templateId, roleName],
         );
         continue;
       }
@@ -1736,12 +1762,11 @@ export class MerchantRepository implements OnModuleInit {
           if (grants[action] === undefined) continue;
           await this.dataSource.query(
             `INSERT INTO public.store_roles_permission
-               (merchant_uuid, store_id, legacy_store_id, role_template_id, role_name, feature_name, permission_action, allowed)
-             VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8)`,
+               (merchant_id, store_id, role_template_id, role_name, feature_name, permission_action, allowed)
+             VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7)`,
             [
-              merchantUuid,
+              merchantId,
               storeUuid,
-              legacyStoreId,
               templateId,
               roleName,
               featureName,
@@ -2159,8 +2184,14 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async listSubscriptions(merchantId?: string): Promise<SubscriptionEntity[]> {
+    let owner: string | undefined;
+    if (merchantId) {
+      const identity = await this.merchantIdentity(merchantId);
+      if (!identity) return [];
+      owner = identity.merchantUuid;
+    }
     const rows = await this.subRepo.find({
-      where: merchantId ? { merchantId } : {},
+      where: owner ? { merchantId: owner } : {},
       order: { createdAt: 'DESC', id: 'DESC' },
     });
     const current = (row: SubscriptionEntity) =>
@@ -4402,7 +4433,7 @@ export class MerchantRepository implements OnModuleInit {
   }> {
     const merchant = await this.requireMerchantRecord(merchantId);
     const rows = await this.dataSource.query(
-      `SELECT id FROM public.stores WHERE (legacy_store_id=$2 OR id::text=$2) AND merchant_uuid=$1::uuid LIMIT 1`,
+      `SELECT id FROM public.stores WHERE (store_code=$2 OR id::text=$2) AND merchant_id=$1::uuid LIMIT 1`,
       [merchant.merchantUuid, storeId],
     );
     if (!rows.length)
@@ -4550,7 +4581,6 @@ export class MerchantRepository implements OnModuleInit {
           ...template,
           selected: selectedIds.has(id),
           required: Boolean(template.required),
-          defaultEnabled: Boolean(template.defaultEnabled),
           storeTypeId: storeType.id,
           storeTypeName: storeType.name,
         });
@@ -4564,9 +4594,63 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   /**
+   * public.roles has a primary key on id only, so conflict targets cannot be used.
+   * Match an existing workforce role by template or role code, then update or insert.
+   */
+  private async ensureWorkforceRole(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<Array<{ id: string }>> },
+    merchantCode: string,
+    roleTemplateId: string,
+    template: {
+      roleCode: string;
+      name: string;
+      description?: string | null;
+      scopeType?: string | null;
+    },
+  ): Promise<void> {
+    const [existing] = await manager.query(
+      `SELECT id FROM public.roles
+       WHERE merchant_id = $1
+         AND (source_role_template_id = $2::uuid OR role_code = $3)
+       ORDER BY CASE WHEN source_role_template_id = $2::uuid THEN 0 ELSE 1 END, created_at
+       LIMIT 1`,
+      [merchantCode, roleTemplateId, template.roleCode],
+    );
+    const values = [
+      roleTemplateId,
+      template.roleCode,
+      template.name,
+      template.description || '',
+      template.scopeType || 'STORE',
+    ];
+    if (existing) {
+      await manager.query(
+        `UPDATE public.roles
+         SET source_role_template_id = $2::uuid,
+             role_code = $3,
+             name = $4,
+             description = $5,
+             scope_type = $6,
+             is_custom = false,
+             status = 'ACTIVE',
+             updated_at = now()
+         WHERE id = $1`,
+        [existing.id, ...values],
+      );
+      return;
+    }
+    await manager.query(
+      `INSERT INTO public.roles
+         (merchant_id, source_role_template_id, role_code, name, description, scope_type, is_custom, status)
+       VALUES ($1, $2::uuid, $3, $4, $5, $6, false, 'ACTIVE')`,
+      [merchantCode, ...values],
+    );
+  }
+
+  /**
    * Replace merchant role-template selections (checkbox save).
    * Validates against subscription store-type mappings, writes merchant_role_templates,
-   * updates merchants.roleIds, and ensures workforce `roles` rows exist.
+   * and ensures workforce `roles` rows exist.
    */
   async saveMerchantRoleTemplates(
     merchantId: string,
@@ -4670,44 +4754,8 @@ export class MerchantRepository implements OnModuleInit {
           );
         }
 
-        const existingRole = await manager.query(
-          `SELECT id FROM public.roles
-           WHERE merchant_id = $1 AND source_role_template_id = $2::uuid LIMIT 1`,
-          [merchantCode, roleTemplateId],
-        );
-        if (!existingRole[0]) {
-          await manager.query(
-            `INSERT INTO public.roles
-               (merchant_id, source_role_template_id, role_code, name, description, scope_type, is_custom, status)
-             VALUES ($1, $2::uuid, $3, $4, $5, $6, false, 'ACTIVE')
-             ON CONFLICT (merchant_id, role_code) DO UPDATE
-               SET source_role_template_id = EXCLUDED.source_role_template_id,
-                   name = EXCLUDED.name,
-                   description = EXCLUDED.description,
-                   status = 'ACTIVE',
-                   updated_at = now()`,
-            [
-              merchantCode,
-              roleTemplateId,
-              templates[0].roleCode,
-              templates[0].name,
-              templates[0].description || '',
-              templates[0].scopeType || 'STORE',
-            ],
-          );
-        } else {
-          await manager.query(
-            `UPDATE public.roles SET status = 'ACTIVE', updated_at = now() WHERE id = $1`,
-            [existingRole[0].id],
-          );
-        }
+        await this.ensureWorkforceRole(manager, merchantCode, roleTemplateId, templates[0]);
       }
-
-      await manager.query(
-        `UPDATE public.merchants SET "roleIds" = $2::jsonb, "updatedAt" = clock_timestamp()
-         WHERE id = $1::uuid`,
-        [merchantUuid, JSON.stringify(ids)],
-      );
     });
 
     return this.listMerchantRoleTemplates(merchantId, 'ACTIVE');
@@ -4716,7 +4764,7 @@ export class MerchantRepository implements OnModuleInit {
   /** Master: role templates linked to a store type via store_type_role_templates. */
   async listRoleTemplatesForStoreType(
     storeTypeIdOrCode: string,
-    options: { status?: string; defaultEnabled?: boolean } = {},
+    options: { status?: string } = {},
   ): Promise<Record<string, unknown>[]> {
     if (!this.isDbConnected || !this.dataSource?.isInitialized) {
       throw new ServiceUnavailableException('PostgreSQL is unavailable');
@@ -4740,18 +4788,13 @@ export class MerchantRepository implements OnModuleInit {
       params.push(options.status.toUpperCase());
       filters.push(`rt.status = $${params.length}`);
     }
-    if (options.defaultEnabled !== undefined) {
-      params.push(options.defaultEnabled);
-      filters.push(`mapping.default_enabled = $${params.length}`);
-    }
 
     return this.dataSource.query(
       `SELECT rt.id, rt.role_code AS "roleCode", rt.name, rt.description,
               rt.scope_type AS "scopeType", rt.status,
               mapping.id AS "mappingId",
-              mapping.default_enabled AS "defaultEnabled",
-              mapping.required,
-              mapping.created_at AS "mappedAt"
+              ${mappingRequired} AS required,
+              COALESCE(to_jsonb(mapping)->>'created_at', to_jsonb(mapping)->>'createdAt') AS "mappedAt"
        FROM public.store_type_role_templates mapping
        JOIN public.role_templates rt ON rt.id = mapping.role_template_id
        WHERE ${filters.join(' AND ')}
@@ -4875,33 +4918,7 @@ export class MerchantRepository implements OnModuleInit {
           [merchantUuid, storeUuid, roleTemplateId, enabled],
         );
 
-        // Ensure merchant role exists so employees can be assigned later.
-        const existingRole = await manager.query(
-          `SELECT id FROM public.roles
-           WHERE merchant_id = $1 AND source_role_template_id = $2::uuid LIMIT 1`,
-          [merchantCode, roleTemplateId],
-        );
-        if (!existingRole[0]) {
-          await manager.query(
-            `INSERT INTO public.roles
-               (merchant_id, source_role_template_id, role_code, name, description, scope_type, is_custom, status)
-             VALUES ($1, $2::uuid, $3, $4, $5, $6, false, 'ACTIVE')
-             ON CONFLICT (merchant_id, role_code) DO UPDATE
-               SET source_role_template_id = EXCLUDED.source_role_template_id,
-                   name = EXCLUDED.name,
-                   description = EXCLUDED.description,
-                   status = 'ACTIVE',
-                   updated_at = now()`,
-            [
-              merchantCode,
-              roleTemplateId,
-              templates[0].roleCode,
-              templates[0].name,
-              templates[0].description || '',
-              templates[0].scopeType || 'STORE',
-            ],
-          );
-        }
+        await this.ensureWorkforceRole(manager, merchantCode, roleTemplateId, templates[0]);
       }
     });
 
@@ -5498,11 +5515,11 @@ export class MerchantRepository implements OnModuleInit {
     merchantIdentifier?: string,
   ): Promise<Record<string, unknown>[]> {
     const stores = await this.dataSource.query(
-      `SELECT s.legacy_store_id AS id,s.id AS "storeUuid",s.merchant_uuid AS "merchantUuid",
-              COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId') AS "merchantId",
+      `SELECT s.store_code AS id,s.id AS "storeUuid",s.merchant_id AS "merchantUuid",
+              s.merchant_id::text AS "merchantId",
               COALESCE(to_jsonb(s)->>'store_type_id',to_jsonb(s)->>'storeType') AS "storeTypeId"
        FROM public.stores s
-       WHERE (s.legacy_store_id::text=$1 OR s.id::text=$1) LIMIT 1`,
+       WHERE (s.store_code=$1 OR s.id::text=$1) LIMIT 1`,
       [storeId],
     );
     if (!stores[0]) throw new NotFoundException('Store not found');
@@ -5542,7 +5559,7 @@ export class MerchantRepository implements OnModuleInit {
        FROM public.store_type_role_templates mapping
        JOIN public.role_templates rt ON rt.id=mapping.role_template_id AND rt.status='ACTIVE'
        LEFT JOIN public.roles r ON r.merchant_id::text=$1 AND r.source_role_template_id=rt.id
-       WHERE mapping.store_type_id::text=$2 AND mapping.default_enabled=true
+       WHERE mapping.store_type_id::text=$2
        ORDER BY rt.name`,
       [merchantId, storeTypeId, stores[0].merchantUuid, stores[0].storeUuid],
     );
@@ -5635,12 +5652,12 @@ export class MerchantRepository implements OnModuleInit {
       const stores = await manager.query(
         `SELECT s.id,COALESCE(to_jsonb(s)->>'store_type_id',to_jsonb(s)->>'storeType') AS "storeType"
            FROM public.stores s
-           WHERE COALESCE(to_jsonb(s)->>'merchant_id',to_jsonb(s)->>'merchantId')=$1
-             AND (s.legacy_store_id::text=$2 OR s.id::text=$2
+           WHERE s.merchant_id::text=$1
+             AND (s.id::text=$2
                OR COALESCE(to_jsonb(s)->>'store_code',to_jsonb(s)->>'storeCode')=$2
-               OR lower(COALESCE(to_jsonb(s)->>'name',to_jsonb(s)->>'storeName'))=lower($2))
+               OR lower(COALESCE(to_jsonb(s)->>'store_name',to_jsonb(s)->>'storeName'))=lower($2))
            LIMIT 1`,
-        [merchantCode, assignment.store],
+        [merchantUuid, assignment.store],
       );
       if (!stores[0])
         throw new BadRequestException(
@@ -5682,7 +5699,7 @@ export class MerchantRepository implements OnModuleInit {
         }
         const roles = await manager.query(
           `SELECT r.id FROM public.roles r
-             JOIN public.store_type_role_templates mapping ON mapping.role_template_id=r.source_role_template_id AND mapping.default_enabled=true
+             JOIN public.store_type_role_templates mapping ON mapping.role_template_id=r.source_role_template_id
              JOIN public.store_types st ON st.id=mapping.store_type_id
              WHERE r.merchant_id=$1 AND r.id=$2::uuid AND r.status='ACTIVE'
                AND (st.id::text=$3 OR lower(COALESCE(to_jsonb(st)->>'store_type_code',to_jsonb(st)->>'storeTypeCode'))=lower($3)) LIMIT 1`,

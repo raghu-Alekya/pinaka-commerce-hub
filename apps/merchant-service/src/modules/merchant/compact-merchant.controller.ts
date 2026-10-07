@@ -701,9 +701,8 @@ export class CompactMerchantController {
   async storeTypes(@Param('id') id: string) {
     const [merchant] = await this.db.query(
       `SELECT m.id::text AS id FROM public.merchants m
-       LEFT JOIN public.merchant_record_versions v ON v.record_code = m."merchantCode"
        WHERE m.id::text = $1 OR m."merchantId" = $1 OR m."merchantCode" = $1
-       ORDER BY v.version ASC NULLS LAST, m."createdAt"
+       ORDER BY m."createdAt" ASC NULLS LAST, m.id
        LIMIT 1`,
       [id],
     );

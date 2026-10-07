@@ -71,7 +71,7 @@ const audit = { timestamps: true, createdColumn: 'created_at', updatedColumn: 'u
 export const EMPLOYEE_ACCESS_RELATIONSHIPS: Relationship[] = [
   { name: 'EmployeeStores', path: 'api/v1/merchants/employees/:employeeId/stores', table: 'employee_stores',
     parentTable: 'employees', parentParam: 'employeeId', parentColumn: 'employee_id', parentUuid: true, ownerColumn: 'merchant_id',
-    childTable: 'stores', childKey: 'storeId', childColumn: 'store_id', childUuid: true, tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchant_uuid',
+    childTable: 'stores', childKey: 'storeId', childColumn: 'store_id', childUuid: true, tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchant_id',
     ...audit, fields: { isPrimary: { column: 'is_primary', kind: 'boolean', default: false }, ...assignment } },
   { name: 'EmployeeStoreRoles', path: 'api/v1/merchants/employees/employee-stores/:employeeStoreId/roles', table: 'employee_store_roles',
     parentTable: 'employee_stores', parentParam: 'employeeStoreId', parentColumn: 'employee_store_id', parentUuid: true, ownerColumn: 'merchant_id',
