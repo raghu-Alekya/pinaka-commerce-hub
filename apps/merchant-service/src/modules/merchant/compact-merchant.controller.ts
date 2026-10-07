@@ -197,7 +197,10 @@ export class CompactMerchantController {
   private async getRecord(id: string) {
     try {
       const rows = await this.db.query(
-        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
+                (SELECT COUNT(*)::int FROM public.stores store
+                 WHERE store.merchant_id = m.id
+                   AND COALESCE(store.is_deleted, false) = false) AS store_count
          FROM public.merchants m
          LEFT JOIN LATERAL (
            SELECT sub.*, row_to_json(sp) AS plan
@@ -582,7 +585,10 @@ export class CompactMerchantController {
   async list() {
     try {
       const rows = await this.db.query(
-        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription
+        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
+                (SELECT COUNT(*)::int FROM public.stores store
+                 WHERE store.merchant_id = m.id
+                   AND COALESCE(store.is_deleted, false) = false) AS store_count
          FROM public.merchants m
          LEFT JOIN LATERAL (
            SELECT sub.*, row_to_json(sp) AS plan
@@ -623,7 +629,11 @@ export class CompactMerchantController {
       );
       try {
         const rows = await this.db.query(
-          `SELECT row_to_json(m) AS merchant FROM public.merchants m
+          `SELECT row_to_json(m) AS merchant,
+                  (SELECT COUNT(*)::int FROM public.stores store
+                   WHERE store.merchant_id = m.id
+                     AND COALESCE(store.is_deleted, false) = false) AS store_count
+           FROM public.merchants m
            ORDER BY COALESCE(
              (to_jsonb(m)->>'createdDate')::timestamptz,
              (to_jsonb(m)->>'created_at')::timestamptz,
@@ -644,7 +654,11 @@ export class CompactMerchantController {
             : String(fallbackError),
         );
         const rows = await this.db.query(
-          `SELECT row_to_json(m) AS merchant FROM public.merchants m`,
+          `SELECT row_to_json(m) AS merchant,
+                  (SELECT COUNT(*)::int FROM public.stores store
+                   WHERE store.merchant_id = m.id
+                     AND COALESCE(store.is_deleted, false) = false) AS store_count
+           FROM public.merchants m`,
         );
         return {
           success: true,
