@@ -34,7 +34,7 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
       return await this.db.transaction('REPEATABLE READ', async manager => {
         const [employee] = await this.read(manager, 'employees', 'id', employeeId);
         const [store] = await this.read(manager, 'stores', 'id', storeId);
-        if (!employee || !store || store.merchantUuid !== employee.merchantId) {
+        if (!employee || !store || store.merchantId !== employee.merchantId) {
           throw new NotFoundException('Employee and store were not found in the same merchant');
         }
         const merchantId = employee.merchantId;
@@ -54,7 +54,7 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
           if (!active(role) || role.merchantId !== merchant.merchantCode) continue;
           roles.push(role);
           const grants = await this.read(manager, 'role_permissions', 'roleId', role.id);
-          const storeMatches = (grant: Row) => [store.id, store.uuid, store.legacyStoreId].filter(Boolean).includes(grant.storeId);
+          const storeMatches = (grant: Row) => [store.id, store.storeCode].filter(Boolean).includes(grant.storeId);
           for (const grant of grants.filter(row => !row.storeId)) {
             if (grant.allowed === true) granted.add(grant.permissionId);
             else granted.delete(grant.permissionId);

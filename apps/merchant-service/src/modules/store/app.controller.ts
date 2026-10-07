@@ -77,6 +77,8 @@ export class AppController {
       storeName: store.name.trim(),
       storeCode: store.id.trim(),
       baseUrl: store.url?.trim(),
+      storeWebsiteUrl: store.url?.trim(),
+      storeEmail: store.email?.trim(),
       phone: store.phone?.trim() || '',
       storeType: store.type?.trim().toUpperCase() || 'RETAIL',
       address: { street: store.address.trim(), city: store.city.trim(), state: store.state.trim(), zipCode: store.zip.trim(), country },
@@ -395,19 +397,40 @@ export class AppController {
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
     @Param('merchantId') merchantId?: string,
   ) {
-    if (merchantId && merchantId !== body.merchantId) {
+    const bodyMerchantId = body.merchant_id || body.merchantId;
+    if (merchantId && bodyMerchantId && merchantId !== bodyMerchantId) {
       throw new BadRequestException('Merchant ID in the URL must match the request body');
     }
-    const ownerId = merchantId || body.merchantId;
+    const ownerId = merchantId || bodyMerchantId;
+    if (!ownerId) throw new BadRequestException('merchant_id is required');
     const { merchant } = await this.merchantRepository.getMerchantById(ownerId);
     if (!merchant) throw new NotFoundException(`Merchant '${ownerId}' not found`);
-    if (await this.merchantRepository.getStoreById(body.storeId)) {
-      throw new ConflictException(`Store ID '${body.storeId}' already exists. Choose a different Store ID.`);
+    const storeKey = body.store_code || body.store_id || body.storeId;
+    if (storeKey && await this.merchantRepository.getStoreById(storeKey)) {
+      throw new ConflictException(`Store ID '${storeKey}' already exists. Choose a different Store ID.`);
     }
-    const store = await this.merchantRepository.createStore(ownerId, this.storeCreationFields(body, merchant.country));
+    const fields = this.storeCreationFields(body, merchant.country);
+    if (!fields.storeName) throw new BadRequestException('name is required');
+    const store = await this.merchantRepository.createStore(ownerId, fields);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
     const employees = await this.attachStoreEmployees(ownerId, store.id, body.employees);
-    return { success: true, store, ...(employees ? { employees, count: employees.length } : {}) };
+    return { success: true, store: this.toStoreResponse(store), ...(employees ? { employees, count: employees.length } : {}) };
+  }
+
+  private toStoreResponse(store: Record<string, any>) {
+    const url = store.storeWebsiteUrl ?? null;
+    const email = store.storeEmail ?? null;
+    return {
+      ...store,
+      store_code: store.storeCode,
+      store_name: store.storeName,
+      store_email: email,
+      email,
+      storeEmail: email,
+      store_website_url: url,
+      url,
+      storeWebsiteUrl: url,
+    };
   }
 
   private storeCreationFields(body: CreateStoreDto, country?: string) {
@@ -415,22 +438,50 @@ export class AppController {
       Kolkata: 'Asia/Kolkata', 'Central Time (CT)': 'America/Chicago',
       'Eastern Time (ET)': 'America/New_York', 'Pacific Time (PT)': 'America/Los_Angeles',
     };
+    const storeKey = body.store_code || body.store_id || body.storeId;
+    const storeType = body.store_type_id || body.storeTypeId || body.type;
+    const street = String(body.address_line1 || body.address || '').trim();
     return {
-      id: body.storeId, storeCode: body.storeId, storeName: body.name.trim(),
-      storeType: body.type?.trim().toUpperCase() || 'RETAIL',
-      phone: body.phone?.trim() || '', baseUrl: body.url?.trim(),
-      currency: body.currency, status: body.status,
+      id: storeKey,
+      storeCode: storeKey,
+      storeName: String(body.name || body.store_name || body.storeName || '').trim(),
+      storeTypeId: storeType,
+      storeType: storeType?.trim(),
+      phone: body.phone?.trim() || '',
+      email: (body.store_email || body.email)?.trim(),
+      storeEmail: (body.store_email || body.email)?.trim(),
+      baseUrl: (body.store_website_url || body.url)?.trim(),
+      storeWebsiteUrl: (body.store_website_url || body.url)?.trim(),
+      currency: body.currency,
+      status: body.status,
       timezone: timezones[body.timezone || ''] || body.timezone || 'UTC',
+      activationPin: body.activation_pin || body.activationPin,
+      operationalStatus: body.operational_status,
       onboardingSetup: storeSetup(body),
-      address: { street: body.address.trim(), city: body.city.trim(), state: body.state.trim(),
-        zipCode: body.zip.trim(), country: body.country || country || '' },
+      addressLine1: street || undefined,
+      addressLine2: body.address_line2 || body.addressLine2,
+      postalCode: body.postal_code || body.zip,
+      city: body.city,
+      state: body.state,
+      country: body.country || country,
+      address: {
+        street,
+        addressLine2: body.address_line2 || body.addressLine2,
+        city: String(body.city || '').trim(),
+        state: String(body.state || '').trim(),
+        zipCode: String(body.postal_code || body.zip || '').trim(),
+        country: body.country || country || '',
+      },
     };
   }
 
   @Post('merchants/:merchantId/stores/bulk')
   async createStoresBatch(@Param('merchantId') merchantId: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoresDto })) body: CreateStoresDto) {
-    if (body.stores.some(s => s.merchantId !== merchantId)) {
+    if (body.stores.some(s => {
+      const owner = s.merchant_id || s.merchantId;
+      return Boolean(owner) && owner !== merchantId;
+    })) {
       throw new BadRequestException('All stores must belong to the merchant in the URL');
     }
     const { merchant } = await this.merchantRepository.getMerchantById(merchantId);
@@ -460,6 +511,7 @@ export class AppController {
     if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
+      ...this.toStoreResponse(s),
       id: s.id, storeCode: s.storeCode || s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
       storeName: s.storeName, storeType: s.storeTypeId,
       address: [s.addressLine1, s.addressLine2, s.city, s.state, s.postalCode, s.country].filter(Boolean).join(', '),
@@ -522,7 +574,7 @@ export class AppController {
     return {
       success: true,
       store: {
-        ...store,
+        ...this.toStoreResponse(store),
         hours: Array.isArray(setup.hours) ? setup.hours : [],
         features: Array.isArray(setup.features) ? setup.features : [],
         rolePermissions,
@@ -558,29 +610,48 @@ export class AppController {
     if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
-    if (body.storeId !== storeId || !(await this.merchantRepository.storeMatchesMerchant(existing, body.merchantId))) {
+    const requestedMerchant = body.merchant_id || body.merchantId;
+    const requestedStore = body.store_code || body.storeId;
+    if (requestedMerchant && !(await this.merchantRepository.storeMatchesMerchant(existing, requestedMerchant))) {
       throw new BadRequestException('Merchant and store ID cannot be changed');
     }
+    if (
+      requestedStore &&
+      requestedStore !== storeId &&
+      requestedStore !== existing.id &&
+      requestedStore !== existing.storeCode
+    ) {
+      throw new BadRequestException('Merchant and store ID cannot be changed');
+    }
+    const storeType = body.store_type_id || body.type;
+    const street = body.address_line1 || body.address;
     const store = await this.merchantRepository.updateStore(storeId, {
-      storeName: body.name.trim(),
-      storeType: body.type?.trim().toUpperCase() ?? existing.storeType,
+      storeName: (body.name || body.store_name || body.storeName || existing.storeName).trim(),
+      storeTypeId: storeType ? await this.merchantRepository.resolveStoreTypeId({ storeTypeId: storeType, storeType }) : existing.storeTypeId,
       phone: body.phone?.trim() ?? existing.phone,
-      email: body.email === undefined ? existing.email : (body.email.trim().toLowerCase() || null),
-      baseUrl: body.url?.trim() ?? existing.baseUrl,
+      storeEmail: body.store_email === undefined && body.email === undefined
+        ? existing.storeEmail
+        : ((body.store_email || body.email || '').trim().toLowerCase() || null),
+      storeWebsiteUrl: (body.store_website_url ?? body.url)?.trim() ?? existing.storeWebsiteUrl,
       currency: body.currency ?? existing.currency,
       status: body.status ?? existing.status,
       timezone: body.timezone ?? existing.timezone,
+      activationPin: body.activation_pin ?? existing.activationPin,
+      operationalStatus: body.operational_status ?? existing.operationalStatus,
       onboardingSetup: storeSetup(body, existing.onboardingSetup),
-      address: { ...existing.address, street: body.address.trim(), city: body.city.trim(),
-        addressLine2: body.addressLine2?.trim() ?? existing.address.addressLine2 ?? '',
-        state: body.state.trim(), zipCode: body.zip.trim(), country: body.country ?? existing.address.country },
+      addressLine1: street?.trim() ?? existing.addressLine1,
+      addressLine2: (body.address_line2 || body.addressLine2)?.trim() ?? existing.addressLine2,
+      city: body.city?.trim() ?? existing.city,
+      state: body.state?.trim() ?? existing.state,
+      postalCode: (body.postal_code || body.zip)?.trim() ?? existing.postalCode,
+      country: body.country ?? existing.country,
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
-    const employees = await this.attachStoreEmployees(body.merchantId, store.id, body.employees);
+    const employees = await this.attachStoreEmployees(body.merchantId || merchantId, store.id, body.employees);
     return {
       success: true,
-      store: { ...store, email: store.email ?? null },
+      store: this.toStoreResponse(store),
       ...(employees ? { employees, count: employees.length } : {}),
     };
   }

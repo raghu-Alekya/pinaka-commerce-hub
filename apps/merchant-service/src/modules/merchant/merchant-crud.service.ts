@@ -115,8 +115,7 @@ export class MerchantCrudService {
 
   private async anchor(manager: Pick<EntityManager,'query'>, merchantId: string) {
     const [row] = await manager.query(`SELECT m.id,m."merchantCode" FROM public.merchants m
-      LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode"
-      WHERE m."merchantId"=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt",m.id LIMIT 1`,[merchantId]);
+      WHERE m."merchantId"=$1 ORDER BY m."createdAt" ASC NULLS LAST,m.id LIMIT 1`,[merchantId]);
     if (!row) throw new NotFoundException('Merchant not found');
     return row;
   }
@@ -127,11 +126,9 @@ export class MerchantCrudService {
     await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('merchant:' || $1,0))",[root]);
     const anchor = await this.anchor(manager,root);
     await manager.query('SELECT 1 FROM public.merchants WHERE id=$1 FOR UPDATE',[anchor.id]);
-    await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1) ON CONFLICT(record_code) DO NOTHING',[anchor.merchantCode]);
     const [merchant] = await manager.query(`SELECT m.*,to_char(m."startDate",'YYYY-MM-DD') AS "startDate",
       to_char(m."renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.merchants m
-      LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode"
-      WHERE m."merchantId"=$1 ORDER BY v.version DESC NULLS LAST LIMIT 1 FOR UPDATE OF m`,[root]);
+      WHERE m."merchantId"=$1 ORDER BY m."createdAt" DESC NULLS LAST, m.id DESC LIMIT 1 FOR UPDATE`,[root]);
     if (!merchant) throw new NotFoundException('Merchant not found');
     return {merchant,root};
   }
@@ -188,7 +185,6 @@ export class MerchantCrudService {
       const keys=Object.keys(next).filter(key=>!['id','createdAt','updatedAt'].includes(key));
       await manager.query(`INSERT INTO public.merchants (${keys.map(quote).join(',')}) VALUES (${keys.map((_,i)=>`$${i+1}`).join(',')})`,this.values(next,keys));
       await this.anchor(manager,root);
-      await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[next.merchantCode]);
     } else {
       const keys=merchantFields.filter(key=>changes[key]!==undefined);
       if (keys.length) await manager.query(`UPDATE public.merchants SET ${keys.map((key,i)=>`${quote(key)}=$${i+2}`).join(',')},"updatedAt"=clock_timestamp() WHERE "merchantCode"=$1`,[current.merchantCode,...this.values(changes,keys)]);
@@ -271,7 +267,6 @@ export class MerchantCrudService {
       const [merchant] = await manager.query(`INSERT INTO public.merchants ("merchantCode",${fields.map(quote).join(',')})
         VALUES ($1,${fields.map((_,i)=>`$${i+2}`).join(',')}) RETURNING *`,[code,...this.values(input,fields)]);
       if (input.status === undefined) await manager.query(`UPDATE public.merchants SET status='ACTIVE' WHERE "merchantCode"=$1`,[code]);
-      await manager.query('INSERT INTO public.merchant_record_versions(record_code) VALUES ($1)',[code]);
       const sub = await this.writeSubscription(manager,merchant.id,{...input,price:input.agreementPrice,status:'ACTIVE'});
       await this.saveMerchantRecord(manager,input.merchantId,merchant,this.subscriptionSnapshot(await this.subscriptionRow(manager,sub)),false);
       await this.extras(manager,input.merchantId,input);
@@ -284,8 +279,7 @@ export class MerchantCrudService {
     const root = await this.identity(this.db,code);
     const [merchant] = await this.db.query(`SELECT m.*,to_char(m."startDate",'YYYY-MM-DD') AS "startDate",
       to_char(m."renewalDate",'YYYY-MM-DD') AS "renewalDate" FROM public.merchants m
-      LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode"
-      WHERE m."merchantId"=$1 ORDER BY v.version DESC NULLS LAST LIMIT 1`,[root]);
+      WHERE m."merchantId"=$1 ORDER BY m."createdAt" DESC NULLS LAST, m.id DESC LIMIT 1`,[root]);
     if (!merchant) throw new NotFoundException('Merchant not found');
     const subscriptions = await this.listSubscriptions(root);
     return {success:true,merchantId:root,merchant,subscription:subscriptions.subscriptions.find((sub: Input)=>sub.status==='ACTIVE') || null};
@@ -325,8 +319,8 @@ export class MerchantCrudService {
   async history(code: string) {
     const current = await this.getMerchant(code);
     const history = await this.db.query('SELECT * FROM public.onboarding_audit_logs WHERE "merchantId"=$1 ORDER BY "createdAt" DESC',[current.merchantId]);
-    const merchants = await this.db.query(`SELECT m.* FROM public.merchants m JOIN public.merchant_record_versions v
-      ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 ORDER BY v.version DESC`,[current.merchantId]);
+    const merchants = await this.db.query(`SELECT m.* FROM public.merchants m
+      WHERE m."merchantId"=$1 ORDER BY m."createdAt" DESC NULLS LAST, m.id DESC`,[current.merchantId]);
     return {...current,merchants,history,...await this.listSubscriptions(current.merchantId)};
   }
 
@@ -339,9 +333,7 @@ export class MerchantCrudService {
       }
       if ((await manager.query(`SELECT 1 FROM public.stores WHERE "merchantId"=$1 OR "merchantId" IN
         (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) LIMIT 1`,[root])).length) throw new ConflictException('Merchant has stores; remove them first');
-      const records=await manager.query('DELETE FROM public.merchant_record_versions WHERE record_code IN (SELECT "merchantCode" FROM public.merchants WHERE "merchantId"=$1) RETURNING record_code',[root]);
-      const rows=Array.isArray(records[0]) ? records[0] : records;
-      await manager.query('DELETE FROM public.merchants WHERE "merchantCode"=ANY($1::varchar[])',[rows.map((row: Input)=>row.record_code)]);
+      await manager.query('DELETE FROM public.merchants WHERE "merchantId"=$1',[root]);
     });
     return {success:true,merchantId:code};
   }

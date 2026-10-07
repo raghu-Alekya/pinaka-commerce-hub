@@ -234,7 +234,7 @@ const EXTRA_COLUMN_SOURCES: Record<string, string[]> = {
   role_code: ['roleCode'],
   store_type_code: ['storeTypeCode'],
   plan_code: ['planCode'],
-  store_code: ['storeCode', 'legacy_store_id'],
+  store_code: ['storeCode'],
   store_name: ['storeName'],
   activation_pin: ['activationPin'],
   merchant_code: ['merchantCode'],

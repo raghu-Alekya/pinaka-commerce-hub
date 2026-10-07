@@ -1428,7 +1428,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         }
       }
       let childOwner = config.childOwnerColumn || 'merchantId';
-      if (config.name === 'EmployeeStores') childOwner = 'merchant_uuid';
+      if (config.name === 'EmployeeStores') childOwner = 'merchant_id';
       const scopeChild =
         config.tenantColumn && config.name !== 'RolePermissions';
       const childOwnerValue =
@@ -1724,7 +1724,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
 
   private async resolveMerchantUuid(identifier: string): Promise<string> {
     const rows = await this.db.query(
-      'SELECT m.id FROM public.merchants m LEFT JOIN public.merchant_record_versions v ON v.record_code=m."merchantCode" WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY v.version ASC NULLS LAST,m."createdAt" LIMIT 1',
+      'SELECT m.id FROM public.merchants m WHERE m."merchantId"=$1 OR m."merchantCode"=$1 OR m.id::text=$1 ORDER BY m."createdAt" ASC NULLS LAST, m.id LIMIT 1',
       [identifier],
     );
     if (!rows.length) throw new NotFoundException('Merchant not found');
@@ -1735,10 +1735,11 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     identifier: string,
     merchant: string,
   ): Promise<string> {
+    const merchantId = await this.resolveMerchantUuid(merchant);
     const rows = await this.db.query(
-      `SELECT id FROM public.stores WHERE (legacy_store_id=$1 OR id::text=$1)
-       AND COALESCE(to_jsonb(stores)->>'merchant_id',to_jsonb(stores)->>'merchantId')=$2 LIMIT 1`,
-      [identifier, merchant],
+      `SELECT id FROM public.stores WHERE (store_code=$1 OR id::text=$1)
+       AND merchant_id=$2::uuid LIMIT 1`,
+      [identifier, merchantId],
     );
     if (!rows.length)
       throw new NotFoundException('Store not found for this merchant');

@@ -37,12 +37,6 @@ export async function ensureMerchantCrudSchema(db: DataSource): Promise<void> {
         await manager.query('UPDATE public.merchants SET "addressLine1"=COALESCE("addressLine1", "businessAddress") WHERE "addressLine1" IS NULL');
       }
 
-      try {
-        await manager.query(`CREATE TABLE IF NOT EXISTS public.merchant_record_versions (
-          record_code varchar(100) PRIMARY KEY,
-          version bigint GENERATED ALWAYS AS IDENTITY UNIQUE
-        )`);
-      } catch {}
     });
   } catch (error) {
     console.warn('ensureMerchantCrudSchema notice:', error);
