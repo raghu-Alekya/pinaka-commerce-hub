@@ -11,7 +11,7 @@ export class DeviceRepository {
   async createDeviceWithMerchantMapping(data: {
     id: string;
     deviceName?: string;
-    deviceCode?: string;
+    deviceId?: string;
     deviceType: string;
     merchantId: string;
     merchantName?: string;
@@ -26,7 +26,7 @@ export class DeviceRepository {
         const device = await deviceRepository.save(deviceRepository.create({
           id: data.id,
           deviceName: data.deviceName || 'Unnamed device',
-          deviceCode: data.deviceCode || `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+          ...(data.deviceId !== undefined ? { deviceId: data.deviceId } : {}),
           deviceType: data.deviceType,
           merchantId: data.merchantId,
           merchantName: data.merchantName || data.merchantId,
