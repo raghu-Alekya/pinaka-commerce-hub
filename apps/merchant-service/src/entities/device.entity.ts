@@ -33,6 +33,9 @@ export class DeviceEntity extends AuditColumns {
   @Column({ name: 'device_type', type: 'varchar', length: 100 })
   deviceType!: string;
 
+  @Column({ name: 'device_active_code', type: 'varchar', length: 100, nullable: true })
+  deviceActiveCode?: string | null;
+
   @Column({
     name: 'status',
     type: 'enum',

@@ -258,6 +258,7 @@ export class DeviceController {
       merchant_id: device.merchantId,
       merchant_name: merchantName || device.merchantName || device.merchantId,
       serial_number: device.serialNumber,
+      device_active_code: device.deviceActiveCode ?? null,
       created_at: device.createdAt,
       updated_at: device.updatedAt,
       created_by: device.createdBy ?? null,
