@@ -126,6 +126,7 @@ import { PosSafeDropDenominationEntity } from '../../pos/safe-drop/pos-safe-drop
 import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.entity';
 import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
+import { StoreEmployeeFastkeyEntity } from '../../pos/fastkeys/store-employee-fastkey.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
 import { ensureMerchantDevicesSchema } from '../device/device.schema';
 
@@ -720,6 +721,7 @@ export class MerchantRepository implements OnModuleInit {
         PosCardPaymentEntity,
         PosTerminalMappingSettingsEntity,
         PosTerminalMappingEntity,
+        StoreEmployeeFastkeyEntity,
         SessionEntity,
         VendorEntity,
         TendorEntity,

@@ -8,7 +8,6 @@ import {
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { EmployeeEntity } from '../../entities/employee.entity';
 import { StoreEntity } from '../../entities/store.entity';
-import { CategoryEntity } from '../../entities/category.entity';
 import { ProductEntity } from '../../entities/product.entity';
 import { AddFastkeyProductsDto, CreateFastkeyDto } from './fastkey.dto';
 import { StoreEmployeeFastkeyEntity } from './store-employee-fastkey.entity';
@@ -255,18 +254,11 @@ export class FastkeyService {
         id: In([...new Set(assignments.map(item => item.product_id))]),
       },
     });
-    const categories = catalogProducts.length
-      ? await db.getRepository(CategoryEntity).find({
-          where: { id: In([...new Set(catalogProducts.map(item => item.categoryId))]) },
-          select: { id: true, name: true },
-        })
-      : [];
-    const categoryNames = new Map(categories.map(item => [item.id, item.name]));
     const productsById = new Map(catalogProducts.map(item => [item.id, item]));
     return assignments.flatMap(assignment => {
       const product = productsById.get(assignment.product_id);
       return product
-        ? [this.presentProduct(product, assignment.sl_number, categoryNames)]
+        ? [this.presentProduct(product, assignment.sl_number)]
         : [];
     });
   }
@@ -274,26 +266,30 @@ export class FastkeyService {
   private presentProduct(
     product: ProductEntity,
     serialNumber: number,
-    categoryNames: Map<string, string>,
   ): Record<string, unknown> {
-    const payload = product.payload || {};
+    const payload = this.catalogProductPayload(product.payload);
     const type = String(payload.type ?? '').toLocaleLowerCase();
     const children = Array.isArray(payload.children) ? payload.children : [];
     return {
       product_id: product.id,
-      name: product.name,
-      price: product.price ?? '',
-      image: product.image ?? '',
-      category: categoryNames.has(product.categoryId)
-        ? [categoryNames.get(product.categoryId)]
-        : [],
+      name: String(payload.name ?? ''),
+      price: payload.price ?? '',
+      image: String(payload.image ?? ''),
+      category: payload.categoryName ? [String(payload.categoryName)] : [],
       sl_number: serialNumber,
       sku: String(payload.sku ?? ''),
       is_variant: type === 'variation' || payload.is_variant === true,
       has_variants: payload.has_variants === true
         || (type === 'variable' && children.length > 0),
-      tags: Array.isArray(product.tags) ? product.tags : [],
+      tags: Array.isArray(payload.tags) ? payload.tags : [],
     };
+  }
+
+  private catalogProductPayload(payload: unknown[]): Record<string, unknown> {
+    const first = Array.isArray(payload) ? payload[0] : undefined;
+    return first && typeof first === 'object'
+      ? first as Record<string, unknown>
+      : {};
   }
 
   private postgresCode(error: unknown): string | undefined {
