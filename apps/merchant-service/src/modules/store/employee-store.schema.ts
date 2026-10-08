@@ -1,7 +1,28 @@
 import { DataSource } from 'typeorm';
 
+/**
+ * Earlier startup renamed employee_stores to store_employees and kept the
+ * unique index name uq_employee_store. Creating employee_stores again then
+ * fails with 42P07 because that index name is already taken.
+ */
+async function restoreEmployeeStoresTable(db: DataSource): Promise<void> {
+  const rows = await db.query(`
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'r'
+      AND c.relname IN ('employee_stores', 'store_employees')
+  `) as Array<{ relname: string }>;
+  const names = new Set(rows.map(row => row.relname));
+  if (names.has('store_employees') && !names.has('employee_stores')) {
+    await db.query('ALTER TABLE public.store_employees RENAME TO employee_stores');
+  }
+}
+
 /** Store-employee assignment and the role mapped to that assignment. */
 export async function ensureEmployeeStoreSchema(db: DataSource): Promise<void> {
+  await restoreEmployeeStoresTable(db);
   await db.transaction(async manager => {
     await manager.query('SELECT pg_advisory_xact_lock(724621, 52)');
     await manager.query(`
