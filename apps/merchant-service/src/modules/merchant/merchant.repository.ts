@@ -1482,6 +1482,7 @@ export class MerchantRepository implements OnModuleInit {
       merchantId: data.merchantId,
       merchantName: data.merchantName || data.merchantId,
       serialNumber: data.serialNumber,
+      deviceActiveCode: (data as any).deviceActiveCode || `PK-${Math.floor(100000 + Math.random() * 900000)}`,
       status: data.status || 'Active',
       createdAt: data.createdAt || new Date(),
       createdBy: data.createdBy,

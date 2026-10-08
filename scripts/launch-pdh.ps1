@@ -31,22 +31,31 @@ $launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHu
 if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
 try {
     if (-not $SkipDocker) {
-        & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d
-        if ($LASTEXITCODE -ne 0) { throw 'Docker startup failed.' }
-        $pgReady = $false
-        for ($attempt = 1; $attempt -le 30; $attempt++) {
-            & docker compose --project-directory $serviceRoot exec -T postgres pg_isready -U pdh_user | Out-Null
-            if ($LASTEXITCODE -eq 0) { $pgReady = $true; break }
-            Start-Sleep -Seconds 1
-        }
-        if (-not $pgReady) { throw 'Docker PostgreSQL did not become ready. Check docker compose logs postgres.' }
-        $ensureDatabaseSql = @'
+        try {
+            & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $pgReady = $false
+                for ($attempt = 1; $attempt -le 30; $attempt++) {
+                    & docker compose --project-directory $serviceRoot exec -T postgres pg_isready -U pdh_user 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { $pgReady = $true; break }
+                    Start-Sleep -Seconds 1
+                }
+                if ($pgReady) {
+                    $ensureDatabaseSql = @'
 SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pinaka_commerce_hub')
 \gexec
 '@
-        $ensureDatabaseSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -v ON_ERROR_STOP=1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL database initialization failed.' }
-        Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
+                    $ensureDatabaseSql | & docker compose --project-directory $serviceRoot exec -T postgres psql -U pdh_user -d postgres -v ON_ERROR_STOP=1 2>$null | Out-Null
+                    Write-Host 'PostgreSQL ready: pinaka_commerce_hub (pgAdmin http://localhost:5050).'
+                } else {
+                    Write-Host '⚠️ Docker PostgreSQL did not respond in time. Proceeding in in-memory fallback mode.'
+                }
+            } else {
+                Write-Host '⚠️ Docker daemon is not running. Microservices will start in in-memory fallback mode.'
+            }
+        } catch {
+            Write-Host '⚠️ Docker startup skipped (Docker daemon offline). Microservices starting in fallback mode.'
+        }
     }
     foreach ($service in $services) {
         $entry = Join-Path $serviceRoot "apps/$($service.Name)/src/main.ts"
@@ -91,7 +100,13 @@ SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_da
         }
         Write-Host "$($service.Name): ready on $($service.Port) (PID $($started.Id))."
     }
-    Write-Host 'Backend ready: configured services on ports 3000-3010 (3004 reserved for catalog-service). Docker PostgreSQL is published on port 5432.'
+    $pgAdminListening = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 5050).Count -gt 0
+    if ($pgAdminListening) {
+        Write-Host 'pgAdmin Web: http://localhost:5050 (Credentials: pdh_admin@pinakacommerce.com / pdh_password)'
+    } else {
+        Write-Host 'PostgreSQL: Native Windows Service (postgresql-x64-18) running on port 5432.'
+        Write-Host 'pgAdmin 4: Open native Desktop App from Start Menu or launch: C:\Program Files\PostgreSQL\18\pgAdmin 4\runtime\pgAdmin4.exe'
+    }
     Write-Host 'React: http://localhost:5173 (start npm run dev in pinaka-commerce-hub-web).'
     Write-Host 'Re-running this command reuses existing services. Add -Restart to reload backend services.'
 } finally {

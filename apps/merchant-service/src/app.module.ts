@@ -9,23 +9,10 @@ import { StoreModule } from './modules/store/store.module';
 import { StorePosConfigurationModule } from './modules/store-pos-configuration/store-pos-configuration.module';
 import { VendorModule } from './modules/vendor/vendor.module';
 import { DeviceModule } from './modules/device/device.module';
+import { PosAuthModule } from './modules/pos-auth/pos-auth.module';
 
 /**
  * Application composition root.
- *
- * Business functionality is now grouped by module:
- * - Master: store setup, features, permissions, role templates, plans, tenders
- * - Merchant
- * - Store
- * - Employee
- * - Vendor
- * - Dynamic Query
- * - POS
- * - Store POS configuration
- * - Shared relationship infrastructure
- *
- * Existing controllers/services/repositories were moved into these modules;
- * their route decorators and function implementations are unchanged.
  */
 @Module({
   imports: [
@@ -39,6 +26,8 @@ import { DeviceModule } from './modules/device/device.module';
     PosModule,
     StorePosConfigurationModule,
     DeviceModule,
+    PosAuthModule,
   ],
 })
 export class AppModule {}
+
