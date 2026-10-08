@@ -33,9 +33,9 @@ export async function ensureEmployeeStoreSchema(db: DataSource): Promise<void> {
     await manager.query(`
       CREATE TABLE IF NOT EXISTS public.store_employees (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        merchant_id uuid NOT NULL REFERENCES public.merchants(id),
-        employee_id uuid NOT NULL REFERENCES public.employees(id),
-        store_id uuid NOT NULL REFERENCES public.stores(id),
+        merchant_id uuid NOT NULL,
+        employee_id uuid NOT NULL,
+        store_id uuid NOT NULL,
         is_primary boolean NOT NULL DEFAULT false,
         login_pin_hash varchar(128),
         status varchar(30) NOT NULL DEFAULT 'ACTIVE',
