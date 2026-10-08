@@ -12,11 +12,32 @@ export class PlanRepository {
       this.sequenceReady = this.merchant.requireDataSource().transaction(async manager => {
         // Serialize initial sequence creation across service processes.
         await manager.query('SELECT pg_advisory_xact_lock(724621, 42)');
+        await manager.query('LOCK TABLE public.plans IN SHARE ROW EXCLUSIVE MODE');
         const [existing] = await manager.query("SELECT to_regclass('public.pch_plan_code_seq') AS name");
-        if (existing.name) return;
-        await manager.query('CREATE SEQUENCE public.pch_plan_code_seq');
-        await manager.query(`SELECT setval('public.pch_plan_code_seq',
-          (SELECT COALESCE(MAX(substring(plan_code FROM '^PLAN-([0-9]+)$')::bigint), 0) + 1 FROM public.plans), false)`);
+        if (!existing.name) {
+          await manager.query('CREATE SEQUENCE public.pch_plan_code_seq');
+          await manager.query(`SELECT setval('public.pch_plan_code_seq',
+            (SELECT COALESCE(MAX(COALESCE(substring(plan_code FROM '^PLN_([0-9]+)$'), substring(plan_code FROM '^PLAN-([0-9]+)$'))::bigint), 0) + 1 FROM public.plans), false)`);
+        } else {
+          // Also handle a table truncated before this reset trigger was installed.
+          await manager.query(`DO $reset_empty$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM public.plans) THEN
+                ALTER SEQUENCE public.pch_plan_code_seq RESTART WITH 1;
+              END IF;
+            END;
+            $reset_empty$`);
+        }
+        await manager.query(`CREATE OR REPLACE FUNCTION public.reset_plan_code_sequence() RETURNS trigger AS $reset$
+          BEGIN
+            ALTER SEQUENCE public.pch_plan_code_seq RESTART WITH 1;
+            RETURN NULL;
+          END;
+          $reset$ LANGUAGE plpgsql;
+          DROP TRIGGER IF EXISTS plans_reset_code_after_truncate ON public.plans;
+          CREATE TRIGGER plans_reset_code_after_truncate
+            AFTER TRUNCATE ON public.plans FOR EACH STATEMENT
+            EXECUTE FUNCTION public.reset_plan_code_sequence();`);
       }).catch(error => { this.sequenceReady = undefined; throw error; });
     }
     await this.sequenceReady;
@@ -79,7 +100,7 @@ export class PlanRepository {
       await this.ensureCodeSequence();
       values = [crypto.randomUUID(), ...entries.map(([, value]) => value)];
       // nextval is atomic across concurrent inserts; do not derive codes from row counts.
-      const code = `(SELECT 'PLAN-' || repeat('0', GREATEST(0, 6 - length(n::text))) || n::text FROM nextval('public.pch_plan_code_seq') AS n)`;
+      const code = `(SELECT 'PLN_' || repeat('0', GREATEST(0, 5 - length(n::text))) || n::text FROM nextval('public.pch_plan_code_seq') AS n)`;
       sql = `INSERT INTO public.plans (id, plan_code, ${entries.map(([key]) => quote(key)).join(', ')}) VALUES ($1, ${code}, ${entries.map((_, index) => `$${index + 2}`).join(', ')}) RETURNING ${projection}`;
     } else if (operation === 'update') {
       values = [id, ...entries.map(([, value]) => value)];
