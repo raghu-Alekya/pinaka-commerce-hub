@@ -18,7 +18,6 @@ export class DeliveryConnectorRepository implements OnModuleInit {
   private inMemoryOrders: DeliveryOrderLogEntity[] = [];
 
   async onModuleInit() {
-    try {
       this.dataSource = await connectPostgres('Delivery Connector DB', [
         DeliveryChannelEntity,
         DeliveryOrderLogEntity,
@@ -27,11 +26,6 @@ export class DeliveryConnectorRepository implements OnModuleInit {
       this.orderLogRepo = this.dataSource.getRepository(DeliveryOrderLogEntity);
       this.isDbConnected = true;
       await this.seedDefaultChannels();
-    } catch (err: any) {
-      console.log(`⚠️ [Delivery Connector DB] Offline (${err.message}). Using in-memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
-    }
 
     try {
       this.redisClient = new Redis({

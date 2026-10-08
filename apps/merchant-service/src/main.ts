@@ -36,8 +36,8 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost)));
   app.useGlobalInterceptors(new TracingInterceptor());
-  const port = Number(process.env.MERCHANT_SERVICE_PORT || 3003);
-  await app.listen(port, '0.0.0.0');
+  const port = process.env.MERCHANT_SERVICE_PORT || 3003;
+  await app.listen(port);
   console.log(`🚀 Merchant Service running on http://localhost:${port}`);
 }
 bootstrap();

@@ -7,15 +7,10 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors({
-    origin: '*',
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: '*',
-  });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalInterceptors(new TracingInterceptor());
   const port = process.env.GATEWAY_PORT || 3000;
-  await app.listen(port, '0.0.0.0');
+  await app.listen(port);
   console.log(`🚀 Gateway Service running on http://localhost:${port}`);
 }
 bootstrap();

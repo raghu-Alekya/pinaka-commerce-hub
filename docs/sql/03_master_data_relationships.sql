@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS public.store_entitlements (
         FOREIGN KEY (feature_id) REFERENCES public.features(id)
 );
 
-CREATE TABLE IF NOT EXISTS public.store_employees (
+CREATE TABLE IF NOT EXISTS public.employee_stores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     merchant_id UUID NOT NULL,
     employee_id UUID NOT NULL,
@@ -160,19 +160,19 @@ CREATE TABLE IF NOT EXISTS public.store_employees (
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
     effective_from TIMESTAMPTZ,
     effective_until TIMESTAMPTZ,
-    CONSTRAINT ck_store_employees_effective_period
+    CONSTRAINT ck_employee_stores_effective_period
         CHECK (effective_until IS NULL OR effective_from IS NULL OR effective_until > effective_from),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_store_employees_tenant_id UNIQUE (merchant_id, store_id, id),
-    CONSTRAINT fk_store_employees_merchant
+    CONSTRAINT uq_employee_stores_tenant_id UNIQUE (merchant_id, store_id, id),
+    CONSTRAINT fk_employee_stores_merchant
         FOREIGN KEY (merchant_id) REFERENCES public.merchants(id),
-    CONSTRAINT fk_store_employees_tenant_store
+    CONSTRAINT fk_employee_stores_tenant_store
         FOREIGN KEY (merchant_id, store_id) REFERENCES public.stores(merchant_uuid, id),
     CONSTRAINT uq_employee_store UNIQUE (employee_id, store_id),
-    CONSTRAINT fk_store_employees_employee
+    CONSTRAINT fk_employee_stores_employee
         FOREIGN KEY (employee_id) REFERENCES public.employees(id),
-    CONSTRAINT fk_store_employees_store
+    CONSTRAINT fk_employee_stores_store
         FOREIGN KEY (store_id) REFERENCES public.stores(id)
 );
 
@@ -190,10 +190,10 @@ CREATE TABLE IF NOT EXISTS public.employee_store_roles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_employee_store_roles_tenant_assignment
-        FOREIGN KEY (merchant_id, store_id, employee_store_id) REFERENCES public.store_employees(merchant_id, store_id, id),
+        FOREIGN KEY (merchant_id, store_id, employee_store_id) REFERENCES public.employee_stores(merchant_id, store_id, id),
     CONSTRAINT uq_employee_store_role UNIQUE (employee_store_id, role_id),
     CONSTRAINT fk_employee_store_roles_employee_store
-        FOREIGN KEY (employee_store_id) REFERENCES public.store_employees(id),
+        FOREIGN KEY (employee_store_id) REFERENCES public.employee_stores(id),
     CONSTRAINT fk_employee_store_roles_role
         FOREIGN KEY (role_id) REFERENCES public.roles(id)
 );
@@ -278,11 +278,11 @@ CREATE INDEX IF NOT EXISTS idx_store_entitlements_store_id
 CREATE INDEX IF NOT EXISTS idx_store_entitlements_feature_id
     ON public.store_entitlements(feature_id);
 
-CREATE INDEX IF NOT EXISTS idx_store_employees_employee_id
-    ON public.store_employees(employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_stores_employee_id
+    ON public.employee_stores(employee_id);
 
-CREATE INDEX IF NOT EXISTS idx_store_employees_store_id
-    ON public.store_employees(store_id);
+CREATE INDEX IF NOT EXISTS idx_employee_stores_store_id
+    ON public.employee_stores(store_id);
 
 CREATE INDEX IF NOT EXISTS idx_employee_store_roles_employee_store_id
     ON public.employee_store_roles(employee_store_id);

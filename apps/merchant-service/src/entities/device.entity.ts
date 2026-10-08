@@ -11,9 +11,6 @@ export class DeviceEntity extends AuditColumns {
   @Column({ name: 'device_code', type: 'varchar', length: 100, unique: true })
   deviceCode!: string;
 
-  @Column({ name: 'device_id', type: 'text', nullable: true })
-  deviceId?: string | null;
-
   @Column({ name: 'merchant_id', type: 'uuid' })
   merchantId!: string;
 
@@ -32,9 +29,6 @@ export class DeviceEntity extends AuditColumns {
 
   @Column({ name: 'device_type', type: 'varchar', length: 100 })
   deviceType!: string;
-
-  @Column({ name: 'device_active_code', type: 'varchar', length: 100, nullable: true })
-  deviceActiveCode?: string | null;
 
   @Column({
     name: 'status',

@@ -1491,7 +1491,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
         config.name === 'EmployeeStoreRoles'
           ? (
               await manager.query(
-                'SELECT store_id FROM public.store_employees WHERE id=$1',
+                'SELECT store_id FROM public.employee_stores WHERE id=$1',
                 [parent],
               )
             )[0]?.store_id
@@ -1713,7 +1713,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
       );
     } else if (config.name === 'EmployeeStoreRoles') {
       rows = await this.db.query(
-        `SELECT m."merchantId" AS id FROM public.store_employees es
+        `SELECT m."merchantId" AS id FROM public.employee_stores es
          JOIN public.merchants m ON m.id=es.merchant_id WHERE es.id=$1::uuid LIMIT 1`,
         [parent],
       );

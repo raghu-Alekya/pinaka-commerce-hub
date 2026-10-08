@@ -144,7 +144,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         CREATE UNIQUE INDEX IF NOT EXISTS pch_roles_tenant_code ON public.roles(merchant_id,role_code);
         EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS pch_stores_tenant_id ON public.stores(%s,id)',store_owner);
         ddl := $ddl$
-          CREATE TABLE IF NOT EXISTS public.store_employees (
+          CREATE TABLE IF NOT EXISTS public.employee_stores (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(), merchant_id uuid NOT NULL,
             employee_id uuid NOT NULL, store_id uuid NOT NULL, is_primary boolean NOT NULL DEFAULT false,
             status varchar(30) NOT NULL DEFAULT 'ACTIVE', effective_from timestamptz, effective_until timestamptz,
@@ -162,7 +162,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
             status varchar(30) NOT NULL DEFAULT 'ACTIVE', effective_from timestamptz, effective_until timestamptz,
             created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
             UNIQUE(employee_store_id,role_id),
-            FOREIGN KEY(merchant_id,store_id,employee_store_id) REFERENCES public.store_employees(merchant_id,store_id,id),
+            FOREIGN KEY(merchant_id,store_id,employee_store_id) REFERENCES public.employee_stores(merchant_id,store_id,id),
             FOREIGN KEY(role_id) REFERENCES public.roles(id),
             CHECK(status IN ('ACTIVE','INACTIVE','SUSPENDED')),
             CHECK(effective_until IS NULL OR effective_from IS NULL OR effective_until>effective_from)
@@ -187,7 +187,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       END $schema$;
     `);
     await renameLegacyCamelCaseColumns(manager, {
-      store_employees: ['merchantId', 'employeeId', 'storeId', 'isPrimary', 'effectiveFrom', 'effectiveUntil', 'loginPinHash', 'createdAt', 'updatedAt'],
+      employee_stores: ['merchantId', 'employeeId', 'storeId', 'isPrimary', 'effectiveFrom', 'effectiveUntil', 'loginPinHash', 'createdAt', 'updatedAt'],
       employee_store_roles: ['merchantId', 'employeeStoreId', 'roleId', 'effectiveFrom', 'effectiveUntil', 'createdAt', 'updatedAt'],
       role_template_permissions: ['roleTemplateId', 'permissionId', 'defaultAllowed', 'createdAt', 'updatedAt'],
       role_permissions: ['roleId', 'permissionId', 'createdAt', 'updatedAt'],
@@ -274,14 +274,14 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         IF merchant_type IS NULL THEN merchant_type := 'varchar(100)'; END IF;
         IF store_type IS NULL THEN store_type := 'varchar(100)'; END IF;
 
-        -- Ensure store_employees columns
-        EXECUTE format('ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
-        EXECUTE format('ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS store_id %s', store_type);
-        ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS is_primary boolean NOT NULL DEFAULT false;
-        ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'ACTIVE';
-        ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS effective_from timestamptz;
-        ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS effective_until timestamptz;
-        ALTER TABLE public.store_employees ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128);
+        -- Ensure employee_stores columns
+        EXECUTE format('ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
+        EXECUTE format('ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS store_id %s', store_type);
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS is_primary boolean NOT NULL DEFAULT false;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'ACTIVE';
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_from timestamptz;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_until timestamptz;
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128);
 
         -- Ensure employee_store_roles columns
         EXECUTE format('ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);
@@ -290,10 +290,10 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS effective_from timestamptz;
         ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS effective_until timestamptz;
 
-        -- Backfill missing merchant_id or store_id in employee_store_roles from store_employees
+        -- Backfill missing merchant_id or store_id in employee_store_roles from employee_stores
         UPDATE public.employee_store_roles esr
           SET merchant_id = es.merchant_id, store_id = es.store_id
-          FROM public.store_employees es
+          FROM public.employee_stores es
           WHERE es.id = esr.employee_store_id
             AND (esr.merchant_id IS NULL OR esr.store_id IS NULL);
 
@@ -302,7 +302,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.role_permissions ADD COLUMN IF NOT EXISTS store_id uuid;
       END $schema$;
 
-      CREATE UNIQUE INDEX IF NOT EXISTS store_employees_employee_store_uq ON public.store_employees(employee_id,store_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS employee_stores_employee_store_uq ON public.employee_stores(employee_id,store_id);
       CREATE UNIQUE INDEX IF NOT EXISTS employee_store_roles_assignment_role_uq ON public.employee_store_roles(employee_store_id,role_id);
 
       CREATE TABLE IF NOT EXISTS public.merchant_role_templates (
@@ -402,8 +402,8 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ON public.permissions(feature_id, lower(btrim(name)));
     `);
     for (const index of [
-      'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.store_employees(employee_id) WHERE is_primary',
-      'CREATE INDEX IF NOT EXISTS pch_store_employees_store ON public.store_employees(store_id)',
+      'CREATE UNIQUE INDEX IF NOT EXISTS pch_employee_one_primary_store ON public.employee_stores(employee_id) WHERE is_primary',
+      'CREATE INDEX IF NOT EXISTS pch_employee_stores_store ON public.employee_stores(store_id)',
       'CREATE INDEX IF NOT EXISTS pch_employee_store_roles_role ON public.employee_store_roles(role_id)',
       'CREATE INDEX IF NOT EXISTS pch_role_permissions_permission ON public.role_permissions(permission_id)',
       'CREATE INDEX IF NOT EXISTS pch_role_permissions_merchant_store ON public.role_permissions(merchant_id,store_id)',

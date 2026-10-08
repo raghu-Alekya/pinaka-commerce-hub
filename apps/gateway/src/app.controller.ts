@@ -1,10 +1,10 @@
 import { Controller, Get, Patch, Param, Body, Headers, Sse, MessageEvent, BadRequestException } from '@nestjs/common';
-import { Observable, ReplaySubject } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { CanonicalOrder, OrderStatus } from '@pinaka-delivery-hub/canonical-model';
 
 // Real-Time Event Stream Subject for Gateway Server-Sent Events (SSE)
-export const gatewayOrderStream$ = new ReplaySubject<CanonicalOrder>(50);
+export const gatewayOrderStream$ = new Subject<CanonicalOrder>();
 
 @Controller('api/v1/gateway')
 export class AppController {

@@ -25,17 +25,8 @@ export interface StoreChannelConfig {
 export interface StoreWebsiteConnectorConfig {
   provider: 'WORDPRESS';
   wordpressUrl: string;
-  wordpressJwt?: string;
-  encryptedJwt?: string;
+  encryptedJwt: string;
   updatedAt: string;
-  status?: 'CONNECTED' | 'NOT_CONNECTED';
-  storeId?: string;
-  merchantId?: string;
-  success?: boolean;
-  message?: string | null;
-  wordpressJwtConfigured?: boolean;
-  lastTestedAt?: string | null;
-  lastTestMessage?: string | null;
 }
 
 @Entity('stores')

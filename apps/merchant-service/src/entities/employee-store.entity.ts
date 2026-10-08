@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Unique } from 'typeorm';
 
-@Entity('store_employees')
+@Entity('employee_stores')
 @Unique('uq_employee_store', ['employeeId', 'storeId'])
 export class EmployeeStoreEntity {
   @PrimaryGeneratedColumn('uuid')

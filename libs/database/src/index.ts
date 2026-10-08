@@ -727,17 +727,6 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
-    -- Plain TRUNCATE must also restart feature numbering (without RESTART IDENTITY).
-    CREATE OR REPLACE FUNCTION public.reset_feature_code_sequence() RETURNS trigger AS $reset$
-    BEGIN
-      ALTER SEQUENCE public.features_code_seq RESTART WITH 1;
-      RETURN NULL;
-    END;
-    $reset$ LANGUAGE plpgsql;
-    DROP TRIGGER IF EXISTS features_reset_code_after_truncate ON public.features;
-    CREATE TRIGGER features_reset_code_after_truncate
-      AFTER TRUNCATE ON public.features FOR EACH STATEMENT
-      EXECUTE FUNCTION public.reset_feature_code_sequence();
     DO $trigger$
     DECLARE
       key_column text;

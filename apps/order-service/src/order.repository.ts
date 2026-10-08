@@ -8,33 +8,22 @@ import { OrderStatusHistoryEntity } from './entities/order-status-history.entity
 
 @Injectable()
 export class OrderRepository implements OnModuleInit {
-  private dataSource?: DataSource;
-  private orderRepo?: Repository<OrderEntity>;
-  private itemRepo?: Repository<OrderItemEntity>;
-  private historyRepo?: Repository<OrderStatusHistoryEntity>;
+  private dataSource!: DataSource;
+  private orderRepo!: Repository<OrderEntity>;
+  private itemRepo!: Repository<OrderItemEntity>;
+  private historyRepo!: Repository<OrderStatusHistoryEntity>;
   private redisClient?: Redis;
-  private isDbConnected = false;
   private isRedisConnected = false;
 
-  private inMemoryOrders: OrderEntity[] = [];
-  private inMemoryItems: OrderItemEntity[] = [];
-  private inMemoryHistory: OrderStatusHistoryEntity[] = [];
-
   async onModuleInit() {
-    try {
-      this.dataSource = await connectPostgres('Order Service DB', [
-        OrderEntity,
-        OrderItemEntity,
-        OrderStatusHistoryEntity,
-      ]);
-      this.orderRepo = this.dataSource.getRepository(OrderEntity);
-      this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
-      this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
-      this.isDbConnected = true;
-    } catch (err: any) {
-      console.log(`⚠️ [Order Service DB] Offline (${err.message}). Using in-memory store fallback.`);
-      this.isDbConnected = false;
-    }
+    this.dataSource = await connectPostgres('Order Service DB', [
+      OrderEntity,
+      OrderItemEntity,
+      OrderStatusHistoryEntity,
+    ]);
+    this.orderRepo = this.dataSource.getRepository(OrderEntity);
+    this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
+    this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
 
     try {
       this.redisClient = new Redis({
@@ -96,44 +85,24 @@ export class OrderRepository implements OnModuleInit {
       updatedAt: new Date(),
     };
 
-    if (this.isDbConnected && this.orderRepo && this.itemRepo) {
-      const orderEntity = this.orderRepo.create(order);
-      const savedOrder = await this.orderRepo.save(orderEntity);
-      for (const item of items) {
-        await this.itemRepo.save(this.itemRepo.create(item));
-      }
-      await this.recordStatusChange(id, 'NONE', OrderStatus.CREATED, 'POS System', 'Initial Order Creation');
-      await this.cacheOrder(savedOrder);
-      console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
-      return { order: savedOrder, items };
-    } else {
-      this.inMemoryOrders.unshift(order);
-      this.inMemoryItems.push(...items);
-      await this.recordStatusChange(id, 'NONE', OrderStatus.CREATED, 'POS System', 'Initial Order Creation');
-      await this.cacheOrder(order);
-      console.log(`🛍️ [Order Created (InMemory)] Order ${order.orderNumber} ($${order.totalAmount}) created for Store ${order.storeId}`);
-      return { order, items };
+    const orderEntity = this.orderRepo.create(order);
+    const savedOrder = await this.orderRepo.save(orderEntity);
+    for (const item of items) {
+      await this.itemRepo.save(this.itemRepo.create(item));
     }
+    await this.recordStatusChange(id, 'NONE', OrderStatus.CREATED, 'POS System', 'Initial Order Creation');
+    await this.cacheOrder(savedOrder);
+    console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
+    return { order: savedOrder, items };
   }
 
   async updateOrderStatus(orderId: string, toStatus: OrderStatus, changedBy: string, reason?: string): Promise<OrderEntity | null> {
-    let order: OrderEntity | null = null;
-
-    if (this.isDbConnected && this.orderRepo) {
-      order = await this.orderRepo.findOne({ where: { id: orderId } });
-      if (order) {
-        const fromStatus = order.orderStatus;
-        order.orderStatus = toStatus;
-        order = await this.orderRepo.save(order);
-        await this.recordStatusChange(orderId, fromStatus, toStatus, changedBy, reason);
-      }
-    } else {
-      order = this.inMemoryOrders.find(o => o.id === orderId) || null;
-      if (order) {
-        const fromStatus = order.orderStatus;
-        order.orderStatus = toStatus;
-        await this.recordStatusChange(orderId, fromStatus, toStatus, changedBy, reason);
-      }
+    let order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (order) {
+      const fromStatus = order.orderStatus;
+      order.orderStatus = toStatus;
+      order = await this.orderRepo.save(order);
+      await this.recordStatusChange(orderId, fromStatus, toStatus, changedBy, reason);
     }
 
     if (order) {
@@ -145,30 +114,19 @@ export class OrderRepository implements OnModuleInit {
   }
 
   async getOrdersByStore(storeId: string): Promise<OrderEntity[]> {
-    if (this.isDbConnected && this.orderRepo) {
-      return this.orderRepo.find({ where: { storeId }, order: { createdAt: 'DESC' } });
-    }
-    return this.inMemoryOrders.filter(o => o.storeId === storeId);
+    return this.orderRepo.find({ where: { storeId }, order: { createdAt: 'DESC' } });
   }
 
   async getOrderById(orderId: string): Promise<{ order: OrderEntity; items: OrderItemEntity[]; history: OrderStatusHistoryEntity[] } | null> {
-    if (this.isDbConnected && this.orderRepo && this.itemRepo && this.historyRepo) {
-      const order = await this.orderRepo.findOne({ where: { id: orderId } });
-      if (!order) return null;
-      const items = await this.itemRepo.find({ where: { orderId } });
-      const history = await this.historyRepo.find({ where: { orderId }, order: { createdAt: 'ASC' } });
-      return { order, items, history };
-    } else {
-      const order = this.inMemoryOrders.find(o => o.id === orderId);
-      if (!order) return null;
-      const items = this.inMemoryItems.filter(i => i.orderId === orderId);
-      const history = this.inMemoryHistory.filter(h => h.orderId === orderId);
-      return { order, items, history };
-    }
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (!order) return null;
+    const items = await this.itemRepo.find({ where: { orderId } });
+    const history = await this.historyRepo.find({ where: { orderId }, order: { createdAt: 'ASC' } });
+    return { order, items, history };
   }
 
   private async recordStatusChange(orderId: string, fromStatus: string, toStatus: string, changedBy: string, reason?: string) {
-    const entry: OrderStatusHistoryEntity = {
+    await this.historyRepo.save(this.historyRepo.create({
       id: `HST-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       orderId,
       fromStatus,
@@ -176,12 +134,7 @@ export class OrderRepository implements OnModuleInit {
       changedBy: changedBy || 'POS System',
       reason: reason || 'State Machine Transition',
       createdAt: new Date(),
-    };
-    if (this.isDbConnected && this.historyRepo) {
-      await this.historyRepo.save(this.historyRepo.create(entry));
-    } else {
-      this.inMemoryHistory.push(entry);
-    }
+    }));
   }
 
   private async cacheOrder(order: OrderEntity) {

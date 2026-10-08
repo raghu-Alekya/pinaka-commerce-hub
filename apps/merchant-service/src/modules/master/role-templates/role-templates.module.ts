@@ -1,9 +1,14 @@
 import { Module } from '@nestjs/common';
-import { RoleTemplateController } from './role-template.controller';
+import { RoleTemplateController } from './role-template.controller'; // NEW file
+// import { RoleTemplateController as LegacyRoleTemplateController } from '../../master/common/master-data.controller';
 import { MerchantRoleTemplateController } from './merchant-role-template.controller';
-import { RoleTemplateFeatureAccessController } from './role-template-mapping.controller';
+import {
+  RoleTemplateFeatureAccessController,
+  RoleTemplateStoreTypeBulkController,
+  RoleTemplateStoreTypeCatalogController,
+} from './role-template-mapping.controller';
 import { RoleController } from './role.controller';
-import { RoleTemplateRepository } from './role-template.repository';
+import { RoleTemplateRepository } from './role-template.repository'; // <-- ADD
 import { MerchantModule } from '../../merchant/merchant.module';
 import { RelationshipsModule } from '../../shared/relationships.module';
 
@@ -13,9 +18,11 @@ import { RelationshipsModule } from '../../shared/relationships.module';
     RoleController,
     RoleTemplateController,
     MerchantRoleTemplateController,
+    RoleTemplateStoreTypeCatalogController,
+    RoleTemplateStoreTypeBulkController,
     RoleTemplateFeatureAccessController,
   ],
-  providers: [RoleTemplateRepository],
-  exports: [RoleTemplateRepository],
+  providers: [RoleTemplateRepository], // <-- ADD
+  exports: [RoleTemplateRepository], // <-- ADD
 })
 export class RoleTemplatesModule {}

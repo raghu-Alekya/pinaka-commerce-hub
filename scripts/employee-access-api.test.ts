@@ -107,7 +107,7 @@ async function main() {
         else process.env[key] = previousEnv[key];
       }
     }
-    expect((await db.query("SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('employees','roles','permissions','role_templates','merchant_role_templates','store_employees','employee_store_roles','role_permissions','role_template_permissions')"))[0].count, 9);
+    expect((await db.query("SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('employees','roles','permissions','role_templates','merchant_role_templates','employee_stores','employee_store_roles','role_permissions','role_template_permissions')"))[0].count, 9);
     expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_permissions' AND column_name='permission_id'")).length, 1, 'legacy camelCase permissionId is renamed');
     expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='role_template_permissions' AND column_name='permission_id'")).length, 1);
     Object.assign(relationships, { db }); Object.assign(access, { db });
