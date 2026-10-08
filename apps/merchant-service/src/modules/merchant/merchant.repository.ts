@@ -126,7 +126,7 @@ import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.e
 import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
-import { ensureMerchantDevicesSchema } from '../device/device.schema';
+import { ensureDeviceIdentitySchema, ensureMerchantDevicesSchema } from '../device/device.schema';
 
 interface WordPressProductNode {
   id?: number;
@@ -744,6 +744,7 @@ export class MerchantRepository implements OnModuleInit {
         `🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`,
       );
     }
+    await ensureDeviceIdentitySchema(this.dataSource);
     await ensureMerchantDevicesSchema(this.dataSource);
     await ensureStoreDevicesSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
@@ -782,10 +783,6 @@ export class MerchantRepository implements OnModuleInit {
 
     // 2. Safely seed master reference data once all repos are initialized
     await this.seedAllMasterData();
-    await this.seedDefaultStoreTypes();
-    await this.seedDefaultCommercialPlans();
-    await this.seedDefaultPlans();
-
     // 3. Redis Connection
     try {
       this.redisClient = new Redis({
@@ -807,75 +804,6 @@ export class MerchantRepository implements OnModuleInit {
       console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
-  }
-
-  private async seedDefaultPlans() {
-    if (!this.planRepo) return;
-    const existing = await this.planRepo.count();
-    if (existing > 0) return;
-    const now = new Date();
-    await this.planRepo.save([
-      this.planRepo.create({
-        planCode: PlanCode.STARTER,
-        planName: 'Starter',
-        description: 'Single-store starter plan',
-        maxStoresAllowed: 1,
-        entitlements: ['POS'],
-        billingCycle: 'MONTHLY',
-        trialDays: 14,
-        price: 0,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-      this.planRepo.create({
-        planCode: PlanCode.PRO,
-        planName: 'Pro Commerce Plan',
-        description: 'Multi-store commerce plan',
-        maxStoresAllowed: 3,
-        entitlements: [
-          'POS',
-          'BARCODE_SCANNING',
-          'UBER_EATS',
-          'DOORDASH',
-          'PAYROLL',
-          'LOYALTY',
-        ],
-        billingCycle: 'MONTHLY',
-        trialDays: 0,
-        price: 99,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-      this.planRepo.create({
-        planCode: PlanCode.ENTERPRISE,
-        planName: 'Enterprise',
-        description: 'Unlimited stores',
-        maxStoresAllowed: 50,
-        entitlements: [
-          'POS',
-          'BARCODE_SCANNING',
-          'UBER_EATS',
-          'DOORDASH',
-          'PAYROLL',
-          'LOYALTY',
-          'ANALYTICS',
-        ],
-        billingCycle: 'ANNUAL',
-        trialDays: 0,
-        price: 999,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-    ]);
-    console.log(
-      'âœ… [PCH Seed] Seeded subscription_plans (STARTER, PRO, ENTERPRISE)',
-    );
   }
 
   async recordAuditLog(
@@ -1461,12 +1389,12 @@ export class MerchantRepository implements OnModuleInit {
   async createDevice(data: {
     id: string;
     deviceName?: string;
-    deviceCode?: string;
+    deviceId?: string;
     deviceType?: string;
     merchantId: string;
     merchantName?: string;
     serialNumber: string;
-    status?: string;
+    status?: RecordStatus;
     createdAt?: Date;
     createdBy: string;
     updatedBy: string;
@@ -1477,14 +1405,13 @@ export class MerchantRepository implements OnModuleInit {
     const entity = this.deviceRepo.create({
       id: data.id,
       deviceName: data.deviceName || 'Unnamed device',
-      deviceCode:
-        data.deviceCode ||
-        `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+      ...(data.deviceId !== undefined ? { deviceId: data.deviceId } : {}),
       deviceType: data.deviceType || 'Other',
       merchantId: data.merchantId,
       merchantName: data.merchantName || data.merchantId,
       serialNumber: data.serialNumber,
-      status: data.status || 'Active',
+      deviceActiveCode: (data as any).deviceActiveCode || `PK-${Math.floor(100000 + Math.random() * 900000)}`,
+      status: (data.status as any) || RecordStatus.ACTIVE,
       createdAt: data.createdAt || new Date(),
       createdBy: data.createdBy,
       updatedBy: data.updatedBy,
@@ -2955,81 +2882,6 @@ export class MerchantRepository implements OnModuleInit {
 
   // --- Master Reference Data: store_types CRUD Methods ---
 
-  private async seedDefaultStoreTypes(): Promise<void> {
-    if (!this.storeTypeRepo) return;
-    try {
-      const count = await this.storeTypeRepo.count();
-      if (count === 0) {
-        const defaults = [
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000001',
-            storeTypeCode: 'RETAIL',
-            name: 'General Retail',
-            description:
-              'Specialty retail, apparel, electronics and merchandise stores',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000002',
-            storeTypeCode: 'GROCERY',
-            name: 'Grocery & Supermarket',
-            description:
-              'Supermarkets, organic food markets, and grocery chains',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000003',
-            storeTypeCode: 'RESTAURANT',
-            name: 'Restaurant & Cafe',
-            description:
-              'Full service dining, quick-service (QSR), bakeries, and cafes',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000004',
-            storeTypeCode: 'LIQUOR',
-            name: 'Liquor & Beverages',
-            description: 'Wine, beer, spirits, and beverage specialty shops',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000005',
-            storeTypeCode: 'CONVENIENCE',
-            name: 'Convenience Store',
-            description:
-              'Corner markets, mini-marts, and 24/7 convenience retailers',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000006',
-            storeTypeCode: 'FUEL',
-            name: 'Gas Station & Forecourt',
-            description:
-              'Fuel stations with integrated retail convenience shops',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000007',
-            storeTypeCode: 'KIOSK',
-            name: 'Kiosk & Pop-Up',
-            description:
-              'Self-service kiosks, food trucks, and seasonal pop-ups',
-            status: StoreTypeStatus.ACTIVE,
-          },
-        ];
-        for (const item of defaults) {
-          const entity = this.storeTypeRepo.create(item);
-          await this.storeTypeRepo.save(entity);
-        }
-        console.log(
-          '🏪 [Master Data] Seeded 7 default store vertical types into store_types',
-        );
-      }
-    } catch (err: any) {
-      console.warn('⚠️ [StoreType Seed Warning] ' + err.message);
-    }
-  }
-
   async listStoreTypes(status?: string): Promise<any[]> {
     if (this.dataSource?.isInitialized) {
       const where = status
@@ -3038,7 +2890,7 @@ export class MerchantRepository implements OnModuleInit {
       const params = status ? [status] : [];
       return await this.dataSource.query(
         `
-        SELECT 
+        SELECT
           s.id,
           s.name,
           s.description,
@@ -3068,7 +2920,7 @@ export class MerchantRepository implements OnModuleInit {
       const trimmed = idOrCode.trim();
       const rows = await this.dataSource.query(
         `
-        SELECT 
+        SELECT
           s.id,
           s.name,
           s.description,
@@ -3147,9 +2999,7 @@ export class MerchantRepository implements OnModuleInit {
 
   private async seedAllMasterData(): Promise<void> {
     await this.seedDefaultFeatures();
-    await this.seedDefaultRoleTemplates();
-    await this.seedDefaultCommercialPlans();
-  }
+    await this.seedDefaultRoleTemplates();  }
 
   private async seedDefaultFeatures(): Promise<void> {
     if (!this.featureRepo || !this.permissionRepo) return;
@@ -3302,56 +3152,6 @@ export class MerchantRepository implements OnModuleInit {
         ];
         for (const item of defaults) {
           await this.roleTemplateRepo.save(this.roleTemplateRepo.create(item));
-        }
-      }
-    } catch {}
-  }
-
-  private async seedDefaultCommercialPlans(): Promise<void> {
-    if (!this.planMasterRepo) return;
-    if (!this.planMasterRepo) return;
-    try {
-      if ((await this.planMasterRepo.count()) === 0) {
-        const defaults = [
-          {
-            id: 'b1111111-0000-0000-0000-000000000001',
-            planCode: 'STARTER',
-            name: 'Starter Plan',
-            description:
-              'Essential cloud POS for single-location small retailers',
-            billingModel: PlanBillingModel.FLAT,
-            basePrice: 29.0,
-            currency: 'USD',
-            billingCycle: PlanBillingCycle.MONTHLY,
-            status: PlanStatus.ACTIVE,
-          },
-          {
-            id: 'b1111111-0000-0000-0000-000000000002',
-            planCode: 'PRO',
-            name: 'Professional Plan',
-            description:
-              'Advanced multi-terminal POS with KDS and delivery aggregator sync',
-            billingModel: PlanBillingModel.PER_STORE,
-            basePrice: 79.0,
-            currency: 'USD',
-            billingCycle: PlanBillingCycle.MONTHLY,
-            status: PlanStatus.ACTIVE,
-          },
-          {
-            id: 'b1111111-0000-0000-0000-000000000003',
-            planCode: 'ENTERPRISE',
-            name: 'Enterprise Suite',
-            description:
-              'Unlimited stores, custom roles, API integrations, and 24/7 SLA',
-            billingModel: PlanBillingModel.CUSTOM,
-            basePrice: 199.0,
-            currency: 'USD',
-            billingCycle: PlanBillingCycle.MONTHLY,
-            status: PlanStatus.ACTIVE,
-          },
-        ];
-        for (const item of defaults) {
-          await this.planMasterRepo.save(this.planMasterRepo.create(item));
         }
       }
     } catch {}
