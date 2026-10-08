@@ -4,15 +4,22 @@ import { DataSource } from 'typeorm';
 export async function renameEmployeeStoresTable(db: DataSource): Promise<void> {
   await db.query(`
     DO $$
+    DECLARE
+      old_table oid;
+      new_table oid;
+      new_empty boolean;
     BEGIN
-      IF to_regclass('public.employee_stores') IS NOT NULL
-         AND to_regclass('public.store_employees') IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM public.store_employees LIMIT 1) THEN
-        DROP TABLE public.store_employees;
+      old_table := to_regclass('public.employee_stores');
+      new_table := to_regclass('public.store_employees');
+      IF old_table IS NOT NULL AND new_table IS NOT NULL THEN
+        EXECUTE 'SELECT NOT EXISTS (SELECT 1 FROM public.store_employees LIMIT 1)' INTO new_empty;
+        IF new_empty THEN
+          EXECUTE 'DROP TABLE public.store_employees';
+          new_table := NULL;
+        END IF;
       END IF;
-      IF to_regclass('public.employee_stores') IS NOT NULL
-         AND to_regclass('public.store_employees') IS NULL THEN
-        ALTER TABLE public.employee_stores RENAME TO store_employees;
+      IF old_table IS NOT NULL AND new_table IS NULL THEN
+        EXECUTE 'ALTER TABLE public.employee_stores RENAME TO store_employees';
       END IF;
     END $$;
   `);
