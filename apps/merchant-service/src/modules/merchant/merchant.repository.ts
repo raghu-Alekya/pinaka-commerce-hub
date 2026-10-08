@@ -782,7 +782,6 @@ export class MerchantRepository implements OnModuleInit {
 
     // 2. Safely seed master reference data once all repos are initialized
     await this.seedAllMasterData();
-    await this.seedDefaultStoreTypes();
     await this.seedDefaultCommercialPlans();
     await this.seedDefaultPlans();
 
@@ -2955,81 +2954,6 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   // --- Master Reference Data: store_types CRUD Methods ---
-
-  private async seedDefaultStoreTypes(): Promise<void> {
-    if (!this.storeTypeRepo) return;
-    try {
-      const count = await this.storeTypeRepo.count();
-      if (count === 0) {
-        const defaults = [
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000001',
-            storeTypeCode: 'RETAIL',
-            name: 'General Retail',
-            description:
-              'Specialty retail, apparel, electronics and merchandise stores',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000002',
-            storeTypeCode: 'GROCERY',
-            name: 'Grocery & Supermarket',
-            description:
-              'Supermarkets, organic food markets, and grocery chains',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000003',
-            storeTypeCode: 'RESTAURANT',
-            name: 'Restaurant & Cafe',
-            description:
-              'Full service dining, quick-service (QSR), bakeries, and cafes',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000004',
-            storeTypeCode: 'LIQUOR',
-            name: 'Liquor & Beverages',
-            description: 'Wine, beer, spirits, and beverage specialty shops',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000005',
-            storeTypeCode: 'CONVENIENCE',
-            name: 'Convenience Store',
-            description:
-              'Corner markets, mini-marts, and 24/7 convenience retailers',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000006',
-            storeTypeCode: 'FUEL',
-            name: 'Gas Station & Forecourt',
-            description:
-              'Fuel stations with integrated retail convenience shops',
-            status: StoreTypeStatus.ACTIVE,
-          },
-          {
-            id: 'a1b2c3d4-e5f6-4a1b-8c2d-000000000007',
-            storeTypeCode: 'KIOSK',
-            name: 'Kiosk & Pop-Up',
-            description:
-              'Self-service kiosks, food trucks, and seasonal pop-ups',
-            status: StoreTypeStatus.ACTIVE,
-          },
-        ];
-        for (const item of defaults) {
-          const entity = this.storeTypeRepo.create(item);
-          await this.storeTypeRepo.save(entity);
-        }
-        console.log(
-          '🏪 [Master Data] Seeded 7 default store vertical types into store_types',
-        );
-      }
-    } catch (err: any) {
-      console.warn('⚠️ [StoreType Seed Warning] ' + err.message);
-    }
-  }
 
   async listStoreTypes(status?: string): Promise<any[]> {
     if (this.dataSource?.isInitialized) {
