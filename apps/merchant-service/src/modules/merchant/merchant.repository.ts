@@ -127,7 +127,7 @@ import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.e
 import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
-import { ensureMerchantDevicesSchema } from '../device/device.schema';
+import { ensureDeviceIdentitySchema, ensureMerchantDevicesSchema } from '../device/device.schema';
 
 interface WordPressProductNode {
   id?: number;
@@ -742,6 +742,7 @@ export class MerchantRepository implements OnModuleInit {
         `🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`,
       );
     }
+    await ensureDeviceIdentitySchema(this.dataSource);
     await ensureMerchantDevicesSchema(this.dataSource);
     await ensureStoreDevicesSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
@@ -1460,12 +1461,12 @@ export class MerchantRepository implements OnModuleInit {
   async createDevice(data: {
     id: string;
     deviceName?: string;
-    deviceCode?: string;
+    deviceId?: string;
     deviceType?: string;
     merchantId: string;
     merchantName?: string;
     serialNumber: string;
-    status?: string;
+    status?: RecordStatus;
     createdAt?: Date;
     createdBy: string;
     updatedBy: string;
@@ -1476,14 +1477,12 @@ export class MerchantRepository implements OnModuleInit {
     const entity = this.deviceRepo.create({
       id: data.id,
       deviceName: data.deviceName || 'Unnamed device',
-      deviceCode:
-        data.deviceCode ||
-        `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+      ...(data.deviceId !== undefined ? { deviceId: data.deviceId } : {}),
       deviceType: data.deviceType || 'Other',
       merchantId: data.merchantId,
       merchantName: data.merchantName || data.merchantId,
       serialNumber: data.serialNumber,
-      status: data.status || 'Active',
+      status: data.status || RecordStatus.ACTIVE,
       createdAt: data.createdAt || new Date(),
       createdBy: data.createdBy,
       updatedBy: data.updatedBy,
