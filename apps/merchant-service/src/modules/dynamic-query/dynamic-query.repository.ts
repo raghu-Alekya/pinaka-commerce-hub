@@ -33,7 +33,7 @@ interface ResolvedStore {
  * parent join. To support Devices or Tenders later:
  * 1. Add a filter DTO with optional parent ids.
  * 2. Copy getStores() when the parent id is a column on the entity.
- * 3. Copy the employee_stores join when the parent is a many-to-many assignment.
+ * 3. Copy the store_employees join when the parent is a many-to-many assignment.
  * Column names are read from TypeORM metadata, so snake_case and camelCase both work.
  */
 @Injectable()
@@ -53,14 +53,14 @@ export class DynamicQueryRepository {
     if (filter.storeId?.trim() || filter.roleId?.trim()) {
       const store = filter.storeId?.trim() ? await this.resolveStore(filter.storeId) : null;
       if (filter.storeId?.trim() && !store) return [];
-      const assignment = await this.requireColumn('employee_stores', 'employee_id', 'employeeId');
-      const storeColumn = await this.requireColumn('employee_stores', 'store_id', 'storeId');
+      const assignment = await this.requireColumn('store_employees', 'employee_id', 'employeeId');
+      const storeColumn = await this.requireColumn('store_employees', 'store_id', 'storeId');
       qb.innerJoin(
-        'employee_stores',
+        'store_employees',
         'assignment',
         `${this.ref('assignment', assignment.name)} = employee.id`,
       );
-      qb.andWhere(`${this.ref('assignment', await this.statusColumn('employee_stores'))} = :employeeAssignmentStatus`, {
+      qb.andWhere(`${this.ref('assignment', await this.statusColumn('store_employees'))} = :employeeAssignmentStatus`, {
         employeeAssignmentStatus: 'ACTIVE',
       });
       if (store) {
