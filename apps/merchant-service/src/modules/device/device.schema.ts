@@ -18,15 +18,26 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
     await manager.query(`
       DO $migration$
       BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='devices') THEN
+          BEGIN
+            ALTER TABLE public.devices ADD CONSTRAINT pk_devices_id PRIMARY KEY (id);
+          EXCEPTION WHEN OTHERS THEN
+            NULL;
+          END;
+        END IF;
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint
           WHERE conrelid = 'public.merchant_devices'::regclass
             AND confrelid = 'public.devices'::regclass
             AND contype = 'f'
         ) THEN
-          ALTER TABLE public.merchant_devices
-            ADD CONSTRAINT fk_merchant_devices_device_id
-            FOREIGN KEY (device_id) REFERENCES public.devices(id);
+          BEGIN
+            ALTER TABLE public.merchant_devices
+              ADD CONSTRAINT fk_merchant_devices_device_id
+              FOREIGN KEY (device_id) REFERENCES public.devices(id);
+          EXCEPTION WHEN OTHERS THEN
+            NULL;
+          END;
         END IF;
       END
       $migration$
