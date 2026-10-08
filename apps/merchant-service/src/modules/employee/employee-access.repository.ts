@@ -43,7 +43,7 @@ export class EmployeeAccessRepository implements OnModuleInit, OnModuleDestroy {
         const active = (row: Row | undefined) => row?.status === 'ACTIVE';
         const inPeriod = (row: Row) => (!row.effectiveFrom || Date.parse(row.effectiveFrom) <= now) &&
           (!row.effectiveUntil || Date.parse(row.effectiveUntil) > now);
-        const [assignment] = (await this.read(manager, 'employee_stores', 'employeeId', employeeId))
+        const [assignment] = (await this.read(manager, 'store_employees', 'employeeId', employeeId))
           .filter(row => row.storeId === storeId && row.merchantId === merchantId && active(row) && inPeriod(row));
         const roleLinks = assignment ? (await this.read(manager, 'employee_store_roles', 'employeeStoreId', assignment.id))
           .filter(row => row.merchantId === merchantId && active(row) && inPeriod(row)) : [];

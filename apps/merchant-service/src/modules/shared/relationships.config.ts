@@ -69,12 +69,12 @@ const assignment: Record<string, Field> = {
 };
 const audit = { timestamps: true, createdColumn: 'created_at', updatedColumn: 'updated_at' };
 export const EMPLOYEE_ACCESS_RELATIONSHIPS: Relationship[] = [
-  { name: 'EmployeeStores', path: 'api/v1/merchants/employees/:employeeId/stores', table: 'employee_stores',
+  { name: 'EmployeeStores', path: 'api/v1/merchants/employees/:employeeId/stores', table: 'store_employees',
     parentTable: 'employees', parentParam: 'employeeId', parentColumn: 'employee_id', parentUuid: true, ownerColumn: 'merchant_id',
     childTable: 'stores', childKey: 'storeId', childColumn: 'store_id', childUuid: true, tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchant_id',
     ...audit, fields: { isPrimary: { column: 'is_primary', kind: 'boolean', default: false }, ...assignment } },
   { name: 'EmployeeStoreRoles', path: 'api/v1/merchants/employees/employee-stores/:employeeStoreId/roles', table: 'employee_store_roles',
-    parentTable: 'employee_stores', parentParam: 'employeeStoreId', parentColumn: 'employee_store_id', parentUuid: true, ownerColumn: 'merchant_id',
+    parentTable: 'store_employees', parentParam: 'employeeStoreId', parentColumn: 'employee_store_id', parentUuid: true, ownerColumn: 'merchant_id',
     childTable: 'roles', childKey: 'roleId', childColumn: 'role_id', childUuid: true, tenantColumn: true, tenantField: 'merchant_id', childOwnerColumn: 'merchant_id',
     ...audit, fields: assignment },
   { name: 'RoleTemplatePermissions', path: 'api/v1/role-templates/:roleTemplateId/permissions', table: 'role_template_permissions',

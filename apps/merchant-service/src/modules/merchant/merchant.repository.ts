@@ -90,7 +90,6 @@ import {
 } from '../../entities/subscription.entity';
 import { OnboardingAuditEntity } from '../../entities/onboarding-audit.entity';
 import { SubscriptionPlanEntity } from '../../entities/subscription-plan.entity';
-import { WebsiteConnectionEntity } from '../../entities/website-connection.entity';
 import { CategoryEntity } from '../../entities/category.entity';
 import { ProductEntity } from '../../entities/product.entity';
 import { DeviceEntity } from '../../entities/device.entity';
@@ -108,7 +107,7 @@ import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
 import { ensureVendorSchema } from '../vendor/vendor.schema';
 import { ensureStoreAccessSchema } from '../master/store-setup/store-access.schema';
 import { ensureStoreRoleTemplateSchema } from '../master/store-setup/store-role-template.schema';
-import { ensureEmployeeStoreSchema } from '../store/employee-store.schema';
+import { ensureEmployeeStoreSchema, renameEmployeeStoresTable } from '../store/employee-store.schema';
 import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
 import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
 import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
@@ -134,6 +133,10 @@ interface WordPressProductNode {
   name?: string;
   price?: string | number;
   image?: string | null;
+  sku?: string;
+  type?: string;
+  stock_status?: string;
+  stock_quantity?: number | null;
   tags?: unknown[];
   [key: string]: unknown;
 }
@@ -658,7 +661,6 @@ export class MerchantRepository implements OnModuleInit {
   private subRepo!: Repository<SubscriptionEntity>;
   private planRepo!: Repository<SubscriptionPlanEntity>;
   private auditRepo!: Repository<OnboardingAuditEntity>;
-  private websiteConnectionRepo!: Repository<WebsiteConnectionEntity>;
   private categoryRepo!: Repository<CategoryEntity>;
   private productRepo!: Repository<ProductEntity>;
   private sessionRepo!: Repository<SessionEntity>;
@@ -698,7 +700,6 @@ export class MerchantRepository implements OnModuleInit {
         SubscriptionEntity,
         OnboardingAuditEntity,
         SubscriptionPlanEntity,
-        WebsiteConnectionEntity,
         CategoryEntity,
         ProductEntity,
         DeviceEntity,
@@ -736,6 +737,7 @@ export class MerchantRepository implements OnModuleInit {
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
+    await renameEmployeeStoresTable(this.dataSource);
     const createdTables = await createMissingTables(this.dataSource);
     if (createdTables.length) {
       console.log(
@@ -755,6 +757,8 @@ export class MerchantRepository implements OnModuleInit {
       CREATE UNIQUE INDEX IF NOT EXISTS merchant_vendors_merchant_vendor_uidx
       ON public.merchant_vendors (merchant_id, vendor_id)
     `);
+    await this.dataSource.query(`DROP TABLE IF EXISTS public.website_connections`);
+    await this.ensureStoreCatalogTables();
 
     this.merchantRepo = this.dataSource.getRepository(MerchantEntity);
     this.storeRepo = this.dataSource.getRepository(StoreEntity);
@@ -771,9 +775,6 @@ export class MerchantRepository implements OnModuleInit {
     this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
     this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
     this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
-    this.websiteConnectionRepo = this.dataSource.getRepository(
-      WebsiteConnectionEntity,
-    );
     this.categoryRepo = this.dataSource.getRepository(CategoryEntity);
     this.productRepo = this.dataSource.getRepository(ProductEntity);
     this.sessionRepo = this.dataSource.getRepository(SessionEntity);
@@ -1733,7 +1734,7 @@ export class MerchantRepository implements OnModuleInit {
       merchantId,
       storeId,
     );
-    return this.dataSource.query(
+    const rows = await this.dataSource.query(
       `SELECT e.id AS "employeeId",
               e.employee_code AS "employeeCode",
               e.first_name AS "firstName",
@@ -1746,11 +1747,11 @@ export class MerchantRepository implements OnModuleInit {
               es.id AS "employeeStoreId",
               es.store_id AS "storeId",
               es.status AS "assignmentStatus",
-              (es.login_pin_hash IS NOT NULL) AS "pinSet",
+              (NULLIF(es.login_pin_hash, '') IS NOT NULL) AS "pinSet",
               r.id AS "roleId",
               r.name AS "roleName",
               r.source_role_template_id AS "roleTemplateId"
-       FROM public.employee_stores es
+       FROM public.store_employees es
        JOIN public.employees e ON e.id = es.employee_id
        LEFT JOIN LATERAL (
          SELECT r.id, r.name, r.source_role_template_id
@@ -1764,6 +1765,10 @@ export class MerchantRepository implements OnModuleInit {
        ORDER BY e.first_name ASC, e.last_name ASC`,
       [merchantUuid, storeUuid],
     );
+    return rows.map((row: Record<string, unknown>) => ({
+      ...row,
+      pinSet: row.pinSet === true || row.pinSet === 't' || row.pinSet === 'true',
+    }));
   }
 
   async saveStoreEmployees(
@@ -1804,7 +1809,7 @@ export class MerchantRepository implements OnModuleInit {
           item.loginPin,
         );
       const [existing] = await this.dataSource.query(
-        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
+        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.store_employees
          WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3 LIMIT 1`,
         [merchantUuid, employee.id, storeUuid],
       );
@@ -1814,7 +1819,7 @@ export class MerchantRepository implements OnModuleInit {
       let assignmentId = existing?.id as string | undefined;
       if (existing) {
         await this.dataSource.query(
-          `UPDATE public.employee_stores
+          `UPDATE public.store_employees
            SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
            WHERE id = $1`,
           [existing.id, pinHash],
@@ -1822,7 +1827,7 @@ export class MerchantRepository implements OnModuleInit {
       } else {
         assignmentId = this.returningRow<{ id: string }>(
           await this.dataSource.query(
-            `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
+            `INSERT INTO public.store_employees (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
            VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
             [merchantUuid, employee.id, storeUuid, pinHash],
           ),
@@ -1855,16 +1860,16 @@ export class MerchantRepository implements OnModuleInit {
     }
     const removeRoles = keepIds.length
       ? `DELETE FROM public.employee_store_roles WHERE employee_store_id IN (
-           SELECT id FROM public.employee_stores
+           SELECT id FROM public.store_employees
            WHERE merchant_id = $1 AND store_id = $2 AND employee_id <> ALL($3::uuid[])
          )`
       : `DELETE FROM public.employee_store_roles WHERE employee_store_id IN (
-           SELECT id FROM public.employee_stores WHERE merchant_id = $1 AND store_id = $2
+           SELECT id FROM public.store_employees WHERE merchant_id = $1 AND store_id = $2
          )`;
     const removeStores = keepIds.length
-      ? `DELETE FROM public.employee_stores
+      ? `DELETE FROM public.store_employees
          WHERE merchant_id = $1 AND store_id = $2 AND employee_id <> ALL($3::uuid[])`
-      : `DELETE FROM public.employee_stores WHERE merchant_id = $1 AND store_id = $2`;
+      : `DELETE FROM public.store_employees WHERE merchant_id = $1 AND store_id = $2`;
     await this.dataSource.query(
       removeRoles,
       keepIds.length
@@ -1902,7 +1907,7 @@ export class MerchantRepository implements OnModuleInit {
     await this.assertUniqueStoreLoginPin(storeUuid, employee.id, loginPin);
     let assignment = (
       await this.dataSource.query(
-        `SELECT id FROM public.employee_stores
+        `SELECT id FROM public.store_employees
        WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3
        LIMIT 1`,
         [merchantUuid, employee.id, storeUuid],
@@ -1911,7 +1916,7 @@ export class MerchantRepository implements OnModuleInit {
     if (!assignment) {
       assignment = this.returningRow(
         await this.dataSource.query(
-          `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
+          `INSERT INTO public.store_employees (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
          VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
           [
             merchantUuid,
@@ -1923,7 +1928,7 @@ export class MerchantRepository implements OnModuleInit {
       );
     } else {
       await this.dataSource.query(
-        `UPDATE public.employee_stores
+        `UPDATE public.store_employees
          SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
          WHERE id = $1`,
         [assignment.id, this.hashEmployeePin(loginPin)],
@@ -1939,64 +1944,53 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string,
     connector: StoreWebsiteConnectorConfig,
   ): Promise<StoreEntity | null> {
-    const store = await this.storeRepo.findOne({
-      where: { id: storeId, isDeleted: false },
-    });
+    const store = await this.getStoreById(storeId);
     if (!store) return null;
-    store.websiteConnector = connector;
-    store.updatedAt = new Date();
-    return this.storeRepo.save(store);
+    const payload: StoreWebsiteConnectorConfig = {
+      ...connector,
+      provider: 'WORDPRESS',
+      storeId: store.storeCode || connector.storeId || store.id,
+      merchantId: connector.merchantId || store.merchantId,
+      wordpressJwtConfigured: Boolean(connector.wordpressJwt || connector.encryptedJwt),
+      updatedAt: connector.updatedAt || new Date().toISOString(),
+    };
+    const rows = await this.dataSource.query(
+      `UPDATE public.stores
+       SET website_connector = $2::jsonb
+       WHERE id::text = $1
+       RETURNING website_connector`,
+      [store.id, JSON.stringify(payload)],
+    );
+    if (!rows?.length) return null;
+    store.websiteConnector = this.parseWebsiteConnector(rows[0]?.website_connector) || payload;
+    return store;
   }
 
   async getWebsiteConnector(
     storeId: string,
   ): Promise<StoreWebsiteConnectorConfig | null> {
-    const connection = await this.websiteConnectionRepo.findOneBy({ storeId });
-    if (connection) {
-      return {
-        provider: 'WORDPRESS',
-        wordpressUrl: connection.wordpressUrl,
-        encryptedJwt: connection.encryptedJwt,
-        updatedAt: connection.updatedAt.toISOString(),
-      };
+    const store = await this.getStoreById(storeId);
+    const rows = await this.dataSource.query(
+      `SELECT website_connector
+       FROM public.stores
+       WHERE id::text = $1 OR store_code = $2
+       LIMIT 1`,
+      [store?.id || storeId, store?.storeCode || storeId],
+    );
+    return this.parseWebsiteConnector(rows[0]?.website_connector) || store?.websiteConnector || null;
+  }
+
+  private parseWebsiteConnector(value: unknown): StoreWebsiteConnectorConfig | null {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value) as StoreWebsiteConnectorConfig;
+      } catch {
+        return null;
+      }
     }
-    const store = await this.storeRepo
-      .createQueryBuilder('store')
-      .addSelect('store.websiteConnector')
-      .where('store.id = :storeId', { storeId })
-      .getOne();
-    return store?.websiteConnector ?? null;
-  }
-
-  async saveWebsiteConnection(fields: {
-    storeId: string;
-    merchantId: string;
-    wordpressUrl: string;
-    encryptedJwt: string;
-    status: 'CONNECTED' | 'NOT_CONNECTED';
-    lastTestedAt?: Date | null;
-    lastTestMessage?: string | null;
-  }): Promise<WebsiteConnectionEntity> {
-    const existing = await this.websiteConnectionRepo.findOneBy({
-      storeId: fields.storeId,
-    });
-    const entity = existing
-      ? Object.assign(existing, fields, { updatedAt: new Date() })
-      : this.websiteConnectionRepo.create(fields);
-    const saved = await this.websiteConnectionRepo.save(entity);
-    await this.saveWebsiteConnector(fields.storeId, {
-      provider: 'WORDPRESS',
-      wordpressUrl: fields.wordpressUrl,
-      encryptedJwt: fields.encryptedJwt,
-      updatedAt: saved.updatedAt.toISOString(),
-    });
-    return saved;
-  }
-
-  async getWebsiteConnection(
-    storeId: string,
-  ): Promise<WebsiteConnectionEntity | null> {
-    return this.websiteConnectionRepo.findOneBy({ storeId });
+    if (typeof value === 'object') return value as StoreWebsiteConnectorConfig;
+    return null;
   }
 
   async touchSession(
@@ -2720,46 +2714,138 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async syncStoreCatalogFromWordPress(params: {
-    merchantId: string;
     storeId: string;
     wordpressUrl: string;
     wordpressJwt: string;
   }): Promise<{ categoryCount: number; productCount: number }> {
+    const store = await this.getStoreById(params.storeId);
+    if (!store) throw new NotFoundException(`Store '${params.storeId}' not found`);
+    await this.ensureStoreCatalogTables();
     const categories = await this.fetchWordPressCategoryCatalog(
       params.wordpressUrl,
       params.wordpressJwt,
     );
-    let productCount = 0;
-    for (const node of categories) {
-      if (!Number.isFinite(Number(node.id))) continue;
-      const savedCategory = await this.upsertStoreCategory(
-        params.merchantId,
-        params.storeId,
-        node,
-      );
-      const products = Array.isArray(node.products) ? node.products : [];
-      for (const product of products) {
-        if (!Number.isFinite(Number(product.id))) continue;
-        await this.upsertStoreProduct(
-          params.merchantId,
-          params.storeId,
-          savedCategory,
-          product,
-        );
-        productCount += 1;
-      }
-    }
-    return { categoryCount: categories.length, productCount };
+    const catalog = this.splitCatalog(categories);
+    await this.saveStoreCatalogRow(this.categoryRepo, store.id, catalog.categories);
+    await this.saveStoreCatalogRow(this.productRepo, store.id, catalog.products);
+    return {
+      categoryCount: catalog.categoryCount,
+      productCount: catalog.products.length,
+    };
   }
 
   async getStoreCatalog(
     storeId: string,
-  ): Promise<{ categories: CategoryEntity[]; products: ProductEntity[] }> {
-    const [categories, products] = await Promise.all([
-      this.categoryRepo.find({ where: { storeId }, order: { name: 'ASC' } }),
-      this.productRepo.find({ where: { storeId }, order: { name: 'ASC' } }),
+  ): Promise<{ categories: unknown[]; products: unknown[] }> {
+    const store = await this.getStoreById(storeId);
+    if (!store) return { categories: [], products: [] };
+    const [categoryRow, productRow] = await Promise.all([
+      this.categoryRepo.findOneBy({ storeId: store.id, isDeleted: false }),
+      this.productRepo.findOneBy({ storeId: store.id, isDeleted: false }),
     ]);
-    return { categories, products };
+    return {
+      categories: this.catalogList(categoryRow?.payload),
+      products: this.catalogList(productRow?.payload),
+    };
+  }
+
+  private async ensureStoreCatalogTables(): Promise<void> {
+    const legacy = await this.dataSource.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'store_categories'
+         AND column_name = 'wordpress_id'
+       LIMIT 1`,
+    );
+    if (legacy.length) {
+      await this.dataSource.query(`DROP TABLE IF EXISTS public.store_products CASCADE`);
+      await this.dataSource.query(`DROP TABLE IF EXISTS public.store_categories CASCADE`);
+    }
+    await this.dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.store_categories (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES public.stores(id),
+        payload JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by UUID,
+        updated_by UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+      )
+    `);
+    await this.dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.store_products (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES public.stores(id),
+        payload JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by UUID,
+        updated_by UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+      )
+    `);
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS store_categories_store_id_uidx
+      ON public.store_categories (store_id)
+    `);
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS store_products_store_id_uidx
+      ON public.store_products (store_id)
+    `);
+  }
+
+  private async saveStoreCatalogRow(
+    repo: { findOneBy: Function; create: Function; save: Function },
+    storeId: string,
+    payload: unknown[],
+  ): Promise<void> {
+    const existing = await repo.findOneBy({ storeId });
+    const fields = {
+      storeId,
+      payload,
+      isDeleted: false,
+      updatedAt: new Date(),
+    };
+    await repo.save(existing ? Object.assign(existing, fields) : repo.create(fields));
+  }
+
+  private catalogList(payload: unknown): unknown[] {
+    return Array.isArray(payload) ? payload : [];
+  }
+
+  private splitCatalog(nodes: WordPressCategoryNode[]): {
+    categories: WordPressCategoryNode[];
+    products: Array<Record<string, unknown>>;
+    categoryCount: number;
+  } {
+    const products: Array<Record<string, unknown>> = [];
+    let categoryCount = 0;
+    const categories = nodes.map((node) => this.categoryWithoutProducts(node, products, () => { categoryCount += 1; }));
+    return { categories, products, categoryCount };
+  }
+
+  private categoryWithoutProducts(
+    node: WordPressCategoryNode,
+    products: Array<Record<string, unknown>>,
+    countCategory: () => void,
+  ): WordPressCategoryNode {
+    countCategory();
+    const children = Array.isArray(node.children) ? node.children : [];
+    const categoryProducts = Array.isArray(node.products) ? node.products : [];
+    for (const product of categoryProducts) {
+      products.push({
+        ...product,
+        categoryId: node.id,
+        categoryName: node.name,
+      });
+    }
+    const { products: _products, children: _children, ...category } = node;
+    return {
+      ...category,
+      children: children.map((child) => this.categoryWithoutProducts(child, products, countCategory)),
+    };
   }
 
   private async fetchWordPressCategoryCatalog(
@@ -2791,95 +2877,7 @@ export class MerchantRepository implements OnModuleInit {
         'WordPress catalog API returned no categories',
       );
     }
-    return this.flattenWordPressCategories(roots);
-  }
-
-  private flattenWordPressCategories(
-    nodes: WordPressCategoryNode[],
-  ): WordPressCategoryNode[] {
-    const flattened: WordPressCategoryNode[] = [];
-    const walk = (items: WordPressCategoryNode[]) => {
-      for (const item of items) {
-        flattened.push(item);
-        if (Array.isArray(item.children) && item.children.length)
-          walk(item.children);
-      }
-    };
-    walk(nodes);
-    return flattened;
-  }
-
-  private async upsertStoreCategory(
-    merchantId: string,
-    storeId: string,
-    node: WordPressCategoryNode,
-  ): Promise<CategoryEntity> {
-    const wordpressId = Number(node.id);
-    const categoryJson = { ...node };
-    delete categoryJson.products;
-    delete categoryJson.children;
-    const fields = {
-      merchantId,
-      storeId,
-      wordpressId,
-      parentWordpressId: Number(node.parent || 0),
-      name: String(node.name || '').trim() || `Category ${wordpressId}`,
-      slug: String(node.slug || ''),
-      description: String(node.description || ''),
-      productCount: Number(node.count || 0),
-      image: node.image ? String(node.image) : null,
-      posTaxClass: String(node.pos_tax_class || ''),
-      posTaxPercent: String(node.pos_tax_percent || ''),
-      payload: categoryJson as Record<string, unknown>,
-      updatedAt: new Date(),
-    };
-    const existing = await this.categoryRepo.findOneBy({
-      storeId,
-      wordpressId,
-    });
-    return this.categoryRepo.save(
-      existing
-        ? Object.assign(existing, fields)
-        : this.categoryRepo.create(fields),
-    );
-  }
-
-  private async upsertStoreProduct(
-    merchantId: string,
-    storeId: string,
-    category: CategoryEntity,
-    product: WordPressProductNode,
-  ): Promise<ProductEntity> {
-    const wordpressId = Number(product.id);
-    const priceRaw =
-      product.price === undefined ||
-      product.price === null ||
-      String(product.price).trim() === ''
-        ? null
-        : String(Number.parseFloat(String(product.price)));
-    const fields = {
-      merchantId,
-      storeId,
-      categoryId: category.id,
-      wordpressId,
-      wordpressCategoryId: category.wordpressId,
-      name: String(product.name || '').trim() || `Product ${wordpressId}`,
-      price: Number.isFinite(Number(priceRaw)) ? priceRaw : null,
-      image: product.image ? String(product.image) : null,
-      tags: Array.isArray(product.tags) ? product.tags : [],
-      payload: product as Record<string, unknown>,
-      updatedAt: new Date(),
-    };
-    const existing = await this.productRepo.findOneBy({
-      storeId,
-      wordpressId,
-      wordpressCategoryId: category.wordpressId,
-    });
-    return this.productRepo.save(
-      existing
-        ? Object.assign(existing, fields)
-        : this.productRepo.create(fields),
-    );
+    return roots;
   }
 
   // --- Master Reference Data: store_types CRUD Methods ---
@@ -5416,7 +5414,7 @@ export class MerchantRepository implements OnModuleInit {
   ) {
     const rows = await this.dataSource.query(
       `SELECT employee_id AS "employeeId", login_pin_hash AS hash
-       FROM public.employee_stores
+       FROM public.store_employees
        WHERE store_id = $1 AND login_pin_hash IS NOT NULL AND employee_id <> $2::uuid`,
       [storeUuid, employeeId],
     );
@@ -5466,7 +5464,7 @@ export class MerchantRepository implements OnModuleInit {
         );
       keepStoreIds.push(stores[0].id);
       const existing = await manager.query(
-        `SELECT id,login_pin_hash AS "loginPinHash" FROM public.employee_stores
+        `SELECT id,login_pin_hash AS "loginPinHash" FROM public.store_employees
            WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id=$3::uuid LIMIT 1`,
         [merchantUuid, employeeId, stores[0].id],
       );
@@ -5475,12 +5473,12 @@ export class MerchantRepository implements OnModuleInit {
         : existing[0]?.loginPinHash || null;
       const upserted = existing[0]
         ? await manager.query(
-            `UPDATE public.employee_stores SET is_primary=$2, login_pin_hash=$3, updated_at=now()
+            `UPDATE public.store_employees SET is_primary=$2, login_pin_hash=$3, updated_at=now()
              WHERE id=$1 RETURNING id`,
             [existing[0].id, index === 0, pinHash],
           )
         : await manager.query(
-            `INSERT INTO public.employee_stores(merchant_id,employee_id,store_id,is_primary,login_pin_hash)
+            `INSERT INTO public.store_employees(merchant_id,employee_id,store_id,is_primary,login_pin_hash)
              VALUES($1,$2,$3,$4,$5) RETURNING id`,
             [merchantUuid, employeeId, stores[0].id, index === 0, pinHash],
           );
@@ -5519,11 +5517,11 @@ export class MerchantRepository implements OnModuleInit {
     if (keepStoreIds.length) {
       await manager.query(
         `DELETE FROM public.employee_store_roles WHERE merchant_id=$1::uuid AND employee_store_id IN
-           (SELECT id FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[]))`,
+           (SELECT id FROM public.store_employees WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[]))`,
         [merchantUuid, employeeId, keepStoreIds],
       );
       await manager.query(
-        `DELETE FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[])`,
+        `DELETE FROM public.store_employees WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[])`,
         [merchantUuid, employeeId, keepStoreIds],
       );
     }

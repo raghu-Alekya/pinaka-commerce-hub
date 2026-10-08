@@ -1,23 +1,30 @@
 import { DataSource } from 'typeorm';
 
+/** One row per employee assignment. Existing installs used employee_stores. */
+export async function renameEmployeeStoresTable(db: DataSource): Promise<void> {
+  await db.query(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.employee_stores') IS NOT NULL
+         AND to_regclass('public.store_employees') IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM public.store_employees LIMIT 1) THEN
+        DROP TABLE public.store_employees;
+      END IF;
+      IF to_regclass('public.employee_stores') IS NOT NULL
+         AND to_regclass('public.store_employees') IS NULL THEN
+        ALTER TABLE public.employee_stores RENAME TO store_employees;
+      END IF;
+    END $$;
+  `);
+}
+
 /** Store-employee assignment and the role mapped to that assignment. */
 export async function ensureEmployeeStoreSchema(db: DataSource): Promise<void> {
+  await renameEmployeeStoresTable(db);
   await db.transaction(async manager => {
     await manager.query('SELECT pg_advisory_xact_lock(724621, 52)');
     await manager.query(`
-      DO $migration$
-      BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='employees') THEN
-          BEGIN
-            ALTER TABLE public.employees ADD CONSTRAINT uq_employees_id UNIQUE (id);
-          EXCEPTION WHEN OTHERS THEN NULL;
-          END;
-        END IF;
-      END
-      $migration$
-    `);
-    await manager.query(`
-      CREATE TABLE IF NOT EXISTS public.employee_stores (
+      CREATE TABLE IF NOT EXISTS public.store_employees (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         merchant_id uuid NOT NULL,
         employee_id uuid NOT NULL,
@@ -29,17 +36,17 @@ export async function ensureEmployeeStoreSchema(db: DataSource): Promise<void> {
         updated_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_employee_store UNIQUE (employee_id, store_id)
       );
-      CREATE INDEX IF NOT EXISTS idx_employee_stores_merchant_store
-        ON public.employee_stores(merchant_id, store_id);
-      CREATE INDEX IF NOT EXISTS idx_employee_stores_store
-        ON public.employee_stores(store_id);
+      CREATE INDEX IF NOT EXISTS idx_store_employees_merchant_store
+        ON public.store_employees(merchant_id, store_id);
+      CREATE INDEX IF NOT EXISTS idx_store_employees_store
+        ON public.store_employees(store_id);
 
       CREATE TABLE IF NOT EXISTS public.employee_store_roles (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        merchant_id uuid NOT NULL,
-        store_id uuid NOT NULL,
-        employee_store_id uuid NOT NULL,
-        role_id uuid NOT NULL,
+        merchant_id uuid NOT NULL REFERENCES public.merchants(id),
+        store_id uuid NOT NULL REFERENCES public.stores(id),
+        employee_store_id uuid NOT NULL REFERENCES public.store_employees(id) ON DELETE CASCADE,
+        role_id uuid NOT NULL REFERENCES public.roles(id),
         status varchar(30) NOT NULL DEFAULT 'ACTIVE',
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
