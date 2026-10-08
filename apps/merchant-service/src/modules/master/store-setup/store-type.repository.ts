@@ -1,4 +1,3 @@
-import * as crypto from 'crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -105,46 +104,10 @@ export class StoreTypeRepository {
       where += ` AND UPPER(status) = $${params.length}`;
     }
 
-    let items = await ds.query(
+    return ds.query(
       `SELECT ${projection} FROM public.store_types WHERE ${where} ORDER BY name ASC, id ASC`,
       params,
     );
-
-    if (items.length === 0 && !status) {
-      await this.seedDefaultStoreTypes();
-      items = await ds.query(
-        `SELECT ${projection} FROM public.store_types WHERE ${where} ORDER BY name ASC, id ASC`,
-        params,
-      );
-    }
-    return items;
-  }
-
-  async seedDefaultStoreTypes(): Promise<void> {
-    const ds = this.merchants.requireDataSource();
-    const cols = await this.ensureTable();
-    const { codeDbCol } = this.getProjection(cols);
-    const defaults = [
-      { code: 'STT_00001', name: 'Retail Store', description: 'General retail and merchandise sales' },
-      { code: 'STT_00002', name: 'Restaurant & Dining', description: 'Food service, dine-in and takeaway' },
-      { code: 'STT_00003', name: 'Grocery & Supermarket', description: 'Groceries, fresh produce, and essentials' },
-      { code: 'STT_00004', name: 'Convenience Store', description: 'Quick-stop retail goods and packaged foods' },
-      { code: 'STT_00005', name: 'Fashion & Apparel', description: 'Clothing, footwear, and accessories' },
-      { code: 'STT_00006', name: 'Electronics & Gadgets', description: 'Consumer electronics and accessories' },
-      { code: 'STT_00007', name: 'Pharmacy & Healthcare', description: 'Medicines, health, and personal care' },
-    ];
-    for (const d of defaults) {
-      try {
-        await ds.query(
-          `INSERT INTO public.store_types (id, ${this.quote(codeDbCol)}, name, description, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'ACTIVE', clock_timestamp(), clock_timestamp())
-           ON CONFLICT (${this.quote(codeDbCol)}) DO NOTHING`,
-          [crypto.randomUUID(), d.code, d.name, d.description],
-        );
-      } catch {
-        // ignore
-      }
-    }
   }
 
   async previewNextCode(): Promise<string> {
