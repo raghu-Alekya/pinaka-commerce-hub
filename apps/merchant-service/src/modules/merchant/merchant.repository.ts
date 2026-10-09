@@ -2010,6 +2010,102 @@ export class MerchantRepository implements OnModuleInit {
     );
   }
 
+  async updateStoreEmployeeAssignment(
+    merchantId: string,
+    storeId: string,
+    employeeId: string,
+    fields: { role_template_id?: string; login_pin?: string },
+  ) {
+    const { merchantCode, merchantUuid, storeUuid } =
+      await this.requireStoreRecord(merchantId, storeId);
+    const [employee] = await this.dataSource.query(
+      `SELECT id FROM public.employees
+       WHERE (id::text = $1 OR employee_code = $1) AND merchant_id = $2::uuid
+       LIMIT 1`,
+      [employeeId, merchantUuid],
+    );
+    if (!employee)
+      throw new NotFoundException(
+        `Employee '${employeeId}' not found for merchant '${merchantId}'`,
+      );
+
+    let assignment = (
+      await this.dataSource.query(
+        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
+         WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3
+         LIMIT 1`,
+        [merchantUuid, employee.id, storeUuid],
+      )
+    )[0];
+    if (fields.login_pin !== undefined) {
+      if (!/^\d{6}$/.test(fields.login_pin))
+        throw new BadRequestException('login_pin must be a 6-digit string');
+      await this.assertUniqueStoreLoginPin(
+        storeUuid,
+        employee.id,
+        fields.login_pin,
+      );
+    }
+
+    let roleId: string | undefined;
+    if (fields.role_template_id !== undefined) {
+      const [role] = await this.dataSource.query(
+        `SELECT id FROM public.roles
+         WHERE source_role_template_id = $1::uuid AND status = 'ACTIVE'
+           AND merchant_id::text = $2
+         LIMIT 1`,
+        [fields.role_template_id, merchantCode],
+      );
+      if (!role)
+        throw new BadRequestException(
+          `Role template '${fields.role_template_id}' is not available for this merchant`,
+        );
+      roleId = role.id;
+    }
+
+    const pinHash = fields.login_pin === undefined
+      ? assignment?.loginPinHash || null
+      : this.hashEmployeePin(fields.login_pin);
+    if (!assignment) {
+      assignment = this.returningRow(
+        await this.dataSource.query(
+          `INSERT INTO public.employee_stores
+             (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
+           VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
+          [merchantUuid, employee.id, storeUuid, pinHash],
+        ),
+      );
+    } else {
+      await this.dataSource.query(
+        `UPDATE public.employee_stores
+         SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+         WHERE id = $1`,
+        [assignment.id, pinHash],
+      );
+    }
+
+    if (roleId) {
+      await this.dataSource.query(
+        `UPDATE public.employee_store_roles SET status = 'INACTIVE', updated_at = now()
+         WHERE employee_store_id = $1::uuid AND status = 'ACTIVE'`,
+        [assignment.id],
+      );
+      await this.dataSource.query(
+        `INSERT INTO public.employee_store_roles
+           (merchant_id, store_id, employee_store_id, role_id, status)
+         VALUES ($1, $2, $3::uuid, $4::uuid, 'ACTIVE')
+         ON CONFLICT (employee_store_id, role_id)
+         DO UPDATE SET status = 'ACTIVE', updated_at = now()`,
+        [merchantUuid, storeUuid, assignment.id, roleId],
+      );
+    }
+
+    const employees = await this.listStoreEmployees(merchantId, storeId);
+    return employees.find(
+      (row) => String(row.employeeId) === String(employee.id),
+    );
+  }
+
   async saveWebsiteConnector(
     storeId: string,
     connector: StoreWebsiteConnectorConfig,

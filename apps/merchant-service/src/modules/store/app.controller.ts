@@ -6,7 +6,7 @@ import { MerchantRepository } from '../merchant/merchant.repository';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from '../../entities/merchant.entity';
 import { PlanCode } from '../../entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
-import { SaveStoreEmployeesDto, AssignStoreEmployeeLoginPinDto, StoreEmployeeAssignmentDto } from '../master/store-setup/store-setup.dto';
+import { SaveStoreEmployeesDto, AssignStoreEmployeeLoginPinDto, StoreEmployeeAssignmentDto, UpdateStoreEmployeeAssignmentDto } from '../master/store-setup/store-setup.dto';
 import { WebsiteConnectionEntity } from '../../entities/website-connection.entity';
 
 
@@ -535,6 +535,15 @@ export class AppController {
     return { success: true, count: employees.length, employees };
   }
 
+  @Get('merchants/:merchantId/stores/:storeId/employees/assignment-screen')
+  async getStoreEmployeeAssignmentScreen(
+    @Param('merchantId') merchantId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    const employees = await this.merchantRepository.listStoreEmployees(merchantId, storeId);
+    return { success: true, count: employees.length, employees };
+  }
+
   @Put('merchants/:merchantId/stores/:storeId/employees')
   async saveStoreEmployees(
     @Param('merchantId') merchantId: string,
@@ -556,6 +565,24 @@ export class AppController {
   ) {
     const employee = await this.merchantRepository.assignStoreEmployeeLoginPin(merchantId, storeId, employeeId, body.loginPin);
     return { success: true, message: 'Employee login PIN assigned', employee };
+  }
+
+  @Patch('merchants/:merchantId/stores/:storeId/employees/:employeeId')
+  async updateStoreEmployeeAssignment(
+    @Param('merchantId') merchantId: string,
+    @Param('storeId') storeId: string,
+    @Param('employeeId') employeeId: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: UpdateStoreEmployeeAssignmentDto })) body: UpdateStoreEmployeeAssignmentDto,
+  ) {
+    if (body.role_template_id === undefined && body.login_pin === undefined)
+      throw new BadRequestException('Provide role_template_id, login_pin, or both');
+    const employee = await this.merchantRepository.updateStoreEmployeeAssignment(
+      merchantId,
+      storeId,
+      employeeId,
+      body,
+    );
+    return { success: true, message: 'Employee store assignment updated', employee };
   }
 
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])

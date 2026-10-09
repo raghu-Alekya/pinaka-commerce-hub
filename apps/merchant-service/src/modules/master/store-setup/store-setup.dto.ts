@@ -56,3 +56,13 @@ export class AssignStoreEmployeeLoginPinDto {
   @Matches(/^\d{6}$/, { message: 'loginPin must be a 6-digit string' })
   loginPin!: string;
 }
+
+export class UpdateStoreEmployeeAssignmentDto {
+  @IsOptional()
+  @IsUUID()
+  role_template_id?: string;
+
+  @IsOptional()
+  @Matches(/^\d{6}$/, { message: 'login_pin must be a 6-digit string' })
+  login_pin?: string;
+}
