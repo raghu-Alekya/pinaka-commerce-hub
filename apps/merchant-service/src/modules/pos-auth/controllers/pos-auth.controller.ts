@@ -1,4 +1,5 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
 import { PosAuthService, DeviceContext } from '../services/pos-auth.service';
 import { MerchantStoreLoginDto } from '../dto/merchant-store-login.dto';
 import { PosLoginDto } from '../dto/pos-login.dto';
@@ -16,6 +17,7 @@ export const CurrentDevice = createParamDecorator(
   },
 );
 
+@Public()
 @Controller(['api/v1/pos/auth', 'connector/api/v1/pos/auth', 'api/v1/auth', 'connector/api/v1/auth', 'pos/auth', 'auth'])
 export class PosAuthController {
   constructor(
@@ -27,6 +29,7 @@ export class PosAuthController {
    * POST /api/v1/pos/auth/merchant-store-login
    * Public endpoint - No Bearer token required in headers
    */
+  @Public()
   @Post(['merchant-store-login', 'merchant_store_login'])
   @HttpCode(HttpStatus.OK)
   async merchantStoreLogin(@Body() dto: MerchantStoreLoginDto) {
@@ -39,6 +42,7 @@ export class PosAuthController {
    * POST /api/v1/pos/auth/store-emp-login
    * Public endpoint - No Bearer token required in headers
    */
+  @Public()
   @Post(['login', 'store-emp-login', 'store_emp_login', 'employee-login'])
   @HttpCode(HttpStatus.OK)
   async login(

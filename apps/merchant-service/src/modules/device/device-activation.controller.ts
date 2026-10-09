@@ -1,3 +1,4 @@
+import { Public } from '@pinaka-delivery-hub/auth';
 import {
   Controller,
   Post,
@@ -22,12 +23,14 @@ export class ActivateDeviceDto {
 
 const activatedSerials = new Set<string>();
 
+@Public()
 @Controller(['api/v1/device-activation', 'connector/api/v1/device-activation', 'device-activation'])
 export class DeviceActivationController {
   constructor(
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
   ) {}
 
+  @Public()
   @Post(['activate', 'active'])
   @HttpCode(HttpStatus.OK)
   async activate(@Body() body: ActivateDeviceDto) {
@@ -224,6 +227,7 @@ export class DeviceActivationController {
     }
   }
 
+  @Public()
   @Post('revoke')
   @HttpCode(HttpStatus.OK)
   async revoke(@Body() body: any) {
