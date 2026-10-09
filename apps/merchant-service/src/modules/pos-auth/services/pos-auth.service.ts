@@ -29,7 +29,7 @@ export class PosAuthService {
 
   /**
    * API 1: Merchant & Store Login / Information Lookup Service
-   * Public auth route - No token required
+   * Public auth route - No Bearer token required in request
    */
   async merchantStoreLogin(dto: MerchantStoreLoginDto) {
     const rawMerchant = (
@@ -53,10 +53,13 @@ export class PosAuthService {
 
     const dataSource = await connectPostgres('POS Auth Service', []);
     const merchants = await dataSource.query(
-      `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
+      `SELECT id, 
+              COALESCE("merchant_code", "merchantCode") AS "merchantCode", 
+              COALESCE("merchant_id", "merchantId") AS "merchantId", 
+              "business_display_name" AS "businessDisplayName", 
               "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
        FROM public.merchants 
-       WHERE (lower(email) = lower($1) OR "merchantCode" = $1 OR "merchantId" = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
+       WHERE (lower(email) = lower($1) OR "merchant_code" = $1 OR "merchantCode" = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
        LIMIT 1`,
       [rawMerchant],
     );
@@ -66,19 +69,20 @@ export class PosAuthService {
       throw new UnauthorizedException('Invalid merchant credentials');
     }
 
-    if (merchant.status && merchant.status !== 'ACTIVE') {
+    if (merchant.status && (String(merchant.status).toUpperCase() === 'INACTIVE' || String(merchant.status).toUpperCase() === 'SUSPENDED')) {
       throw new ForbiddenException('Merchant account is inactive or suspended');
     }
 
     let store = null;
     if (rawStore) {
       const stores = await dataSource.query(
-        `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+        `SELECT id, "store_code" AS "storeCode", 
+                COALESCE("store_name", "name", "store_code") AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1))
-           AND (id::text = $2 OR store_code = $2 OR lower(store_name) = lower($2))
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1))
+           AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(COALESCE(store_name, name, '')) = lower($2))
          LIMIT 1`,
         [String(merchant.id), rawStore],
       );
@@ -87,12 +91,13 @@ export class PosAuthService {
 
     if (!store) {
       const stores = await dataSource.query(
-        `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+        `SELECT id, "store_code" AS "storeCode", 
+                COALESCE("store_name", "name", "store_code") AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1))
-           AND status = 'ACTIVE'
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1))
+           AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
          ORDER BY created_at ASC
          LIMIT 1`,
         [String(merchant.id)],
@@ -104,7 +109,7 @@ export class PosAuthService {
       throw new NotFoundException(`Store '${rawStore || 'default'}' not found for this merchant`);
     }
 
-    if (store.status && store.status !== 'ACTIVE') {
+    if (store.status && String(store.status).toUpperCase() === 'INACTIVE') {
       throw new ForbiddenException('Store is currently inactive');
     }
 
@@ -144,7 +149,7 @@ export class PosAuthService {
 
   /**
    * API 2: Employee PIN Login Service (POS Authentication)
-   * Public endpoint - No Bearer token required in headers
+   * Public endpoint - No Bearer token required in request
    * Supports 6-digit PIN login with automatic employee resolution across
    * public.employee_stores and public.employees tables.
    */
@@ -193,17 +198,20 @@ export class PosAuthService {
       // 1. Resolve Target Merchant if specified
       if (targetMerchantId) {
         const merchants = await dataSource.query(
-          `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
+          `SELECT id, 
+                  COALESCE("merchant_code", "merchantCode") AS "merchantCode", 
+                  COALESCE("merchant_id", "merchantId") AS "merchantId", 
+                  "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1 OR lower(email) = lower($1))
+           WHERE (id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1 OR lower(email) = lower($1))
            LIMIT 1`,
           [String(targetMerchantId).trim()],
         );
         merchant = merchants[0];
         if (merchant) {
           targetMerchantId = merchant.id;
-          if (merchant.status && merchant.status !== 'ACTIVE') {
+          if (merchant.status && (String(merchant.status).toUpperCase() === 'INACTIVE' || String(merchant.status).toUpperCase() === 'SUSPENDED')) {
             throw new ForbiddenException('Merchant account is inactive or suspended');
           }
         }
@@ -211,14 +219,15 @@ export class PosAuthService {
 
       // 2. Resolve Target Store if specified
       if (targetStoreId) {
-        let storeWhere = `(id::text = $1 OR store_code = $1 OR lower(store_name) = lower($1))`;
+        let storeWhere = `(id::text = $1 OR lower(store_code) = lower($1) OR lower(COALESCE(store_name, name, '')) = lower($1))`;
         let storeParams: any[] = [String(targetStoreId).trim()];
         if (targetMerchantId) {
           storeParams.push(String(targetMerchantId));
-          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR "merchantId"::text = $2 OR "merchantCode" = $2))`;
+          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR "merchant_id" = $2 OR "merchantId" = $2 OR "merchant_code" = $2 OR "merchantCode" = $2))`;
         }
         const stores = await dataSource.query(
-          `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+          `SELECT id, "store_code" AS "storeCode", 
+                  COALESCE("store_name", "name", "store_code") AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
            WHERE ${storeWhere}
@@ -252,14 +261,14 @@ export class PosAuthService {
           es.status AS "storeAssignmentStatus",
           es.role_template_id AS "roleTemplateId"
         FROM public.employees e
-        LEFT JOIN public.employee_stores es ON es.employee_id = e.id AND (es.status = 'ACTIVE' OR es.status IS NULL)
-        WHERE e.status = 'ACTIVE'
+        LEFT JOIN public.employee_stores es ON es.employee_id = e.id AND (es.status IS NULL OR UPPER(es.status::text) <> 'INACTIVE')
+        WHERE (e.status IS NULL OR UPPER(e.status::text) <> 'INACTIVE')
       `;
       const queryParams: any[] = [];
 
       if (targetMerchantId) {
         queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchantId"::text = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR "merchantId" = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
       }
 
       if (rawEmployeeCode) {
@@ -323,10 +332,13 @@ export class PosAuthService {
       // 4. Resolve final merchant details if needed
       if (!merchant && targetMerchantId) {
         const merchants = await dataSource.query(
-          `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
+          `SELECT id, 
+                  COALESCE("merchant_code", "merchantCode") AS "merchantCode", 
+                  COALESCE("merchant_id", "merchantId") AS "merchantId", 
+                  "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1)
+           WHERE (id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1)
            LIMIT 1`,
           [String(targetMerchantId)],
         );
@@ -337,11 +349,12 @@ export class PosAuthService {
       if (!store) {
         const finalMerchant = targetMerchantId || merchant?.id || employee.merchantId;
         const stores = await dataSource.query(
-          `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+          `SELECT id, "store_code" AS "storeCode", 
+                  COALESCE("store_name", "name", "store_code") AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
-           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1)) 
-             AND status = 'ACTIVE'
+           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1)) 
+             AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
            ORDER BY created_at ASC
            LIMIT 1`,
           [String(finalMerchant)],
