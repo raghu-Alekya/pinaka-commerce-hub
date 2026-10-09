@@ -1,6 +1,8 @@
-import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, Param, Patch, Post, Put, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { RELATIONSHIPS, EMPLOYEE_ACCESS_RELATIONSHIPS, Relationship } from './relationships.config';
 import { RelationshipsRepository } from './relationships.repository';
+import { filterMasterList } from '../master/common/master-list';
+import { StoreTypeRepository } from '../master/store-setup/store-type.repository';
 
 export type RelationshipRequest = { user?: { id?: string } };
 export function relationshipUserId(request: RelationshipRequest): string {
@@ -25,11 +27,31 @@ function createController(config: Relationship) {
   @Controller([config.path, `connector/${config.path}`, config.path.replace(/^api\/v1\//, '')])
   @UseGuards(RelationshipOwnerGuard)
   class RelationshipController {
-    constructor(@Inject(RelationshipsRepository) public readonly repository: RelationshipsRepository) {}
+    constructor(
+      @Inject(RelationshipsRepository) public readonly repository: RelationshipsRepository,
+      @Inject(StoreTypeRepository) private readonly storeTypes: StoreTypeRepository,
+    ) {}
     @Get()
     list(@Param() params: Record<string,string>) { return this.repository.execute(config, 'list', params); }
     @Get(':relatedId')
-    get(@Param() params: Record<string,string>) { return this.repository.execute(config, 'get', params, params.relatedId); }
+    async get(@Param() params: Record<string,string>, @Query() query: Record<string, string>) {
+      // Keep this reserved catalog path working even if Nest registers the
+      // parameter route before RoleTemplateStoreTypeCatalogController.
+      if (config.name === 'RoleTemplateStoreTypes' && params.relatedId === 'available') {
+        const mapped = await this.repository.execute(config, 'list', params);
+        const mappings = new Map((mapped.items as { storeTypeId: string; id: string; defaultEnabled?: boolean; required?: boolean }[])
+          .map(item => [item.storeTypeId.toLowerCase(), item]));
+        const masterStoreTypes = filterMasterList(await this.storeTypes.list(), query) as Record<string, any>[];
+        const all = masterStoreTypes.map(storeType => {
+          const mapping = mappings.get(String(storeType.id).toLowerCase());
+          return { ...storeType, mapped: Boolean(mapping), checked: Boolean(mapping), mappingId: mapping?.id || null,
+            defaultEnabled: mapping?.defaultEnabled ?? false, required: mapping?.required ?? false };
+        });
+        const visible = query.unmappedOnly?.trim().toLowerCase() === 'true' ? all.filter(item => !item.mapped) : all;
+        return { success: true, count: visible.length, storeTypes: visible };
+      }
+      return this.repository.execute(config, 'get', params, params.relatedId);
+    }
     @Post()
     create(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'create', params, undefined, body, request.user?.id); }
     @Put(':relatedId')
