@@ -42,6 +42,18 @@ export class PosShiftEntity {
   @Column({ name: 'device_id', type: 'varchar', length: 100 })
   terminalId!: string; // Sunmi Serial # / Device ID
 
+  @Column({ name: 'opening_device_id', type: 'uuid', nullable: true })
+  openingDeviceId?: string;
+
+  @Column({ name: 'opened_by_employee_id', type: 'uuid', nullable: true })
+  openedByEmployeeId?: string;
+
+  @Column({ name: 'closed_by_employee_id', type: 'uuid', nullable: true })
+  closedByEmployeeId?: string;
+
+  @Column({ name: 'shift_number', type: 'varchar', length: 100, nullable: true })
+  shiftNumber?: string;
+
   @Column({ name: 'cashier_name', type: 'varchar', length: 150 })
   cashierName!: string;
 
@@ -60,19 +72,19 @@ export class PosShiftEntity {
   @Column({ name: 'total_paid_outs', type: 'decimal', precision: 10, scale: 2, default: 0.00 })
   totalPaidOuts!: number;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ name: 'drawer_denominations', type: 'jsonb', nullable: true })
   drawer_denominations?: DrawerDenomination[];
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ name: 'drawer_total_amount', type: 'decimal', precision: 12, scale: 2, nullable: true })
   drawer_total_amount?: number;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ name: 'tube_denominations', type: 'jsonb', nullable: true })
   tube_denominations?: TubeDenomination[];
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ name: 'tube_total_amount', type: 'decimal', precision: 12, scale: 2, nullable: true })
   tube_total_amount?: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Column({ name: 'total_amount', type: 'decimal', precision: 12, scale: 2, nullable: true })
   total_amount?: number;
 
   @Column({ name: 'closing_cash_actual', type: 'decimal', precision: 10, scale: 2, nullable: true })
@@ -81,10 +93,22 @@ export class PosShiftEntity {
   @Column({ name: 'expected_cash_in_drawer', type: 'decimal', precision: 10, scale: 2, nullable: true })
   expectedCashInDrawer?: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({ name: 'declared_cash', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  declaredCash?: number;
+
+  @Column({ name: 'cash_difference', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  cashDifference?: number;
+
+  @Column({ name: 'discrepancy', type: 'decimal', precision: 10, scale: 2, nullable: true })
   discrepancy?: number; // Over / Short
 
-  @Column({ type: 'varchar', length: 50, default: ShiftStatus.OPEN })
+  @Column({ name: 'opening_note', type: 'text', nullable: true })
+  openingNote?: string;
+
+  @Column({ name: 'closing_note', type: 'text', nullable: true })
+  closingNote?: string;
+
+  @Column({ name: 'status', type: 'varchar', length: 50, default: ShiftStatus.OPEN })
   status!: ShiftStatus;
 
   @Column({ name: 'opened_at', type: 'timestamptz' })

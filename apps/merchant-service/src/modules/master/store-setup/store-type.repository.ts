@@ -38,7 +38,7 @@ export class StoreTypeRepository {
         description TEXT NOT NULL DEFAULT '',
         status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ
       )
     `);
     await safeExec(`DROP TRIGGER IF EXISTS store_types_legacy_cols ON public.store_types CASCADE`);
@@ -48,6 +48,12 @@ export class StoreTypeRepository {
     await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
     await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS created_by UUID`);
     await safeExec(`ALTER TABLE public.store_types ADD COLUMN IF NOT EXISTS updated_by UUID`);
+    await ds.query(`
+      ALTER TABLE public.store_types ALTER COLUMN updated_at DROP NOT NULL;
+      ALTER TABLE public.store_types ALTER COLUMN updated_at DROP DEFAULT;
+      ALTER TABLE public.store_types ALTER COLUMN updated_by DROP NOT NULL;
+      ALTER TABLE public.store_types ALTER COLUMN updated_by DROP DEFAULT;
+    `);
 
     try {
       const colRes = await ds.query(
@@ -196,11 +202,11 @@ export class StoreTypeRepository {
       description,
       status,
       [createdDbCol]: new Date(),
-      [updatedDbCol]: new Date(),
+      [updatedDbCol]: null,
     };
     if (hasIsDeleted) insertData['is_deleted'] = status === StoreTypeStatus.INACTIVE;
     if (hasCreatedBy && loginUserId) insertData['created_by'] = loginUserId;
-    if (hasUpdatedBy && loginUserId) insertData['updated_by'] = loginUserId;
+    if (hasUpdatedBy) insertData['updated_by'] = null;
 
     const alternateCodeCol = cols.find(c => c !== codeDbCol && ['store_type_code', 'storetypecode', 'code'].includes(c.toLowerCase()));
     if (alternateCodeCol) {

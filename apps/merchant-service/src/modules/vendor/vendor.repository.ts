@@ -113,7 +113,8 @@ export class VendorRepository {
           vendorType: dto.vendorType,
           vendorCode,
           createdBy: actorId,
-          updatedBy: actorId,
+          updatedBy: null,
+          updatedAt: null as unknown as Date,
           contactPerson: optionalText(dto.contactPerson),
           phone: optionalText(dto.phone),
           email,
@@ -126,7 +127,8 @@ export class VendorRepository {
           country: optionalText(dto.country),
           status: dto.status || VendorStatus.ACTIVE,
         });
-        return repository.save(entity);
+        await repository.insert(entity);
+        return repository.findOneByOrFail({ id: entity.id });
       });
     } catch (error: any) {
       if (error?.code === '23505' || error?.driverError?.code === '23505') {
