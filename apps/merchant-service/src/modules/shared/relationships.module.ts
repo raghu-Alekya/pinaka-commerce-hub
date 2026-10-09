@@ -7,8 +7,15 @@ import {
 import { RelationshipsRepository } from './relationships.repository';
 
 @Module({
-  controllers: [...RELATIONSHIP_CONTROLLERS, RoleTemplatePermissionsReplaceController],
-  providers: [RelationshipsRepository, RelationshipOwnerGuard],
+  imports: [MerchantModule],
+  controllers: [
+    // Register these static paths before generic `:relatedId` relationship routes.
+    RoleTemplateStoreTypeCatalogController,
+    RoleTemplateStoreTypeBulkController,
+    RoleTemplatePermissionsReplaceController,
+    ...RELATIONSHIP_CONTROLLERS,
+  ],
+  providers: [RelationshipsRepository, RelationshipOwnerGuard, StoreTypeRepository],
   exports: [RelationshipsRepository, RelationshipOwnerGuard],
 })
 export class RelationshipsModule {}

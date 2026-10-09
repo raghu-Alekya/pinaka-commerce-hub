@@ -515,6 +515,65 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
             items: await this.withChildDetails(manager, config, remaining),
           };
         }
+
+        // The feature catalog is stored in feature_permissions, while the
+        // employee/role permission tables still reference public.permissions.
+        // Frontend selections use the feature_permissions UUIDs, so mirror
+        // those catalog rows into the legacy table before applying grants.
+        const featurePermissionIds = parsed.selected.map((item) => item.child);
+        const featurePermissions = await manager.query(
+          `SELECT id, feature_id AS "featureId", permission_code AS "permissionCode",
+                  name, description, status
+           FROM public.feature_permissions
+           WHERE feature_id = ANY($1::uuid[]) OR id = ANY($2::uuid[])`,
+          [parsed.featureIds, featurePermissionIds],
+        );
+        const permissionIdMap = new Map<string, string>();
+        for (const permission of featurePermissions as {
+          id: string;
+          featureId: string;
+          permissionCode: string;
+          name: string;
+          description: string;
+          status: string;
+        }[]) {
+          const matching = await manager.query(
+            `SELECT id FROM public.permissions
+             WHERE id = $1 OR (feature_id = $2 AND
+               (permission_key = $3 OR lower(btrim(name)) = lower(btrim($4))))
+             ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END
+             LIMIT 1`,
+            [permission.id, permission.featureId, permission.permissionCode, permission.name],
+          );
+          let legacyPermissionId = matching[0]?.id as string | undefined;
+          if (!legacyPermissionId) {
+            const inserted = await manager.query(
+              `INSERT INTO public.permissions
+                 (id, feature_id, permission_key, name, description, status)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT DO NOTHING
+               RETURNING id`,
+              [permission.id, permission.featureId, permission.permissionCode,
+                permission.name, permission.description ?? '', permission.status ?? 'ACTIVE'],
+            );
+            legacyPermissionId = inserted[0]?.id as string | undefined;
+          }
+          if (!legacyPermissionId) {
+            const conflict = await manager.query(
+              `SELECT id FROM public.permissions
+               WHERE feature_id = $1 AND
+                 (permission_key = $2 OR lower(btrim(name)) = lower(btrim($3)))
+               ORDER BY CASE WHEN permission_key = $2 THEN 0 ELSE 1 END
+               LIMIT 1`,
+              [permission.featureId, permission.permissionCode, permission.name],
+            );
+            legacyPermissionId = conflict[0]?.id as string | undefined;
+          }
+          if (legacyPermissionId) {
+            permissionIdMap.set(String(permission.id).toLowerCase(), legacyPermissionId);
+          }
+        }
+
         const catalog = await manager.query(
           `SELECT DISTINCT p.id
            FROM public.store_type_role_templates mapping
@@ -536,14 +595,15 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
             allowed.set(String(row.id).toLowerCase(), false);
         }
         for (const item of parsed.selected) {
-          allowed.set(item.child.toLowerCase(), item.defaultAllowed);
+          const permissionId = permissionIdMap.get(item.child.toLowerCase()) || item.child;
+          allowed.set(permissionId.toLowerCase(), item.defaultAllowed);
         }
         await manager.query(
           `DELETE FROM public.role_template_permissions WHERE ${quoteIdent(config.parentColumn)} = $1`,
           [parent],
         );
         if (!allowed.size) return { success: true, count: 0, items: [] };
-        const items = [];
+        const items: Record<string, unknown>[] = [];
         for (const [permissionId, defaultAllowed] of allowed) {
           const child =
             parsed.selected.find(
