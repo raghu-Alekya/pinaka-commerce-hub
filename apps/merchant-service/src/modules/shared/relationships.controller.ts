@@ -55,7 +55,14 @@ function createController(config: Relationship) {
     @Post()
     create(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'create', params, undefined, body, request.user?.id); }
     @Put(':relatedId')
-    replace(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'replace', params, params.relatedId, body, request.user?.id); }
+    replace(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) {
+      // Protect the static bulk route if a platform router registers this
+      // parameterized route first. Otherwise `bulk` is treated as relatedId.
+      if (config.name === 'RoleTemplatePermissions' && params.relatedId === 'bulk') {
+        return this.repository.replaceBulk(config, params, body);
+      }
+      return this.repository.execute(config, 'replace', params, params.relatedId, body, request.user?.id);
+    }
     @Patch(':relatedId')
     patch(@Param() params: Record<string,string>, @Body() body: unknown, @Req() request: RelationshipRequest) { return this.repository.execute(config, 'patch', params, params.relatedId, body, request.user?.id); }
     @Delete(':relatedId')

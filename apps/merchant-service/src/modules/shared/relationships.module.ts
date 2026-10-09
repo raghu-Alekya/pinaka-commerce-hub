@@ -18,8 +18,8 @@ import {
     // Register these static paths before generic `:relatedId` relationship routes.
     RoleTemplateStoreTypeCatalogController,
     RoleTemplateStoreTypeBulkController,
-    ...RELATIONSHIP_CONTROLLERS,
     RoleTemplatePermissionsReplaceController,
+    ...RELATIONSHIP_CONTROLLERS,
   ],
   providers: [RelationshipsRepository, RelationshipOwnerGuard, StoreTypeRepository],
   exports: [RelationshipsRepository, RelationshipOwnerGuard],
