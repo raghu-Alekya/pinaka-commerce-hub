@@ -64,6 +64,15 @@ export class StorePosConfigurationController {
   }
 
   /**
+   * Get customized POS store configuration.
+   *
+   * GET /api/v1/store/store-pos-configuration/:storeId/bootstrap
+   */
+  @Get(':storeId/bootstrap')
+  getStoreBootstrap(@Param('storeId') storeId: string) {
+    return this.service.getStoreInfo(storeId);
+  }
+  /**
    * Get a specific POS configuration.
    *
    * GET /api/v1/store/store-pos-configuration/:storeId/:configurationName
@@ -134,5 +143,5 @@ export class StorePosConfigurationController {
       success: true,
       message: 'POS configuration deleted successfully',
     };
-  }
+  } 
 }
