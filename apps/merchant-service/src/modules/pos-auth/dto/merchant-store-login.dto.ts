@@ -1,15 +1,35 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 export class MerchantStoreLoginDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'Merchant identifier (email, code, or name) is required' })
-  merchantIdentifier!: string;
+  merchantIdentifier?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'Password is required' })
-  password!: string;
+  merchantId?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'Store ID or Store Code is required' })
-  storeId!: string;
+  merchantCode?: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
+
+  @IsOptional()
+  @IsString()
+  storeId?: string;
+
+  @IsOptional()
+  @IsString()
+  storeCode?: string;
+
+  @IsOptional()
+  @IsString()
+  storeName?: string;
 }

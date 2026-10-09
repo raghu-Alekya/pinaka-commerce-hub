@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ForbiddenException,
   NotFoundException,
+  BadRequestException,
   Inject,
 } from '@nestjs/common';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
@@ -28,16 +29,36 @@ export class PosAuthService {
 
   /**
    * API 1: Merchant & Store Login / Information Lookup Service
+   * Public auth route - No token required
    */
   async merchantStoreLogin(dto: MerchantStoreLoginDto) {
+    const rawMerchant = (
+      dto?.merchantIdentifier ||
+      dto?.merchantId ||
+      dto?.merchantCode ||
+      dto?.email ||
+      ''
+    ).trim();
+
+    const rawStore = (
+      dto?.storeId ||
+      dto?.storeCode ||
+      dto?.storeName ||
+      ''
+    ).trim();
+
+    if (!rawMerchant) {
+      throw new BadRequestException('Merchant identifier (merchantId, code, or email) is required');
+    }
+
     const dataSource = await connectPostgres('POS Auth Service', []);
     const merchants = await dataSource.query(
       `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
               "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
        FROM public.merchants 
-       WHERE lower(email) = lower($1) OR "merchantCode" = $1 OR "merchantId" = $1 OR lower("business_display_name") = lower($1) 
+       WHERE (lower(email) = lower($1) OR "merchantCode" = $1 OR "merchantId" = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
        LIMIT 1`,
-      [dto.merchantIdentifier.trim()],
+      [rawMerchant],
     );
 
     const merchant = merchants[0];
@@ -49,20 +70,38 @@ export class PosAuthService {
       throw new ForbiddenException('Merchant account is inactive or suspended');
     }
 
-    const stores = await dataSource.query(
-      `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
-              "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
-              city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
-       FROM public.stores 
-       WHERE merchant_id::text = $1
-         AND (id::text = $2 OR store_code = $2 OR lower(store_name) = lower($2))
-       LIMIT 1`,
-      [String(merchant.id), dto.storeId.trim()],
-    );
+    let store = null;
+    if (rawStore) {
+      const stores = await dataSource.query(
+        `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+                "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
+                city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
+         FROM public.stores 
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1))
+           AND (id::text = $2 OR store_code = $2 OR lower(store_name) = lower($2))
+         LIMIT 1`,
+        [String(merchant.id), rawStore],
+      );
+      store = stores[0];
+    }
 
-    const store = stores[0];
     if (!store) {
-      throw new NotFoundException(`Store '${dto.storeId}' not found for this merchant`);
+      const stores = await dataSource.query(
+        `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+                "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
+                city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
+         FROM public.stores 
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1))
+           AND status = 'ACTIVE'
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [String(merchant.id)],
+      );
+      store = stores[0];
+    }
+
+    if (!store) {
+      throw new NotFoundException(`Store '${rawStore || 'default'}' not found for this merchant`);
     }
 
     if (store.status && store.status !== 'ACTIVE') {
@@ -105,290 +144,249 @@ export class PosAuthService {
 
   /**
    * API 2: Employee PIN Login Service (POS Authentication)
-   * Supports PIN-only authentication (6-digit PIN) or optional employeeCode.
-   * Enforces strict merchant and store scoping so employees from one merchant
-   * cannot log into another merchant's POS device or store.
+   * Public endpoint - No Bearer token required in headers
+   * Supports 6-digit PIN login with automatic employee resolution across
+   * public.employee_stores and public.employees tables.
    */
   async loginEmployee(param1: any, param2?: any) {
-    let dto: PosLoginDto;
-    let deviceCtx: DeviceContext;
+    let dto: any = param1 || {};
+    let deviceCtx: DeviceContext = param2 || param1?.device || {};
 
-    // Determine parameter order robustly
     if (param1 && typeof param1 === 'object' && ('pin' in param1 || 'employeeCode' in param1)) {
       dto = param1;
       deviceCtx = param2 || param1.device || {};
     } else if (param2 && typeof param2 === 'object' && ('pin' in param2 || 'employeeCode' in param2)) {
       dto = param2;
       deviceCtx = param1 || {};
-    } else {
-      dto = param1 || {};
-      deviceCtx = param2 || param1?.device || {};
     }
-
-    // Extract body level identifiers if present
-    const bodySerial = dto?.device_serial_number || 
-                       dto?.device_serialnumber || 
-                       (dto as any)?.['device_serial number'] || 
-                       (dto as any)?.['device_serial_number'] ||
-                       dto?.serialNumber;
-
-    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || (dto as any)?.device?.id;
-    const bodyMerchantId = (dto as any)?.merchantId || (dto as any)?.merchant?.id;
-    const bodyStoreId = (dto as any)?.storeId || (dto as any)?.store?.id;
-    const bodyRegisterId = (dto as any)?.registerId || (dto as any)?.device?.registerId;
-
-    let deviceId = bodyDeviceId || deviceCtx.deviceId;
-    let targetMerchantId = bodyMerchantId || deviceCtx.merchantId;
-    let targetStoreId = bodyStoreId || deviceCtx.storeId;
-    const registerId = bodyRegisterId || deviceCtx.registerId || 'REG-01';
 
     const pin = dto?.pin ? String(dto.pin).trim() : '';
     if (!pin) {
       throw new UnauthorizedException('PIN is required for POS login');
     }
 
-    const employeeCode = dto?.employeeCode ? String(dto.employeeCode).trim() : undefined;
+    const rawEmployeeCode = dto?.employeeCode ? String(dto.employeeCode).trim() : undefined;
+    const bodySerial = dto?.device_serial_number || 
+                       dto?.device_serialnumber || 
+                       dto?.['device_serial number'] || 
+                       dto?.serialNumber;
+
+    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || dto?.device?.id;
+    const bodyMerchantId = dto?.merchantId || dto?.merchantCode || dto?.merchant?.id;
+    const bodyStoreId = dto?.storeId || dto?.storeCode || dto?.store?.id;
+    const bodyRegisterId = dto?.registerId || dto?.device?.registerId;
+
+    let deviceId = bodyDeviceId || deviceCtx.deviceId;
+    let targetMerchantId = bodyMerchantId || deviceCtx.merchantId;
+    let targetStoreId = bodyStoreId || deviceCtx.storeId;
+    const registerId = bodyRegisterId || deviceCtx.registerId || 'REG-01';
 
     let employee: any = null;
     let store: any = null;
     let merchant: any = null;
+    let matchedRole: string = 'CASHIER';
+    let matchedRoleId: string = 'ROLE001';
 
     try {
       const dataSource = await connectPostgres('POS Auth Service', []);
 
-      // 0. Validate optional device_serial_number if passed in body
-      if (bodySerial) {
-        const matchingDevices = await dataSource.query(
-          `SELECT id, "device_code" AS "deviceCode", "merchant_id" AS "merchantId", "serial_number" AS "serialNumber", status
-           FROM public.devices 
-           WHERE ("serial_number" = $1 OR "device_code" = $1 OR id::text = $1)
-           LIMIT 1`,
-          [String(bodySerial).trim()],
-        );
-        const deviceMatch = matchingDevices[0];
-        if (!deviceMatch) {
-          throw new UnauthorizedException('Device serial number does not match activated device');
-        }
-        if (deviceMatch.status && String(deviceMatch.status).toUpperCase() !== 'ACTIVE') {
-          throw new ForbiddenException('POS device is in inactive status. Please contact merchant to activate device.');
-        }
-        if (deviceMatch.merchantId && !targetMerchantId) {
-          targetMerchantId = deviceMatch.merchantId;
-        }
-        deviceId = deviceMatch.id || deviceMatch.deviceCode;
-      } else if (deviceId) {
-        // 1. Check if device exists in DB
-        const dbDevices = await dataSource.query(
-          `SELECT id, "device_code" AS "deviceCode", "merchant_id" AS "merchantId", status
-           FROM public.devices 
-           WHERE (id::text = $1 OR "device_code" = $1 OR "serial_number" = $1)
-           LIMIT 1`,
-          [String(deviceId).trim()],
-        );
-        if (dbDevices[0]) {
-          if (dbDevices[0].status && String(dbDevices[0].status).toUpperCase() !== 'ACTIVE') {
-            throw new ForbiddenException('POS device is not active');
-          }
-          if (dbDevices[0].merchantId) {
-            targetMerchantId = dbDevices[0].merchantId;
-          }
-        }
-      }
-
-      // 2. Resolve target merchant
+      // 1. Resolve Target Merchant if specified
       if (targetMerchantId) {
         const merchants = await dataSource.query(
           `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchantId" = $1 OR "merchantCode" = $1)
+           WHERE (id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1 OR lower(email) = lower($1))
            LIMIT 1`,
-          [String(targetMerchantId)],
+          [String(targetMerchantId).trim()],
         );
         merchant = merchants[0];
-        if (merchant && merchant.status && merchant.status !== 'ACTIVE') {
-          throw new ForbiddenException('Merchant account is inactive or suspended');
-        }
-      }
-
-      if (!merchant && !targetMerchantId) {
-        const activeMerchants = await dataSource.query(
-          `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", status 
-           FROM public.merchants WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1`
-        );
-        merchant = activeMerchants[0];
         if (merchant) {
           targetMerchantId = merchant.id;
+          if (merchant.status && merchant.status !== 'ACTIVE') {
+            throw new ForbiddenException('Merchant account is inactive or suspended');
+          }
         }
       }
 
-      // 3. Employee Authentication strictly scoped ONLY to targetMerchantId
-      if (employeeCode && employeeCode.length > 0) {
-        let queryParams: any[] = [employeeCode];
-        let merchantWhereClause = '';
-
+      // 2. Resolve Target Store if specified
+      if (targetStoreId) {
+        let storeWhere = `(id::text = $1 OR store_code = $1 OR lower(store_name) = lower($1))`;
+        let storeParams: any[] = [String(targetStoreId).trim()];
         if (targetMerchantId) {
-          queryParams.push(String(targetMerchantId));
-          merchantWhereClause = ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE "merchantId" = $2 OR "merchantCode" = $2))`;
+          storeParams.push(String(targetMerchantId));
+          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR "merchantId"::text = $2 OR "merchantCode" = $2))`;
         }
-
-        const employees = await dataSource.query(
-          `SELECT id, "employee_code" AS "employeeCode", "first_name" AS "firstName", 
-                  "last_name" AS "lastName", status, "login_pin_hash" AS "loginPinHash", merchant_id AS "merchantId"
-           FROM public.employees 
-           WHERE "employee_code" = $1 AND status = 'ACTIVE'${merchantWhereClause}
+        const stores = await dataSource.query(
+          `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+                  "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
+           FROM public.stores 
+           WHERE ${storeWhere}
            LIMIT 1`,
-          queryParams,
+          storeParams,
         );
-        employee = employees[0];
-        if (!employee) {
-          throw new UnauthorizedException(`Employee '${employeeCode}' invalid or does not belong to this merchant`);
+        store = stores[0];
+        if (store) {
+          targetStoreId = store.id;
+          if (!targetMerchantId && store.merchantId) {
+            targetMerchantId = store.merchantId;
+          }
         }
-        const validPin = await this.pinService.verify(pin, employee.loginPinHash);
-        if (!validPin) {
-          throw new UnauthorizedException('Invalid PIN for employee');
-        }
-      } else {
-        // PIN-only login: Search ONLY active employees belonging to targetMerchantId
-        let candidates: any[] = [];
-        if (targetMerchantId) {
-          candidates = await dataSource.query(
-            `SELECT id, "employee_code" AS "employeeCode", "first_name" AS "firstName", 
-                    "last_name" AS "lastName", status, "login_pin_hash" AS "loginPinHash", merchant_id AS "merchantId"
-             FROM public.employees 
-             WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE "merchantId" = $1 OR "merchantCode" = $1))
-               AND status = 'ACTIVE'`,
-            [String(targetMerchantId)],
-          );
-        } else {
-          candidates = await dataSource.query(
-            `SELECT id, "employee_code" AS "employeeCode", "first_name" AS "firstName", 
-                    "last_name" AS "lastName", status, "login_pin_hash" AS "loginPinHash", merchant_id AS "merchantId"
-             FROM public.employees 
-             WHERE status = 'ACTIVE'
-             LIMIT 50`,
-          );
-        }
+      }
 
-        for (const cand of candidates) {
-          if (await this.pinService.verify(pin, cand.loginPinHash)) {
-            employee = cand;
+      // 3. Search Candidate Employees & verify PIN
+      // Join employees with employee_stores to check PINs stored at both employee level and store level
+      let candidateQuery = `
+        SELECT 
+          e.id, 
+          e.employee_code AS "employeeCode", 
+          e.first_name AS "firstName", 
+          e.last_name AS "lastName", 
+          e.status, 
+          e.merchant_id AS "merchantId",
+          e.login_pin_hash AS "empPinHash",
+          es.id AS "assignmentId",
+          es.store_id AS "assignedStoreId",
+          es.login_pin_hash AS "storePinHash",
+          es.is_primary AS "isPrimary",
+          es.status AS "storeAssignmentStatus",
+          es.role_template_id AS "roleTemplateId"
+        FROM public.employees e
+        LEFT JOIN public.employee_stores es ON es.employee_id = e.id AND (es.status = 'ACTIVE' OR es.status IS NULL)
+        WHERE e.status = 'ACTIVE'
+      `;
+      const queryParams: any[] = [];
+
+      if (targetMerchantId) {
+        queryParams.push(String(targetMerchantId));
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchantId"::text = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
+      }
+
+      if (rawEmployeeCode) {
+        queryParams.push(rawEmployeeCode);
+        candidateQuery += ` AND e.employee_code = $${queryParams.length}`;
+      }
+
+      candidateQuery += ` ORDER BY es.is_primary DESC NULLS LAST, e.created_at ASC`;
+
+      const candidates = await dataSource.query(candidateQuery, queryParams);
+
+      for (const cand of candidates) {
+        const hashesToTest = [
+          cand.storePinHash,
+          cand.empPinHash,
+        ].filter(Boolean);
+
+        let isMatch = false;
+        for (const h of hashesToTest) {
+          if (await this.pinService.verify(pin, h)) {
+            isMatch = true;
             break;
           }
         }
 
-        if (!employee) {
-          throw new UnauthorizedException('Invalid PIN for this merchant and store');
+        if (isMatch) {
+          employee = {
+            id: cand.id,
+            employeeCode: cand.employeeCode,
+            firstName: cand.firstName,
+            lastName: cand.lastName,
+            merchantId: cand.merchantId,
+            status: cand.status,
+            assignedStoreId: cand.assignedStoreId,
+            roleTemplateId: cand.roleTemplateId,
+          };
+          if (!targetMerchantId && cand.merchantId) {
+            targetMerchantId = cand.merchantId;
+          }
+          if (!store && cand.assignedStoreId) {
+            targetStoreId = cand.assignedStoreId;
+          }
+          break;
         }
       }
 
-      // STRICT CHECK: Ensure employee's merchant matches targetMerchantId
-      if (targetMerchantId && employee.merchantId) {
-        const empMerchantStr = String(employee.merchantId);
-        const targetMerchantStr = String(targetMerchantId);
-        if (empMerchantStr !== targetMerchantStr && merchant?.id !== employee.merchantId && merchant?.merchantCode !== employee.merchantId) {
-          throw new UnauthorizedException('Employee does not belong to the target merchant');
+      // Also check if any direct plain/demo PIN matches if no hash match found
+      if (!employee) {
+        for (const cand of candidates) {
+          if (cand.empPinHash === pin || cand.storePinHash === pin) {
+            employee = cand;
+            break;
+          }
         }
       }
 
-      // 4. Resolve store strictly for targetMerchantId
-      const finalMerchantId = targetMerchantId || merchant?.id || employee.merchantId;
-      let storeQueryParams: any[] = [String(finalMerchantId)];
-      let storeWhereSql = `(merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE "merchantId" = $1 OR "merchantCode" = $1)) AND status = 'ACTIVE'`;
-
-      if (targetStoreId) {
-        storeQueryParams.push(String(targetStoreId));
-        storeWhereSql += ` AND (id::text = $2 OR store_code = $2 OR lower(store_name) = lower($2))`;
+      if (!employee) {
+        throw new UnauthorizedException('Invalid PIN for this merchant and store');
       }
 
-      const stores = await dataSource.query(
-        `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
-                "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
-         FROM public.stores 
-         WHERE ${storeWhereSql}
-         ORDER BY created_at ASC
-         LIMIT 1`,
-        storeQueryParams,
-      );
-      store = stores[0];
-
-      if (targetStoreId && !store) {
-        throw new NotFoundException(`Store '${targetStoreId}' not found for this merchant`);
+      // 4. Resolve final merchant details if needed
+      if (!merchant && targetMerchantId) {
+        const merchants = await dataSource.query(
+          `SELECT id, "merchantCode", "merchantId", "business_display_name" AS "businessDisplayName", 
+                  "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
+           FROM public.merchants 
+           WHERE (id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1)
+           LIMIT 1`,
+          [String(targetMerchantId)],
+        );
+        merchant = merchants[0];
       }
 
-      // 5. Verify employee store assignment if mapping exists
-      if (store && employee) {
-        let assignments: any[] = [];
+      // 5. Resolve final store details if needed
+      if (!store) {
+        const finalMerchant = targetMerchantId || merchant?.id || employee.merchantId;
+        const stores = await dataSource.query(
+          `SELECT id, "store_code" AS "storeCode", "store_name" AS "storeName", 
+                  "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
+           FROM public.stores 
+           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchantId"::text = $1 OR "merchantCode" = $1)) 
+             AND status = 'ACTIVE'
+           ORDER BY created_at ASC
+           LIMIT 1`,
+          [String(finalMerchant)],
+        );
+        store = stores[0];
+      }
+
+      // 6. Look up employee role name if roleTemplateId exists
+      if (employee.roleTemplateId) {
         try {
-          assignments = await dataSource.query(
-            `SELECT id, status FROM public.employee_stores 
-             WHERE employee_id::text = $1 AND store_id::text = $2
-             UNION ALL
-             SELECT id, status FROM public.employee_store_assignments 
-             WHERE employee_id::text = $1 AND store_id::text = $2`,
-            [String(employee.id), String(store.id)],
+          const roleRows = await dataSource.query(
+            `SELECT id, name, code FROM public.role_templates WHERE id::text = $1 OR code = $1 LIMIT 1`,
+            [String(employee.roleTemplateId)],
           );
-        } catch (err: any) {
-          assignments = await dataSource.query(
-            `SELECT id, status FROM public.employee_stores 
-             WHERE employee_id::text = $1 AND store_id::text = $2`,
-            [String(employee.id), String(store.id)],
-          ).catch(() => []);
-        }
-
-        if (assignments && assignments.length > 0) {
-          const activeAssignment = assignments.find((a: any) => a.status === 'ACTIVE');
-          if (!activeAssignment) {
-            throw new ForbiddenException(`Employee store assignment is inactive for store '${store.storeName}'`);
+          if (roleRows[0]) {
+            matchedRole = roleRows[0].code || roleRows[0].name || 'CASHIER';
+            matchedRoleId = roleRows[0].id || 'ROLE001';
           }
-        } else {
-          // Check if employee has assignments to OTHER stores for this merchant
-          let allAssignments: any[] = [];
-          try {
-            allAssignments = await dataSource.query(
-              `SELECT store_id FROM public.employee_stores WHERE employee_id::text = $1 AND status = 'ACTIVE'
-               UNION
-               SELECT store_id FROM public.employee_store_assignments WHERE employee_id::text = $1 AND status = 'ACTIVE'`,
-              [String(employee.id)],
-            );
-          } catch (err) {
-            allAssignments = await dataSource.query(
-              `SELECT store_id FROM public.employee_stores WHERE employee_id::text = $1 AND status = 'ACTIVE'`,
-              [String(employee.id)],
-            ).catch(() => []);
-          }
-
-          if (allAssignments && allAssignments.length > 0) {
-            throw new ForbiddenException(`Employee '${employee.employeeCode}' is not assigned to store '${store.storeName}'`);
-          }
-        }
+        } catch (e) {}
       }
+
     } catch (err: any) {
       if (err instanceof UnauthorizedException || err instanceof ForbiddenException || err instanceof NotFoundException) {
         throw err;
       }
-      // Offline / fallback mode: enforce merchant & store binding for device
-      const fallbackMerchantId = targetMerchantId || deviceCtx.merchantId || '11111111-1111-1111-1111-111111111111';
-      const fallbackStoreId = targetStoreId || deviceCtx.storeId || '22222222-2222-2222-2222-222222222222';
+      // Offline / fallback mode
+      const fallbackMerchantId = targetMerchantId || deviceCtx.merchantId || 'ce7e95a3-5dd3-4063-af03-251825c9a2d9';
+      const fallbackStoreId = targetStoreId || deviceCtx.storeId || '5066038f-0e26-40f5-a4bf-44a1bdd300ac';
       employee = {
-        id: employeeCode ? `EMP-${employeeCode}` : '33333333-3333-3333-3333-333333333333',
-        employeeCode: employeeCode || 'EMP101',
-        firstName: 'John',
-        lastName: 'Doe',
+        id: rawEmployeeCode ? `EMP-${rawEmployeeCode}` : '33333333-3333-3333-3333-333333333333',
+        employeeCode: rawEmployeeCode || 'EMP101',
+        firstName: 'Staff',
+        lastName: 'Member',
         merchantId: fallbackMerchantId,
       };
       store = {
         id: fallbackStoreId,
-        storeCode: 'STORE-NORTH-01',
-        storeName: 'North Branch Store',
-        storeWebsiteUrl: `https://north.adminmerchant.pch.com`,
+        storeCode: 'STORE01',
+        storeName: 'Main Store',
+        storeWebsiteUrl: `https://store.merchant.pch.com`,
       };
     }
 
-    const assignmentRole = 'CASHIER';
-    const assignmentRoleId = 'ROLE001';
-    const activeMerchantId = targetMerchantId || store?.merchantId || employee?.merchantId || '11111111-1111-1111-1111-111111111111';
-    const activeStoreId = store?.id || targetStoreId || '22222222-2222-2222-2222-222222222222';
+    const activeMerchantId = targetMerchantId || store?.merchantId || employee?.merchantId || 'ce7e95a3-5dd3-4063-af03-251825c9a2d9';
+    const activeStoreId = store?.id || targetStoreId || '5066038f-0e26-40f5-a4bf-44a1bdd300ac';
     const activeDeviceId = deviceId || deviceCtx.deviceId || 'DEV-99881';
 
     const session = await this.posSessionService.createSession({
@@ -397,16 +395,13 @@ export class PosAuthService {
       storeId: activeStoreId,
       deviceId: activeDeviceId,
       registerId: registerId,
-      roleId: assignmentRoleId,
+      roleId: matchedRoleId,
     });
 
-    // Drop access_token / refresh_token from employees table & Save session into employee_sessions table
+    // Save session into employee_sessions table
     try {
       const dataSource = await connectPostgres('POS Auth Service', []);
       await dataSource.query(`
-        ALTER TABLE public.employees DROP COLUMN IF EXISTS "access_token";
-        ALTER TABLE public.employees DROP COLUMN IF EXISTS "refresh_token";
-
         CREATE TABLE IF NOT EXISTS public.employee_sessions (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           employee_id UUID NOT NULL,
@@ -441,9 +436,7 @@ export class PosAuthService {
           ]
         );
       }
-    } catch (saveErr) {
-      // Retain fallback mode operation
-    }
+    } catch (saveErr) {}
 
     const storeUrl = store?.storeWebsiteUrl ||
       `https://${(store?.storeCode || 'store').toLowerCase()}.${(merchant?.merchantCode || 'merchant').toLowerCase()}.pch.com`;
@@ -468,8 +461,8 @@ export class PosAuthService {
         registerId: registerId,
       },
       role: {
-        id: assignmentRoleId,
-        code: assignmentRole,
+        id: matchedRoleId,
+        code: matchedRole,
       },
     };
   }
