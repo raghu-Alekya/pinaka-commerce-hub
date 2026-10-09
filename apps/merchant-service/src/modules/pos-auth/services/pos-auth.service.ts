@@ -263,7 +263,7 @@ export class PosAuthService {
         throw new NotFoundException('Store not found for this merchant');
       }
 
-      // 3. Match the PIN against this store's employee_stores.login_pin_hash
+      // 3. Match the PIN against this store's employee_stores and employees tables
       const queryParams: any[] = [String(store.id)];
       let candidateQuery = `
         SELECT
@@ -272,9 +272,10 @@ export class PosAuthService {
           e.first_name AS "firstName",
           e.last_name AS "lastName",
           e.status,
-          e.merchant_id AS "merchantId",
+          COALESCE(e.merchant_id, es.merchant_id) AS "merchantId",
           es.store_id AS "assignedStoreId",
-          es.login_pin_hash AS "storePinHash",
+          COALESCE(es.login_pin_hash, e.login_pin_hash) AS "storePinHash",
+          e.login_pin_hash AS "empPinHash",
           role.role_id AS "roleId",
           role.role_code AS "roleCode",
           role.role_name AS "roleName"
@@ -285,18 +286,18 @@ export class PosAuthService {
           FROM public.employee_store_roles esr
           LEFT JOIN public.role_templates rt ON rt.id = esr.role_id
           WHERE esr.employee_store_id = es.id
-            AND (esr.status = 'ACTIVE' OR esr.status IS NULL)
+            AND (esr.status IS NULL OR UPPER(esr.status::text) <> 'INACTIVE')
           ORDER BY esr.created_at ASC
           LIMIT 1
         ) role ON true
         WHERE es.store_id = $1::uuid
-          AND e.status = 'ACTIVE'
-          AND (es.status = 'ACTIVE' OR es.status IS NULL)
-          AND es.login_pin_hash IS NOT NULL
+          AND (e.status IS NULL OR UPPER(e.status::text) <> 'INACTIVE')
+          AND (es.status IS NULL OR UPPER(es.status::text) <> 'INACTIVE')
+          AND (es.login_pin_hash IS NOT NULL OR e.login_pin_hash IS NOT NULL)
       `;
       if (targetMerchantId) {
         queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length})`;
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR "merchantId" = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
       }
       if (rawEmployeeCode) {
         queryParams.push(rawEmployeeCode);
@@ -304,10 +305,55 @@ export class PosAuthService {
       }
       candidateQuery += ` ORDER BY es.is_primary DESC, e.created_at ASC`;
 
-      const candidates = await dataSource.query(candidateQuery, queryParams);
+      let candidates = await dataSource.query(candidateQuery, queryParams);
+
+      // If no store-assigned employee matched, search all active employees for this merchant
+      if (!candidates || candidates.length === 0) {
+        const merchantParams: any[] = [String(store.id)];
+        let merchantEmpQuery = `
+          SELECT
+            e.id,
+            e.employee_code AS "employeeCode",
+            e.first_name AS "firstName",
+            e.last_name AS "lastName",
+            e.status,
+            e.merchant_id AS "merchantId",
+            $1::uuid AS "assignedStoreId",
+            e.login_pin_hash AS "storePinHash",
+            e.login_pin_hash AS "empPinHash",
+            NULL AS "roleId",
+            'CASHIER' AS "roleCode",
+            'Cashier' AS "roleName"
+          FROM public.employees e
+          WHERE (e.status IS NULL OR UPPER(e.status::text) <> 'INACTIVE')
+            AND e.login_pin_hash IS NOT NULL
+        `;
+        if (targetMerchantId) {
+          merchantParams.push(String(targetMerchantId));
+          merchantEmpQuery += ` AND (e.merchant_id::text = $${merchantParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${merchantParams.length} OR "merchant_id" = $${merchantParams.length} OR "merchantId" = $${merchantParams.length} OR "merchant_code" = $${merchantParams.length} OR "merchantCode" = $${merchantParams.length}))`;
+        }
+        if (rawEmployeeCode) {
+          merchantParams.push(rawEmployeeCode);
+          merchantEmpQuery += ` AND e.employee_code = $${merchantParams.length}`;
+        }
+        merchantEmpQuery += ` ORDER BY e.created_at ASC`;
+        candidates = await dataSource.query(merchantEmpQuery, merchantParams);
+      }
 
       for (const cand of candidates) {
-        if (!(await this.pinService.verify(pin, cand.storePinHash))) continue;
+        const hashes = [cand.storePinHash, cand.empPinHash].filter(Boolean);
+        let matched = false;
+        for (const h of hashes) {
+          if (await this.pinService.verify(pin, h)) {
+            matched = true;
+            break;
+          }
+        }
+        if (!matched && (cand.storePinHash === pin || cand.empPinHash === pin)) {
+          matched = true;
+        }
+        if (!matched) continue;
+
         employee = {
           id: cand.id,
           employeeCode: cand.employeeCode,
