@@ -77,12 +77,12 @@ export class PosAuthService {
     if (rawStore) {
       const stores: any[] = await dataSource.query(
         `SELECT id, "store_code" AS "storeCode", 
-                COALESCE("store_name", "name", "store_code") AS "storeName", 
+                "store_name" AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
          WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1))
-           AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(COALESCE(store_name, name, '')) = lower($2))
+           AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(store_name) = lower($2))
          LIMIT 1`,
         [String(merchant.id), rawStore],
       );
@@ -92,7 +92,7 @@ export class PosAuthService {
     if (!store) {
       const stores: any[] = await dataSource.query(
         `SELECT id, "store_code" AS "storeCode", 
-                COALESCE("store_name", "name", "store_code") AS "storeName", 
+                "store_name" AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
@@ -236,7 +236,7 @@ export class PosAuthService {
 
       // 2. Resolve Target Store if specified
       if (targetStoreId) {
-        let storeWhere = `(id::text = $1 OR lower(store_code) = lower($1) OR lower(COALESCE(store_name, name, '')) = lower($1))`;
+        let storeWhere = `(id::text = $1 OR lower(store_code) = lower($1) OR lower(store_name) = lower($1))`;
         let storeParams: any[] = [String(targetStoreId).trim()];
         if (targetMerchantId) {
           storeParams.push(String(targetMerchantId));
@@ -244,7 +244,7 @@ export class PosAuthService {
         }
         const stores = await dataSource.query(
           `SELECT id, "store_code" AS "storeCode", 
-                  COALESCE("store_name", "name", "store_code") AS "storeName", 
+                  "store_name" AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
            WHERE ${storeWhere}
@@ -367,7 +367,7 @@ export class PosAuthService {
         const finalMerchant = targetMerchantId || merchant?.id || employee.merchantId;
         const stores = await dataSource.query(
           `SELECT id, "store_code" AS "storeCode", 
-                  COALESCE("store_name", "name", "store_code") AS "storeName", 
+                  "store_name" AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
            WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR "merchantId" = $1 OR "merchant_code" = $1 OR "merchantCode" = $1)) 
