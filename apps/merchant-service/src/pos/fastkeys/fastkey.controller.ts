@@ -16,7 +16,11 @@ import { mkdirSync } from 'node:fs';
 import { unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { RequireAuth } from '../../modules/shared/session-auth.guard';
-import { AddFastkeyProductsDto, CreateFastkeyDto } from './fastkey.dto';
+import {
+  AddFastkeyProductsDto,
+  CreateFastkeyDto,
+  UpdateFastkeyDto,
+} from './fastkey.dto';
 import { FastkeyService } from './fastkey.service';
 
 type AuthenticatedRequest = {
@@ -81,6 +85,33 @@ export class FastkeyController {
     }
   }
 
+  @Post('update-fastkey')
+  @HttpCode(200)
+  @RequireAuth()
+  @UseInterceptors(fastkeyImageUpload)
+  async update(
+    @Body() dto: UpdateFastkeyDto,
+    @Req() request: AuthenticatedRequest,
+    @UploadedFile() file?: UploadedFastkeyImage,
+  ) {
+    const origin = this.requestOrigin(request);
+    let imagePath: string | undefined;
+    try {
+      if (file) {
+        imagePath = await this.saveImage(file);
+        dto.fastkey_image = `${origin}${imagePath}`;
+      }
+      const result = await this.service.update(dto, request.user?.id, origin);
+      if (imagePath && result.previousImage) {
+        await this.removeImage(result.previousImage);
+      }
+      return result.response;
+    } catch (error) {
+      if (imagePath) await this.removeImage(imagePath);
+      throw error;
+    }
+  }
+
   @Get('get-by-user')
   @RequireAuth()
   getByUser(@Req() request: AuthenticatedRequest) {
@@ -98,6 +129,20 @@ export class FastkeyController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.service.addProducts(
+      dto,
+      request.user?.id,
+      this.requestOrigin(request),
+    );
+  }
+
+  @Post('update-fastkey-products')
+  @HttpCode(200)
+  @RequireAuth()
+  updateProducts(
+    @Body() dto: AddFastkeyProductsDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.service.updateProducts(
       dto,
       request.user?.id,
       this.requestOrigin(request),
@@ -128,7 +173,17 @@ export class FastkeyController {
   }
 
   private async removeImage(imagePath: string): Promise<void> {
-    if (!imagePath.startsWith('/uploads/fastkeys/')) return;
-    await unlink(join(fastkeyImageDirectory, basename(imagePath))).catch(() => undefined);
+    let pathname = imagePath;
+    try {
+      if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+        pathname = new URL(imagePath).pathname;
+      }
+    } catch {
+      return;
+    }
+    if (!pathname.startsWith('/uploads/fastkeys/')) return;
+    const filename = basename(pathname);
+    if (filename === 'no-image.png' || filename === 'no-image-2.png') return;
+    await unlink(join(fastkeyImageDirectory, filename)).catch(() => undefined);
   }
 }

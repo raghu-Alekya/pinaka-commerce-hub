@@ -24,6 +24,25 @@ export class CreateFastkeyDto {
   fastkey_image?: string;
 }
 
+export class UpdateFastkeyDto {
+  @IsOptional()
+  @IsString()
+  @IsUUID()
+  fastkey_id?: string;
+
+  @IsOptional()
+  @IsString()
+  fastkey_title?: string;
+
+  @IsOptional()
+  @IsString()
+  fastkey_index?: string;
+
+  @IsOptional()
+  @IsString()
+  fastkey_image?: string;
+}
+
 export class FastkeyProductDto {
   @IsString()
   @IsUUID()

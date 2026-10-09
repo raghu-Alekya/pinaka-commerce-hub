@@ -34,7 +34,9 @@ function signJwt(payload: Record<string, unknown>, secret: string): string {
 
 @Injectable()
 export class PosSessionService {
-  private readonly secret = process.env.JWT_SECRET || 'pdh_super_secret_jwt_key';
+  private get secret(): string {
+    return process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'pdh-local-development-secret-change-me';
+  }
 
   async createSession(params: CreateSessionParams) {
     const now = Math.floor(Date.now() / 1000);
@@ -42,21 +44,23 @@ export class PosSessionService {
 
     const accessPayload = {
       sub: params.employeeId,
+      jti: sessionId,
       sid: sessionId,
+      type: 'access',
       merchantId: params.merchantId,
       storeId: params.storeId,
       deviceId: params.deviceId,
       registerId: params.registerId || 'REG-01',
       roleId: params.roleId,
-      type: 'pos_employee',
       iat: now,
       exp: now + 12 * 3600,
     };
 
     const refreshPayload = {
+      jti: `ref_${sessionId}`,
       sid: sessionId,
       sub: params.employeeId,
-      type: 'pos_refresh',
+      type: 'refresh',
       iat: now,
       exp: now + 7 * 24 * 3600,
     };

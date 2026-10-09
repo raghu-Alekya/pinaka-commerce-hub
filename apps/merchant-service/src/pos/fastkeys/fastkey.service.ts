@@ -9,11 +9,16 @@ import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { EmployeeEntity } from '../../entities/employee.entity';
 import { StoreEntity } from '../../entities/store.entity';
 import { ProductEntity } from '../../entities/product.entity';
-import { AddFastkeyProductsDto, CreateFastkeyDto } from './fastkey.dto';
+import {
+  AddFastkeyProductsDto,
+  CreateFastkeyDto,
+  UpdateFastkeyDto,
+} from './fastkey.dto';
 import { StoreEmployeeFastkeyEntity } from './store-employee-fastkey.entity';
 import { In } from 'typeorm';
 
 type FastkeyContext = { employee_id: string; store_id: string };
+
 @Injectable()
 export class FastkeyService {
   constructor(
@@ -45,7 +50,7 @@ export class FastkeyService {
       },
       select: { id: true, json: true },
     });
-    if (existing.some(item => item.json.fastkey_title.trim().toLocaleLowerCase() === title.toLocaleLowerCase())) {
+    if (existing.some(item => (item.json?.fastkey_title || '').trim().toLocaleLowerCase() === title.toLocaleLowerCase())) {
       throw new HttpException({
         status: 'error',
         message: 'You already have a Fast Key with this title.',
@@ -119,6 +124,109 @@ export class FastkeyService {
     };
   }
 
+  async update(
+    dto: UpdateFastkeyDto,
+    userId: string | undefined,
+    origin: string,
+  ) {
+    if (!userId) throw new UnauthorizedException('Authentication is required');
+    if (!dto.fastkey_id) {
+      throw new HttpException({ message: 'Missing fastkey_id' }, 400);
+    }
+
+    const db = this.merchants.requireDataSource();
+    const context = await this.resolveContext();
+    const repository = db.getRepository(StoreEmployeeFastkeyEntity);
+    const fastkey = await repository.findOne({
+      where: { id: dto.fastkey_id, isDeleted: false },
+    });
+    if (!fastkey) {
+      throw new HttpException({ message: 'Fast Key not found' }, 404);
+    }
+    if (
+      fastkey.employeeId !== context.employee_id
+      || fastkey.storeId !== context.store_id
+    ) {
+      throw new HttpException({ message: 'You cannot modify this Fast Key' }, 403);
+    }
+
+    const requestedTitle = String(dto.fastkey_title ?? '').trim();
+    if (requestedTitle) {
+      const scopedFastkeys = await repository.find({
+        where: {
+          employeeId: context.employee_id,
+          storeId: context.store_id,
+          isDeleted: false,
+        },
+        select: { id: true, json: true },
+      });
+      const normalizedTitle = requestedTitle.toLocaleLowerCase();
+      if (scopedFastkeys.some(item => (
+        item.id !== fastkey.id
+        && String(item.json?.fastkey_title ?? '').trim().toLocaleLowerCase() === normalizedTitle
+      ))) {
+        throw new HttpException({
+          status: 'error',
+          message: 'You already have a Fast Key with this title.',
+        }, 409);
+      }
+    }
+
+    const previousImage = fastkey.fastkeyImage;
+    await db.transaction(async manager => {
+      const transactionalRepository = manager.getRepository(StoreEmployeeFastkeyEntity);
+      const rows = await transactionalRepository.find({
+        where: {
+          employeeId: context.employee_id,
+          storeId: context.store_id,
+          isDeleted: false,
+        },
+      });
+      const current = rows.find(item => item.id === fastkey.id);
+      if (!current) {
+        throw new HttpException({ message: 'Fast Key not found' }, 404);
+      }
+
+      if (requestedTitle) {
+        current.json = { ...current.json, fastkey_title: requestedTitle };
+      }
+      const requestedImage = String(dto.fastkey_image ?? '').trim();
+      if (requestedImage) current.fastkeyImage = requestedImage;
+
+      if (dto.fastkey_index !== undefined) {
+        const ordered = rows
+          .filter(item => item.id !== current.id)
+          .sort((left, right) => (
+            this.fastkeyIndex(left) - this.fastkeyIndex(right)
+            || left.id.localeCompare(right.id)
+          ));
+        const requestedIndex = this.toWordPressInteger(dto.fastkey_index);
+        const targetIndex = Math.min(Math.max(requestedIndex, 1), ordered.length + 1);
+        ordered.splice(targetIndex - 1, 0, current);
+        ordered.forEach((item, index) => {
+          item.json = { ...item.json, fastkey_index: index + 1 };
+        });
+        await transactionalRepository.save(ordered);
+      } else {
+        await transactionalRepository.save(current);
+      }
+    });
+
+    const saved = await repository.findOneOrFail({ where: { id: fastkey.id } });
+    return {
+      previousImage: saved.fastkeyImage !== previousImage ? previousImage : undefined,
+      response: {
+        status: 'success',
+        message: 'Fast Key updated',
+        fastkey_id: saved.id,
+        fastkey_title: String(saved.json?.fastkey_title ?? ''),
+        fastkey_index: this.fastkeyIndex(saved),
+        fastkey_image: saved.fastkeyImage?.trim()
+          || `${origin}/uploads/fastkeys/no-image.png`,
+      },
+    };
+  }
+
   async addProducts(
     dto: AddFastkeyProductsDto,
     userId: string | undefined,
@@ -185,13 +293,82 @@ export class FastkeyService {
 
     return {
       fastkey_id: fastkey.id,
-      fastkey_title: String(fastkey.json.fastkey_title ?? ''),
+      fastkey_title: String(fastkey.json?.fastkey_title ?? ''),
       fastkey_image: fastkey.fastkeyImage?.trim()
         || `${origin}/uploads/fastkeys/no-image.png`,
       fastkey_index: this.fastkeyIndex(fastkey),
       itemCount: updatedProducts.length,
       message: failedProducts.length
         ? 'Some products failed to add'
+        : 'FastKeys updated successfully',
+      status: failedProducts.length ? 'partial_success' : 'success',
+      products,
+      failed_products: failedProducts,
+    };
+  }
+
+  async updateProducts(
+    dto: AddFastkeyProductsDto,
+    userId: string | undefined,
+    origin: string,
+  ) {
+    if (!userId) throw new UnauthorizedException('Authentication is required');
+    if (!dto.fastkey_id || !Array.isArray(dto.products) || !dto.products.length) {
+      throw new HttpException({ message: 'Missing required fields', status: 'error' }, 400);
+    }
+
+    const db = this.merchants.requireDataSource();
+    const context = await this.resolveContext();
+    const fastkeyRepository = db.getRepository(StoreEmployeeFastkeyEntity);
+    const fastkey = await fastkeyRepository.findOne({
+      where: {
+        id: dto.fastkey_id,
+        employeeId: context.employee_id,
+        storeId: context.store_id,
+        isDeleted: false,
+      },
+    });
+    if (!fastkey) {
+      throw new HttpException({ status: 'error', message: 'Fast Key not found' }, 404);
+    }
+
+    const requestedIds = [...new Set(dto.products.map(item => item.product_id))];
+    const catalogProducts = await db.getRepository(ProductEntity).find({
+      where: { storeId: fastkey.storeId, id: In(requestedIds) },
+      select: { id: true },
+    });
+    const existingProductIds = new Set(catalogProducts.map(item => item.id));
+    const updatedProducts: Array<{ product_id: string; sl_number: number }> = [];
+    const failedProducts: Array<Record<string, unknown>> = [];
+
+    for (const requested of dto.products) {
+      if (!existingProductIds.has(requested.product_id)) {
+        failedProducts.push({
+          product_id: requested.product_id,
+          message: 'Product does not exist',
+          status: 'failed',
+        });
+        continue;
+      }
+      updatedProducts.push({
+        product_id: requested.product_id,
+        sl_number: requested.sl_number,
+      });
+    }
+
+    fastkey.json = { ...fastkey.json, products: updatedProducts };
+    await fastkeyRepository.save(fastkey);
+    const products = await this.enhanceProducts(fastkey.storeId, updatedProducts);
+
+    return {
+      fastkey_id: fastkey.id,
+      fastkey_title: String(fastkey.json?.fastkey_title ?? ''),
+      fastkey_image: fastkey.fastkeyImage?.trim()
+        || `${origin}/uploads/fastkeys/no-image.png`,
+      fastkey_index: this.fastkeyIndex(fastkey),
+      itemCount: updatedProducts.length,
+      message: failedProducts.length
+        ? 'Some products failed to update'
         : 'FastKeys updated successfully',
       status: failedProducts.length ? 'partial_success' : 'success',
       products,
@@ -285,7 +462,7 @@ export class FastkeyService {
     };
   }
 
-  private catalogProductPayload(payload: unknown[]): Record<string, unknown> {
+  private catalogProductPayload(payload: unknown): Record<string, unknown> {
     const first = Array.isArray(payload) ? payload[0] : undefined;
     return first && typeof first === 'object'
       ? first as Record<string, unknown>
