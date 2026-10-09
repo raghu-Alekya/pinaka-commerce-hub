@@ -493,14 +493,17 @@ export class CompactMerchantController {
         setCol('status', 'ACTIVE');
         if (createdBy) {
           setCol('created_by', createdBy);
-          setCol('updated_by', createdBy);
+
           setCol('createdBy', createdBy);
-          setCol('updatedBy', createdBy);
+
         }
         setCol('createdDate', new Date());
-        setCol('updatedDate', new Date());
+        setCol('updatedDate', null);
+        setCol('updatedAt', null);
+        setCol('updated_by', null);
+        setCol('updatedBy', null);
         setCol('created_at', new Date());
-        setCol('updated_at', new Date());
+        setCol('updated_at', null);
         if (availMerchantCols.has('merchantCode') && !merchantData.merchantCode)
           setCol('merchantCode', rowId);
 

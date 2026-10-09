@@ -453,12 +453,12 @@ export class MerchantRepository implements OnModuleInit {
           status: statusVal,
           [typeDbCol]: typeVal,
           [createdDbCol]: new Date(),
-          [updatedDbCol]: new Date(),
+          [updatedDbCol]: null,
         };
         if (createdByDbCol)
           insertData[createdByDbCol] = fields.created_by ?? null;
         if (updatedByDbCol)
-          insertData[updatedByDbCol] = fields.updated_by ?? null;
+          insertData[updatedByDbCol] = null;
         const insertKeys = Object.keys(insertData);
         const insertValues = Object.values(insertData);
         const placeholders = insertValues
@@ -1109,6 +1109,9 @@ export class MerchantRepository implements OnModuleInit {
     const saved = await this.merchantRepo.save(
       this.merchantRepo.create({
         id: rowId,
+        createdBy: data.createdBy ?? null,
+        updatedBy: null,
+        updatedAt: null as unknown as Date,
         merchantCode: requestedCode,
         merchantId,
         businessDisplayName:
@@ -3443,8 +3446,11 @@ export class MerchantRepository implements OnModuleInit {
       description: dto.description?.trim() || '',
       featureType: dto.feature_type,
       status: dto.status || FeatureStatus.ACTIVE,
+      updatedBy: null,
+      updatedAt: null as unknown as Date,
     });
-    return this.featureRepo.save(entity);
+    await this.featureRepo.insert(entity);
+    return this.featureRepo.findOneByOrFail({ id: entity.id });
   }
 
   async updateFeature(
@@ -3996,11 +4002,13 @@ export class MerchantRepository implements OnModuleInit {
           description: input.description?.trim() || '',
           status: input.status || RecordStatus.ACTIVE,
           createdBy: input.createdBy,
-          updatedBy: input.updatedBy,
+          updatedBy: null,
+          updatedAt: null as unknown as Date,
           isDeleted:
             (input.status || RecordStatus.ACTIVE) === RecordStatus.INACTIVE,
         });
-        return repo.save(permission);
+        await repo.insert(permission);
+        return repo.findOneByOrFail({ id: permission.id });
       });
     } catch (error: any) {
       if (error?.driverError?.code === '23505' || error?.code === '23505') {
@@ -4136,8 +4144,11 @@ export class MerchantRepository implements OnModuleInit {
       description: dto.description?.trim() || '',
       scopeType: dto.scopeType || RoleScopeType.STORE,
       status: dto.status || RoleTemplateStatus.ACTIVE,
+      updatedBy: null,
+      updatedAt: null as unknown as Date,
     });
-    return this.roleTemplateRepo.save(entity);
+    await this.roleTemplateRepo.insert(entity);
+    return this.roleTemplateRepo.findOneByOrFail({ id: entity.id });
   }
 
   async updateRoleTemplate(
@@ -5368,6 +5379,8 @@ export class MerchantRepository implements OnModuleInit {
             merchantId: dto.merchantId,
             employeeCode,
             createdBy: dto.createdBy,
+            updatedBy: null,
+            updatedAt: null as unknown as Date,
             firstName: dto.firstName.trim(),
             lastName: dto.lastName?.trim() || '',
             email,
@@ -5410,7 +5423,7 @@ export class MerchantRepository implements OnModuleInit {
           ],
         );
         employee.userId = user.id;
-        await employeeRepo.save(employee);
+        await manager.query('UPDATE public.employees SET user_id=$2 WHERE id=$1', [employee.id, user.id]);
         if (dto.storeAssignments) {
           await this.syncEmployeeAssignmentsWithManager(
             manager,
