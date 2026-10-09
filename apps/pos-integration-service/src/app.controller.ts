@@ -1,6 +1,52 @@
 import { Inject, Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
 import { MovementType } from './entities/cash-movement.entity';
+import { ShiftDenominationData } from './entities/pos-shift.entity';
+
+const SHIFT_REQUEST_ALIASES = [
+  ['merchant_id', 'merchantId'],
+  ['store_id', 'storeId'],
+  ['terminal_id', 'terminalId'],
+  ['device_id', 'terminalId'],
+  ['deviceId', 'terminalId'],
+  ['register_id', 'registerId'],
+  ['cashier_name', 'cashierName'],
+  ['opening_cash', 'openingCash'],
+  ['shift_id', 'shiftId'],
+  ['movement_type', 'movementType'],
+  ['performed_by', 'performedBy'],
+  ['closing_cash_actual', 'closingCashActual'],
+] as const;
+
+function normalizeShiftRequest<T extends object>(input: T): T {
+  const request = { ...input } as T & Record<string, unknown>;
+  for (const [snakeName, camelName] of SHIFT_REQUEST_ALIASES) {
+    if (!(snakeName in request)) continue;
+    if (camelName in request && !Object.is(request[snakeName], request[camelName])) {
+      throw new BadRequestException(`Conflicting values for ${snakeName} and ${camelName}`);
+    }
+    Object.assign(request, { [camelName]: request[snakeName] });
+    delete request[snakeName];
+  }
+  return request;
+}
+
+type OpenShiftRequest = ShiftDenominationData & {
+  merchantId?: string;
+  merchant_id?: string;
+  storeId?: string;
+  store_id?: string;
+  terminalId?: string;
+  terminal_id?: string;
+  deviceId?: string;
+  device_id?: string;
+  registerId?: string;
+  register_id?: string;
+  cashierName?: string;
+  cashier_name?: string;
+  openingCash?: number;
+  opening_cash?: number;
+};
 
 
 @Controller('api/v1/pos')
@@ -40,15 +86,68 @@ export class AppController {
   }
 
   // --- 2. Open Cashier Shift ---
-  @Post('shifts/open')
-  async openShift(@Body() body: { merchantId: string; storeId: string; terminalId?: string; cashierName: string; openingCash: number }) {
-    if (!body.merchantId || !body.storeId || !body.cashierName) {
+  @Post(['shifts', 'shifts/open'])
+  async openShift(@Body() request: OpenShiftRequest) {
+    const body = normalizeShiftRequest(request);
+    if (!body?.merchantId?.trim() || !body.storeId?.trim() || !body.cashierName?.trim()) {
       throw new BadRequestException('merchantId, storeId, and cashierName are required');
     }
-    const shift = await this.posRepository.openShift(body.merchantId, body.storeId, body.terminalId || 'SUNMI-D3-01', body.cashierName, body.openingCash || 200.00);
+    const openingCash = body.openingCash === undefined ? 200 : Number(body.openingCash);
+    if (!Number.isFinite(openingCash) || openingCash < 0) {
+      throw new BadRequestException('openingCash must be a non-negative number');
+    }
+    if (body.registerId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.registerId)) {
+      throw new BadRequestException('registerId must be a valid UUID');
+    }
+    if (body.drawer_denominations !== undefined && (
+      !Array.isArray(body.drawer_denominations) ||
+      body.drawer_denominations.some(item =>
+        !item ||
+        !Number.isFinite(item.denomination) || item.denomination <= 0 ||
+        !Number.isInteger(item.denom_count) || item.denom_count < 0,
+      )
+    )) {
+      throw new BadRequestException('drawer_denominations must contain positive denominations and non-negative integer denom_count values');
+    }
+    if (body.tube_denominations !== undefined && (
+      !Array.isArray(body.tube_denominations) ||
+      body.tube_denominations.some(item =>
+        !item ||
+        !Number.isFinite(item.denomination) || item.denomination <= 0 ||
+        !Number.isInteger(item.tube_count) || item.tube_count < 0 ||
+        !Number.isInteger(item.cell_count) || item.cell_count < 0 ||
+        !Number.isFinite(item.total) || item.total < 0,
+      )
+    )) {
+      throw new BadRequestException('tube_denominations must contain positive denominations and non-negative tube_count, cell_count, and total values');
+    }
+    for (const [field, amount] of [
+      ['drawer_total_amount', body.drawer_total_amount],
+      ['tube_total_amount', body.tube_total_amount],
+      ['total_amount', body.total_amount],
+    ] as const) {
+      if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) {
+        throw new BadRequestException(`${field} must be a non-negative number`);
+      }
+    }
+    const shift = await this.posRepository.openShift(
+      body.merchantId.trim(),
+      body.storeId.trim(),
+      body.terminalId?.trim() || 'SUNMI-D3-01',
+      body.cashierName.trim(),
+      openingCash,
+      body.registerId,
+      {
+        drawer_denominations: body.drawer_denominations,
+        drawer_total_amount: body.drawer_total_amount,
+        tube_denominations: body.tube_denominations,
+        tube_total_amount: body.tube_total_amount,
+        total_amount: body.total_amount,
+      },
+    );
     return {
       success: true,
-      message: 'Cashier shift opened successfully!',
+      message: 'Shift created and opened successfully',
       shiftId: shift.id,
       shift,
     };
@@ -56,7 +155,19 @@ export class AppController {
 
   // --- 3. Record Safe Drop / Paid Out ---
   @Post('shifts/cash-movement')
-  async recordCashMovement(@Body() body: { shiftId: string; storeId: string; movementType: MovementType; amount: number; performedBy: string; reason?: string }) {
+  async recordCashMovement(@Body() request: {
+    shiftId?: string;
+    shift_id?: string;
+    storeId?: string;
+    store_id?: string;
+    movementType?: MovementType;
+    movement_type?: MovementType;
+    amount: number;
+    performedBy?: string;
+    performed_by?: string;
+    reason?: string;
+  }) {
+    const body = normalizeShiftRequest(request);
     if (!body.shiftId || !body.storeId || !body.amount) {
       throw new BadRequestException('shiftId, storeId, and amount are required');
     }
@@ -70,7 +181,13 @@ export class AppController {
 
   // --- 4. Close Shift & Generate Z-Report ---
   @Post('shifts/close')
-  async closeShift(@Body() body: { shiftId: string; closingCashActual: number }) {
+  async closeShift(@Body() request: {
+    shiftId?: string;
+    shift_id?: string;
+    closingCashActual?: number;
+    closing_cash_actual?: number;
+  }) {
+    const body = normalizeShiftRequest(request);
     if (!body.shiftId || body.closingCashActual === undefined) {
       throw new BadRequestException('shiftId and closingCashActual are required');
     }
@@ -87,12 +204,14 @@ export class AppController {
   }
 
   @Get('shifts/active')
-  async getActiveShift(@Query('storeId') storeId: string) {
-    const shift = await this.posRepository.getActiveShift(storeId || 'STR-5001');
+  async getActiveShift(@Query() query: { storeId?: string; store_id?: string }) {
+    const { storeId } = normalizeShiftRequest(query);
+    const shifts = await this.posRepository.getActiveShifts(storeId || 'STR-5001');
     return {
       success: true,
       storeId: storeId || 'STR-5001',
-      shift,
+      shifts,
+      shift: shifts[0] ?? null,
     };
   }
 }
