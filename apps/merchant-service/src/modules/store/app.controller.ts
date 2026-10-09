@@ -395,6 +395,7 @@ export class AppController {
   @Post(['stores', 'merchants/:merchantId/stores'])
   async createStore(
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
+    @Req() request: { user?: { id?: string } },
     @Param('merchantId') merchantId?: string,
   ) {
     const bodyMerchantId = body.merchant_id || body.merchantId;
@@ -409,7 +410,7 @@ export class AppController {
     if (storeKey && await this.merchantRepository.getStoreById(storeKey)) {
       throw new ConflictException(`Store ID '${storeKey}' already exists. Choose a different Store ID.`);
     }
-    const fields = this.storeCreationFields(body, merchant.country);
+    const fields = { ...this.storeCreationFields(body, merchant.country), createdBy: request.user?.id ?? null };
     if (!fields.storeName) throw new BadRequestException('name is required');
     const store = await this.merchantRepository.createStore(ownerId, fields);
     await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
@@ -477,7 +478,7 @@ export class AppController {
 
   @Post('merchants/:merchantId/stores/bulk')
   async createStoresBatch(@Param('merchantId') merchantId: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoresDto })) body: CreateStoresDto) {
+    @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoresDto })) body: CreateStoresDto, @Req() request: { user?: { id?: string } }) {
     if (body.stores.some(s => {
       const owner = s.merchant_id || s.merchantId;
       return Boolean(owner) && owner !== merchantId;
@@ -487,7 +488,7 @@ export class AppController {
     const { merchant } = await this.merchantRepository.getMerchantById(merchantId);
     if (!merchant) throw new NotFoundException('Merchant not found');
     const stores = await this.merchantRepository.createStoresBatch(merchantId,
-      body.stores.map(s => this.storeCreationFields(s, merchant.country)));
+      body.stores.map(s => ({ ...this.storeCreationFields(s, merchant.country), createdBy: request.user?.id ?? null })));
     for (const [index, store] of stores.entries()) {
       await this.attachStoreEmployees(merchantId, store.id, body.stores[index].employees);
     }

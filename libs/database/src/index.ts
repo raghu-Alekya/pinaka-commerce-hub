@@ -614,6 +614,15 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     await dataSource.query(sql);
   };
 
+  await install('stores', 'updated_at', `
+    ALTER TABLE public.stores ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.stores ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.stores ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.stores ALTER COLUMN updated_by DROP DEFAULT;
+    DROP TRIGGER IF EXISTS stores_create_audit ON public.stores;
+    DROP FUNCTION IF EXISTS public.clear_store_update_audit_on_insert();
+  `);
+
   await install('merchants', 'merchant_code', `
     ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
     ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100);

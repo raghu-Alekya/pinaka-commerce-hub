@@ -1308,7 +1308,9 @@ export class MerchantRepository implements OnModuleInit {
       ],
       isDeleted: false,
       createdAt: new Date(),
-      updatedAt: new Date(),
+      createdBy: data.createdBy ?? null,
+      updatedBy: null,
+      updatedAt: null as unknown as Date,
     };
   }
 
