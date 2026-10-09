@@ -52,7 +52,7 @@ export class PosAuthService {
     }
 
     const dataSource = await connectPostgres('POS Auth Service', []);
-    const merchants = await dataSource.query(
+    const merchants: any[] = await dataSource.query(
       `SELECT id, 
               COALESCE("merchant_code", "merchantCode") AS "merchantCode", 
               COALESCE("merchant_id", "merchantId") AS "merchantId", 
@@ -73,9 +73,9 @@ export class PosAuthService {
       throw new ForbiddenException('Merchant account is inactive or suspended');
     }
 
-    let store = null;
+    let store: any = null;
     if (rawStore) {
-      const stores = await dataSource.query(
+      const stores: any[] = await dataSource.query(
         `SELECT id, "store_code" AS "storeCode", 
                 COALESCE("store_name", "name", "store_code") AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
@@ -90,7 +90,7 @@ export class PosAuthService {
     }
 
     if (!store) {
-      const stores = await dataSource.query(
+      const stores: any[] = await dataSource.query(
         `SELECT id, "store_code" AS "storeCode", 
                 COALESCE("store_name", "name", "store_code") AS "storeName", 
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
@@ -153,13 +153,13 @@ export class PosAuthService {
    * Supports 6-digit PIN login with automatic employee resolution across
    * public.employee_stores and public.employees tables.
    */
-  async loginEmployee(param1: any, param2?: any) {
-    let dto: any = param1 || {};
-    let deviceCtx: DeviceContext = param2 || param1?.device || {};
+  async loginEmployee(param1: PosLoginDto | any, param2?: DeviceContext | any) {
+    let dto: PosLoginDto = param1 || {};
+    let deviceCtx: DeviceContext = param2 || (param1 as any)?.device || {};
 
     if (param1 && typeof param1 === 'object' && ('pin' in param1 || 'employeeCode' in param1)) {
       dto = param1;
-      deviceCtx = param2 || param1.device || {};
+      deviceCtx = param2 || (param1 as any).device || {};
     } else if (param2 && typeof param2 === 'object' && ('pin' in param2 || 'employeeCode' in param2)) {
       dto = param2;
       deviceCtx = param1 || {};
@@ -173,13 +173,13 @@ export class PosAuthService {
     const rawEmployeeCode = dto?.employeeCode ? String(dto.employeeCode).trim() : undefined;
     const bodySerial = dto?.device_serial_number || 
                        dto?.device_serialnumber || 
-                       dto?.['device_serial number'] || 
+                       (dto as any)?.['device_serial number'] || 
                        dto?.serialNumber;
 
-    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || dto?.device?.id;
-    const bodyMerchantId = dto?.merchantId || dto?.merchantCode || dto?.merchant?.id;
-    const bodyStoreId = dto?.storeId || dto?.storeCode || dto?.store?.id;
-    const bodyRegisterId = dto?.registerId || dto?.device?.registerId;
+    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || (dto as any)?.device?.id;
+    const bodyMerchantId = (dto as any)?.merchantId || (dto as any)?.merchantCode || (dto as any)?.merchant?.id;
+    const bodyStoreId = (dto as any)?.storeId || (dto as any)?.storeCode || (dto as any)?.store?.id;
+    const bodyRegisterId = (dto as any)?.registerId || (dto as any)?.device?.registerId;
 
     let deviceId = bodyDeviceId || deviceCtx.deviceId;
     let targetMerchantId = bodyMerchantId || deviceCtx.merchantId;
@@ -194,6 +194,23 @@ export class PosAuthService {
 
     try {
       const dataSource = await connectPostgres('POS Auth Service', []);
+
+      // If serial number is passed, resolve device
+      if (bodySerial && !deviceId) {
+        const matchingDevices = await dataSource.query(
+          `SELECT id, "device_code" AS "deviceCode", "merchant_id" AS "merchantId" 
+           FROM public.devices 
+           WHERE ("serial_number" = $1 OR "device_code" = $1 OR id::text = $1)
+           LIMIT 1`,
+          [String(bodySerial).trim()],
+        );
+        if (matchingDevices[0]) {
+          deviceId = matchingDevices[0].id || matchingDevices[0].deviceCode;
+          if (!targetMerchantId && matchingDevices[0].merchantId) {
+            targetMerchantId = matchingDevices[0].merchantId;
+          }
+        }
+      }
 
       // 1. Resolve Target Merchant if specified
       if (targetMerchantId) {
