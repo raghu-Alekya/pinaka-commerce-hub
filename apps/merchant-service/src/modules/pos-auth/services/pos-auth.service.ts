@@ -259,32 +259,8 @@ export class PosAuthService {
         }
       }
 
-      // 3. Search Candidate Employees & verify PIN
-      // Join employees with employee_stores to check PINs stored at both employee level and store level
-      let candidateQuery = `
-        SELECT 
-          e.id, 
-          e.employee_code AS "employeeCode", 
-          e.first_name AS "firstName", 
-          e.last_name AS "lastName", 
-          e.status, 
-          e.merchant_id AS "merchantId",
-          e.login_pin_hash AS "empPinHash",
-          es.id AS "assignmentId",
-          es.store_id AS "assignedStoreId",
-          es.login_pin_hash AS "storePinHash",
-          es.is_primary AS "isPrimary",
-          es.status AS "storeAssignmentStatus",
-          es.role_template_id AS "roleTemplateId"
-        FROM public.employees e
-        LEFT JOIN public.employee_stores es ON es.employee_id = e.id AND (es.status IS NULL OR UPPER(es.status::text) <> 'INACTIVE')
-        WHERE (e.status IS NULL OR UPPER(e.status::text) <> 'INACTIVE')
-      `;
-      const queryParams: any[] = [];
-
-      if (targetMerchantId) {
-        queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR "merchantId" = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
+      if (!store?.id) {
+        throw new NotFoundException('Store not found for this merchant');
       }
 
       // 3. Match the PIN against this store's employee_stores.login_pin_hash

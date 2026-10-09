@@ -15,7 +15,11 @@ import { StorePosConfigurationsService } from './store-pos-configuration.service
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 
-@Controller('api/v1/store/store-pos-configuration')
+@Controller([
+  'api/v1/store/store-pos-configuration',
+  'connector/api/v1/store/store-pos-configuration',
+  'store/store-pos-configuration',
+])
 export class StorePosConfigurationController {
   constructor(
     @Inject(StorePosConfigurationsService)

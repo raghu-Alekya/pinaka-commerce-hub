@@ -128,6 +128,8 @@ import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/po
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { StoreEmployeeFastkeyEntity } from '../../pos/fastkeys/store-employee-fastkey.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
+import { ensureStorePosConfigurationSchema } from '../store-pos-configuration/store-pos-configuration.schema';
+import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
 import { ensureMerchantDevicesSchema } from '../device/device.schema';
 
 interface WordPressProductNode {
@@ -721,6 +723,7 @@ export class MerchantRepository implements OnModuleInit {
         PosCardPaymentEntity,
         PosTerminalMappingSettingsEntity,
         PosTerminalMappingEntity,
+        StorePosConfigurationEntity,
         StoreEmployeeFastkeyEntity,
         SessionEntity,
         VendorEntity,
@@ -751,6 +754,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
+    await ensureStorePosConfigurationSchema(this.dataSource);
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
