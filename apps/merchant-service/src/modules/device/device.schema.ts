@@ -1,36 +1,5 @@
 import { DataSource } from 'typeorm';
 
-/** Add device_id and make device_code database-generated for old and new databases. */
-export async function ensureDeviceIdentitySchema(db: DataSource): Promise<void> {
-  await db.transaction(async manager => {
-    await manager.query('SELECT pg_advisory_xact_lock(724621, 56)');
-    await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_id text');
-    await manager.query('CREATE SEQUENCE IF NOT EXISTS public.devices_device_code_seq START WITH 1');
-    await manager.query(`
-      SELECT setval(
-        'public.devices_device_code_seq',
-        GREATEST(
-          (SELECT last_value FROM public.devices_device_code_seq),
-          COALESCE((
-            SELECT MAX(substring(device_code FROM 5)::bigint)
-            FROM public.devices
-            WHERE device_code ~ '^DVC_[0-9]+$'
-          ), 0),
-          1
-        ),
-        (SELECT is_called FROM public.devices_device_code_seq) OR EXISTS (
-          SELECT 1 FROM public.devices WHERE device_code ~ '^DVC_[0-9]+$'
-        )
-      )
-    `);
-    await manager.query(`
-      ALTER TABLE public.devices
-      ALTER COLUMN device_code SET DEFAULT
-        ('DVC_' || lpad(nextval('public.devices_device_code_seq')::text, 5, '0'))
-    `);
-  });
-}
-
 export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {
     await manager.query('SELECT pg_advisory_xact_lock(724621, 55)');

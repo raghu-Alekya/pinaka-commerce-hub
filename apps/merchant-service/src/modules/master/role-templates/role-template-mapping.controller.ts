@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { filterMasterList } from '../common/master-list';
-import { StoreTypeRepository } from '../store-setup/store-type.repository';
+import { MerchantRepository } from '../../merchant/merchant.repository';
 import { RELATIONSHIPS } from '../../shared/relationships.config';
 import { RelationshipOwnerGuard, relationshipUserId } from '../../shared/relationships.controller';
 import type { RelationshipRequest } from '../../shared/relationships.controller';
@@ -18,7 +18,7 @@ const roleTemplateStoreTypes = RELATIONSHIPS.find(config => config.name === 'Rol
 @UseGuards(RelationshipOwnerGuard)
 export class RoleTemplateStoreTypeCatalogController {
   constructor(
-    @Inject(StoreTypeRepository) private readonly storeTypes: StoreTypeRepository,
+    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
     @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
   ) {}
 
@@ -27,7 +27,7 @@ export class RoleTemplateStoreTypeCatalogController {
     const mapped = await this.relationships.execute(roleTemplateStoreTypes, 'list', { roleTemplateId });
     const mappings = new Map((mapped.items as { id: string; storeTypeId: string; required: boolean }[])
       .map(item => [item.storeTypeId.toLowerCase(), item]));
-    const masterStoreTypes = filterMasterList(await this.storeTypes.list(), query) as Record<string, any>[];
+    const masterStoreTypes = (filterMasterList(await this.merchants.masterData('store_types', 'list'), query) || []) as Record<string, any>[];
     const storeTypes = masterStoreTypes.map((storeType: Record<string, any>) => {
       const mapping = mappings.get(String(storeType.id).toLowerCase());
       return {

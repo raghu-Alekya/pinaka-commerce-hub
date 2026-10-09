@@ -49,10 +49,11 @@ export class DeviceController {
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.id;
     const { serial_number } = body;
+    const deviceCode = body.device_code || `DEV-${randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
     const device = await this.service.createDevice({
       id: randomUUID(),
       deviceName: body.device_name,
-      deviceId: body.device_id,
+      deviceCode,
       deviceType: body.device_type,
       merchantId,
       merchantName: merchant.businessDisplayName ?? merchant.id,
@@ -202,7 +203,7 @@ export class DeviceController {
     const updated = await this.service.updateDevice(deviceId, {
       deviceName: body.device_name ?? current.deviceName,
       deviceType: body.device_type ?? current.deviceType,
-      deviceId: body.device_id ?? current.deviceId ?? undefined,
+      deviceCode: body.device_code ?? current.deviceCode,
       serialNumber: body.serial_number ?? current.serialNumber,
       merchantId,
       merchantName: merchant.businessDisplayName ?? merchant.id,
@@ -252,7 +253,6 @@ export class DeviceController {
       id: device.id,
       device_name: device.deviceName,
       device_code: device.deviceCode,
-      device_id: device.deviceId ?? null,
       device_type: device.deviceType,
       status: device.status,
       merchant_id: device.merchantId,
