@@ -28,7 +28,7 @@ export class DeviceActivationController {
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
   ) {}
 
-  @Post('activate')
+  @Post(['activate', 'active'])
   @HttpCode(HttpStatus.OK)
   async activate(@Body() body: ActivateDeviceDto) {
     const activationCode = body.activationCode ? String(body.activationCode).trim() : '';

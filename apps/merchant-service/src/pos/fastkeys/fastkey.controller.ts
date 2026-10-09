@@ -53,6 +53,10 @@ const fastkeyImageUpload = FileInterceptor('fastkey_image', {
 
 @Controller([
   'api/v1/fastkeys',
+  'connector/api/v1/fastkeys',
+  'api/v1/pos/fastkeys',
+  'connector/api/v1/pos/fastkeys',
+  'fastkeys',
   'wp-json/pinaka-pos/v1/fastkeys',
   'wordpress/wp-json/pinaka-pos/v1/fastkeys',
 ])
@@ -62,7 +66,7 @@ export class FastkeyController {
     private readonly service: FastkeyService,
   ) {}
 
-  @Post('create')
+  @Post(['create', 'fastkeys/create'])
   @HttpCode(201)
   @RequireAuth()
   @UseInterceptors(fastkeyImageUpload)
@@ -85,7 +89,7 @@ export class FastkeyController {
     }
   }
 
-  @Post('update-fastkey')
+  @Post(['update-fastkey', 'update', 'update-fastkeys'])
   @HttpCode(200)
   @RequireAuth()
   @UseInterceptors(fastkeyImageUpload)
@@ -112,7 +116,7 @@ export class FastkeyController {
     }
   }
 
-  @Get('get-by-user')
+  @Get(['get-by-user', 'get-by-uesr', 'get_by_user'])
   @RequireAuth()
   getByUser(@Req() request: AuthenticatedRequest) {
     return this.service.getByUser(
@@ -121,7 +125,7 @@ export class FastkeyController {
     );
   }
 
-  @Post('add-products')
+  @Post(['add-products', 'add_products', 'fastkeys/add-products'])
   @HttpCode(200)
   @RequireAuth()
   addProducts(
@@ -135,7 +139,7 @@ export class FastkeyController {
     );
   }
 
-  @Post('update-fastkey-products')
+  @Post(['update-fastkey-products', 'update/fastkey-products', 'update_fastkey_products'])
   @HttpCode(200)
   @RequireAuth()
   updateProducts(

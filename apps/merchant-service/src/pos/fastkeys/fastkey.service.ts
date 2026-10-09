@@ -307,6 +307,7 @@ export class FastkeyService {
     };
   }
 
+
   async updateProducts(
     dto: AddFastkeyProductsDto,
     userId: string | undefined,
@@ -327,10 +328,12 @@ export class FastkeyService {
         storeId: context.store_id,
         isDeleted: false,
       },
+ (feat(pos-auth,fastkeys,nginx): add route aliases and update endpoints for pos-auth, device-activation, fastkeys and nginx direct /api/v1 support)
     });
     if (!fastkey) {
       throw new HttpException({ status: 'error', message: 'Fast Key not found' }, 404);
     }
+
 
     const requestedIds = [...new Set(dto.products.map(item => item.product_id))];
     const catalogProducts = await db.getRepository(ProductEntity).find({
@@ -373,6 +376,7 @@ export class FastkeyService {
       status: failedProducts.length ? 'partial_success' : 'success',
       products,
       failed_products: failedProducts,
+ (feat(pos-auth,fastkeys,nginx): add route aliases and update endpoints for pos-auth, device-activation, fastkeys and nginx direct /api/v1 support)
     };
   }
 

@@ -99,7 +99,7 @@ export class DeviceAuthGuard implements CanActivate {
   }
 }
 
-@Controller('api/v1/pos/auth')
+@Controller(['api/v1/pos/auth', 'connector/api/v1/pos/auth', 'api/v1/auth', 'connector/api/v1/auth', 'pos/auth', 'auth'])
 export class PosAuthController {
   constructor(
     @Inject(PosAuthService) private readonly posAuthService: PosAuthService,
@@ -109,7 +109,7 @@ export class PosAuthController {
    * API 1: Merchant & Store Login / Information Lookup
    * POST /api/v1/pos/auth/merchant-store-login
    */
-  @Post('merchant-store-login')
+  @Post(['merchant-store-login', 'merchant_store_login'])
   @HttpCode(HttpStatus.OK)
   async merchantStoreLogin(@Body() dto: MerchantStoreLoginDto) {
     return this.posAuthService.merchantStoreLogin(dto);
@@ -119,7 +119,7 @@ export class PosAuthController {
    * API 2: Employee PIN Login (POS Authentication - 6-digit PIN)
    * POST /api/v1/pos/auth/login
    */
-  @Post('login')
+  @Post(['login', 'store-emp-login', 'store_emp_login', 'employee-login'])
   @HttpCode(HttpStatus.OK)
   @UseGuards(DeviceAuthGuard)
   async login(
