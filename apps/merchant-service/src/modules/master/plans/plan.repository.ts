@@ -66,6 +66,7 @@ export class PlanRepository {
       if (!userId) throw new UnauthorizedException('Authenticated user is required');
       if (operation === 'update' && !entries.length) throw new BadRequestException('Provide at least one field to update');
       entries = [...entries, [operation === 'create' ? 'created_by' : 'updated_by', userId]];
+      if (operation === 'create') entries.push(['updated_at', null], ['updated_by', null]);
     }
     if (operation === 'delete' && !userId) throw new UnauthorizedException('Authenticated user is required');
     let sql: string;

@@ -623,7 +623,53 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     DROP FUNCTION IF EXISTS public.clear_store_update_audit_on_insert();
   `);
 
+  await install('tendors', 'updated_at', `
+    ALTER TABLE public.tendors ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.tendors ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.tendors ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.tendors ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
+  await install('employees', 'updated_at', `
+    ALTER TABLE public.employees ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.employees ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.employees ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.employees ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
+  await install('plans', 'updated_at', `
+    ALTER TABLE public.plans ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.plans ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.plans ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.plans ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
+  await install('role_templates', 'updated_at', `
+    ALTER TABLE public.role_templates ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.role_templates ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.role_templates ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.role_templates ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
+  await install('feature_permissions', 'updated_at', `
+    ALTER TABLE public.feature_permissions ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.feature_permissions ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.feature_permissions ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.feature_permissions ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
+  await install('vendors', 'updated_at', `
+    ALTER TABLE public.vendors ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.vendors ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.vendors ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.vendors ALTER COLUMN updated_by DROP DEFAULT;
+  `);
+
   await install('merchants', 'merchant_code', `
+    ALTER TABLE public.merchants ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.merchants ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.merchants ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.merchants ALTER COLUMN updated_by DROP DEFAULT;
     ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
     ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "merchantCode" varchar(100);
     ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS "businessName" varchar(255);
@@ -672,7 +718,14 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       NEW.last_name := COALESCE(NEW.last_name, NEW."lastName");
       NEW."lastName" := COALESCE(NEW."lastName", NEW.last_name);
       NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
-      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
+      IF TG_OP = 'INSERT' THEN
+        NEW.updated_at := NULL;
+        NEW.updated_by := NULL;
+        NEW."updatedAt" := NULL;
+        NEW := jsonb_populate_record(NEW, '{"updatedDate":null,"updatedBy":null}'::jsonb);
+      ELSE
+        NEW."updatedAt" := NEW.updated_at;
+      END IF;
       NEW."createdDate" := COALESCE(NEW."createdDate", NEW.created_at, now());
       RETURN NEW;
     END;
@@ -717,6 +770,10 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   const featureAuditAndCodeSql = `
     ALTER TABLE public.features ADD COLUMN IF NOT EXISTS created_by uuid;
     ALTER TABLE public.features ADD COLUMN IF NOT EXISTS updated_by uuid;
+    ALTER TABLE public.features ALTER COLUMN updated_at DROP NOT NULL;
+    ALTER TABLE public.features ALTER COLUMN updated_at DROP DEFAULT;
+    ALTER TABLE public.features ALTER COLUMN updated_by DROP NOT NULL;
+    ALTER TABLE public.features ALTER COLUMN updated_by DROP DEFAULT;
     CREATE SEQUENCE IF NOT EXISTS public.features_code_seq START WITH 1;
     CREATE OR REPLACE FUNCTION public.generate_feature_code() RETURNS trigger AS $fn$
     DECLARE
