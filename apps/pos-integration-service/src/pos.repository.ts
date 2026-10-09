@@ -46,7 +46,7 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
       );
     `);
 
-    // 2. Add any missing columns to existing pos_shifts table
+    // 2. Add any missing snake_case columns to existing pos_shifts table
     await dataSource.query(`
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
@@ -81,7 +81,7 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
     `);
 
-    // 3. Migrate legacy camelCase column values to snake_case column values
+    // 3. Migrate legacy camelCase column values to snake_case column values and drop legacy columns
     await dataSource.query(`
       DO $$
       DECLARE
@@ -121,12 +121,15 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
             WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.legacy_col
           ) THEN
             EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            IF col.legacy_col <> col.snake_col THEN
+              EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS %I', col.legacy_col);
+            END IF;
           END IF;
         END LOOP;
       END $$;
     `);
 
-    // 4. Ensure cash_movements table with snake_case columns
+    // 4. Ensure cash_movements table with snake_case columns and drop legacy camelCase columns
     await dataSource.query(`
       CREATE TABLE IF NOT EXISTS public.cash_movements (
         id VARCHAR(100) PRIMARY KEY,
@@ -148,18 +151,23 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
       BEGIN
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'shiftId') THEN
           UPDATE public.cash_movements SET shift_id = "shiftId" WHERE shift_id IS NULL AND "shiftId" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "shiftId";
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'storeId') THEN
           UPDATE public.cash_movements SET store_id = "storeId" WHERE store_id IS NULL AND "storeId" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "storeId";
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'movementType') THEN
           UPDATE public.cash_movements SET movement_type = "movementType" WHERE movement_type IS NULL AND "movementType" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "movementType";
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'performedBy') THEN
           UPDATE public.cash_movements SET performed_by = "performedBy" WHERE performed_by IS NULL AND "performedBy" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "performedBy";
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'createdAt') THEN
           UPDATE public.cash_movements SET created_at = "createdAt" WHERE created_at IS NULL AND "createdAt" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "createdAt";
         END IF;
       END $$;
     `);
