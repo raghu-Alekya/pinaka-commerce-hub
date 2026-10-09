@@ -20,6 +20,8 @@ import { PosTerminalMappingService } from './terminal-mappings/pos-terminal-mapp
 import { FastkeyController } from './fastkeys/fastkey.controller';
 import { FastkeyService } from './fastkeys/fastkey.service';
 import { MerchantModule } from '../modules/merchant/merchant.module';
+import { FastkeyController } from './fastkeys/fastkey.controller';
+import { FastkeyService } from './fastkeys/fastkey.service';
 
 @Module({
   imports: [MerchantModule],

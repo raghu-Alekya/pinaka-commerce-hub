@@ -6,8 +6,9 @@ export class CreateDeviceDto {
   @IsOptional()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
-  @MaxLength(1000)
-  device_id?: string;
+  @Matches(/\S/)
+  @MaxLength(100)
+  device_code?: string;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
@@ -43,8 +44,9 @@ export class UpdateDeviceDto {
   @IsOptional()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
-  @MaxLength(1000)
-  device_id?: string;
+  @Matches(/\S/)
+  @MaxLength(100)
+  device_code?: string;
 
   @IsOptional()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))

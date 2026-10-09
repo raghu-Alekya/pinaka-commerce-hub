@@ -1,11 +1,16 @@
-import { Inject, Controller, Get, Post, Body, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Inject, Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
+import { PosConfigRepository } from './pos-config.repository';
+import { FastkeyItem } from './pos-config.entity';
 import { MovementType } from './entities/cash-movement.entity';
 
 
 @Controller('api/v1/pos')
 export class AppController {
-  constructor(@Inject(PosRepository) private readonly posRepository: PosRepository) {}
+  constructor(
+    @Inject(PosRepository) private readonly posRepository: PosRepository,
+    @Inject(PosConfigRepository) private readonly posConfigRepository: PosConfigRepository,
+  ) {}
 
   @Get('health')
   health() {
@@ -14,6 +19,35 @@ export class AppController {
       service: 'pos-integration-service',
       version: '2.0.0 (PCH Module 5)',
       timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('stores/:storeId/fastkeys')
+  async getFastkeys(@Param('storeId') storeId: string) {
+    const config = await this.posConfigRepository.getStoreConfig(storeId);
+    return {
+      success: true,
+      storeId,
+      fastkeys: config.fastkeys || [],
+      version: config.version,
+    };
+  }
+
+  @Put('stores/:storeId/fastkeys')
+  async saveFastkeys(
+    @Param('storeId') storeId: string,
+    @Body('fastkeys') fastkeys: FastkeyItem[],
+  ) {
+    if (!Array.isArray(fastkeys)) {
+      throw new BadRequestException('fastkeys must be an array');
+    }
+    const config = await this.posConfigRepository.updateFastkeys(storeId, fastkeys);
+    return {
+      success: true,
+      message: 'Fast Keys saved successfully',
+      storeId,
+      fastkeys: config.fastkeys,
+      version: config.version,
     };
   }
 
