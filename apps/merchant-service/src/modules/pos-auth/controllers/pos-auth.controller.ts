@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { PosAuthService, DeviceContext } from '../services/pos-auth.service';
 import { MerchantStoreLoginDto } from '../dto/merchant-store-login.dto';
@@ -51,4 +51,104 @@ export class PosAuthController {
   ) {
     return this.posAuthService.loginEmployee(dto, device);
   }
+
+  /**
+   * Store catalog: products, categories, and tags.
+   * GET /api/v1/pos/auth/catalog
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get('catalog')
+  @HttpCode(HttpStatus.OK)
+  async getStoreCatalog(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCatalog(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
+   * Store products.
+   * GET /api/v1/pos/auth/catalog/products
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get(['catalog/products', 'products', 'store-products'])
+  @HttpCode(HttpStatus.OK)
+  async getStoreProducts(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreProducts(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
+   * Store categories.
+   * GET /api/v1/pos/auth/catalog/categories
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get(['catalog/categories', 'categories', 'store-categories'])
+  @HttpCode(HttpStatus.OK)
+  async getStoreCategories(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCategories(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
+   * Distinct tags used by the store's products.
+   * GET /api/v1/pos/auth/catalog/tags
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get(['catalog/tags', 'tags', 'store-tags'])
+  @HttpCode(HttpStatus.OK)
+  async getStoreTags(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreTags(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
+   * All POS configurations for the store.
+   * GET /api/v1/pos/auth/store-pos-configurations
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get(['store-pos-configurations', 'configurations', 'pos-configurations'])
+  @HttpCode(HttpStatus.OK)
+  async getStorePosConfigurations(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStorePosConfigurations(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+}
+
+function headerValue(value?: string | string[]): string {
+  if (Array.isArray(value)) return String(value[0] || '').trim();
+  return String(value || '').trim();
 }

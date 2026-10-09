@@ -192,8 +192,7 @@ export class PosAuthService {
     let matchedRole: string = 'CASHIER';
     let matchedRoleId: string = 'ROLE001';
 
-    try {
-      const dataSource = await connectPostgres('POS Auth Service', []);
+    const dataSource = await connectPostgres('POS Auth Service', []);
 
       // If serial number is passed, resolve device
       if (bodySerial && !deviceId) {
@@ -260,86 +259,72 @@ export class PosAuthService {
         }
       }
 
-      // 3. Search Candidate Employees & verify PIN
-      // Join employees with employee_stores to check PINs stored at both employee level and store level
-      let candidateQuery = `
-        SELECT 
-          e.id, 
-          e.employee_code AS "employeeCode", 
-          e.first_name AS "firstName", 
-          e.last_name AS "lastName", 
-          e.status, 
-          e.merchant_id AS "merchantId",
-          e.login_pin_hash AS "empPinHash",
-          es.id AS "assignmentId",
-          es.store_id AS "assignedStoreId",
-          es.login_pin_hash AS "storePinHash",
-          es.is_primary AS "isPrimary",
-          es.status AS "storeAssignmentStatus",
-          es.role_template_id AS "roleTemplateId"
-        FROM public.employees e
-        LEFT JOIN public.employee_stores es ON es.employee_id = e.id AND (es.status IS NULL OR UPPER(es.status::text) <> 'INACTIVE')
-        WHERE (e.status IS NULL OR UPPER(e.status::text) <> 'INACTIVE')
-      `;
-      const queryParams: any[] = [];
-
-      if (targetMerchantId) {
-        queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR "merchantId" = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR "merchantCode" = $${queryParams.length}))`;
+      if (!store?.id) {
+        throw new NotFoundException('Store not found for this merchant');
       }
 
+      // 3. Match the PIN against this store's employee_stores.login_pin_hash
+      const queryParams: any[] = [String(store.id)];
+      let candidateQuery = `
+        SELECT
+          e.id,
+          e.employee_code AS "employeeCode",
+          e.first_name AS "firstName",
+          e.last_name AS "lastName",
+          e.status,
+          e.merchant_id AS "merchantId",
+          es.store_id AS "assignedStoreId",
+          es.login_pin_hash AS "storePinHash",
+          role.role_id AS "roleId",
+          role.role_code AS "roleCode",
+          role.role_name AS "roleName"
+        FROM public.employee_stores es
+        JOIN public.employees e ON e.id = es.employee_id
+        LEFT JOIN LATERAL (
+          SELECT esr.role_id, rt.role_code, rt.name AS role_name
+          FROM public.employee_store_roles esr
+          LEFT JOIN public.role_templates rt ON rt.id = esr.role_id
+          WHERE esr.employee_store_id = es.id
+            AND (esr.status = 'ACTIVE' OR esr.status IS NULL)
+          ORDER BY esr.created_at ASC
+          LIMIT 1
+        ) role ON true
+        WHERE es.store_id = $1::uuid
+          AND e.status = 'ACTIVE'
+          AND (es.status = 'ACTIVE' OR es.status IS NULL)
+          AND es.login_pin_hash IS NOT NULL
+      `;
+      if (targetMerchantId) {
+        queryParams.push(String(targetMerchantId));
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length})`;
+      }
       if (rawEmployeeCode) {
         queryParams.push(rawEmployeeCode);
         candidateQuery += ` AND e.employee_code = $${queryParams.length}`;
       }
-
-      candidateQuery += ` ORDER BY es.is_primary DESC NULLS LAST, e.created_at ASC`;
+      candidateQuery += ` ORDER BY es.is_primary DESC, e.created_at ASC`;
 
       const candidates = await dataSource.query(candidateQuery, queryParams);
 
       for (const cand of candidates) {
-        const hashesToTest = [
-          cand.storePinHash,
-          cand.empPinHash,
-        ].filter(Boolean);
-
-        let isMatch = false;
-        for (const h of hashesToTest) {
-          if (await this.pinService.verify(pin, h)) {
-            isMatch = true;
-            break;
-          }
+        if (!(await this.pinService.verify(pin, cand.storePinHash))) continue;
+        employee = {
+          id: cand.id,
+          employeeCode: cand.employeeCode,
+          firstName: cand.firstName,
+          lastName: cand.lastName,
+          merchantId: cand.merchantId,
+          status: cand.status,
+          assignedStoreId: cand.assignedStoreId,
+          roleId: cand.roleId,
+          roleCode: cand.roleCode,
+          roleName: cand.roleName,
+        };
+        if (cand.roleCode || cand.roleName || cand.roleId) {
+          matchedRole = cand.roleCode || cand.roleName || 'CASHIER';
+          matchedRoleId = cand.roleId || 'ROLE001';
         }
-
-        if (isMatch) {
-          employee = {
-            id: cand.id,
-            employeeCode: cand.employeeCode,
-            firstName: cand.firstName,
-            lastName: cand.lastName,
-            merchantId: cand.merchantId,
-            status: cand.status,
-            assignedStoreId: cand.assignedStoreId,
-            roleTemplateId: cand.roleTemplateId,
-          };
-          if (!targetMerchantId && cand.merchantId) {
-            targetMerchantId = cand.merchantId;
-          }
-          if (!store && cand.assignedStoreId) {
-            targetStoreId = cand.assignedStoreId;
-          }
-          break;
-        }
-      }
-
-      // Also check if any direct plain/demo PIN matches if no hash match found
-      if (!employee) {
-        for (const cand of candidates) {
-          if (cand.empPinHash === pin || cand.storePinHash === pin) {
-            employee = cand;
-            break;
-          }
-        }
+        break;
       }
 
       if (!employee) {
@@ -378,42 +363,6 @@ export class PosAuthService {
         );
         store = stores[0];
       }
-
-      // 6. Look up employee role name if roleTemplateId exists
-      if (employee.roleTemplateId) {
-        try {
-          const roleRows = await dataSource.query(
-            `SELECT id, name, code FROM public.role_templates WHERE id::text = $1 OR code = $1 LIMIT 1`,
-            [String(employee.roleTemplateId)],
-          );
-          if (roleRows[0]) {
-            matchedRole = roleRows[0].code || roleRows[0].name || 'CASHIER';
-            matchedRoleId = roleRows[0].id || 'ROLE001';
-          }
-        } catch (e) {}
-      }
-
-    } catch (err: any) {
-      if (err instanceof UnauthorizedException || err instanceof ForbiddenException || err instanceof NotFoundException) {
-        throw err;
-      }
-      // Offline / fallback mode
-      const fallbackMerchantId = targetMerchantId || deviceCtx.merchantId || 'ce7e95a3-5dd3-4063-af03-251825c9a2d9';
-      const fallbackStoreId = targetStoreId || deviceCtx.storeId || '5066038f-0e26-40f5-a4bf-44a1bdd300ac';
-      employee = {
-        id: rawEmployeeCode ? `EMP-${rawEmployeeCode}` : '33333333-3333-3333-3333-333333333333',
-        employeeCode: rawEmployeeCode || 'EMP101',
-        firstName: 'Staff',
-        lastName: 'Member',
-        merchantId: fallbackMerchantId,
-      };
-      store = {
-        id: fallbackStoreId,
-        storeCode: 'STORE01',
-        storeName: 'Main Store',
-        storeWebsiteUrl: `https://store.merchant.pch.com`,
-      };
-    }
 
     const activeMerchantId = targetMerchantId || store?.merchantId || employee?.merchantId || 'ce7e95a3-5dd3-4063-af03-251825c9a2d9';
     const activeStoreId = store?.id || targetStoreId || '5066038f-0e26-40f5-a4bf-44a1bdd300ac';
@@ -496,4 +445,450 @@ export class PosAuthService {
       },
     };
   }
+
+  /**
+   * Store products for the merchant and store named in the request headers.
+   * The POS login access token is checked before any catalog data is read.
+   */
+  async getStoreProducts(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const products = await this.queryStoreProducts(scope);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      productCount: products.length,
+      products,
+    };
+  }
+
+  /**
+   * Store categories for the merchant and store named in the request headers.
+   * The POS login access token is checked before any catalog data is read.
+   */
+  async getStoreCategories(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const categories = await this.queryStoreCategories(scope);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      categoryCount: categories.length,
+      categories,
+    };
+  }
+
+  /**
+   * Distinct product tags for the merchant and store named in the request headers.
+   * The POS login access token is checked before any catalog data is read.
+   */
+  async getStoreTags(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const products = await this.queryStoreProducts(scope);
+    const tags = this.collectTags(products);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      tagCount: tags.length,
+      tags,
+    };
+  }
+
+  /**
+   * All rows in store_pos_configurations for the store on the login token.
+   */
+  async getStorePosConfigurations(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    let configurations: Array<Record<string, unknown>> = [];
+    try {
+      configurations = await scope.dataSource.query(
+        `SELECT id::text AS id,
+                store_id::text AS "storeId",
+                configuration_name AS "configurationName",
+                configuration_value AS "configurationValue",
+                created_by::text AS "createdBy",
+                updated_by::text AS "updatedBy",
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+         FROM public.store_pos_configurations
+         WHERE store_id = $1::uuid
+         ORDER BY configuration_name ASC, id ASC`,
+        [scope.store.id],
+      );
+    } catch (error) {
+      if (this.postgresCode(error) !== '42P01') throw error;
+    }
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      count: configurations.length,
+      configurations,
+    };
+  }
+
+  /**
+   * Products, categories, and tags for one store.
+   * The POS login access token is checked before any catalog data is read.
+   */
+  async getStoreCatalog(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const [products, categories] = await Promise.all([
+      this.queryStoreProducts(scope),
+      this.queryStoreCategories(scope),
+    ]);
+    const tags = this.collectTags(products);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      productCount: products.length,
+      categoryCount: categories.length,
+      tagCount: tags.length,
+      products,
+      categories,
+      tags,
+    };
+  }
+
+  private async authorizeStoreCatalog(
+    authorization: string | undefined,
+    merchantHeader: string | undefined,
+    storeHeader: string | undefined,
+  ): Promise<CatalogScope> {
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+
+    const dataSource = await connectPostgres('POS Auth Service', []);
+    let session: EmployeeSessionRow | undefined;
+    try {
+      const rows = await dataSource.query(
+        `SELECT id::text AS id,
+                employee_id::text AS employee_id,
+                store_id::text AS store_id,
+                merchant_id::text AS merchant_id,
+                status
+         FROM public.employee_sessions
+         WHERE access_token = $1
+           AND lower(COALESCE(status, '')) = 'active'
+         ORDER BY session_created_at DESC NULLS LAST
+         LIMIT 1`,
+        [token],
+      );
+      session = rows[0];
+    } catch (error) {
+      if (this.postgresCode(error) === '42P01') {
+        throw new UnauthorizedException('Session is not active. Please log in again.');
+      }
+      throw error;
+    }
+    if (!session || session.employee_id !== String(payload.sub)) {
+      throw new UnauthorizedException('Session is not active. Please log in again.');
+    }
+
+    const merchantKey = String(merchantHeader || '').trim();
+    const storeKey = String(storeHeader || '').trim();
+    if (!merchantKey) {
+      throw new BadRequestException('x-merchant-id header is required');
+    }
+    if (!storeKey) {
+      throw new BadRequestException('x-store-id header is required');
+    }
+
+    const merchants = await dataSource.query(
+      `SELECT id::text AS id, "merchantCode", "merchantId", status
+       FROM public.merchants
+       WHERE id::text = $1
+          OR "merchantId"::text = $1
+          OR "merchantCode" = $1
+          OR lower(email) = lower($1)
+       LIMIT 1`,
+      [merchantKey],
+    );
+    const merchant = merchants[0] as MerchantScopeRow | undefined;
+    if (!merchant) {
+      throw new NotFoundException('Merchant not found');
+    }
+    if (merchant.status && merchant.status !== 'ACTIVE') {
+      throw new ForbiddenException('Merchant account is inactive or suspended');
+    }
+
+    const stores = await dataSource.query(
+      `SELECT id::text AS id,
+              store_code AS "storeCode",
+              store_name AS "storeName",
+              merchant_id::text AS "merchantId",
+              status
+       FROM public.stores
+       WHERE (id::text = $1 OR store_code = $1 OR lower(store_name) = lower($1))
+         AND (
+           merchant_id::text = $2
+           OR merchant_id IN (
+             SELECT id FROM public.merchants
+             WHERE id::text = $2 OR "merchantId"::text = $2 OR "merchantCode" = $2
+           )
+         )
+       LIMIT 1`,
+      [storeKey, merchant.id],
+    );
+    const store = stores[0] as StoreScopeRow | undefined;
+    if (!store) {
+      throw new NotFoundException('Store not found for this merchant');
+    }
+    if (store.status && store.status !== 'ACTIVE') {
+      throw new ForbiddenException('Store is currently inactive');
+    }
+
+    const merchantIds = this.identityKeys(merchant.id, merchant.merchantId, merchant.merchantCode);
+    const storeIds = this.identityKeys(store.id, store.storeCode);
+    this.assertTokenMatchesStore(payload, session, merchantIds, storeIds);
+
+    return { dataSource, merchant, store, merchantIds, storeIds };
+  }
+
+  private assertTokenMatchesStore(
+    payload: { merchantId?: string; storeId?: string },
+    session: EmployeeSessionRow,
+    merchantIds: string[],
+    storeIds: string[],
+  ): void {
+    const tokenMerchant = String(payload.merchantId || '').trim();
+    const tokenStore = String(payload.storeId || '').trim();
+    const sessionMerchant = String(session.merchant_id || '').trim();
+    const sessionStore = String(session.store_id || '').trim();
+
+    const merchantOk =
+      this.keyIn(sessionMerchant, merchantIds) &&
+      (!tokenMerchant || this.keyIn(tokenMerchant, merchantIds));
+    const storeOk =
+      this.keyIn(sessionStore, storeIds) &&
+      (!tokenStore || this.keyIn(tokenStore, storeIds));
+
+    if (!merchantOk || !storeOk) {
+      throw new ForbiddenException('Login token is not valid for this merchant and store');
+    }
+  }
+
+  private async queryStoreProducts(scope: CatalogScope): Promise<CatalogProduct[]> {
+    const rows = await this.queryCatalog(
+      scope,
+      `SELECT id::text AS id,
+              "merchantId",
+              "storeId",
+              "categoryId"::text AS "categoryId",
+              "wordpressId",
+              "wordpressCategoryId",
+              name,
+              price,
+              image,
+              tags,
+              payload
+       FROM public.products
+       WHERE "merchantId" = ANY($1::text[])
+         AND "storeId" = ANY($2::text[])
+       ORDER BY name ASC, id ASC`,
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      merchantId: String(row.merchantId || ''),
+      storeId: String(row.storeId || ''),
+      categoryId: row.categoryId ? String(row.categoryId) : null,
+      wordpressId: row.wordpressId ?? null,
+      wordpressCategoryId: row.wordpressCategoryId ?? null,
+      name: String(row.name || ''),
+      price: row.price ?? null,
+      image: row.image ?? null,
+      tags: Array.isArray(row.tags) ? row.tags : [],
+      payload: row.payload ?? {},
+    }));
+  }
+
+  private async queryStoreCategories(scope: CatalogScope): Promise<CatalogCategory[]> {
+    const rows = await this.queryCatalog(
+      scope,
+      `SELECT id::text AS id,
+              "merchantId",
+              "storeId",
+              "wordpressId",
+              "parentWordpressId",
+              name,
+              slug,
+              description,
+              "productCount",
+              image,
+              "posTaxClass",
+              "posTaxPercent",
+              payload
+       FROM public.categories
+       WHERE "merchantId" = ANY($1::text[])
+         AND "storeId" = ANY($2::text[])
+       ORDER BY name ASC, id ASC`,
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      merchantId: String(row.merchantId || ''),
+      storeId: String(row.storeId || ''),
+      wordpressId: row.wordpressId ?? null,
+      parentWordpressId: row.parentWordpressId ?? 0,
+      name: String(row.name || ''),
+      slug: String(row.slug || ''),
+      description: String(row.description || ''),
+      productCount: Number(row.productCount || 0),
+      image: row.image ?? null,
+      posTaxClass: String(row.posTaxClass || ''),
+      posTaxPercent: String(row.posTaxPercent || ''),
+      payload: row.payload ?? {},
+    }));
+  }
+
+  private async queryCatalog(scope: CatalogScope, sql: string): Promise<Array<Record<string, any>>> {
+    try {
+      return await scope.dataSource.query(sql, [scope.merchantIds, scope.storeIds]);
+    } catch (error) {
+      if (this.postgresCode(error) === '42P01') {
+        throw new NotFoundException('Store catalog has not been synced');
+      }
+      throw error;
+    }
+  }
+
+  private collectTags(products: CatalogProduct[]): unknown[] {
+    const seen = new Set<string>();
+    const tags: unknown[] = [];
+    const add = (value: unknown) => {
+      const list = Array.isArray(value) ? value : [];
+      for (const tag of list) {
+        const key = typeof tag === 'string'
+          ? tag.trim().toLowerCase()
+          : JSON.stringify(tag);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        tags.push(typeof tag === 'string' ? tag.trim() : tag);
+      }
+    };
+    for (const product of products) {
+      add(product.tags);
+      const payload = product.payload;
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        add((payload as { tags?: unknown }).tags);
+      }
+    }
+    tags.sort((left, right) => this.tagLabel(left).localeCompare(this.tagLabel(right)));
+    return tags;
+  }
+
+  private tagLabel(tag: unknown): string {
+    if (typeof tag === 'string') return tag;
+    if (tag && typeof tag === 'object') {
+      const record = tag as { name?: unknown; slug?: unknown; id?: unknown };
+      return String(record.name || record.slug || record.id || '');
+    }
+    return '';
+  }
+
+  private extractBearerToken(authorization?: string): string {
+    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+    if (!token) {
+      throw new UnauthorizedException('Bearer token is required');
+    }
+    return token;
+  }
+
+  private identityKeys(...values: Array<string | null | undefined>): string[] {
+    return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+  }
+
+  private keyIn(value: string, keys: string[]): boolean {
+    if (!value) return false;
+    const normalized = value.toLowerCase();
+    return keys.some((key) => key.toLowerCase() === normalized);
+  }
+
+  private postgresCode(error: unknown): string | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const record = error as { code?: string; driverError?: { code?: string } };
+    return record.code || record.driverError?.code;
+  }
+}
+
+interface EmployeeSessionRow {
+  id: string;
+  employee_id: string;
+  store_id?: string | null;
+  merchant_id?: string | null;
+  status?: string | null;
+}
+
+interface MerchantScopeRow {
+  id: string;
+  merchantCode?: string | null;
+  merchantId?: string | null;
+  status?: string | null;
+}
+
+interface StoreScopeRow {
+  id: string;
+  storeCode?: string | null;
+  storeName?: string | null;
+  merchantId?: string | null;
+  status?: string | null;
+}
+
+interface CatalogScope {
+  dataSource: { query: (sql: string, params?: unknown[]) => Promise<any[]> };
+  merchant: MerchantScopeRow;
+  store: StoreScopeRow;
+  merchantIds: string[];
+  storeIds: string[];
+}
+
+interface CatalogProduct {
+  id: string;
+  merchantId: string;
+  storeId: string;
+  categoryId: string | null;
+  wordpressId: number | null;
+  wordpressCategoryId: number | null;
+  name: string;
+  price: string | number | null;
+  image: string | null;
+  tags: unknown[];
+  payload: unknown;
+}
+
+interface CatalogCategory {
+  id: string;
+  merchantId: string;
+  storeId: string;
+  wordpressId: number | null;
+  parentWordpressId: number;
+  name: string;
+  slug: string;
+  description: string;
+  productCount: number;
+  image: string | null;
+  posTaxClass: string;
+  posTaxPercent: string;
+  payload: unknown;
 }
