@@ -1,8 +1,9 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { connectPostgres } from '@pinaka-delivery-hub/database';
-import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
+import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
+import { PosShiftEntity, ShiftDenominationData, ShiftStatus } from './entities/pos-shift.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
 
 @Injectable()
@@ -21,7 +22,8 @@ export class PosRepository implements OnModuleInit {
     this.dataSource = await connectPostgres('POS Integration DB', [
       PosShiftEntity,
       CashMovementEntity,
-    ]);
+    ], { synchronize: false });
+    await createMissingTables(this.dataSource);
     this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
     this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
     this.isDbConnected = true;
@@ -43,18 +45,28 @@ export class PosRepository implements OnModuleInit {
   }
 
   // --- Open Cashier Shift ---
-  async openShift(merchantId: string, storeId: string, terminalId: string, cashierName: string, openingCash: number): Promise<PosShiftEntity> {
+  async openShift(
+    merchantId: string,
+    storeId: string,
+    terminalId: string,
+    cashierName: string,
+    openingCash: number,
+    registerId?: string,
+    denominationData: ShiftDenominationData = {},
+  ): Promise<PosShiftEntity> {
     const shift: PosShiftEntity = {
-      id: `SHIFT-${Math.floor(8000 + Math.random() * 1000)}`,
+      id: `SHIFT-${randomUUID()}`,
       merchantId,
       storeId,
+      registerId,
       terminalId: terminalId || 'SUNMI-D3-01',
       cashierName: cashierName || 'Cashier',
-      openingCash: Number(openingCash) || 200.00,
+      openingCash: Number(openingCash),
       totalCashSales: 0.00,
       totalCardSales: 0.00,
       totalSafeDrops: 0.00,
       totalPaidOuts: 0.00,
+      ...denominationData,
       status: ShiftStatus.OPEN,
       openedAt: new Date(),
       createdAt: new Date(),
@@ -143,11 +155,16 @@ export class PosRepository implements OnModuleInit {
     return { success: true, shift };
   }
 
-  async getActiveShift(storeId: string): Promise<PosShiftEntity | null> {
+  async getActiveShifts(storeId: string): Promise<PosShiftEntity[]> {
     if (this.isDbConnected && this.shiftRepo) {
-      return await this.shiftRepo.findOne({ where: { storeId, status: ShiftStatus.OPEN } });
+      return await this.shiftRepo.find({
+        where: { storeId, status: ShiftStatus.OPEN },
+        order: { openedAt: 'DESC', createdAt: 'DESC' },
+      });
     }
-    return this.inMemoryShifts.find((s) => s.storeId === storeId && s.status === ShiftStatus.OPEN) || null;
+    return this.inMemoryShifts
+      .filter((shift) => shift.storeId === storeId && shift.status === ShiftStatus.OPEN)
+      .sort((left, right) => right.openedAt.getTime() - left.openedAt.getTime());
   }
 
   private async cacheActiveShift(storeId: string, shift: PosShiftEntity) {
