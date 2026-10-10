@@ -19,12 +19,11 @@ import { PosTerminalMappingController } from './terminal-mappings/pos-terminal-m
 import { PosTerminalMappingService } from './terminal-mappings/pos-terminal-mapping.service';
 import { FastkeyController } from './fastkeys/fastkey.controller';
 import { FastkeyService } from './fastkeys/fastkey.service';
+import { PosEmployeeAttendanceModule } from './pos_employee_attendance/pos_employee_attendance.module';
 import { MerchantModule } from '../modules/merchant/merchant.module';
-import { FastkeyController } from './fastkeys/fastkey.controller';
-import { FastkeyService } from './fastkeys/fastkey.service';
 
 @Module({
-  imports: [MerchantModule],
+  imports: [MerchantModule, PosEmployeeAttendanceModule],
   controllers: [
     PosCurrencyTaxController,
     PosServiceChargeController,
