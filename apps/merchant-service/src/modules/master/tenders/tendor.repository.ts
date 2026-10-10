@@ -244,10 +244,13 @@ export class TendorRepository {
     const entity = this.store().create({
       tendorCode,
       tendorName,
+      updatedBy: null,
+      updatedAt: null as unknown as Date,
       status: ((normalizeStatus(dto.status) || TendorStatus.ACTIVE) as TendorStatus),
     });
     try {
-      return await this.store().save(entity);
+      await this.store().insert(entity);
+      return this.store().findOneByOrFail({ id: entity.id });
     } catch (error: any) {
       if (error?.code === '23505' || error?.driverError?.code === '23505') {
         throw this.uniqueConflict(error, tendorCode, tendorName);

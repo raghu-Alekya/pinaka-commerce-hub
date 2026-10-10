@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { createHmac } from 'node:crypto';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export interface CreateSessionParams {
   employeeId: string;
@@ -8,6 +8,16 @@ export interface CreateSessionParams {
   deviceId: string;
   registerId?: string;
   roleId: string;
+}
+
+export interface PosAccessTokenPayload {
+  sub: string;
+  jti: string;
+  merchantId?: string;
+  storeId?: string;
+  deviceId?: string;
+  type?: string;
+  exp: number;
 }
 
 function base64UrlEncode(input: string): string {
@@ -34,7 +44,9 @@ function signJwt(payload: Record<string, unknown>, secret: string): string {
 
 @Injectable()
 export class PosSessionService {
-  private readonly secret = process.env.JWT_SECRET || 'pdh_super_secret_jwt_key';
+  private get secret(): string {
+    return process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'pdh-local-development-secret-change-me';
+  }
 
   async createSession(params: CreateSessionParams) {
     const now = Math.floor(Date.now() / 1000);
@@ -42,21 +54,23 @@ export class PosSessionService {
 
     const accessPayload = {
       sub: params.employeeId,
+      jti: sessionId,
       sid: sessionId,
+      type: 'access',
       merchantId: params.merchantId,
       storeId: params.storeId,
       deviceId: params.deviceId,
       registerId: params.registerId || 'REG-01',
       roleId: params.roleId,
-      type: 'pos_employee',
       iat: now,
       exp: now + 12 * 3600,
     };
 
     const refreshPayload = {
+      jti: `ref_${sessionId}`,
       sid: sessionId,
       sub: params.employeeId,
-      type: 'pos_refresh',
+      type: 'refresh',
       iat: now,
       exp: now + 7 * 24 * 3600,
     };
@@ -69,5 +83,43 @@ export class PosSessionService {
       accessToken,
       refreshToken,
     };
+  }
+
+  verifyAccessToken(token: string): PosAccessTokenPayload {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    const [header, body, signature] = parts;
+    const expected = createHmac('sha256', this.secret)
+      .update(`${header}.${body}`)
+      .digest();
+    let supplied: Buffer;
+    try {
+      supplied = Buffer.from(signature, 'base64url');
+    } catch {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+
+    let payload: PosAccessTokenPayload;
+    try {
+      payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as PosAccessTokenPayload;
+    } catch {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    if (
+      payload.type !== 'access' ||
+      typeof payload.exp !== 'number' ||
+      payload.exp <= Math.floor(Date.now() / 1000)
+    ) {
+      throw new UnauthorizedException('Access token has expired');
+    }
+    if (!payload.sub || !payload.jti) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    return payload;
   }
 }

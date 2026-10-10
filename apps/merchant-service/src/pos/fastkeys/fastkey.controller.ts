@@ -16,7 +16,11 @@ import { mkdirSync } from 'node:fs';
 import { unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { RequireAuth } from '../../modules/shared/session-auth.guard';
-import { AddFastkeyProductsDto, CreateFastkeyDto } from './fastkey.dto';
+import {
+  AddFastkeyProductsDto,
+  CreateFastkeyDto,
+  UpdateFastkeyDto,
+} from './fastkey.dto';
 import { FastkeyService } from './fastkey.service';
 
 type AuthenticatedRequest = {
@@ -49,6 +53,10 @@ const fastkeyImageUpload = FileInterceptor('fastkey_image', {
 
 @Controller([
   'api/v1/fastkeys',
+  'connector/api/v1/fastkeys',
+  'api/v1/pos/fastkeys',
+  'connector/api/v1/pos/fastkeys',
+  'fastkeys',
   'wp-json/pinaka-pos/v1/fastkeys',
   'wordpress/wp-json/pinaka-pos/v1/fastkeys',
 ])
@@ -58,7 +66,7 @@ export class FastkeyController {
     private readonly service: FastkeyService,
   ) {}
 
-  @Post('create')
+  @Post(['create', 'fastkeys/create'])
   @HttpCode(201)
   @RequireAuth()
   @UseInterceptors(fastkeyImageUpload)
@@ -81,7 +89,34 @@ export class FastkeyController {
     }
   }
 
-  @Get('get-by-user')
+  @Post(['update-fastkey', 'update', 'update-fastkeys'])
+  @HttpCode(200)
+  @RequireAuth()
+  @UseInterceptors(fastkeyImageUpload)
+  async update(
+    @Body() dto: UpdateFastkeyDto,
+    @Req() request: AuthenticatedRequest,
+    @UploadedFile() file?: UploadedFastkeyImage,
+  ) {
+    const origin = this.requestOrigin(request);
+    let imagePath: string | undefined;
+    try {
+      if (file) {
+        imagePath = await this.saveImage(file);
+        dto.fastkey_image = `${origin}${imagePath}`;
+      }
+      const result = await this.service.update(dto, request.user?.id, origin);
+      if (imagePath && result.previousImage) {
+        await this.removeImage(result.previousImage);
+      }
+      return result.response;
+    } catch (error) {
+      if (imagePath) await this.removeImage(imagePath);
+      throw error;
+    }
+  }
+
+  @Get(['get-by-user', 'get-by-uesr', 'get_by_user'])
   @RequireAuth()
   getByUser(@Req() request: AuthenticatedRequest) {
     return this.service.getByUser(
@@ -90,7 +125,7 @@ export class FastkeyController {
     );
   }
 
-  @Post('add-products')
+  @Post(['add-products', 'add_products', 'fastkeys/add-products'])
   @HttpCode(200)
   @RequireAuth()
   addProducts(
@@ -98,6 +133,20 @@ export class FastkeyController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.service.addProducts(
+      dto,
+      request.user?.id,
+      this.requestOrigin(request),
+    );
+  }
+
+  @Post(['update-fastkey-products', 'update/fastkey-products', 'update_fastkey_products'])
+  @HttpCode(200)
+  @RequireAuth()
+  updateProducts(
+    @Body() dto: AddFastkeyProductsDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.service.updateProducts(
       dto,
       request.user?.id,
       this.requestOrigin(request),
@@ -128,7 +177,17 @@ export class FastkeyController {
   }
 
   private async removeImage(imagePath: string): Promise<void> {
-    if (!imagePath.startsWith('/uploads/fastkeys/')) return;
-    await unlink(join(fastkeyImageDirectory, basename(imagePath))).catch(() => undefined);
+    let pathname = imagePath;
+    try {
+      if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+        pathname = new URL(imagePath).pathname;
+      }
+    } catch {
+      return;
+    }
+    if (!pathname.startsWith('/uploads/fastkeys/')) return;
+    const filename = basename(pathname);
+    if (filename === 'no-image.png' || filename === 'no-image-2.png') return;
+    await unlink(join(fastkeyImageDirectory, filename)).catch(() => undefined);
   }
 }

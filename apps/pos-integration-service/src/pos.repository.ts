@@ -1,9 +1,180 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
-import { connectPostgres } from '@pinaka-delivery-hub/database';
-import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
+import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
+import { PosShiftEntity, ShiftDenominationData, ShiftStatus } from './entities/pos-shift.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
+
+async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
+  try {
+    // 1. Create table if not exists with all snake_case columns
+    await dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.pos_shifts (
+        id VARCHAR(100) PRIMARY KEY,
+        merchant_id VARCHAR(100) NOT NULL,
+        store_id VARCHAR(100) NOT NULL,
+        register_id UUID,
+        device_id VARCHAR(100) NOT NULL,
+        opening_device_id UUID,
+        opened_by_employee_id UUID,
+        closed_by_employee_id UUID,
+        shift_number VARCHAR(100),
+        cashier_name VARCHAR(150) NOT NULL,
+        opening_cash DECIMAL(10,2) DEFAULT 200.00,
+        total_cash_sales DECIMAL(10,2) DEFAULT 0.00,
+        total_card_sales DECIMAL(10,2) DEFAULT 0.00,
+        total_safe_drops DECIMAL(10,2) DEFAULT 0.00,
+        total_paid_outs DECIMAL(10,2) DEFAULT 0.00,
+        drawer_denominations JSONB,
+        drawer_total_amount DECIMAL(12,2),
+        tube_denominations JSONB,
+        tube_total_amount DECIMAL(12,2),
+        total_amount DECIMAL(12,2),
+        closing_cash_actual DECIMAL(10,2),
+        expected_cash_in_drawer DECIMAL(10,2),
+        declared_cash DECIMAL(10,2),
+        cash_difference DECIMAL(10,2),
+        discrepancy DECIMAL(10,2),
+        opening_note TEXT,
+        closing_note TEXT,
+        status VARCHAR(50) DEFAULT 'OPEN',
+        opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Add any missing snake_case columns to existing pos_shifts table
+    await dataSource.query(`
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS register_id UUID;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id UUID;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_by_employee_id UUID;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_employee_id UUID;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS shift_number VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cashier_name VARCHAR(150);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_cash DECIMAL(10,2) DEFAULT 200.00;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cash_sales DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_card_sales DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_safe_drops DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_paid_outs DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_denominations JSONB;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_total_amount DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_denominations JSONB;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_total_amount DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_amount DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_cash_actual DECIMAL(10,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS expected_cash_in_drawer DECIMAL(10,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(10,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cash_difference DECIMAL(10,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(10,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_note TEXT;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_note TEXT;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'OPEN';
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+    `);
+
+    // 3. Migrate legacy camelCase column values to snake_case column values and drop legacy columns
+    await dataSource.query(`
+      DO $$
+      DECLARE
+        col RECORD;
+      BEGIN
+        FOR col IN
+          SELECT legacy_col, snake_col FROM (VALUES
+            ('merchantId', 'merchant_id'),
+            ('storeId', 'store_id'),
+            ('registerId', 'register_id'),
+            ('terminalId', 'device_id'),
+            ('terminal_id', 'device_id'),
+            ('openingDeviceId', 'opening_device_id'),
+            ('openedByEmployeeId', 'opened_by_employee_id'),
+            ('closedByEmployeeId', 'closed_by_employee_id'),
+            ('shiftNumber', 'shift_number'),
+            ('cashierName', 'cashier_name'),
+            ('openingCash', 'opening_cash'),
+            ('totalCashSales', 'total_cash_sales'),
+            ('totalCardSales', 'total_card_sales'),
+            ('totalSafeDrops', 'total_safe_drops'),
+            ('totalPaidOuts', 'total_paid_outs'),
+            ('closingCashActual', 'closing_cash_actual'),
+            ('expectedCashInDrawer', 'expected_cash_in_drawer'),
+            ('declaredCash', 'declared_cash'),
+            ('cashDifference', 'cash_difference'),
+            ('openingNote', 'opening_note'),
+            ('closingNote', 'closing_note'),
+            ('openedAt', 'opened_at'),
+            ('closedAt', 'closed_at'),
+            ('createdAt', 'created_at'),
+            ('updatedAt', 'updated_at')
+          ) AS t(legacy_col, snake_col)
+        LOOP
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.legacy_col
+          ) THEN
+            EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            IF col.legacy_col <> col.snake_col THEN
+              EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS %I', col.legacy_col);
+            END IF;
+          END IF;
+        END LOOP;
+      END $$;
+    `);
+
+    // 4. Ensure cash_movements table with snake_case columns and drop legacy camelCase columns
+    await dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.cash_movements (
+        id VARCHAR(100) PRIMARY KEY,
+        shift_id VARCHAR(100) NOT NULL,
+        store_id VARCHAR(100) NOT NULL,
+        movement_type VARCHAR(50) DEFAULT 'SAFE_DROP',
+        amount DECIMAL(10,2) NOT NULL,
+        performed_by VARCHAR(255) NOT NULL,
+        reason VARCHAR(255),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS shift_id VARCHAR(100);
+      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
+      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS movement_type VARCHAR(50) DEFAULT 'SAFE_DROP';
+      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS performed_by VARCHAR(255);
+      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'shiftId') THEN
+          UPDATE public.cash_movements SET shift_id = "shiftId" WHERE shift_id IS NULL AND "shiftId" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "shiftId";
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'storeId') THEN
+          UPDATE public.cash_movements SET store_id = "storeId" WHERE store_id IS NULL AND "storeId" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "storeId";
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'movementType') THEN
+          UPDATE public.cash_movements SET movement_type = "movementType" WHERE movement_type IS NULL AND "movementType" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "movementType";
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'performedBy') THEN
+          UPDATE public.cash_movements SET performed_by = "performedBy" WHERE performed_by IS NULL AND "performedBy" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "performedBy";
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'createdAt') THEN
+          UPDATE public.cash_movements SET created_at = "createdAt" WHERE created_at IS NULL AND "createdAt" IS NOT NULL;
+          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "createdAt";
+        END IF;
+      END $$;
+    `);
+  } catch (err: any) {
+    console.error('⚠️ [pos_shifts schema alignment error]:', err.message);
+  }
+}
 
 @Injectable()
 export class PosRepository implements OnModuleInit {
@@ -21,7 +192,9 @@ export class PosRepository implements OnModuleInit {
     this.dataSource = await connectPostgres('POS Integration DB', [
       PosShiftEntity,
       CashMovementEntity,
-    ]);
+    ], { synchronize: false });
+    await createMissingTables(this.dataSource);
+    await ensurePosShiftSnakeCaseSchema(this.dataSource);
     this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
     this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
     this.isDbConnected = true;
@@ -43,18 +216,28 @@ export class PosRepository implements OnModuleInit {
   }
 
   // --- Open Cashier Shift ---
-  async openShift(merchantId: string, storeId: string, terminalId: string, cashierName: string, openingCash: number): Promise<PosShiftEntity> {
+  async openShift(
+    merchantId: string,
+    storeId: string,
+    terminalId: string,
+    cashierName: string,
+    openingCash: number,
+    registerId?: string,
+    denominationData: ShiftDenominationData = {},
+  ): Promise<PosShiftEntity> {
     const shift: PosShiftEntity = {
-      id: `SHIFT-${Math.floor(8000 + Math.random() * 1000)}`,
+      id: `SHIFT-${randomUUID()}`,
       merchantId,
       storeId,
+      registerId,
       terminalId: terminalId || 'SUNMI-D3-01',
       cashierName: cashierName || 'Cashier',
-      openingCash: Number(openingCash) || 200.00,
+      openingCash: Number(openingCash),
       totalCashSales: 0.00,
       totalCardSales: 0.00,
       totalSafeDrops: 0.00,
       totalPaidOuts: 0.00,
+      ...denominationData,
       status: ShiftStatus.OPEN,
       openedAt: new Date(),
       createdAt: new Date(),
@@ -143,11 +326,16 @@ export class PosRepository implements OnModuleInit {
     return { success: true, shift };
   }
 
-  async getActiveShift(storeId: string): Promise<PosShiftEntity | null> {
+  async getActiveShifts(storeId: string): Promise<PosShiftEntity[]> {
     if (this.isDbConnected && this.shiftRepo) {
-      return await this.shiftRepo.findOne({ where: { storeId, status: ShiftStatus.OPEN } });
+      return await this.shiftRepo.find({
+        where: { storeId, status: ShiftStatus.OPEN },
+        order: { openedAt: 'DESC', createdAt: 'DESC' },
+      });
     }
-    return this.inMemoryShifts.find((s) => s.storeId === storeId && s.status === ShiftStatus.OPEN) || null;
+    return this.inMemoryShifts
+      .filter((shift) => shift.storeId === storeId && shift.status === ShiftStatus.OPEN)
+      .sort((left, right) => right.openedAt.getTime() - left.openedAt.getTime());
   }
 
   private async cacheActiveShift(storeId: string, shift: PosShiftEntity) {

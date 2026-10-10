@@ -3,22 +3,12 @@ import {
   CreateDateColumn,
   Entity,
   Index,
-  JoinColumn,
-  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { EmployeeEntity } from '../../entities/employee.entity';
-import { StoreEntity } from '../../entities/store.entity';
-
-export interface FastkeyJson {
-  fastkey_title: string;
-  fastkey_index: number;
-  products?: Array<Record<string, unknown>>;
-}
 
 @Entity('store_employee_fastkeys')
-@Index('idx_store_employee_fastkeys_scope', ['storeId', 'employeeId'])
+@Index(['storeId', 'employeeId'])
 export class StoreEmployeeFastkeyEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -26,29 +16,26 @@ export class StoreEmployeeFastkeyEntity {
   @Column({ name: 'store_id', type: 'uuid' })
   storeId!: string;
 
-  @ManyToOne(() => StoreEntity)
-  @JoinColumn({ name: 'store_id', referencedColumnName: 'id' })
-  store?: StoreEntity;
-
   @Column({ name: 'employee_id', type: 'uuid' })
   employeeId!: string;
 
-  @ManyToOne(() => EmployeeEntity)
-  @JoinColumn({ name: 'employee_id', referencedColumnName: 'id' })
-  employee?: EmployeeEntity;
+  @Column({ type: 'jsonb', default: '{}' })
+  json!: {
+    fastkey_title?: string;
+    fastkey_index?: number;
+    products?: Array<{ product_id: string; sl_number: number }>;
+    [key: string]: unknown;
+  };
 
-  @Column({ name: 'json', type: 'jsonb', default: () => "'{}'::jsonb" })
-  json!: FastkeyJson;
+  @Column({ name: 'fastkey_image', type: 'varchar', length: 2048, nullable: true })
+  fastkeyImage?: string | null;
+
+  @Column({ name: 'is_deleted', type: 'boolean', default: false })
+  isDeleted!: boolean;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
-
-  @Column({ name: 'is_deleted', type: 'boolean', default: false })
-  isDeleted!: boolean;
-
-  @Column({ name: 'fastkey_image', type: 'text', default: '' })
-  fastkeyImage!: string;
 }

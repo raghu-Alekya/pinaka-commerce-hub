@@ -3,7 +3,7 @@ Write-Host "============================================================" -Foreg
 Write-Host "  PCH MODULE 5 (SUNMI FLUTTER POS & SHIFT LEDGER) TEST SUITE" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
-$baseUrl = "http://localhost:3006/api/v1/pos"
+$baseUrl = "http://localhost:3007/api/v1/pos"
 $storeId = "STR-5001"
 
 # 1. Health Check
@@ -32,17 +32,40 @@ try {
 }
 
 # 3. Open Cashier Shift
-Write-Host "`n3. Testing POST $baseUrl/shifts/open (Opening Cashier Shift)..." -ForegroundColor Yellow
+Write-Host "`n3. Testing POST $baseUrl/shifts (Creating Cashier Shift)..." -ForegroundColor Yellow
 $openShiftPayload = @{
     merchantId = "MCH-1001"
     storeId = $storeId
     terminalId = "SUNMI-D3-PRO-01"
     cashierName = "Sarah Jenkins"
-    openingCash = 200.00
+    openingCash = 400.00
+    drawer_denominations = @(
+        @{ denomination = 400; denom_count = 4 },
+        @{ denomination = 50; denom_count = 0 },
+        @{ denomination = 20; denom_count = 0 },
+        @{ denomination = 10; denom_count = 0 },
+        @{ denomination = 5; denom_count = 0 },
+        @{ denomination = 1; denom_count = 0 },
+        @{ denomination = 0.5; denom_count = 0 },
+        @{ denomination = 0.25; denom_count = 0 },
+        @{ denomination = 0.1; denom_count = 0 },
+        @{ denomination = 0.05; denom_count = 0 }
+    )
+    drawer_total_amount = 400.0
+    tube_denominations = @(
+        @{ denomination = 100; tube_count = 0; cell_count = 0; total = 0.0 },
+        @{ denomination = 50; tube_count = 0; cell_count = 0; total = 0.0 },
+        @{ denomination = 20; tube_count = 0; cell_count = 0; total = 0.0 },
+        @{ denomination = 10; tube_count = 0; cell_count = 0; total = 0.0 },
+        @{ denomination = 5; tube_count = 0; cell_count = 0; total = 0.0 },
+        @{ denomination = 1; tube_count = 0; cell_count = 0; total = 0.0 }
+    )
+    tube_total_amount = 0.0
+    total_amount = 500.0
 } | ConvertTo-Json
 
 try {
-    $shiftResult = Invoke-RestMethod -Uri "$baseUrl/shifts/open" -Method Post -Body $openShiftPayload -ContentType "application/json"
+    $shiftResult = Invoke-RestMethod -Uri "$baseUrl/shifts" -Method Post -Body $openShiftPayload -ContentType "application/json"
     Write-Host "[SUCCESS] Cashier Shift Opened!" -ForegroundColor Green
     Write-Host "   Shift ID    :" $shiftResult.shiftId -ForegroundColor Cyan
     Write-Host "   Cashier     :" $shiftResult.shift.cashierName -ForegroundColor Cyan

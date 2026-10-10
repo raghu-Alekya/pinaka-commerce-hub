@@ -17,9 +17,9 @@ import { PosServiceChargeController } from './service-charges/pos-service-charge
 import { PosServiceChargeService } from './service-charges/pos-service-charge.service';
 import { PosTerminalMappingController } from './terminal-mappings/pos-terminal-mapping.controller';
 import { PosTerminalMappingService } from './terminal-mappings/pos-terminal-mapping.service';
-import { MerchantModule } from '../modules/merchant/merchant.module';
 import { FastkeyController } from './fastkeys/fastkey.controller';
 import { FastkeyService } from './fastkeys/fastkey.service';
+import { MerchantModule } from '../modules/merchant/merchant.module';
 
 @Module({
   imports: [MerchantModule],

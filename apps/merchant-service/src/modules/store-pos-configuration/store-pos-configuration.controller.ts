@@ -15,7 +15,11 @@ import { StorePosConfigurationsService } from './store-pos-configuration.service
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 
-@Controller('api/v1/store/store-pos-configuration')
+@Controller([
+  'api/v1/store/store-pos-configuration',
+  'connector/api/v1/store/store-pos-configuration',
+  'store/store-pos-configuration',
+])
 export class StorePosConfigurationController {
   constructor(
     @Inject(StorePosConfigurationsService)
@@ -59,6 +63,15 @@ export class StorePosConfigurationController {
     return this.service.findByStoreId(storeId);
   }
 
+  /**
+   * Get customized POS store configuration.
+   *
+   * GET /api/v1/store/store-pos-configuration/:storeId/bootstrap
+   */
+  @Get(':storeId/bootstrap')
+  getStoreBootstrap(@Param('storeId') storeId: string) {
+    return this.service.getStoreInfo(storeId);
+  }
   /**
    * Get a specific POS configuration.
    *
@@ -130,5 +143,5 @@ export class StorePosConfigurationController {
       success: true,
       message: 'POS configuration deleted successfully',
     };
-  }
+  } 
 }

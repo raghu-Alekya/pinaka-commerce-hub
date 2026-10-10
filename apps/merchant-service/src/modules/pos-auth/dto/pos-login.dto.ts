@@ -1,14 +1,29 @@
-import { IsNotEmpty, IsString, IsOptional, Length } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional } from 'class-validator';
 
 export class PosLoginDto {
+  @IsString()
+  @IsNotEmpty({ message: 'PIN is required' })
+  pin!: string;
+
   @IsOptional()
   @IsString()
   employeeCode?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'PIN is required' })
-  @Length(4, 8, { message: 'PIN must be 6 digits' })
-  pin!: string;
+  merchantId?: string;
+
+  @IsOptional()
+  @IsString()
+  merchantCode?: string;
+
+  @IsOptional()
+  @IsString()
+  storeId?: string;
+
+  @IsOptional()
+  @IsString()
+  storeCode?: string;
 
   @IsOptional()
   @IsString()
@@ -37,4 +52,8 @@ export class PosLoginDto {
   @IsOptional()
   @IsString()
   deviceService?: string;
+
+  @IsOptional()
+  @IsString()
+  registerId?: string;
 }

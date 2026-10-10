@@ -137,6 +137,7 @@ export class RoleTemplateRepository {
       status: dto.status || RoleTemplateStatus.ACTIVE,
       createdBy: loginUserId || null,
       updatedBy: null,
+      updatedAt: null as unknown as Date,
     });
 
     const saved = await repository.save(entity);
