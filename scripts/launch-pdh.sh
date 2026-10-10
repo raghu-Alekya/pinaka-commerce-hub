@@ -75,7 +75,6 @@ services=(
   "connector-service:3001"
   "order-service:3002"
   "merchant-service:3003"
-  "menu-service:3004"
   "inventory-service:3005"
   "analytics-service:3006"
   "pos-integration-service:3007"
@@ -208,5 +207,5 @@ for item in "${services[@]}"; do
   echo "$name: ready on $port (PID $pid)."
 done
 
-echo "Backend ready: ports 3000-3010."
+echo "Backend ready: configured services on ports 3000-3010 (3004 reserved for catalog-service)."
 echo "Re-run without --restart to reuse running services. Use --restart to reload them."

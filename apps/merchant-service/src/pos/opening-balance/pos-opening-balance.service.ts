@@ -1,5 +1,5 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { MerchantRepository } from '../../merchant.repository';
+import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { PosOpeningBalanceEntity } from './pos-opening-balance.entity';
 import { SavePosOpeningBalanceDto } from './pos-opening-balance.dto';
 

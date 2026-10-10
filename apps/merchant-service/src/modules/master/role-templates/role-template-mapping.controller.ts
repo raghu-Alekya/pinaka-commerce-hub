@@ -1,0 +1,142 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { filterMasterList } from '../common/master-list';
+import { StoreTypeRepository } from '../store-setup/store-type.repository';
+import { RELATIONSHIPS } from '../../shared/relationships.config';
+import {
+  RelationshipOwnerGuard,
+  relationshipUserId,
+} from '../../shared/relationships.controller';
+import type { RelationshipRequest } from '../../shared/relationships.controller';
+import { RelationshipsRepository } from '../../shared/relationships.repository';
+
+const roleTemplateStoreTypes = RELATIONSHIPS.find(
+  (config) => config.name === 'RoleTemplateStoreTypes',
+)!;
+
+// Full unique paths — must not share @Controller path with generated RoleTemplateStoreTypes CRUD.
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/store-types/available',
+  'api/v1/role_templates/:roleTemplateId/store-types/available',
+  'connector/api/v1/role-templates/:roleTemplateId/store-types/available',
+  'connector/api/v1/role_templates/:roleTemplateId/store-types/available',
+])
+@UseGuards(RelationshipOwnerGuard)
+export class RoleTemplateStoreTypeCatalogController {
+  constructor(
+    @Inject(StoreTypeRepository)
+    private readonly storeTypes: StoreTypeRepository,
+    @Inject(RelationshipsRepository)
+    private readonly relationships: RelationshipsRepository,
+  ) {}
+
+  @Get()
+  async available(
+    @Param('roleTemplateId') roleTemplateId: string,
+    @Query() query: Record<string, string>,
+  ) {
+    const mapped = await this.relationships.execute(
+      roleTemplateStoreTypes,
+      'list',
+      { roleTemplateId },
+    );
+    const mappings = new Map(
+      (
+        mapped.items as { id: string; storeTypeId: string; required: boolean }[]
+      ).map((item) => [item.storeTypeId.toLowerCase(), item]),
+    );
+    const masterStoreTypes = filterMasterList(
+      await this.storeTypes.list(),
+      query,
+    ) as Record<string, any>[];
+    const storeTypes = masterStoreTypes.map(
+      (storeType: Record<string, any>) => {
+        const mapping = mappings.get(String(storeType.id).toLowerCase());
+        return {
+          ...storeType,
+          mapped: Boolean(mapping),
+          checked: Boolean(mapping),
+          mappingId: mapping?.id || null,
+          required: mapping?.required ?? false,
+        };
+      },
+    );
+    const unmappedOnly = query.unmappedOnly?.trim().toLowerCase() === 'true';
+    const visible = unmappedOnly
+      ? storeTypes.filter((storeType) => !storeType.mapped)
+      : storeTypes;
+    return { success: true, count: visible.length, storeTypes: visible };
+  }
+}
+
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/store-types/bulk',
+  'api/v1/role_templates/:roleTemplateId/store-types/bulk',
+])
+@UseGuards(RelationshipOwnerGuard)
+export class RoleTemplateStoreTypeBulkController {
+  constructor(
+    @Inject(RelationshipsRepository)
+    private readonly relationships: RelationshipsRepository,
+  ) {}
+
+  @Put()
+  replace(
+    @Param('roleTemplateId') roleTemplateId: string,
+    @Body() body: unknown,
+    @Req() request: RelationshipRequest,
+  ) {
+    return this.relationships.saveRoleTemplateStoreTypes(
+      roleTemplateStoreTypes,
+      { roleTemplateId },
+      body,
+      relationshipUserId(request),
+    );
+  }
+
+  @Post()
+  create(
+    @Param('roleTemplateId') roleTemplateId: string,
+    @Body() body: unknown,
+    @Req() request: RelationshipRequest,
+  ) {
+    return this.relationships.saveRoleTemplateStoreTypes(
+      roleTemplateStoreTypes,
+      { roleTemplateId },
+      body,
+      relationshipUserId(request),
+    );
+  }
+}
+
+@Controller([
+  'api/v1/role-templates/:roleTemplateId/features',
+  'api/v1/role_templates/:roleTemplateId/features',
+  'connector/api/v1/role-templates/:roleTemplateId/features',
+  'connector/api/v1/role_templates/:roleTemplateId/features',
+])
+@UseGuards(RelationshipOwnerGuard)
+export class RoleTemplateFeatureAccessController {
+  constructor(
+    @Inject(RelationshipsRepository)
+    private readonly relationships: RelationshipsRepository,
+  ) {}
+
+  @Get()
+  list(
+    @Param('roleTemplateId') roleTemplateId: string,
+    @Query() query: Record<string, string | string[]>,
+  ) {
+    return this.relationships.listRoleTemplateAccess(roleTemplateId, query);
+  }
+}

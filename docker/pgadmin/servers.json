@@ -5,7 +5,17 @@
       "Group": "Servers",
       "Host": "postgres",
       "Port": 5432,
-      "MaintenanceDB": "pinaka_commerce_hub",
+      "MaintenanceDB": "pinaka_commerce_hub_new",
+      "Username": "pdh_user",
+      "SSLMode": "prefer",
+      "PassFile": "/pgpass"
+    },
+    "2": {
+      "Name": "Pinaka PostgreSQL (Host)",
+      "Group": "Servers",
+      "Host": "host.docker.internal",
+      "Port": 5432,
+      "MaintenanceDB": "pinaka_commerce_hub_new",
       "Username": "pdh_user",
       "SSLMode": "prefer",
       "PassFile": "/pgpass"

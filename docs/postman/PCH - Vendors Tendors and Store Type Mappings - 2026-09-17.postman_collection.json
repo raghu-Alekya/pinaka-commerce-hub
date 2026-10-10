@@ -10,7 +10,7 @@
     "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
   },
   "variable": [
-    { "key": "masterBaseUrl", "value": "http://localhost:3003/api/v1" },
+    { "key": "masterBaseUrl", "value": "http://127.0.0.1:3003/api/v1" },
     { "key": "accessToken", "value": "" },
     { "key": "vendorId", "value": "" },
     { "key": "tendorId", "value": "" },
@@ -41,7 +41,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"vendorCode\": \"VEN_ORG_001\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"address\": \"Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
+              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"addressLine1\": \"Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{masterBaseUrl}}/vendors", "host": ["{{masterBaseUrl}}"], "path": ["vendors"] }
@@ -50,12 +50,21 @@
         },
         {
           "name": "Create supplier",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "if (pm.response.code === 200 || pm.response.code === 201) { const data = pm.response.json(); if (data.vendor && data.vendor.id) pm.collectionVariables.set('vendorId', data.vendor.id); }"
+              ]
+            }
+          }],
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"vendorName\": \"Fresh Farms Supply\",\n  \"vendorType\": \"SUPPLIER\",\n  \"vendorCode\": \"VEN_SUP_001\",\n  \"contactPerson\": \"Rahul\",\n  \"phone\": \"8888888888\",\n  \"email\": \"rahul@freshfarms.example\",\n  \"productCategory\": \"Produce\",\n  \"address\": \"Vijayawada\",\n  \"status\": \"ACTIVE\"\n}",
+              "raw": "{\n  \"vendorName\": \"Fresh Farms Supply\",\n  \"vendorType\": \"SUPPLIER\",\n  \"contactPerson\": \"Rahul\",\n  \"phone\": \"8888888888\",\n  \"email\": \"rahul@freshfarms.example\",\n  \"productCategory\": \"Produce\",\n  \"addressLine1\": \"Vijayawada\",\n  \"status\": \"ACTIVE\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{masterBaseUrl}}/vendors", "host": ["{{masterBaseUrl}}"], "path": ["vendors"] }
@@ -112,7 +121,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"vendorCode\": \"VEN_ORG_001\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"address\": \"Banjara Hills, Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
+              "raw": "{\n  \"vendorName\": \"Acme Events\",\n  \"vendorType\": \"ORGANIZER\",\n  \"contactPerson\": \"Priya Sharma\",\n  \"phone\": \"9999999999\",\n  \"email\": \"priya@acme.example\",\n  \"productCategory\": \"Events\",\n  \"addressLine1\": \"Banjara Hills, Hyderabad\",\n  \"status\": \"ACTIVE\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -142,7 +151,7 @@
           "response": []
         },
         {
-          "name": "Delete (soft)",
+          "name": "Delete",
           "request": {
             "method": "DELETE",
             "header": [],

@@ -1,72 +1,70 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { Audited, AuditColumns, RecordStatus, VendorType } from './commerce-enums';
+import { StoreTypeEntity } from './store-type.entity';
 
-export enum VendorType {
-  ORGANIZER = 'ORGANIZER',
-  SUPPLIER = 'SUPPLIER',
-}
-
-export enum VendorStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-}
+export { RecordStatus as VendorStatus, VendorType } from './commerce-enums';
 
 @Entity('vendors')
-@Index('vendors_vendor_code_active_uidx', ['vendorCode'], {
-  unique: true,
-  where: `"deletedAt" IS NULL AND "vendorCode" IS NOT NULL AND "vendorCode" <> ''`,
-})
-export class VendorEntity {
+@Audited()
+export class VendorEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 150 })
+  @Column({ name: 'vendor_code', type: 'varchar', length: 50, unique: true })
+  vendorCode!: string;
+
+  @Column({ name: 'vendor_name', type: 'varchar', length: 150 })
   vendorName!: string;
 
-  @Column({ type: 'varchar', length: 20 })
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt?: Date | null;
+
+  @Column({ name: 'vendor_type', type: 'enum', enum: VendorType, enumName: 'vendor_type' })
   vendorType!: VendorType;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  vendorCode?: string | null;
+  @Column({ name: 'store_type_id', type: 'uuid', nullable: true })
+  storeTypeId?: string | null;
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
+  @ManyToOne(() => StoreTypeEntity, { nullable: true })
+  @JoinColumn({ name: 'store_type_id' })
+  storeType?: StoreTypeEntity;
+
+  @Column({ name: 'contact_person', type: 'varchar', length: 150, nullable: true })
   contactPerson?: string | null;
 
-  @Column({ type: 'varchar', length: 30, nullable: true })
+  @Column({ name: 'phone', type: 'varchar', length: 30, nullable: true })
   phone?: string | null;
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
+  @Column({ name: 'email', type: 'varchar', length: 150, nullable: true })
   email?: string | null;
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
+  @Column({ name: 'product_category', type: 'varchar', length: 150, nullable: true })
   productCategory?: string | null;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Column({ name: 'address_line1', type: 'varchar', length: 255, nullable: true })
   addressLine1?: string | null;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Column({ name: 'address_line2', type: 'varchar', length: 255, nullable: true })
   addressLine2?: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
+  @Column({ name: 'city', type: 'varchar', length: 100, nullable: true })
   city?: string | null;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
+  @Column({ name: 'state', type: 'varchar', length: 50, nullable: true })
   state?: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
+  @Column({ name: 'zip_code', type: 'varchar', length: 20, nullable: true })
   zipCode?: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
+  @Column({ name: 'country', type: 'varchar', length: 100, nullable: true })
   country?: string | null;
 
-  @Column({ type: 'varchar', length: 20, default: VendorStatus.ACTIVE })
-  status!: VendorStatus;
-
-  @CreateDateColumn({ type: 'timestamptz' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updatedAt!: Date;
-
-  @DeleteDateColumn({ type: 'timestamptz', nullable: true })
-  deletedAt?: Date | null;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: RecordStatus,
+    enumName: 'record_status',
+    default: RecordStatus.ACTIVE,
+  })
+  status!: RecordStatus;
 }

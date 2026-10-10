@@ -1,39 +1,34 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
+import { StoreTypeEntity } from './store-type.entity';
 
-export enum TendorStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-}
-
+export { RecordStatus as TendorStatus } from './commerce-enums';
 
 @Entity('tendors')
-@Index('tendors_name_active_uidx', ['tendorName'], {
-  unique: true,
-  where: `"deletedAt" IS NULL`,
-})
-@Index('tendors_code_active_uidx', ['tendorCode'], {
-  unique: true,
-  where: `"deletedAt" IS NULL AND "tendorCode" IS NOT NULL AND "tendorCode" <> ''`,
-})
-export class TendorEntity {
+@Audited()
+export class TendorEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 50 })
+  @Column({ name: 'tendor_code', type: 'varchar', length: 50, unique: true })
   tendorCode!: string;
 
-  @Column({ type: 'varchar', length: 150 })
+  @Column({ name: 'tendor_name', type: 'varchar', length: 150 })
   tendorName!: string;
 
-  @Column({ type: 'varchar', length: 20, default: TendorStatus.ACTIVE })
-  status!: TendorStatus;
+  @Column({ name: 'store_type_id', type: 'uuid', nullable: true })
+  storeTypeId?: string | null;
 
-  @CreateDateColumn({ type: 'timestamptz' })
-  createdAt!: Date;
+  @ManyToOne(() => StoreTypeEntity, { nullable: true })
+  @JoinColumn({ name: 'store_type_id' })
+  storeType?: StoreTypeEntity;
 
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updatedAt!: Date;
-
-  @DeleteDateColumn({ type: 'timestamptz', nullable: true })
-  deletedAt?: Date | null;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: RecordStatus,
+    enumName: 'record_status',
+    default: RecordStatus.ACTIVE,
+  })
+  status!: RecordStatus;
 }
