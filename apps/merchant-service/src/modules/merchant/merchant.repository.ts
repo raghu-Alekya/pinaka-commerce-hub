@@ -128,6 +128,7 @@ import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/po
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { StoreEmployeeFastkeyEntity } from '../../pos/fastkeys/store-employee-fastkey.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
+import { ensureVendorStoreSchema } from '../dynamic-query/vendor-store.schema';
 import { ensureStorePosConfigurationSchema } from '../store-pos-configuration/store-pos-configuration.schema';
 import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
 import { ensureMerchantDevicesSchema } from '../device/device.schema';
@@ -750,13 +751,13 @@ export class MerchantRepository implements OnModuleInit {
     }
     await ensureMerchantDevicesSchema(this.dataSource);
     await ensureStoreDevicesSchema(this.dataSource);
+    await ensureVendorStoreSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
     await this.migrateEncryptedPinsToPlaintext();
     await this.ensureStoreCategoriesTable();
-    await this.ensureStoreProductsStoreIdUniqueIndex();
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
@@ -1472,6 +1473,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async createDevice(data: {
     id: string;
+    deviceId?: string;
     deviceName?: string;
     deviceCode?: string;
     deviceType?: string;
@@ -3070,6 +3072,54 @@ export class MerchantRepository implements OnModuleInit {
     return rows[0]?.payload ?? null;
   }
 
+  async searchStoreProducts(
+    storeId: string,
+    search: string,
+  ): Promise<unknown[] | null> {
+    const term = String(search ?? '').trim();
+    if (!term) return null;
+    const pattern = `%${term.replace(/[\\%_]/g, '\\$&')}%`;
+    let rows: Array<{ products?: unknown }> = [];
+    try {
+      rows = await this.dataSource.query(
+        `SELECT COALESCE(jsonb_agg(match.product), '[]'::jsonb) AS products
+         FROM (
+           SELECT product
+           FROM public.store_products AS catalog
+           CROSS JOIN LATERAL jsonb_array_elements(
+             CASE
+               WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+               ELSE '[]'::jsonb
+             END
+           ) AS product
+           WHERE catalog.store_id = $1::uuid
+             AND COALESCE(catalog.is_deleted, false) = false
+             AND (
+               COALESCE(product->>'name', '') ILIKE $2 ESCAPE '\\'
+               OR COALESCE(product->>'sku', '') ILIKE $2 ESCAPE '\\'
+               OR COALESCE(product->>'slug', '') ILIKE $2 ESCAPE '\\'
+             )
+           ORDER BY product->>'name'
+           LIMIT 50
+         ) AS match`,
+        [storeId, pattern],
+      );
+    } catch (error: unknown) {
+      const code =
+        error && typeof error === 'object'
+          ? (error as { code?: string; driverError?: { code?: string } }).code
+            ?? (error as { driverError?: { code?: string } }).driverError?.code
+          : undefined;
+      if (code === '42P01' || code === '42703') return null;
+      throw error;
+    }
+    const products = rows[0]?.products;
+    if (!Array.isArray(products) || products.length === 0) return null;
+    return products.map((product) =>
+      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+    );
+  }
+
   async getStoreProductsByCategoryId(
     storeId: string,
     categoryId: string,
@@ -3090,7 +3140,19 @@ export class MerchantRepository implements OnModuleInit {
          ) AS product
          WHERE catalog.store_id = $1::uuid
            AND COALESCE(catalog.is_deleted, false) = false
-           AND product->>'categoryId' = $2`,
+           AND (
+             product->>'categoryId' = $2
+             OR EXISTS (
+               SELECT 1
+               FROM jsonb_array_elements(
+                 CASE
+                   WHEN jsonb_typeof(product->'categories') = 'array' THEN product->'categories'
+                   ELSE '[]'::jsonb
+                 END
+               ) AS category
+               WHERE category->>'id' = $2
+             )
+           )`,
         [storeId, categoryKey],
       ),
       this.dataSource.query(
@@ -3121,30 +3183,117 @@ export class MerchantRepository implements OnModuleInit {
     if (!Array.isArray(products) || products.length === 0) return null;
     const category = this.asRecord(categoryRows[0]?.category);
     return products.map((product) =>
-      this.presentCategoryProduct(this.asRecord(product) ?? {}, category),
+      this.presentWooProduct(this.asRecord(product) ?? {}, category),
     );
   }
 
-  private presentCategoryProduct(
+  private presentWooProduct(
     product: Record<string, unknown>,
     category: Record<string, unknown> | null,
   ): Record<string, unknown> {
+    const value = (key: string): unknown =>
+      Object.prototype.hasOwnProperty.call(product, key) && product[key] !== undefined
+        ? product[key]
+        : null;
+    const dimensions = this.asRecord(product.dimensions);
     return {
       id: this.numberOrNull(product.id),
-      name: this.textOrNull(product.name),
-      sku: this.textOrNull(product.sku),
-      price: this.textOrNull(product.price),
-      regular_price: this.textOrNull(product.regular_price),
-      sale_price: this.textOrNull(product.sale_price),
+      name: value('name'),
+      slug: value('slug'),
+      permalink: value('permalink'),
+      date_created: value('date_created'),
+      date_created_gmt: value('date_created_gmt'),
+      date_modified: value('date_modified'),
+      date_modified_gmt: value('date_modified_gmt'),
+      type: value('type'),
+      status: value('status'),
+      featured: value('featured'),
+      catalog_visibility: value('catalog_visibility'),
+      description: value('description'),
+      short_description: value('short_description'),
+      sku: value('sku'),
+      price: value('price'),
+      regular_price: value('regular_price'),
+      sale_price: value('sale_price'),
+      date_on_sale_from: value('date_on_sale_from'),
+      date_on_sale_from_gmt: value('date_on_sale_from_gmt'),
+      date_on_sale_to: value('date_on_sale_to'),
+      date_on_sale_to_gmt: value('date_on_sale_to_gmt'),
+      on_sale: value('on_sale'),
+      purchasable: value('purchasable'),
+      total_sales: value('total_sales'),
+      virtual: value('virtual'),
+      downloadable: value('downloadable'),
+      downloads: value('downloads'),
+      download_limit: value('download_limit'),
+      download_expiry: value('download_expiry'),
+      external_url: value('external_url'),
+      button_text: value('button_text'),
+      tax_status: value('tax_status'),
+      tax_class: value('tax_class'),
+      manage_stock: value('manage_stock'),
+      stock_quantity: value('stock_quantity'),
+      backorders: value('backorders'),
+      backorders_allowed: value('backorders_allowed'),
+      backordered: value('backordered'),
+      low_stock_amount: value('low_stock_amount'),
+      sold_individually: value('sold_individually'),
+      weight: value('weight'),
+      dimensions: dimensions
+        ? {
+            length: dimensions.length ?? null,
+            width: dimensions.width ?? null,
+            height: dimensions.height ?? null,
+          }
+        : null,
+      shipping_required: value('shipping_required'),
+      shipping_taxable: value('shipping_taxable'),
+      shipping_class: value('shipping_class'),
+      shipping_class_id: value('shipping_class_id'),
+      reviews_allowed: value('reviews_allowed'),
+      average_rating: value('average_rating'),
+      rating_count: value('rating_count'),
+      upsell_ids: value('upsell_ids'),
+      cross_sell_ids: value('cross_sell_ids'),
+      parent_id: value('parent_id'),
+      purchase_note: value('purchase_note'),
       categories: this.productCategories(product, category),
-      tags: Array.isArray(product.tags) ? product.tags : null,
-      images: Array.isArray(product.images) ? product.images : null,
-      attributes: this.productAttributes(product.attributes),
-      meta_data: this.productMetaData(product.meta_data),
-      variations: this.productVariations(product.variations),
-      type: this.textOrNull(product.type),
-      tax: this.productTax(product.tax),
+      brands: value('brands'),
+      tags: value('tags'),
+      images: this.productImages(product),
+      attributes: value('attributes'),
+      default_attributes: value('default_attributes'),
+      variations: value('variations'),
+      grouped_products: value('grouped_products'),
+      menu_order: value('menu_order'),
+      price_html: value('price_html'),
+      related_ids: value('related_ids'),
+      meta_data: value('meta_data'),
+      stock_status: value('stock_status'),
+      has_options: value('has_options'),
+      post_password: value('post_password'),
+      global_unique_id: value('global_unique_id'),
+      _links: value('_links'),
     };
+  }
+
+  private productImages(product: Record<string, unknown>): unknown {
+    if (Array.isArray(product.images)) return product.images;
+    const src = this.textOrNull(product.image);
+    if (!src) return null;
+    return [{
+      id: null,
+      date_created: null,
+      date_created_gmt: null,
+      date_modified: null,
+      date_modified_gmt: null,
+      src,
+      name: null,
+      alt: null,
+      srcset: null,
+      sizes: null,
+      thumbnail: null,
+    }];
   }
 
   private productCategories(
@@ -3167,67 +3316,6 @@ export class MerchantRepository implements OnModuleInit {
     const slug = this.textOrNull(category?.slug);
     if (id === null && name === null && slug === null) return null;
     return [{ name, slug, id }];
-  }
-
-  private productAttributes(value: unknown): Array<Record<string, unknown>> | null {
-    if (!Array.isArray(value) || value.length === 0) return null;
-    return value
-      .map((item) => this.asRecord(item))
-      .filter((item): item is Record<string, unknown> => item !== null)
-      .map((item) => ({
-        name: this.textOrNull(item.name),
-        values: Array.isArray(item.values) ? item.values : null,
-        visible: typeof item.visible === 'boolean' ? item.visible : null,
-        variation: typeof item.variation === 'boolean' ? item.variation : null,
-      }));
-  }
-
-  private productMetaData(value: unknown): Array<Record<string, unknown>> | null {
-    if (!Array.isArray(value) || value.length === 0) return null;
-    return value
-      .map((item) => this.asRecord(item))
-      .filter((item): item is Record<string, unknown> => item !== null)
-      .map((item) => ({
-        id: this.numberOrNull(item.id),
-        key: this.textOrNull(item.key),
-        value: item.value === undefined || item.value === '' ? null : item.value,
-      }));
-  }
-
-  private productVariations(value: unknown): number[] | null {
-    if (!Array.isArray(value) || value.length === 0) return null;
-    const ids = value
-      .map((item) => this.numberOrNull(this.asRecord(item)?.id ?? item))
-      .filter((item): item is number => item !== null);
-    return ids.length > 0 ? ids : null;
-  }
-
-  private productTax(value: unknown): Record<string, unknown> | null {
-    const tax = this.asRecord(value);
-    if (!tax) return null;
-    const rates = Array.isArray(tax.tax_rates)
-      ? tax.tax_rates
-          .map((item) => this.asRecord(item))
-          .filter((item): item is Record<string, unknown> => item !== null)
-          .map((item) => ({
-            id: this.textOrNull(item.id),
-            label: this.textOrNull(item.label),
-            rate: this.numberOrNull(item.rate),
-            compound: typeof item.compound === 'boolean' ? item.compound : null,
-            shipping: typeof item.shipping === 'boolean' ? item.shipping : null,
-            priority: this.textOrNull(item.priority),
-            country: this.textOrNull(item.country),
-            state: this.textOrNull(item.state),
-            postcode: this.textOrNull(item.postcode),
-            city: this.textOrNull(item.city),
-          }))
-      : null;
-    return {
-      taxable: typeof tax.taxable === 'boolean' ? tax.taxable : null,
-      tax_class: this.textOrNull(tax.tax_class),
-      tax_status: this.textOrNull(tax.tax_status),
-      tax_rates: rates && rates.length > 0 ? rates : null,
-    };
   }
 
   private asRecord(value: unknown): Record<string, unknown> | null {
