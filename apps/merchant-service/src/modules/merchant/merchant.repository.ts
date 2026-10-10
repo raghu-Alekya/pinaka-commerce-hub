@@ -750,6 +750,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
+    await this.migrateEncryptedPinsToPlaintext();
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
@@ -1808,7 +1809,7 @@ export class MerchantRepository implements OnModuleInit {
       merchantId,
       storeId,
     );
-    return this.dataSource.query(
+    const rows = await this.dataSource.query(
       `SELECT e.id AS "employeeId",
               e.employee_code AS "employeeCode",
               e.first_name AS "firstName",
@@ -1822,6 +1823,7 @@ export class MerchantRepository implements OnModuleInit {
               es.store_id AS "storeId",
               es.status AS "assignmentStatus",
               (es.login_pin_hash IS NOT NULL) AS "pinSet",
+              es.login_pin AS "loginPin",
               r.id AS "roleId",
               r.name AS "roleName",
               r.source_role_template_id AS "roleTemplateId"
@@ -1839,21 +1841,22 @@ export class MerchantRepository implements OnModuleInit {
        ORDER BY e.first_name ASC, e.last_name ASC`,
       [merchantUuid, storeUuid],
     );
+    return rows;
   }
 
   async saveStoreEmployees(
     merchantId: string,
     storeId: string,
     employees: Array<{
-      employeeId: string;
-      roleTemplateId?: string;
-      loginPin?: string;
+      employee_id: string;
+      role_template_id?: string;
+      login_pin?: string;
     }> = [],
   ): Promise<void> {
     const { merchantCode, merchantUuid, storeUuid } =
       await this.requireStoreRecord(merchantId, storeId);
     const pins = employees
-      .map((item) => item.loginPin)
+      .map((item) => item.login_pin)
       .filter((pin): pin is string => Boolean(pin));
     if (new Set(pins).size !== pins.length)
       throw new ConflictException(
@@ -1865,41 +1868,47 @@ export class MerchantRepository implements OnModuleInit {
         `SELECT id FROM public.employees
          WHERE merchant_id = $2::uuid AND (id::text = $1 OR employee_code = $1)
          LIMIT 1`,
-        [item.employeeId, merchantUuid],
+        [item.employee_id, merchantUuid],
       );
       if (!employee)
         throw new BadRequestException(
-          `Employee '${item.employeeId}' does not belong to this merchant`,
+          `Employee '${item.employee_id}' does not belong to this merchant`,
         );
       keepIds.push(employee.id);
-      if (item.loginPin)
+      if (item.login_pin)
         await this.assertUniqueStoreLoginPin(
           storeUuid,
           employee.id,
-          item.loginPin,
+          item.login_pin,
         );
+      if (item.login_pin)
+        await this.updateEmployeeMasterPin(employee.id, item.login_pin);
       const [existing] = await this.dataSource.query(
-        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
+        `SELECT id, login_pin_hash AS "loginPinHash",
+                login_pin AS "loginPin" FROM public.employee_stores
          WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3 LIMIT 1`,
         [merchantUuid, employee.id, storeUuid],
       );
-      const pinHash = item.loginPin
-        ? this.hashEmployeePin(item.loginPin)
+      const pinHash = item.login_pin
+        ? this.hashEmployeePin(item.login_pin)
         : existing?.loginPinHash || null;
+      const pinValue = item.login_pin || existing?.loginPin || null;
       let assignmentId = existing?.id as string | undefined;
       if (existing) {
         await this.dataSource.query(
           `UPDATE public.employee_stores
-           SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+           SET login_pin_hash = $2, login_pin = $3,
+               status = 'ACTIVE', updated_at = now()
            WHERE id = $1`,
-          [existing.id, pinHash],
+          [existing.id, pinHash, pinValue],
         );
       } else {
         assignmentId = this.returningRow<{ id: string }>(
           await this.dataSource.query(
-            `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
-           VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
-            [merchantUuid, employee.id, storeUuid, pinHash],
+            `INSERT INTO public.employee_stores
+               (merchant_id, employee_id, store_id, is_primary, login_pin_hash, login_pin, status)
+           VALUES ($1, $2::uuid, $3, false, $4, $5, 'ACTIVE') RETURNING id`,
+            [merchantUuid, employee.id, storeUuid, pinHash, pinValue],
           ),
         ).id;
       }
@@ -1911,16 +1920,16 @@ export class MerchantRepository implements OnModuleInit {
         `DELETE FROM public.employee_store_roles WHERE employee_store_id = $1`,
         [assignmentId],
       );
-      if (!item.roleTemplateId) continue;
+      if (!item.role_template_id) continue;
       const [role] = await this.dataSource.query(
         `SELECT id FROM public.roles
          WHERE source_role_template_id = $1::uuid AND status = 'ACTIVE' AND merchant_id::text = $2
          LIMIT 1`,
-        [item.roleTemplateId, merchantCode],
+        [item.role_template_id, merchantCode],
       );
       if (!role)
         throw new BadRequestException(
-          `Role template '${item.roleTemplateId}' is not available for this merchant`,
+          `Role template '${item.role_template_id}' is not available for this merchant`,
         );
       await this.dataSource.query(
         `INSERT INTO public.employee_store_roles (merchant_id, store_id, employee_store_id, role_id, status)
@@ -1975,6 +1984,7 @@ export class MerchantRepository implements OnModuleInit {
         `Employee '${employeeId}' not found for merchant '${merchantId}'`,
       );
     await this.assertUniqueStoreLoginPin(storeUuid, employee.id, loginPin);
+    await this.updateEmployeeMasterPin(employee.id, loginPin);
     let assignment = (
       await this.dataSource.query(
         `SELECT id FROM public.employee_stores
@@ -1986,22 +1996,25 @@ export class MerchantRepository implements OnModuleInit {
     if (!assignment) {
       assignment = this.returningRow(
         await this.dataSource.query(
-          `INSERT INTO public.employee_stores (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
-         VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
+        `INSERT INTO public.employee_stores
+           (merchant_id, employee_id, store_id, is_primary, login_pin_hash, login_pin, status)
+         VALUES ($1, $2::uuid, $3, false, $4, $5, 'ACTIVE') RETURNING id`,
           [
             merchantUuid,
             employee.id,
             storeUuid,
             this.hashEmployeePin(loginPin),
+            loginPin,
           ],
         ),
       );
     } else {
       await this.dataSource.query(
         `UPDATE public.employee_stores
-         SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+         SET login_pin_hash = $2, login_pin = $3,
+             status = 'ACTIVE', updated_at = now()
          WHERE id = $1`,
-        [assignment.id, this.hashEmployeePin(loginPin)],
+        [assignment.id, this.hashEmployeePin(loginPin), loginPin],
       );
     }
     const employees = await this.listStoreEmployees(merchantId, storeId);
@@ -2031,7 +2044,8 @@ export class MerchantRepository implements OnModuleInit {
 
     let assignment = (
       await this.dataSource.query(
-        `SELECT id, login_pin_hash AS "loginPinHash" FROM public.employee_stores
+        `SELECT id, login_pin_hash AS "loginPinHash",
+                login_pin AS "loginPin" FROM public.employee_stores
          WHERE merchant_id = $1 AND employee_id = $2::uuid AND store_id = $3
          LIMIT 1`,
         [merchantUuid, employee.id, storeUuid],
@@ -2045,6 +2059,7 @@ export class MerchantRepository implements OnModuleInit {
         employee.id,
         fields.login_pin,
       );
+      await this.updateEmployeeMasterPin(employee.id, fields.login_pin);
     }
 
     let roleId: string | undefined;
@@ -2066,21 +2081,25 @@ export class MerchantRepository implements OnModuleInit {
     const pinHash = fields.login_pin === undefined
       ? assignment?.loginPinHash || null
       : this.hashEmployeePin(fields.login_pin);
+    const pinValue = fields.login_pin === undefined
+      ? assignment?.loginPin || null
+      : fields.login_pin;
     if (!assignment) {
       assignment = this.returningRow(
         await this.dataSource.query(
           `INSERT INTO public.employee_stores
-             (merchant_id, employee_id, store_id, is_primary, login_pin_hash, status)
-           VALUES ($1, $2::uuid, $3, false, $4, 'ACTIVE') RETURNING id`,
-          [merchantUuid, employee.id, storeUuid, pinHash],
+             (merchant_id, employee_id, store_id, is_primary, login_pin_hash, login_pin, status)
+           VALUES ($1, $2::uuid, $3, false, $4, $5, 'ACTIVE') RETURNING id`,
+          [merchantUuid, employee.id, storeUuid, pinHash, pinValue],
         ),
       );
     } else {
       await this.dataSource.query(
         `UPDATE public.employee_stores
-         SET login_pin_hash = $2, status = 'ACTIVE', updated_at = now()
+         SET login_pin_hash = $2, login_pin = $3,
+             status = 'ACTIVE', updated_at = now()
          WHERE id = $1`,
-        [assignment.id, pinHash],
+        [assignment.id, pinHash, pinValue],
       );
     }
 
@@ -5247,7 +5266,8 @@ export class MerchantRepository implements OnModuleInit {
   ): Promise<Record<string, unknown>> {
     // Read every table column, including nullable values, without returning credential hashes.
     const [row] = await this.dataSource.query(
-      `SELECT to_jsonb(e) - 'login_pin_hash' - 'password_hash' AS details
+      `SELECT to_jsonb(e) - 'login_pin_hash' - 'password_hash' AS details,
+              (e.login_pin_hash IS NOT NULL) AS "pinSet"
        FROM public.employees e WHERE e.id=$1::uuid`,
       [employee.id],
     );
@@ -5257,6 +5277,11 @@ export class MerchantRepository implements OnModuleInit {
         value,
       ]),
     );
+    const createdAt = Date.parse(String(details.createdAt ?? ''));
+    const updatedAt = Date.parse(String(details.updatedAt ?? ''));
+    if (Number.isFinite(createdAt) && Number.isFinite(updatedAt) && updatedAt <= createdAt) {
+      delete details.updatedAt;
+    }
     const users = employee.userId
       ? await this.dataSource.query(
           'SELECT username FROM public.users WHERE id=$1',
@@ -5268,8 +5293,23 @@ export class MerchantRepository implements OnModuleInit {
        FROM public.merchants WHERE id=$1::uuid`,
       [employee.merchantId],
     );
+    const assignmentRows = await this.dataSource.query(
+      `SELECT es.store_id::text AS "storeId",
+              COALESCE(to_jsonb(s)->>'store_name', to_jsonb(s)->>'storeName', to_jsonb(s)->>'name') AS "storeName",
+              es.status AS "assignmentStatus",
+              (es.login_pin_hash IS NOT NULL) AS "pinSet",
+              es.login_pin AS "loginPin"
+       FROM public.employee_stores es
+       LEFT JOIN public.stores s ON s.id::text = es.store_id::text
+       WHERE es.merchant_id::text = $1::text AND es.employee_id = $2::uuid
+       ORDER BY es.created_at ASC`,
+      [employee.merchantId, employee.id],
+    );
+    const storeAssignments = assignmentRows;
     return {
       ...details,
+      pinSet: Boolean(row?.pinSet),
+      storeAssignments,
       merchantCode: merchants[0]?.merchantCode || null,
       merchantName: merchants[0]?.merchantName || null,
       username: details.username ?? users[0]?.username ?? null,
@@ -5356,6 +5396,7 @@ export class MerchantRepository implements OnModuleInit {
             loginPinHash: dto.loginPin
               ? this.hashEmployeePin(dto.loginPin)
               : null,
+            loginPin: dto.loginPin || null,
             sendCredentials: dto.sendCredentials ?? true,
             status: dto.status || EmployeeStatus.ACTIVE,
           }),
@@ -5389,6 +5430,7 @@ export class MerchantRepository implements OnModuleInit {
             dto.merchantId!,
             employee.id,
             dto.storeAssignments,
+            dto.loginPin,
           );
         }
         return employee;
@@ -5441,6 +5483,8 @@ export class MerchantRepository implements OnModuleInit {
       existing.loginPinHash = dto.loginPin
         ? this.hashEmployeePin(dto.loginPin)
         : null;
+    if (dto.loginPin !== undefined)
+      existing.loginPin = dto.loginPin || null;
     if (dto.temporaryPassword !== undefined) existing.passwordHash = null;
     if (dto.sendCredentials !== undefined)
       existing.sendCredentials = dto.sendCredentials;
@@ -5489,6 +5533,13 @@ export class MerchantRepository implements OnModuleInit {
           saved.merchantId,
           saved.id,
           dto.storeAssignments,
+          dto.loginPin,
+        );
+      } else if (dto.loginPin !== undefined) {
+        await this.syncEmployeePinToAssignmentsWithManager(
+          manager,
+          saved.id,
+          dto.loginPin || null,
         );
       }
       return saved;
@@ -5596,15 +5647,76 @@ export class MerchantRepository implements OnModuleInit {
     // Codes are globally unique; keep the lock until the employee transaction commits.
     await manager.query('SELECT pg_advisory_xact_lock(724621, 43)');
     const [row] = await manager.query(
-      `SELECT COALESCE(MAX(employee_code::numeric), 0)::text AS last_code
-       FROM public.employees WHERE employee_code ~ '^[0-9]+$'`,
+      `SELECT COALESCE(MAX(CASE WHEN employee_code ~ '^EMP-[0-9]+$' THEN substring(employee_code from 5)::numeric WHEN employee_code ~ '^[0-9]+$' THEN employee_code::numeric END), 0)::text AS last_code
+       FROM public.employees WHERE employee_code ~ '^[0-9]+$' OR employee_code ~ '^EMP-[0-9]+$'`,
     );
-    return (BigInt(row.last_code) + 1n).toString().padStart(6, '0');
+    return `EMP-${(BigInt(row.last_code) + 1n).toString().padStart(5, '0')}`;
   }
 
   private hashEmployeePin(value: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
     return `${salt}:${crypto.scryptSync(value, salt, 32).toString('hex')}`;
+  }
+
+  private async migrateEncryptedPinsToPlaintext(): Promise<void> {
+    for (const table of ['employees', 'employee_stores']) {
+      const columns = await this.dataSource.query(
+        `SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+           AND column_name = 'login_pin_encrypted'`,
+        [table],
+      );
+      if (!columns.length) continue;
+
+      const encryptedRows = await this.dataSource.query(
+        `SELECT id, login_pin_encrypted AS value FROM public.${table}
+         WHERE login_pin_encrypted IS NOT NULL AND login_pin IS NULL`,
+      );
+      for (const row of encryptedRows) {
+        const loginPin = this.decryptEmployeePin(String(row.value));
+        await this.dataSource.query(
+          `UPDATE public.${table} SET login_pin = $2 WHERE id = $1 AND login_pin IS NULL`,
+          [row.id, loginPin],
+        );
+      }
+      await this.dataSource.query(
+        `ALTER TABLE public.${table} DROP COLUMN IF EXISTS login_pin_encrypted`,
+      );
+    }
+  }
+
+  private employeePinEncryptionKey(): Buffer {
+    const keyValue = process.env.STORE_CONFIG_ENCRYPTION_KEY;
+    const key = keyValue
+      ? Buffer.from(keyValue, 'base64')
+      : crypto.createHash('sha256').update(
+          process.env.AUTH_JWT_SECRET || 'pdh-local-development-secret-change-me',
+        ).digest();
+    if (key.length !== 32)
+      throw new InternalServerErrorException(
+        'STORE_CONFIG_ENCRYPTION_KEY must be a base64-encoded 32-byte key',
+      );
+    return key;
+  }
+
+  private decryptEmployeePin(value: string): string {
+    const [version, ivPart, ciphertextPart, tagPart] = value.split(':');
+    if (version !== 'v1' || !ivPart || !ciphertextPart || !tagPart)
+      throw new InternalServerErrorException('Stored employee PIN cannot be decrypted');
+    try {
+      const decipher = crypto.createDecipheriv(
+        'aes-256-gcm',
+        this.employeePinEncryptionKey(),
+        Buffer.from(ivPart, 'base64url'),
+      );
+      decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+      return Buffer.concat([
+        decipher.update(Buffer.from(ciphertextPart, 'base64url')),
+        decipher.final(),
+      ]).toString('utf8');
+    } catch {
+      throw new InternalServerErrorException('Stored employee PIN cannot be decrypted');
+    }
   }
 
   private returningRow<T>(result: T[] | [T[], number]): T {
@@ -5632,19 +5744,32 @@ export class MerchantRepository implements OnModuleInit {
     );
   }
 
+  private async updateEmployeeMasterPin(employeeId: string, loginPin: string) {
+    await this.dataSource.query(
+      `UPDATE public.employees
+       SET login_pin = $2, login_pin_hash = $3, updated_at = now()
+       WHERE id = $1::uuid`,
+      [employeeId, loginPin, this.hashEmployeePin(loginPin)],
+    );
+  }
+
   private async assertUniqueStoreLoginPin(
     storeUuid: string,
     employeeId: string,
     pin: string,
   ) {
     const rows = await this.dataSource.query(
-      `SELECT employee_id AS "employeeId", login_pin_hash AS hash
-       FROM public.employee_stores
-       WHERE store_id = $1 AND login_pin_hash IS NOT NULL AND employee_id <> $2::uuid`,
+      `SELECT es.employee_id AS "employeeId",
+              es.login_pin_hash AS hash,
+              COALESCE(es.login_pin, e.login_pin) AS pin
+       FROM public.employee_stores es
+       JOIN public.employees e ON e.id = es.employee_id
+       WHERE es.store_id = $1 AND es.employee_id <> $2::uuid
+         AND (es.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL OR e.login_pin IS NOT NULL)`,
       [storeUuid, employeeId],
     );
     for (const row of rows) {
-      if (this.matchesEmployeePin(pin, row.hash)) {
+      if (row.pin === pin || (row.hash && this.matchesEmployeePin(pin, row.hash))) {
         throw new ConflictException(
           'This login PIN is already assigned to another employee in this store',
         );
@@ -5662,6 +5787,7 @@ export class MerchantRepository implements OnModuleInit {
     merchantId: string,
     employeeId: string,
     assignments?: Array<{ store: string; roles?: string[]; loginPin?: string }>,
+    defaultLoginPin?: string,
   ): Promise<void> {
     const merchants = await manager.query(
       'SELECT m.id,m.merchant_id AS "merchantCode" FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
@@ -5689,23 +5815,43 @@ export class MerchantRepository implements OnModuleInit {
         );
       keepStoreIds.push(stores[0].id);
       const existing = await manager.query(
-        `SELECT id,login_pin_hash AS "loginPinHash" FROM public.employee_stores
+        `SELECT id,login_pin_hash AS "loginPinHash",
+                login_pin AS "loginPin" FROM public.employee_stores
            WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id=$3::uuid LIMIT 1`,
         [merchantUuid, employeeId, stores[0].id],
       );
-      const pinHash = assignment.loginPin
-        ? this.hashEmployeePin(assignment.loginPin)
+      const assignedPin = assignment.loginPin ?? defaultLoginPin;
+      if (assignedPin)
+        await this.assertUniqueStoreLoginPinWithManager(
+          manager,
+          stores[0].id,
+          employeeId,
+          assignedPin,
+        );
+      const pinHash = assignedPin
+        ? this.hashEmployeePin(assignedPin)
         : existing[0]?.loginPinHash || null;
+      const pinValue = assignedPin ?? existing[0]?.loginPin ?? null;
+      if (assignedPin) {
+        await manager.query(
+          `UPDATE public.employees
+           SET login_pin = $2, login_pin_hash = $3, updated_at = now()
+           WHERE id = $1::uuid`,
+          [employeeId, assignedPin, this.hashEmployeePin(assignedPin)],
+        );
+      }
       const upserted = existing[0]
         ? await manager.query(
-            `UPDATE public.employee_stores SET is_primary=$2, login_pin_hash=$3, updated_at=now()
+            `UPDATE public.employee_stores
+             SET is_primary=$2, login_pin_hash=$3, login_pin=$4, updated_at=now()
              WHERE id=$1 RETURNING id`,
-            [existing[0].id, index === 0, pinHash],
+            [existing[0].id, index === 0, pinHash, pinValue],
           )
         : await manager.query(
-            `INSERT INTO public.employee_stores(merchant_id,employee_id,store_id,is_primary,login_pin_hash)
-             VALUES($1,$2,$3,$4,$5) RETURNING id`,
-            [merchantUuid, employeeId, stores[0].id, index === 0, pinHash],
+            `INSERT INTO public.employee_stores
+               (merchant_id,employee_id,store_id,is_primary,login_pin_hash,login_pin)
+             VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+            [merchantUuid, employeeId, stores[0].id, index === 0, pinHash, pinValue],
           );
       await manager.query(
         'DELETE FROM public.employee_store_roles WHERE merchant_id=$1::uuid AND employee_store_id=$2',
@@ -5748,6 +5894,63 @@ export class MerchantRepository implements OnModuleInit {
       await manager.query(
         `DELETE FROM public.employee_stores WHERE merchant_id=$1::uuid AND employee_id=$2 AND store_id <> ALL($3::uuid[])`,
         [merchantUuid, employeeId, keepStoreIds],
+      );
+    }
+  }
+
+  private async syncEmployeePinToAssignmentsWithManager(
+    manager: EntityManager,
+    employeeId: string,
+    loginPin: string | null,
+  ): Promise<void> {
+    const assignments = await manager.query(
+      `SELECT id, store_id AS "storeId"
+       FROM public.employee_stores
+       WHERE employee_id = $1::uuid`,
+      [employeeId],
+    );
+    for (const assignment of assignments) {
+      if (loginPin) {
+        await this.assertUniqueStoreLoginPinWithManager(
+          manager,
+          assignment.storeId,
+          employeeId,
+          loginPin,
+        );
+      }
+      await manager.query(
+        `UPDATE public.employee_stores
+         SET login_pin = $2, login_pin_hash = $3, updated_at = now()
+         WHERE id = $1::uuid`,
+        [
+          assignment.id,
+          loginPin,
+          loginPin ? this.hashEmployeePin(loginPin) : null,
+        ],
+      );
+    }
+  }
+
+  private async assertUniqueStoreLoginPinWithManager(
+    manager: EntityManager,
+    storeId: string,
+    employeeId: string,
+    loginPin: string,
+  ): Promise<void> {
+    const rows = await manager.query(
+      `SELECT es.login_pin_hash AS hash,
+              COALESCE(es.login_pin, e.login_pin) AS pin
+       FROM public.employee_stores es
+       JOIN public.employees e ON e.id = es.employee_id
+       WHERE es.store_id = $1::uuid AND es.employee_id <> $2::uuid
+         AND (es.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL OR e.login_pin IS NOT NULL)`,
+      [storeId, employeeId],
+    );
+    if (rows.some((row: { hash: string | null; pin: string | null }) =>
+      row.pin === loginPin || (row.hash && this.matchesEmployeePin(loginPin, row.hash)),
+    )) {
+      throw new ConflictException(
+        'This login PIN is already assigned to another employee in this store',
       );
     }
   }

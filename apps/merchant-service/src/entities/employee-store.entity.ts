@@ -21,6 +21,9 @@ export class EmployeeStoreEntity {
   @Column({ name: 'login_pin_hash', type: 'varchar', length: 128, nullable: true, select: false })
   loginPinHash?: string | null;
 
+  @Column({ name: 'login_pin', type: 'varchar', length: 6, nullable: true })
+  loginPin?: string | null;
+
   @Column({ name: 'status', type: 'varchar', length: 30, default: 'ACTIVE' })
   status!: string;
 

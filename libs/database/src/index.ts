@@ -637,9 +637,9 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       "postalCode" = postal_code,
       "firstName" = first_name,
       "lastName" = last_name,
-      "createdAt" = created_at,
-      "updatedAt" = updated_at,
-      "createdDate" = created_at;
+      "createdAt" = NULLIF(created_at::text, '')::timestamptz,
+      "updatedAt" = NULLIF(updated_at::text, '')::timestamptz,
+      "createdDate" = NULLIF(created_at::text, '')::timestamptz;
     CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
     BEGIN
       NEW.merchant_code := COALESCE(NULLIF(NEW.merchant_code, ''), NULLIF(NEW."merchantCode", ''), 'MCH-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8));
@@ -662,9 +662,9 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       NEW."firstName" := COALESCE(NEW."firstName", NEW.first_name);
       NEW.last_name := COALESCE(NEW.last_name, NEW."lastName");
       NEW."lastName" := COALESCE(NEW."lastName", NEW.last_name);
-      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
-      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
-      NEW."createdDate" := COALESCE(NEW."createdDate", NEW.created_at, now());
+      NEW."createdAt" := COALESCE(NEW."createdAt", NULLIF(NEW.created_at::text, '')::timestamptz, now());
+      NEW."updatedAt" := COALESCE(NEW."updatedAt", NULLIF(NEW.updated_at::text, '')::timestamptz, now());
+      NEW."createdDate" := COALESCE(NEW."createdDate", NULLIF(NEW.created_at::text, '')::timestamptz, now());
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
@@ -817,8 +817,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       NEW."renewalDate" := COALESCE(NEW."renewalDate", NEW.renewal_date);
       NEW.trial_end_date := COALESCE(NEW.trial_end_date, NEW."trialEndDate");
       NEW."trialEndDate" := COALESCE(NEW."trialEndDate", NEW.trial_end_date);
-      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
-      NEW."updatedAt" := COALESCE(NEW."updatedAt", NEW.updated_at, now());
+      NEW."createdAt" := COALESCE(NEW."createdAt", NULLIF(NEW.created_at::text, '')::timestamptz, now());
+      NEW."updatedAt" := COALESCE(NEW."updatedAt", NULLIF(NEW.updated_at::text, '')::timestamptz, now());
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
@@ -831,8 +831,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       "startDate" = COALESCE(s."startDate", s.start_date),
       "renewalDate" = COALESCE(s."renewalDate", s.renewal_date),
       "trialEndDate" = COALESCE(s."trialEndDate", s.trial_end_date),
-      "createdAt" = s.created_at,
-      "updatedAt" = s.updated_at;
+      "createdAt" = NULLIF(s.created_at::text, '')::timestamptz,
+      "updatedAt" = NULLIF(s.updated_at::text, '')::timestamptz;
     UPDATE public.subscriptions s SET "merchantId" = COALESCE(to_jsonb(m)->>'merchant_id', to_jsonb(m)->>'merchantId')
       FROM public.merchants m WHERE s.merchant_id::text = m.id::text;
   `);
@@ -929,7 +929,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       NEW.merchant_name := COALESCE(NULLIF(NEW.merchant_name, ''), NULLIF(NEW."merchantName", ''));
       NEW."merchantName" := COALESCE(NULLIF(NEW."merchantName", ''), NEW.merchant_name);
       NEW."merchantId" := COALESCE(NEW.merchant_id::text, NEW."merchantId");
-      NEW."createdAt" := COALESCE(NEW."createdAt", NEW.created_at, now());
+      NEW."createdAt" := COALESCE(NEW."createdAt", NULLIF(NEW.created_at::text, '')::timestamptz, now());
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
