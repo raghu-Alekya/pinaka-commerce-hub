@@ -10,6 +10,7 @@ export class DeviceRepository {
 
   async createDeviceWithMerchantMapping(data: {
     id: string;
+    deviceId?: string;
     deviceName?: string;
     deviceCode?: string;
     deviceType: string;
@@ -22,11 +23,21 @@ export class DeviceRepository {
   }): Promise<DeviceEntity> {
     try {
       return await this.merchants.requireDataSource().transaction(async manager => {
+        // Serialize code allocation so concurrent creates cannot choose the same code.
+        await manager.query('SELECT pg_advisory_xact_lock(724621, 56)');
+        const rows: Array<{ maxCode: string | null }> = await manager.query(`
+          SELECT MAX(substring(device_code FROM '^DVC-([0-9]+)$')::bigint)::text AS "maxCode"
+          FROM public.devices
+          WHERE device_code ~ '^DVC-[0-9]+$'
+        `);
+        const nextCode = Number(rows[0]?.maxCode ?? 0) + 1;
+        const deviceCode = `DVC-${String(nextCode).padStart(5, '0')}`;
         const deviceRepository = manager.getRepository(DeviceEntity);
         const device = await deviceRepository.save(deviceRepository.create({
           id: data.id,
+          deviceId: data.deviceId,
           deviceName: data.deviceName || 'Unnamed device',
-          deviceCode: data.deviceCode || `DEV-${data.id.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+          deviceCode,
           deviceType: data.deviceType,
           merchantId: data.merchantId,
           merchantName: data.merchantName || data.merchantId,
