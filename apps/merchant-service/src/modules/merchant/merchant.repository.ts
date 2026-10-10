@@ -3068,6 +3068,183 @@ export class MerchantRepository implements OnModuleInit {
     return rows[0]?.payload ?? null;
   }
 
+  async getStoreProductsByCategoryId(
+    storeId: string,
+    categoryId: string,
+  ): Promise<unknown[] | null> {
+    const categoryKey = String(categoryId ?? '').trim();
+    if (!/^\d+$/.test(categoryKey)) {
+      throw new BadRequestException('categoryId must be a number');
+    }
+    const [productRows, categoryRows] = await Promise.all([
+      this.dataSource.query(
+        `SELECT COALESCE(jsonb_agg(product), '[]'::jsonb) AS products
+         FROM public.store_products AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+             ELSE '[]'::jsonb
+           END
+         ) AS product
+         WHERE catalog.store_id = $1::uuid
+           AND COALESCE(catalog.is_deleted, false) = false
+           AND product->>'categoryId' = $2`,
+        [storeId, categoryKey],
+      ),
+      this.dataSource.query(
+        `SELECT category
+         FROM public.store_categories AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+             ELSE '[]'::jsonb
+           END
+         ) AS category
+         WHERE catalog.store_id = $1::uuid
+           AND COALESCE(catalog.is_deleted, false) = false
+           AND category->>'id' = $2
+         LIMIT 1`,
+        [storeId, categoryKey],
+      ).catch((error: unknown) => {
+        const code =
+          error && typeof error === 'object'
+            ? (error as { code?: string; driverError?: { code?: string } }).code
+              ?? (error as { driverError?: { code?: string } }).driverError?.code
+            : undefined;
+        if (code === '42P01' || code === '42703') return [];
+        throw error;
+      }),
+    ]);
+    const products = productRows[0]?.products;
+    if (!Array.isArray(products) || products.length === 0) return null;
+    const category = this.asRecord(categoryRows[0]?.category);
+    return products.map((product) =>
+      this.presentCategoryProduct(this.asRecord(product) ?? {}, category),
+    );
+  }
+
+  private presentCategoryProduct(
+    product: Record<string, unknown>,
+    category: Record<string, unknown> | null,
+  ): Record<string, unknown> {
+    return {
+      id: this.numberOrNull(product.id),
+      name: this.textOrNull(product.name),
+      sku: this.textOrNull(product.sku),
+      price: this.textOrNull(product.price),
+      regular_price: this.textOrNull(product.regular_price),
+      sale_price: this.textOrNull(product.sale_price),
+      categories: this.productCategories(product, category),
+      tags: Array.isArray(product.tags) ? product.tags : null,
+      images: Array.isArray(product.images) ? product.images : null,
+      attributes: this.productAttributes(product.attributes),
+      meta_data: this.productMetaData(product.meta_data),
+      variations: this.productVariations(product.variations),
+      type: this.textOrNull(product.type),
+      tax: this.productTax(product.tax),
+    };
+  }
+
+  private productCategories(
+    product: Record<string, unknown>,
+    category: Record<string, unknown> | null,
+  ): Array<Record<string, unknown>> | null {
+    if (Array.isArray(product.categories) && product.categories.length > 0) {
+      const categories = product.categories
+        .map((item) => this.asRecord(item))
+        .filter((item): item is Record<string, unknown> => item !== null)
+        .map((item) => ({
+          name: this.textOrNull(item.name),
+          slug: this.textOrNull(item.slug),
+          id: this.numberOrNull(item.id),
+        }));
+      return categories.length > 0 ? categories : null;
+    }
+    const id = this.numberOrNull(category?.id ?? product.categoryId);
+    const name = this.textOrNull(category?.name ?? product.categoryName);
+    const slug = this.textOrNull(category?.slug);
+    if (id === null && name === null && slug === null) return null;
+    return [{ name, slug, id }];
+  }
+
+  private productAttributes(value: unknown): Array<Record<string, unknown>> | null {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    return value
+      .map((item) => this.asRecord(item))
+      .filter((item): item is Record<string, unknown> => item !== null)
+      .map((item) => ({
+        name: this.textOrNull(item.name),
+        values: Array.isArray(item.values) ? item.values : null,
+        visible: typeof item.visible === 'boolean' ? item.visible : null,
+        variation: typeof item.variation === 'boolean' ? item.variation : null,
+      }));
+  }
+
+  private productMetaData(value: unknown): Array<Record<string, unknown>> | null {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    return value
+      .map((item) => this.asRecord(item))
+      .filter((item): item is Record<string, unknown> => item !== null)
+      .map((item) => ({
+        id: this.numberOrNull(item.id),
+        key: this.textOrNull(item.key),
+        value: item.value === undefined || item.value === '' ? null : item.value,
+      }));
+  }
+
+  private productVariations(value: unknown): number[] | null {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    const ids = value
+      .map((item) => this.numberOrNull(this.asRecord(item)?.id ?? item))
+      .filter((item): item is number => item !== null);
+    return ids.length > 0 ? ids : null;
+  }
+
+  private productTax(value: unknown): Record<string, unknown> | null {
+    const tax = this.asRecord(value);
+    if (!tax) return null;
+    const rates = Array.isArray(tax.tax_rates)
+      ? tax.tax_rates
+          .map((item) => this.asRecord(item))
+          .filter((item): item is Record<string, unknown> => item !== null)
+          .map((item) => ({
+            id: this.textOrNull(item.id),
+            label: this.textOrNull(item.label),
+            rate: this.numberOrNull(item.rate),
+            compound: typeof item.compound === 'boolean' ? item.compound : null,
+            shipping: typeof item.shipping === 'boolean' ? item.shipping : null,
+            priority: this.textOrNull(item.priority),
+            country: this.textOrNull(item.country),
+            state: this.textOrNull(item.state),
+            postcode: this.textOrNull(item.postcode),
+            city: this.textOrNull(item.city),
+          }))
+      : null;
+    return {
+      taxable: typeof tax.taxable === 'boolean' ? tax.taxable : null,
+      tax_class: this.textOrNull(tax.tax_class),
+      tax_status: this.textOrNull(tax.tax_status),
+      tax_rates: rates && rates.length > 0 ? rates : null,
+    };
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  }
+
+  private textOrNull(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    const text = String(value).trim();
+    return text ? text : null;
+  }
+
+  private numberOrNull(value: unknown): number | null {
+    if (value === null || value === undefined || String(value).trim() === '') return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) ? amount : null;
+  }
+
   private storeProductPayload(
     category: WordPressCategoryNode,
     product: WordPressProductNode,
