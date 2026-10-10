@@ -65,6 +65,9 @@ export class EmployeeEntity extends AuditColumns {
   @Column({ name: 'login_pin_hash', type: 'varchar', length: 128, nullable: true, select: false })
   loginPinHash?: string | null;
 
+  @Column({ name: 'login_pin', type: 'varchar', length: 6, nullable: true })
+  loginPin?: string | null;
+
   @Column({ name: 'password_hash', type: 'varchar', length: 128, nullable: true, select: false })
   passwordHash?: string | null;
 

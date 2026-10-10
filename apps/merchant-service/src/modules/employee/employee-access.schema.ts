@@ -90,6 +90,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ADD COLUMN IF NOT EXISTS country varchar(50) NOT NULL DEFAULT '',
         ADD COLUMN IF NOT EXISTS username varchar(30),
         ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128),
+        ADD COLUMN IF NOT EXISTS login_pin varchar(6),
         ADD COLUMN IF NOT EXISTS password_hash varchar(128),
         ADD COLUMN IF NOT EXISTS send_credentials boolean NOT NULL DEFAULT true,
         ADD COLUMN IF NOT EXISTS last_active_at timestamptz,
@@ -282,6 +283,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_from timestamptz;
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS effective_until timestamptz;
         ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128);
+        ALTER TABLE public.employee_stores ADD COLUMN IF NOT EXISTS login_pin varchar(6);
 
         -- Ensure employee_store_roles columns
         EXECUTE format('ALTER TABLE public.employee_store_roles ADD COLUMN IF NOT EXISTS merchant_id %s', merchant_type);

@@ -45,11 +45,18 @@ export async function ensureEmployeeStoreSchema(db: DataSource): Promise<void> {
         store_id uuid NOT NULL,
         is_primary boolean NOT NULL DEFAULT false,
         login_pin_hash varchar(128),
+        login_pin varchar(6),
         status varchar(30) NOT NULL DEFAULT 'ACTIVE',
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_employee_store UNIQUE (employee_id, store_id)
       );
+      ALTER TABLE public.employee_stores
+        ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128),
+        ADD COLUMN IF NOT EXISTS login_pin varchar(6);
+      ALTER TABLE public.employees
+        ADD COLUMN IF NOT EXISTS login_pin_hash varchar(128),
+        ADD COLUMN IF NOT EXISTS login_pin varchar(6);
       CREATE INDEX IF NOT EXISTS idx_employee_stores_merchant_store
         ON public.employee_stores(merchant_id, store_id);
       CREATE INDEX IF NOT EXISTS idx_employee_stores_store
