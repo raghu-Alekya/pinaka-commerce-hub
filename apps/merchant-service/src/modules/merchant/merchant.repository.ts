@@ -755,6 +755,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
     await this.migrateEncryptedPinsToPlaintext();
+    await this.ensureStoreCategoriesTable();
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
@@ -2976,7 +2977,95 @@ export class MerchantRepository implements OnModuleInit {
       }
     }
     await this.saveStoreCategoriesProducts(params.storeId, payload, response);
+    const parentCategories = await this.fetchWordPressParentCategories(
+      params.wordpressUrl,
+      params.wordpressJwt,
+    );
+    await this.saveStoreCategories(params.storeId, parentCategories);
     return { categoryCount: categories.length, productCount };
+  }
+
+  private async fetchWordPressParentCategories(
+    wordpressUrl: string,
+    wordpressJwt: string,
+  ): Promise<unknown[]> {
+    const baseUrl = wordpressUrl.replace(/\/+$/, '');
+    const categories: unknown[] = [];
+    let page = 1;
+    let totalPages = 1;
+    while (page <= totalPages && page <= 50) {
+      const url = new URL(`${baseUrl}/wp-json/wc/v3/products/categories`);
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('per_page', '100');
+      url.searchParams.set('hide_empty', 'true');
+      url.searchParams.set('parent', '0');
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${wordpressJwt}`,
+        },
+      });
+      if (!response.ok) {
+        throw new BadRequestException(
+          `WordPress categories API returned HTTP ${response.status}. Check the site URL and JWT token.`,
+        );
+      }
+      const body = await response.json();
+      if (Array.isArray(body)) categories.push(...body);
+      const reportedPages = Number(response.headers.get('x-wp-totalpages'));
+      totalPages = Number.isFinite(reportedPages) && reportedPages > 0 ? reportedPages : page;
+      page += 1;
+    }
+    return categories;
+  }
+
+  private async ensureStoreCategoriesTable(): Promise<void> {
+    await this.dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.store_categories (
+        id uuid NOT NULL DEFAULT gen_random_uuid(),
+        store_id uuid NOT NULL,
+        payload jsonb NOT NULL DEFAULT '[]'::jsonb,
+        created_by uuid,
+        updated_by uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        is_deleted boolean NOT NULL DEFAULT false,
+        CONSTRAINT store_categories_pkey PRIMARY KEY (id),
+        CONSTRAINT store_categories_store_id_fkey FOREIGN KEY (store_id)
+          REFERENCES public.stores (id)
+      )
+    `);
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS store_categories_store_id_uidx
+      ON public.store_categories (store_id)
+    `);
+  }
+
+  private async saveStoreCategories(
+    storeId: string,
+    payload: unknown[],
+  ): Promise<void> {
+    await this.ensureStoreCategoriesTable();
+    await this.dataSource.query(
+      `INSERT INTO public.store_categories (store_id, payload, updated_at)
+       VALUES ($1::uuid, $2::jsonb, now())
+       ON CONFLICT (store_id)
+       DO UPDATE SET payload = EXCLUDED.payload, updated_at = now(), is_deleted = false`,
+      [storeId, JSON.stringify(payload)],
+    );
+  }
+
+  async getStoreCategoriesByStoreId(storeId: string): Promise<unknown> {
+    await this.ensureStoreCategoriesTable();
+    const rows = await this.dataSource.query(
+      `SELECT payload
+       FROM public.store_categories
+       WHERE store_id = $1::uuid
+         AND COALESCE(is_deleted, false) = false
+       LIMIT 1`,
+      [storeId],
+    );
+    return rows[0]?.payload ?? null;
   }
 
   private storeProductPayload(
