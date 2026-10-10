@@ -128,6 +128,7 @@ import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/po
 import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { StoreEmployeeFastkeyEntity } from '../../pos/fastkeys/store-employee-fastkey.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
+import { ensureVendorStoreSchema } from '../dynamic-query/vendor-store.schema';
 import { ensureStorePosConfigurationSchema } from '../store-pos-configuration/store-pos-configuration.schema';
 import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
 import { ensureMerchantDevicesSchema } from '../device/device.schema';
@@ -750,6 +751,7 @@ export class MerchantRepository implements OnModuleInit {
     }
     await ensureMerchantDevicesSchema(this.dataSource);
     await ensureStoreDevicesSchema(this.dataSource);
+    await ensureVendorStoreSchema(this.dataSource);
     await ensureVendorSchema(this.dataSource);
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
@@ -1470,6 +1472,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async createDevice(data: {
     id: string;
+    deviceId?: string;
     deviceName?: string;
     deviceCode?: string;
     deviceType?: string;

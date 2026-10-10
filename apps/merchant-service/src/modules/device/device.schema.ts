@@ -5,6 +5,7 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
     await manager.query('SELECT pg_advisory_xact_lock(724621, 55)');
     // Keep the activation field available before any device list query runs.
     await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_active_code varchar(100)');
+    await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_id text');
     await manager.query(`
       CREATE TABLE IF NOT EXISTS public.merchant_devices (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
