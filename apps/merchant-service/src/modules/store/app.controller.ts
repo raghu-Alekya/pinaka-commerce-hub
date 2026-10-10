@@ -387,6 +387,16 @@ export class AppController {
     return payload;
   }
 
+  @Get('store/:storeId/store-categories/:categoryId/products')
+  async getStoreProductsByCategory(
+    @Param('storeId') storeId: string,
+    @Param('categoryId') categoryId: string,
+  ) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return this.merchantRepository.getStoreProductsByCategoryId(store.id, categoryId);
+  }
+
   @Get('stores/:storeId/configuration')
   async getStoreConfiguration(@Param('storeId') storeId: string) {
     const store = await this.merchantRepository.getStoreById(storeId);
