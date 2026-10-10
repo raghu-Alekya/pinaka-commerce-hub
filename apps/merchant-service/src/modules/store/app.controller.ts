@@ -265,16 +265,24 @@ export class AppController {
     this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const existing = await this.merchantRepository.getWebsiteConnection(storeId);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
-    const wordpressJwt = body.wordpressJwt?.trim();
-    if (!wordpressJwt) throw new BadRequestException('wordpressJwt is required');
+    const replacementJwt = body.wordpressJwt?.trim();
+    if (!replacementJwt && !existing?.encryptedJwt) {
+      throw new BadRequestException('wordpressJwt is required');
+    }
+    const wordpressJwt = replacementJwt
+      ? replacementJwt
+      : this.decryptConnectorSecret(existing!.encryptedJwt);
 
     const test = await this.pingWordPress(wordpressUrl, wordpressJwt);
     const connection = await this.merchantRepository.saveWebsiteConnection({
       storeId: store.id,
       merchantId: store.merchantId,
       wordpressUrl,
-      encryptedJwt: this.encryptConnectorSecret(wordpressJwt),
+      encryptedJwt: replacementJwt
+        ? this.encryptConnectorSecret(replacementJwt)
+        : existing!.encryptedJwt,
       status: test.ok ? 'CONNECTED' : 'NOT_CONNECTED',
       lastTestedAt: new Date(),
       lastTestMessage: test.message,
@@ -344,15 +352,15 @@ export class AppController {
     this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    const connection = await this.merchantRepository.getWebsiteConnection(storeId);
-    if (!connection?.encryptedJwt || !connection.wordpressUrl) {
+    const connector = await this.merchantRepository.getWebsiteConnector(storeId);
+    if (!connector?.encryptedJwt || !connector.wordpressUrl) {
       throw new BadRequestException('Connect the WordPress site before syncing the catalog');
     }
     const catalog = await this.syncStoreCatalog(
       store.merchantId,
       store.id,
-      connection.wordpressUrl,
-      this.decryptConnectorSecret(connection.encryptedJwt),
+      connector.wordpressUrl,
+      this.decryptConnectorSecret(connector.encryptedJwt),
     );
     return {
       success: true,
@@ -819,14 +827,26 @@ export class AppController {
   private decryptConnectorSecret(value: string): string {
     const [version, ivPart, ciphertextPart, tagPart] = value.split(':');
     if (version !== 'v1' || !ivPart || !ciphertextPart || !tagPart) {
-      throw new InternalServerErrorException('Stored website JWT cannot be decrypted');
+      throw new BadRequestException(
+        'The saved WordPress JWT is no longer valid. Edit the website connection and save the JWT token again.',
+      );
     }
-    const decipher = createDecipheriv('aes-256-gcm', this.connectorEncryptionKey(), Buffer.from(ivPart, 'base64url'));
-    decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
-    return Buffer.concat([
-      decipher.update(Buffer.from(ciphertextPart, 'base64url')),
-      decipher.final(),
-    ]).toString('utf8');
+    try {
+      const decipher = createDecipheriv(
+        'aes-256-gcm',
+        this.connectorEncryptionKey(),
+        Buffer.from(ivPart, 'base64url'),
+      );
+      decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+      return Buffer.concat([
+        decipher.update(Buffer.from(ciphertextPart, 'base64url')),
+        decipher.final(),
+      ]).toString('utf8');
+    } catch {
+      throw new BadRequestException(
+        'The saved WordPress JWT was encrypted with a different server key. Edit the website connection and save the JWT token again.',
+      );
+    }
   }
 
   private async syncStoreCatalog(

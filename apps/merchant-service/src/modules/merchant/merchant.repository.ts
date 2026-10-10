@@ -2151,21 +2151,22 @@ export class MerchantRepository implements OnModuleInit {
   async getWebsiteConnector(
     storeId: string,
   ): Promise<StoreWebsiteConnectorConfig | null> {
-    const connection = await this.websiteConnectionRepo.findOneBy({ storeId });
-    if (connection) {
-      return {
-        provider: 'WORDPRESS',
-        wordpressUrl: connection.wordpressUrl,
-        encryptedJwt: connection.encryptedJwt,
-        updatedAt: connection.updatedAt.toISOString(),
-      };
-    }
     const store = await this.storeRepo
       .createQueryBuilder('store')
       .addSelect('store.websiteConnector')
       .where('store.id = :storeId', { storeId })
       .getOne();
-    return store?.websiteConnector ?? null;
+    if (store?.websiteConnector) return store.websiteConnector;
+
+    const connection = await this.websiteConnectionRepo.findOneBy({ storeId });
+    return connection
+      ? {
+          provider: 'WORDPRESS',
+          wordpressUrl: connection.wordpressUrl,
+          encryptedJwt: connection.encryptedJwt,
+          updatedAt: connection.updatedAt.toISOString(),
+        }
+      : null;
   }
 
   async saveWebsiteConnection(fields: {
@@ -3356,6 +3357,7 @@ export class MerchantRepository implements OnModuleInit {
     payload: Array<Record<string, unknown>>,
     response: unknown,
   ): Promise<void> {
+    await this.ensureStoreProductsStoreIdUniqueIndex();
     await this.dataSource.query(
       `INSERT INTO public.store_products (store_id, payload, store_categories_products, updated_at)
        VALUES ($1::uuid, $2::jsonb, $3::jsonb, now())
@@ -3366,6 +3368,13 @@ export class MerchantRepository implements OnModuleInit {
          updated_at = now()`,
       [storeId, JSON.stringify(payload), JSON.stringify(response)],
     );
+  }
+
+  private async ensureStoreProductsStoreIdUniqueIndex(): Promise<void> {
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS store_products_store_id_uidx
+      ON public.store_products (store_id)
+    `);
   }
 
   private async ensureStoreCategoriesProductsColumn(): Promise<void> {
