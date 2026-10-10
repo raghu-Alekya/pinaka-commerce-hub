@@ -512,6 +512,32 @@ export class PosAuthService {
     };
   }
 
+  async getStoreCategoriesAndProducts(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    try {
+      const rows = await scope.dataSource.query(
+        `SELECT store_categories_products
+         FROM public.store_products
+         WHERE store_id = $1::uuid
+           AND COALESCE(is_deleted, false) = false
+         LIMIT 1`,
+        [scope.store.id],
+      );
+      return rows[0]?.store_categories_products ?? null;
+    } catch (error) {
+      if (this.postgresCode(error) === '42P01' || this.postgresCode(error) === '42703') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  
+
   /**
    * Store categories for the merchant and store named in the request headers.
    * The POS login access token is checked before any catalog data is read.

@@ -90,6 +90,26 @@ export class PosAuthController {
     );
   }
 
+    /**
+   * Store products.
+   * GET /api/v1/pos/auth/catalog/get-categories-products
+   * Requires the POS login access token plus x-merchant-id and x-store-id.
+   */
+  @Get(['catalog/get-categories-products', 'get-categories-products'])
+  @HttpCode(HttpStatus.OK)
+  async getStoreProductsAndCategories(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCategoriesAndProducts(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+
   /**
    * Store categories.
    * GET /api/v1/pos/auth/catalog/categories
