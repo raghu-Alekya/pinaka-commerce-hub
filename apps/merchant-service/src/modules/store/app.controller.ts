@@ -1,5 +1,5 @@
 import { storeSetup } from '../master/store-setup/store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from '../merchant/merchant.repository';
@@ -385,6 +385,16 @@ export class AppController {
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const payload = await this.merchantRepository.getStoreCategoriesByStoreId(store.id);
     return payload;
+  }
+
+  @Get('store/:storeId/products/search')
+  async searchStoreProducts(
+    @Param('storeId') storeId: string,
+    @Query('search') search?: string,
+  ) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return this.merchantRepository.searchStoreProducts(store.id, search ?? '');
   }
 
   @Get('store/:storeId/store-categories/:categoryId/products')
