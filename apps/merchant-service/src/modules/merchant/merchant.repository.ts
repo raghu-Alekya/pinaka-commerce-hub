@@ -755,6 +755,10 @@ export class MerchantRepository implements OnModuleInit {
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
     await ensureStorePosConfigurationSchema(this.dataSource);
+    await this.dataSource.query(
+      `ALTER TABLE public.stores DROP COLUMN IF EXISTS store_products`,
+    );
+    await this.ensureStoreCategoriesProductsColumn();
     // Existing merchant_vendors tables may predate this pairwise key. The
     // mapping endpoint's ON CONFLICT target requires a matching unique index.
     await this.dataSource.query(`
@@ -2931,11 +2935,12 @@ export class MerchantRepository implements OnModuleInit {
     wordpressUrl: string;
     wordpressJwt: string;
   }): Promise<{ categoryCount: number; productCount: number }> {
-    const categories = await this.fetchWordPressCategoryCatalog(
+    const { categories, response } = await this.fetchWordPressCategoryCatalog(
       params.wordpressUrl,
       params.wordpressJwt,
     );
     let productCount = 0;
+    const payload: Array<Record<string, unknown>> = [];
     for (const node of categories) {
       if (!Number.isFinite(Number(node.id))) continue;
       const savedCategory = await this.upsertStoreCategory(
@@ -2952,10 +2957,129 @@ export class MerchantRepository implements OnModuleInit {
           savedCategory,
           product,
         );
+        payload.push(this.storeProductPayload(node, product));
         productCount += 1;
       }
     }
+    await this.saveStoreCategoriesProducts(params.storeId, payload, response);
     return { categoryCount: categories.length, productCount };
+  }
+
+  private storeProductPayload(
+    category: WordPressCategoryNode,
+    product: WordPressProductNode,
+  ): Record<string, unknown> {
+    const record = product as Record<string, unknown>;
+    return {
+      id: Number(product.id),
+      sku: record.sku ?? null,
+      name: product.name ?? null,
+      tags: Array.isArray(product.tags) ? product.tags : [],
+      type: record.type ?? null,
+      image: product.image ?? null,
+      price: product.price ?? null,
+      categoryId: Number(category.id),
+      categoryName: category.name ?? null,
+      stock_status: record.stock_status ?? null,
+      stock_quantity: record.stock_quantity ?? null,
+    };
+  }
+
+  private async saveStoreCategoriesProducts(
+    storeId: string,
+    payload: Array<Record<string, unknown>>,
+    response: unknown,
+  ): Promise<void> {
+    await this.dataSource.query(
+      `INSERT INTO public.store_products (store_id, payload, store_categories_products, updated_at)
+       VALUES ($1::uuid, $2::jsonb, $3::jsonb, now())
+       ON CONFLICT (store_id)
+       DO UPDATE SET
+         payload = EXCLUDED.payload,
+         store_categories_products = EXCLUDED.store_categories_products,
+         updated_at = now()`,
+      [storeId, JSON.stringify(payload), JSON.stringify(response)],
+    );
+  }
+
+  private async ensureStoreCategoriesProductsColumn(): Promise<void> {
+    const db = this.dataSource;
+    await db.query(
+      `ALTER TABLE public.store_products ADD COLUMN IF NOT EXISTS store_categories_products jsonb`,
+    );
+    const legacy = await db.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'store_products'
+         AND column_name = 'wordpress_response'`,
+    );
+    if (legacy.length) {
+      await db.query(
+        `UPDATE public.store_products
+         SET store_categories_products = COALESCE(store_categories_products, wordpress_response)`,
+      );
+      await db.query(
+        `ALTER TABLE public.store_products DROP COLUMN wordpress_response`,
+      );
+    }
+    await db.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(724621, 61)');
+      const columns = await manager.query(
+        `SELECT column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'store_products'
+         ORDER BY ordinal_position`,
+      );
+      const names = columns.map(
+        (row: { column_name: string }) => row.column_name,
+      );
+      const payloadIndex = names.indexOf('payload');
+      if (
+        payloadIndex >= 0 &&
+        names[payloadIndex + 1] === 'store_categories_products'
+      ) {
+        return;
+      }
+      await manager.query(`
+        CREATE TABLE public.store_products__ordered (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          store_id uuid NOT NULL,
+          payload jsonb NOT NULL DEFAULT '[]'::jsonb,
+          store_categories_products jsonb,
+          created_by uuid,
+          updated_by uuid,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          is_deleted boolean NOT NULL DEFAULT false
+        )
+      `);
+      await manager.query(`
+        INSERT INTO public.store_products__ordered (
+          id, store_id, payload, store_categories_products,
+          created_by, updated_by, created_at, updated_at, is_deleted
+        )
+        SELECT id, store_id, payload, store_categories_products,
+               created_by, updated_by, created_at, updated_at, is_deleted
+        FROM public.store_products
+      `);
+      await manager.query(`DROP TABLE public.store_products`);
+      await manager.query(
+        `ALTER TABLE public.store_products__ordered RENAME TO store_products`,
+      );
+      await manager.query(
+        `ALTER TABLE public.store_products RENAME CONSTRAINT store_products__ordered_pkey TO store_products_pkey`,
+      );
+      await manager.query(`
+        ALTER TABLE public.store_products
+        ADD CONSTRAINT store_products_store_id_fkey
+        FOREIGN KEY (store_id) REFERENCES public.stores (id)
+      `);
+      await manager.query(`
+        CREATE UNIQUE INDEX store_products_store_id_uidx
+        ON public.store_products (store_id)
+      `);
+    });
   }
 
   async getStoreCatalog(
@@ -2971,7 +3095,7 @@ export class MerchantRepository implements OnModuleInit {
   private async fetchWordPressCategoryCatalog(
     wordpressUrl: string,
     wordpressJwt: string,
-  ): Promise<WordPressCategoryNode[]> {
+  ): Promise<{ categories: WordPressCategoryNode[]; response: unknown }> {
     const baseUrl = wordpressUrl.replace(/\/+$/, '');
     const response = await fetch(
       `${baseUrl}/wp-json/pinaka-pos/v1/categories/get-categories-products`,
@@ -2997,7 +3121,10 @@ export class MerchantRepository implements OnModuleInit {
         'WordPress catalog API returned no categories',
       );
     }
-    return this.flattenWordPressCategories(roots);
+    return {
+      categories: this.flattenWordPressCategories(roots),
+      response: body,
+    };
   }
 
   private flattenWordPressCategories(
