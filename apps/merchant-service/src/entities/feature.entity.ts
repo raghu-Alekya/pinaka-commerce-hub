@@ -1,36 +1,40 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 
-export enum FeatureStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-}
+export { RecordStatus as FeatureStatus } from './commerce-enums';
 
 @Entity('features')
-export class FeatureEntity {
+@Audited()
+export class FeatureEntity extends AuditColumns {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 100, unique: true })
-  featureKey!: string;
+  @Column({ name: 'feature_code', type: 'varchar', length: 100, unique: true })
+  featureCode!: string;
 
-  @Column({ type: 'varchar', length: 150 })
+  get featureKey(): string {
+    return this.featureCode;
+  }
+
+  set featureKey(value: string) {
+    if (value) this.featureCode = value;
+  }
+
+  @Column({ name: 'name', type: 'varchar', length: 150 })
   name!: string;
 
-  @Column({ type: 'text', default: '' })
+  @Column({ name: 'description', type: 'text', default: '' })
   description!: string;
 
-  @Column({ type: 'varchar', length: 100 })
-  category!: string;
-
-  @Column({ type: 'varchar', length: 20, default: 'TEXT' })
+  @Column({ name: 'feature_type', type: 'varchar', length: 100 })
   featureType!: string;
 
-  @Column({ type: 'varchar', length: 20, default: FeatureStatus.ACTIVE })
-  status!: FeatureStatus;
-
-  @CreateDateColumn({ type: 'timestamptz' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ type: 'timestamptz' })
-  updatedAt!: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: RecordStatus,
+    enumName: 'record_status',
+    default: RecordStatus.ACTIVE,
+  })
+  status!: RecordStatus;
 }
