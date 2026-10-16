@@ -13,7 +13,7 @@ MAIL_MODE=mock
 # Use a long random value in production (for example, 32+ random bytes).
 AUTH_JWT_SECRET=replace-with-a-long-random-secret
 AUTH_WEB_URL=http://localhost:3010
-ORDEROUT_POS_API_KEY=s11pfICCvVLnNsQujYu60TuAo6OLqyhF
+ORDEROUT_POS_API_KEY=replace-with-a-new-random-api-key
 GOOGLE_CLIENT_ID=
 SMTP_HOST=
 SMTP_PORT=587
