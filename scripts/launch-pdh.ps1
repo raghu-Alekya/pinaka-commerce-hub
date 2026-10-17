@@ -1,6 +1,8 @@
 param(
     [switch]$Restart,
     [switch]$SkipDocker,
+    [ValidateSet('gateway','connector-service','order-service','merchant-service','inventory-service','analytics-service','pos-integration-service','notification-service','admin-api','auth-service')]
+    [string]$OnlyService,
     [ValidateRange(1, 3600)]
     [int]$StartupTimeoutSeconds = 120
 )
@@ -26,6 +28,10 @@ $services = @(
     @{Name='notification-service';Port=3008}, @{Name='admin-api';Port=3009},
     @{Name='auth-service';Port=3010}
 )
+if ($OnlyService) {
+    $services = @($services | Where-Object Name -eq $OnlyService)
+    $SkipDocker = $true
+}
 # Serialize launches so repeated clicks cannot start competing service copies.
 $launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHubLauncher')
 if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }

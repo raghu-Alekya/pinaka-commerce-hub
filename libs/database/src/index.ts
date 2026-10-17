@@ -614,7 +614,12 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   const install = async (table: string, requiredColumn: string, sql: string) => {
     if (!(await tableExists(dataSource, table))) return;
     if (!(await columnExists(dataSource, table, requiredColumn))) return;
-    await dataSource.query(sql);
+    try {
+      await dataSource.query(sql);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Legacy schema migration failed for ${table}.${requiredColumn}: ${message}`, { cause: error });
+    }
   };
 
   await install('stores', 'updated_at', `
@@ -712,13 +717,13 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.merchants SET last_name = COALESCE(last_name, "lastName") WHERE last_name IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='createdAt') THEN
-        UPDATE public.merchants SET created_at = COALESCE(created_at, "createdAt") WHERE created_at IS NULL;
+        UPDATE public.merchants SET created_at = COALESCE(NULLIF(created_at::text, ''), NULLIF("createdAt"::text, '')) WHERE created_at IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='createdDate') THEN
-        UPDATE public.merchants SET created_at = COALESCE(created_at, "createdDate") WHERE created_at IS NULL;
+        UPDATE public.merchants SET created_at = COALESCE(NULLIF(created_at::text, ''), NULLIF("createdDate"::text, '')) WHERE created_at IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='updatedAt') THEN
-        UPDATE public.merchants SET updated_at = COALESCE(updated_at, "updatedAt") WHERE updated_at IS NULL;
+        UPDATE public.merchants SET updated_at = COALESCE(NULLIF(updated_at::text, ''), NULLIF("updatedAt"::text, '')) WHERE updated_at IS NULL;
       END IF;
       ALTER TABLE public.merchants
         DROP COLUMN IF EXISTS "merchantId",
@@ -882,10 +887,10 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.subscriptions SET trial_end_date = COALESCE(trial_end_date, "trialEndDate") WHERE trial_end_date IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name='createdAt') THEN
-        UPDATE public.subscriptions SET created_at = COALESCE(created_at, "createdAt") WHERE created_at IS NULL;
+        UPDATE public.subscriptions SET created_at = COALESCE(created_at, NULLIF("createdAt"::text, '')::timestamptz) WHERE created_at IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name='updatedAt') THEN
-        UPDATE public.subscriptions SET updated_at = COALESCE(updated_at, "updatedAt") WHERE updated_at IS NULL;
+        UPDATE public.subscriptions SET updated_at = COALESCE(updated_at, NULLIF("updatedAt"::text, '')::timestamptz) WHERE updated_at IS NULL;
       END IF;
       ALTER TABLE public.subscriptions
         DROP COLUMN IF EXISTS "merchantId",
@@ -929,7 +934,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.vendors SET product_category = COALESCE(product_category, "productCategory") WHERE product_category IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='deletedAt') THEN
-        UPDATE public.vendors SET deleted_at = COALESCE(deleted_at, "deletedAt") WHERE deleted_at IS NULL AND "deletedAt" IS NOT NULL;
+        UPDATE public.vendors SET deleted_at = COALESCE(deleted_at, NULLIF("deletedAt"::text, '')::timestamptz) WHERE deleted_at IS NULL AND "deletedAt" IS NOT NULL;
       END IF;
       ALTER TABLE public.vendors
         DROP COLUMN IF EXISTS "vendorName",
@@ -1004,7 +1009,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         END IF;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='devices' AND column_name='createdAt') THEN
-        UPDATE public.devices SET created_at = COALESCE(created_at, "createdAt") WHERE created_at IS NULL;
+        UPDATE public.devices SET created_at = COALESCE(created_at, NULLIF("createdAt"::text, '')::timestamptz) WHERE created_at IS NULL;
       END IF;
       ALTER TABLE public.devices
         DROP COLUMN IF EXISTS "deviceName",
