@@ -1,6 +1,6 @@
 # Auth Service API
 
-Base URL: `http://localhost:3009`
+Base URL: `http://127.0.0.1:3010`
 
 ## Authentication
 
