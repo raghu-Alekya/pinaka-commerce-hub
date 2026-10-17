@@ -1,3 +1,5 @@
+import { PosTaxClassController } from './currency-tax/pos-tax-class.controller';
+import { PosTaxClassService } from './currency-tax/pos-tax-class.service';
 import { DiscountController } from './discount/discount.controller';
 import { DiscountService } from './discount/discount.service';
 import { Module } from '@nestjs/common';
@@ -32,6 +34,7 @@ import { PosSafeTransactionsService } from './safe-transactions/pos-safe-transac
 @Module({
   imports: [MerchantModule, PosEmployeeAttendanceModule],
   controllers: [
+    PosTaxClassController,
     DiscountController,
     PosCurrencyTaxController,
     PosServiceChargeController,
@@ -47,6 +50,7 @@ import { PosSafeTransactionsService } from './safe-transactions/pos-safe-transac
     StoreFastkeyImageController,
   ],
   providers: [
+    PosTaxClassService,
     DiscountService,
     PosCurrencyTaxService,
     PosServiceChargeService,

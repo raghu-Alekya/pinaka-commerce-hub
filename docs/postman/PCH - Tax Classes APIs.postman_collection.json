@@ -1,0 +1,119 @@
+{
+  "info": {
+    "name": "PCH - POS Tax Classes",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Owner token and validated WordPress connector required. Writes apply to WordPress and refresh currency_taxes.taxClasses in PCH. PUT updates rates, not class names/slugs. Replace rate IDs with IDs from GET. Omitted regional rates remain unchanged; new rates without IDs are added. DELETE permanently deletes the class and all its WordPress rates; Standard cannot be deleted. Product assignments are not changed by these APIs."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3003/api/v1"
+    },
+    {
+      "key": "store_id",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "tax_class_slug",
+      "value": "reduced-rate"
+    }
+  ],
+  "item": [
+    {
+      "name": "Get tax classes",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes",
+        "header": []
+      }
+    },
+    {
+      "name": "Create tax class",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Reduced Rate\",\n  \"rate\": 5,\n  \"country\": \"US\",\n  \"state\": \"TX\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Update single-rate class",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes/{{tax_class_slug}}",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rate\": 7\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Update regional rates",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes/{{tax_class_slug}}",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rates\": [\n    {\n      \"id\": 1,\n      \"rate\": \"7\",\n      \"country\": \"US\",\n      \"state\": \"TX\",\n      \"priority\": 1,\n      \"compound\": false,\n      \"shipping\": true\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Delete tax class",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes/{{tax_class_slug}}",
+        "header": []
+      }
+    }
+  ]
+}

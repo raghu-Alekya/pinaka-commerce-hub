@@ -1,3 +1,4 @@
+import { fetchPosTaxClasses } from '../store-pos-configuration/pos-tax-sync';
 import { groupFeaturesByCategory } from '../master/common/master-list';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { storeSetup } from '../master/store-setup/store-setup';
@@ -3126,7 +3127,16 @@ export class MerchantRepository implements OnModuleInit {
       merged.set(String(record.id), item);
     }
     const payload = [...merged.values()];
+    const taxClasses = await fetchPosTaxClasses(params);
+    await ensureStorePosConfigurationSchema(this.dataSource);
     await this.saveStoreProductPayload(params.storeId, payload);
+    await this.dataSource.query(`
+      INSERT INTO public.store_pos_configurations (store_id, configuration_name, configuration_value)
+      VALUES ($1::uuid, 'currency_taxes', $2::jsonb)
+      ON CONFLICT (store_id, configuration_name) DO UPDATE
+      SET configuration_value = COALESCE(store_pos_configurations.configuration_value, '{}'::jsonb) || EXCLUDED.configuration_value,
+          updated_at = now()
+    `, [params.storeId, JSON.stringify({ taxClasses })]);
     return payload.length;
   }
 
