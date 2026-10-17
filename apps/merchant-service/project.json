@@ -9,7 +9,7 @@
       "command": "npx tsx apps/merchant-service/src/main.ts"
     },
     "build": {
-      "command": "npx tsc --noEmit"
+      "command": "npx tsc --noEmit -p apps/merchant-service/tsconfig.json"
     }
   }
 }

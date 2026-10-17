@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MerchantRepository } from '../../merchant.repository';
+import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { PosServiceChargeEntity } from './pos-service-charge.entity';
 import { PosServiceChargeTierEntity } from './pos-service-charge-tier.entity';
 import { SavePosServiceChargeDto } from './pos-service-charge.dto';

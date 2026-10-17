@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Redis Cache & Pub/Sub
   redis:
@@ -44,7 +42,7 @@ services:
     environment:
       POSTGRES_USER: pdh_user
       POSTGRES_PASSWORD: pdh_password
-      POSTGRES_DB: pinaka_commerce_hub
+      POSTGRES_DB: pinaka_commerce_hub_new
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -57,10 +55,17 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@pdh.com
       PGADMIN_DEFAULT_PASSWORD: pdh_password
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+      PGPASS_FILE: /pgpass
     depends_on:
       - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./docker/pgadmin/pgpass:/pgpass:ro
 
 volumes:
   redis_data:
   rabbitmq_data:
   postgres_data:
+  pgadmin_data:

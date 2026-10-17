@@ -8,7 +8,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:3009",
+      "value": "http://127.0.0.1:3010",
       "type": "string"
     },
     {
@@ -43,12 +43,12 @@
     },
     {
       "key": "ownerEmail",
-      "value": "replace-with-your-real-gmail@gmail.com",
+      "value": "admin@alektasolutions.com",
       "type": "string"
     },
     {
       "key": "ownerPassword",
-      "value": "ChangeMe@123",
+      "value": "",
       "type": "string"
     },
     {

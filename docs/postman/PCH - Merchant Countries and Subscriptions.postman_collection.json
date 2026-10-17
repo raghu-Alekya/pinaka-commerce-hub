@@ -12,8 +12,8 @@
     { "key": "baseUrl", "value": "http://localhost:3003" },
     { "key": "authBaseUrl", "value": "http://localhost:3010" },
     { "key": "accessToken", "value": "" },
-    { "key": "email", "value": "admin@alektasolutions.com" },
-    { "key": "password", "value": "admin@123" },
+    { "key": "email", "value": "" },
+    { "key": "password", "value": "" },
     { "key": "merchantId", "value": "2c160969-79b7-4562-be63-02cf504e2bca" },
     { "key": "planId", "value": "2a8ac621-fd00-4b7f-aa88-6e03124b22ee" }
   ],
