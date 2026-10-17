@@ -7,7 +7,7 @@ import { PosTaxClassService } from './pos-tax-class.service';
 export class PosTaxClassController {
   constructor(@Inject(PosTaxClassService) private readonly taxes: PosTaxClassService) {}
 
-  @Get()
+  @Get(['', 'settings'])
   list(@Param('storeId', new ParseUUIDPipe()) storeId: string, @Req() request: { user?: { role?: string; id?: string } }) {
     return this.taxes.execute('list', storeId, undefined, {}, request.user);
   }
@@ -15,6 +15,11 @@ export class PosTaxClassController {
   @Post()
   create(@Param('storeId', new ParseUUIDPipe()) storeId: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { role?: string; id?: string } }) {
     return this.taxes.execute('create', storeId, undefined, body, request.user);
+  }
+
+  @Put('settings')
+  updateSettings(@Param('storeId', new ParseUUIDPipe()) storeId: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { role?: string; id?: string } }) {
+    return this.taxes.execute('update-settings', storeId, undefined, body, request.user);
   }
 
   @Put(':slug')

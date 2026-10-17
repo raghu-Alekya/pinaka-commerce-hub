@@ -19,6 +19,15 @@ export class StorePosConfigurationsService {
     return this.merchants.requireDataSource().getRepository(StorePosConfigurationEntity);
   }
 
+  private mergeConfigurationValue(
+    name: string,
+    current: Record<string, unknown>,
+    incoming: Record<string, unknown>,
+  ): Record<string, unknown> {
+    // General currency/tax saves omit the separately managed WordPress classes.
+    return name === 'currency_taxes' ? { ...current, ...incoming } : incoming;
+  }
+
   /** Accepts a store UUID or a store code such as STORE-001. */
   private async storeUuid(storeKey: string): Promise<string> {
     const store = await this.merchants.getStoreById(storeKey);
@@ -165,7 +174,9 @@ export class StorePosConfigurationsService {
     }
 
     if (dto.configurationValue !== undefined) {
-      configuration.configurationValue = dto.configurationValue;
+      configuration.configurationValue = this.mergeConfigurationValue(
+        configuration.configurationName, configuration.configurationValue, dto.configurationValue,
+      );
     }
 
     const actor = dto.updatedBy || actorId;
@@ -193,7 +204,9 @@ export class StorePosConfigurationsService {
     const actor = dto.createdBy || actorId || null;
 
     if (existing) {
-      existing.configurationValue = dto.configurationValue;
+      existing.configurationValue = this.mergeConfigurationValue(
+        existing.configurationName, existing.configurationValue, dto.configurationValue,
+      );
       if (actor) existing.updatedBy = actor;
 
       return this.repository().save(existing);

@@ -34,6 +34,36 @@
   ],
   "item": [
     {
+      "name": "Get tax settings",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes/settings",
+        "header": []
+      }
+    },
+    {
+      "name": "Update Enable Taxes",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/stores/{{store_id}}/tax-classes/settings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"taxEnabled\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "Get tax classes",
       "request": {
         "method": "GET",

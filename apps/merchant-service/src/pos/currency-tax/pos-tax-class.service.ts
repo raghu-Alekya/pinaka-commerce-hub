@@ -1,7 +1,7 @@
 import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createDecipheriv, createHash } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { fetchPosTaxClasses, SyncedTaxClass } from '../../modules/store-pos-configuration/pos-tax-sync';
+import { fetchPosTaxClasses, fetchPosTaxConfiguration } from '../../modules/store-pos-configuration/pos-tax-sync';
 import { ensureStorePosConfigurationSchema } from '../../modules/store-pos-configuration/store-pos-configuration.schema';
 
 type Connection = { wordpressUrl: string; wordpressJwt: string };
@@ -77,8 +77,8 @@ export class PosTaxClassService {
     });
   }
 
-  private async refresh(storeId: string, connection: Connection, actorId?: string): Promise<SyncedTaxClass[]> {
-    const taxClasses = await fetchPosTaxClasses(connection);
+  private async refresh(storeId: string, connection: Connection, actorId?: string): Promise<{ taxEnabled: boolean; taxClasses: Awaited<ReturnType<typeof fetchPosTaxClasses>> }> {
+    const configuration = await fetchPosTaxConfiguration(connection);
     const db = this.merchants.requireDataSource();
     await ensureStorePosConfigurationSchema(db);
     await db.query(`
@@ -87,11 +87,11 @@ export class PosTaxClassService {
       ON CONFLICT (store_id,configuration_name) DO UPDATE
       SET configuration_value=COALESCE(store_pos_configurations.configuration_value,'{}'::jsonb) || EXCLUDED.configuration_value,
           updated_at=now(),updated_by=EXCLUDED.updated_by
-    `, [storeId, JSON.stringify({ taxClasses }), actorId ?? null]);
-    return taxClasses;
+    `, [storeId, JSON.stringify(configuration), actorId ?? null]);
+    return configuration;
   }
 
-  async execute(operation: 'list' | 'create' | 'update' | 'delete', storeId: string, slug: string | undefined, input: Record<string, any>, actor?: { id?: string; role?: string }) {
+  async execute(operation: 'list' | 'create' | 'update' | 'delete' | 'update-settings', storeId: string, slug: string | undefined, input: Record<string, any>, actor?: { id?: string; role?: string }) {
     if (actor?.role !== 'OWNER') throw new ForbiddenException('Only owners can manage WordPress tax classes');
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Body must be an object');
     const store = await this.merchants.getStoreById(storeId);
@@ -99,7 +99,16 @@ export class PosTaxClassService {
     const saved = await this.merchants.getWebsiteConnection(store.id);
     if (!saved?.wordpressUrl || !saved.encryptedJwt || saved.status !== 'CONNECTED') throw new BadRequestException('Connect and validate WordPress before managing taxes');
     const connection = { wordpressUrl: saved.wordpressUrl, wordpressJwt: this.decrypt(saved.encryptedJwt) };
-    if (operation === 'list') return { success: true, store_id: store.id, taxClasses: await this.refresh(store.id, connection, actor.id) };
+    if (operation === 'list') return { success: true, store_id: store.id, ...await this.refresh(store.id, connection, actor.id) };
+    if (operation === 'update-settings') {
+      if (Object.keys(input).some(key => key !== 'taxEnabled') || typeof input.taxEnabled !== 'boolean') throw new BadRequestException('Provide taxEnabled as a boolean');
+      await this.request(connection, 'PUT', 'settings/general/woocommerce_calc_taxes', { value: input.taxEnabled ? 'yes' : 'no' });
+      try {
+        return { success: true, store_id: store.id, ...await this.refresh(store.id, connection, actor.id) };
+      } catch {
+        throw new BadGatewayException('WordPress Enable Taxes was updated, but refreshing PCH failed. Run GET tax-classes/settings.');
+      }
+    }
     const classes = await fetchPosTaxClasses(connection);
     let current = classes.find(item => item.slug === slug);
     if (operation !== 'create' && !current) throw new NotFoundException('Tax class not found');
@@ -141,8 +150,8 @@ export class PosTaxClassService {
       throw error;
     }
     try {
-      const taxClasses = await this.refresh(store.id, connection, actor.id);
-      return { success: true, store_id: store.id, ...(operation === 'delete' ? { deleted_slug: slug } : { taxClass: taxClasses.find(item => item.slug === slug) }), taxClasses };
+      const { taxClasses, taxEnabled } = await this.refresh(store.id, connection, actor.id);
+      return { success: true, store_id: store.id, taxEnabled, ...(operation === 'delete' ? { deleted_slug: slug } : { taxClass: taxClasses.find(item => item.slug === slug) }), taxClasses };
     } catch {
       throw new BadGatewayException('WordPress changes succeeded, but refreshing PCH failed. Run GET tax-classes or product sync before retrying a write.');
     }

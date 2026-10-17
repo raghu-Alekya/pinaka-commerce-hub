@@ -24,7 +24,7 @@ async function fetchTaxCollection(connection: Connection, path: string): Promise
     try { body = await response.json(); } catch { throw new BadGatewayException('Invalid WordPress tax JSON response'); }
     if (!Array.isArray(body) || body.some(item => !item || typeof item !== 'object')) throw new BadGatewayException('Invalid WordPress tax collection');
     items.push(...body);
-    if (path === 'taxes/classes') return items;
+    if (path === 'taxes/classes' || path === 'settings/general') return items;
     const pages = Number(response.headers.get('x-wp-totalpages'));
     if (Number.isFinite(pages) && pages > 0 ? page >= pages : body.length < 100) return items;
   }
@@ -55,4 +55,14 @@ export async function fetchPosTaxClasses(connection: Connection): Promise<Synced
     group.rate = values.length === 1 ? values[0] : null;
   }
   return [...groups.values()];
+}
+
+export async function fetchPosTaxConfiguration(connection: Connection): Promise<{ taxEnabled: boolean; taxClasses: SyncedTaxClass[] }> {
+  const [taxClasses, settings] = await Promise.all([
+    fetchPosTaxClasses(connection),
+    fetchTaxCollection(connection, 'settings/general'),
+  ]);
+  const setting = settings.find(item => item.id === 'woocommerce_calc_taxes');
+  if (!setting || !['yes', 'no'].includes(setting.value)) throw new BadGatewayException('WordPress did not return a valid Enable Taxes setting');
+  return { taxEnabled: setting.value === 'yes', taxClasses };
 }
