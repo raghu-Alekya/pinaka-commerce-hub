@@ -8,6 +8,8 @@ import { MerchantResponseRelationsInterceptor } from './merchant-response-relati
 import { OnboardingController } from './onboarding.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { SessionAuthGuard } from '../shared/session-auth.guard';
+import { PlatformHealthSourceController } from './platform-health-source.controller';
+import { PlatformHealthSourceService } from './platform-health-source.service';
 
 @Module({
   controllers: [
@@ -15,10 +17,12 @@ import { SessionAuthGuard } from '../shared/session-auth.guard';
     CountriesController,
     OnboardingController,
     ReferenceDataController,
+    PlatformHealthSourceController,
   ],
   providers: [
     MerchantRepository,
     MerchantCrudService,
+    PlatformHealthSourceService,
     SessionAuthGuard,
     {
       provide: APP_GUARD,

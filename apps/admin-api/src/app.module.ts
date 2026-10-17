@@ -1,8 +1,9 @@
-﻿import { Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
-  imports: [],
+  imports: [DashboardModule],
   controllers: [AppController],
   providers: [],
 })
