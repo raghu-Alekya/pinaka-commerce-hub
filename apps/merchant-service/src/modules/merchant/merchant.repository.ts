@@ -3195,8 +3195,8 @@ private async productDataSyncContext(deviceId: string | undefined, merchantId: s
     }
     const rows = await this.requireDataSource().query(`
       SELECT d.id::text AS id,d.device_code,d.device_id,m.store_id::text AS store_id
-      FROM public.devices d JOIN public.store_devices m ON m.device_id=d.id
-      JOIN public.stores s ON s.id=m.store_id
+      FROM public.devices d JOIN public.store_devices m ON m.device_id::text=d.id::text
+      JOIN public.stores s ON s.id::text=m.store_id::text
       WHERE (d.id::text=$1 OR d.device_code=$1 OR d.device_id=$1)
         AND COALESCE(d.is_deleted,false)=false AND m.is_deleted=false AND m.is_mapped=true
         AND s.merchant_id::text=$2 AND s.id::text=$3
