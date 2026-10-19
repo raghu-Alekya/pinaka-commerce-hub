@@ -1,0 +1,91 @@
+{
+  "info": {
+    "name": "PCH - POS Data Sync",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Reads store_products from PCH; does not call WordPress. Device must have an active store mapping. Use an Owner token or a token scoped to the matching store/device. First poll returns the store snapshot as created events. Repeated polls retain changes until acknowledged. Deleted products return data:null. Changes made only in WordPress appear after PCH product sync. On startup the service creates pos_data_sync_snapshots, pos_data_sync_events and pos_data_sync_devices. Ack only after applying all events through last_sync_version; do not send acknowledgement when changes is empty and no positive version is available. Both endpoints require merchant_id and store_id UUIDs matching the device mapping."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3003/api/v1"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "device_id",
+      "value": "POS-003"
+    },
+    {
+      "key": "last_sync_version",
+      "value": "0"
+    },
+    {
+      "key": "merchant_id",
+      "value": ""
+    },
+    {
+      "key": "store_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Get local product changes",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/data-sync/get-data-changes?device_id={{device_id}}&merchant_id={{merchant_id}}&store_id={{store_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "  const body = pm.response.json();",
+              "  if (body.status && Array.isArray(body.changes) && body.changes.length) {",
+              "    pm.collectionVariables.set(\"last_sync_version\", Math.max(...body.changes.map(c => c.event_version)));",
+              "  }",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Acknowledge applied changes",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/data-sync/update-data-count",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"merchant_id\": \"{{merchant_id}}\",\n  \"store_id\": \"{{store_id}}\",\n  \"last_sync_version\": {{last_sync_version}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
