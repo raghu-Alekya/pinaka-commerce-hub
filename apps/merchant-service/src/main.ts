@@ -24,8 +24,11 @@ async function bootstrap() {
     type: [
       'application/json',
       'application/*+json',
-      'application/x-www-form-urlencoded',
     ],
+  });
+  app.useBodyParser('urlencoded', {
+    limit: '50mb',
+    extended: true,
   });
   app.use(
     (
