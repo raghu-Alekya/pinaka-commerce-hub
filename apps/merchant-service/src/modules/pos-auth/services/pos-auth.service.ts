@@ -637,8 +637,6 @@ export class PosAuthService {
           AND esr.merchant_id::text = ANY($2::text[])
           AND esr.store_id::text = ANY($3::text[])
           AND upper(COALESCE(esr.status::text, 'ACTIVE')) = 'ACTIVE'
-          AND (esr.effective_from IS NULL OR esr.effective_from <= now())
-          AND (esr.effective_until IS NULL OR esr.effective_until > now())
           AND (role.id IS NULL OR upper(COALESCE(role.status::text, 'ACTIVE')) = 'ACTIVE')
         LIMIT 1`,
       [matchedEmployeeStoreId, scope.merchantIds, scope.storeIds],
