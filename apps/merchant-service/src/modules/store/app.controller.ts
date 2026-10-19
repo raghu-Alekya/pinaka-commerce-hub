@@ -1,8 +1,9 @@
 import { storeSetup } from '../master/store-setup/store-setup';
-import { ValidationPipe, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, HttpCode, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
-import { MerchantRepository } from '../merchant/merchant.repository';
+import { MerchantRepository, DataSyncActor } from '../merchant/merchant.repository';
+import { RequireAuth } from '../shared/session-auth.guard';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from '../../entities/merchant.entity';
 import { PlanCode } from '../../entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
@@ -13,6 +14,20 @@ import { WebsiteConnectionEntity } from '../../entities/website-connection.entit
 @Controller(['api/v1', 'connector/api/v1'])
 export class AppController {
   constructor(@Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository) {}
+
+  @Get('data-sync/get-data-changes')
+  @RequireAuth()
+  getProductDataChanges(@Query('device_id') deviceId: string, @Query('merchant_id') merchantId: string, @Query('store_id') storeId: string, @Req() request: { user?: DataSyncActor }) {
+    return this.merchantRepository.getProductDataChanges(deviceId, merchantId, storeId, request.user);
+  }
+
+  @Post('data-sync/update-data-count')
+  @HttpCode(200)
+  @RequireAuth()
+  acknowledgeProductDataChanges(@Body() body: { device_id?: string; merchant_id?: string; store_id?: string; last_sync_version?: number }, @Req() request: { user?: DataSyncActor }) {
+    return this.merchantRepository.acknowledgeProductDataChanges(body?.device_id, body?.last_sync_version, body?.merchant_id, body?.store_id, request.user);
+  }
+
   private toBusinessType(value?: string): BusinessType {
     return value?.toUpperCase() === 'RESTAURANT' ? BusinessType.RESTAURANT : BusinessType.RETAIL;
   }

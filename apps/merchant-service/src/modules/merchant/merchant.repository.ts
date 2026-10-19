@@ -6,6 +6,8 @@ import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
 import {
   BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
   ConflictException,
   Injectable,
   Inject,
@@ -173,6 +175,95 @@ interface StoreProductTaxConfiguration {
 
 /** `required` is optional on older mapping rows. */
 const mappingRequired = `COALESCE((to_jsonb(mapping)->>'required')::boolean, false)`;
+
+export type DataSyncActor = { id?: string; role?: string; storeId?: string; deviceId?: string };
+
+type DataSyncProduct = Record<string, unknown> & { id: string | number };
+
+function stableDataSyncJson(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(stableDataSyncJson).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableDataSyncJson((value as Record<string, unknown>)[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+
+type DataSyncRow = Record<string, any>;
+
+const object = (value: unknown): DataSyncRow => value && typeof value === 'object' && !Array.isArray(value) ? value as DataSyncRow : {};
+
+const array = (value: unknown): any[] => Array.isArray(value) ? value : [];
+
+const dataSyncFlag = (value: unknown): boolean => value === true || value === 1 || value === '1' || value === 'yes';
+
+function formatDataSyncProduct(product: DataSyncRow, configuration: DataSyncRow = {}) {
+  const existingTax = object(product.tax);
+  const taxClass = String(product.tax_class ?? existingTax.tax_class ?? '');
+  const taxStatus = String(product.tax_status ?? existingTax.tax_status ?? '');
+  const taxable = configuration.taxEnabled === false ? false
+    : typeof existingTax.taxable === 'boolean' ? existingTax.taxable : taxStatus === 'taxable';
+  const selectedClass = array(configuration.taxClasses).find(item => item?.slug === (taxClass || 'standard'));
+  const rates = !taxable ? [] : Array.isArray(existingTax.tax_rates) ? existingTax.tax_rates : array(selectedClass?.rates);
+  const terms = (value: unknown) => array(value).map(term => ({ name: String(term?.name ?? ''), slug: String(term?.slug ?? ''), id: term?.id ?? term?.term_id ?? 0 }));
+  return {
+    id: product.id,
+    name: String(product.name ?? ''),
+    sku: String(product.sku ?? ''),
+    price: String(product.price ?? ''),
+    regular_price: String(product.regular_price ?? ''),
+    sale_price: String(product.sale_price ?? ''),
+    categories: terms(product.categories),
+    tags: terms(product.tags),
+    images: array(product.images).map(image => typeof image === 'string' ? image : image?.src).filter(image => typeof image === 'string' && image.length > 0),
+    attributes: array(product.attributes).map(attribute => ({
+      name: String(attribute?.name ?? ''),
+      values: array(attribute?.values ?? attribute?.options),
+      visible: Boolean(attribute?.visible),
+      variation: Boolean(attribute?.variation),
+    })),
+    meta_data: array(product.meta_data).filter(meta => ['_pinaka_discount_amount_auto_apply', '_discount_amount'].includes(meta?.key)).map(meta => ({ id: meta.id ?? 0, key: meta.key, value: meta.value })),
+    variations: product.type === 'variable' ? array(product.variations).map(item => typeof item === 'object' ? item?.id : item).filter(id => id !== undefined && id !== null) : [],
+    type: String(product.type ?? 'simple'),
+    tax: {
+      taxable,
+      tax_class: taxClass,
+      tax_status: taxStatus,
+      tax_rates: rates.map(rate => ({
+        id: rate?.id ?? rate?.rate_id ?? '',
+        label: String(rate?.label ?? rate?.name ?? ''),
+        rate: rate?.rate ?? '',
+        compound: dataSyncFlag(rate?.compound),
+        shipping: dataSyncFlag(rate?.shipping),
+        priority: rate?.priority ?? '',
+        country: rate?.country ?? '',
+        state: rate?.state ?? '',
+        postcode: rate?.postcode ?? '',
+        city: rate?.city ?? '',
+      })),
+    },
+  };
+}
+
+async function ensurePosDataSyncSchema(db: DataSource): Promise<void> {
+  await db.transaction(async manager => {
+    await manager.query('SELECT pg_advisory_xact_lock(724621, 61)');
+    await manager.query(`
+      CREATE TABLE IF NOT EXISTS public.pos_data_sync_snapshots (
+        store_id uuid PRIMARY KEY, payload jsonb NOT NULL DEFAULT '[]'::jsonb
+      );
+      CREATE TABLE IF NOT EXISTS public.pos_data_sync_events (
+        event_id bigserial PRIMARY KEY, store_id uuid NOT NULL, post_id text NOT NULL,
+        event_type varchar(20) NOT NULL, payload jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS pos_data_sync_events_store_version_idx ON public.pos_data_sync_events(store_id,event_id);
+      CREATE TABLE IF NOT EXISTS public.pos_data_sync_devices (
+        store_id uuid NOT NULL, device_id uuid NOT NULL,
+        last_sync_version bigint NOT NULL DEFAULT 0,
+        delivered_version bigint NOT NULL DEFAULT 0,
+        PRIMARY KEY(store_id,device_id)
+      );
+    `);
+  });
+}
 
 @Injectable()
 export class MerchantRepository implements OnModuleInit {
@@ -764,6 +855,7 @@ export class MerchantRepository implements OnModuleInit {
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
     const createdTables = await createMissingTables(this.dataSource);
+    await ensurePosDataSyncSchema(this.dataSource);
     await ensurePosSafeDropSchema(this.dataSource);
     if (createdTables.length) {
       console.log(
@@ -3093,6 +3185,106 @@ export class MerchantRepository implements OnModuleInit {
     const attributeCount = await this.syncStoreAttributesFromWordPress(params);
     const tagCount = await this.syncStoreTagsFromWordPress(params);
     return { categoryCount, productCount, attributeCount, tagCount };
+  }
+
+private async productDataSyncContext(deviceId: string | undefined, merchantId: string | undefined, storeId: string | undefined, actor?: DataSyncActor) {
+    if (!actor?.id) throw new UnauthorizedException('Authentication is required');
+    if (typeof deviceId !== 'string' || !deviceId.trim()) throw new BadRequestException('device_id required');
+    for (const [name, value] of [['merchant_id', merchantId], ['store_id', storeId]]) {
+      if (typeof value !== 'string' || !value.trim()) throw new BadRequestException(`${name} required`);
+    }
+    const rows = await this.requireDataSource().query(`
+      SELECT d.id::text AS id,d.device_code,d.device_id,m.store_id::text AS store_id
+      FROM public.devices d JOIN public.store_devices m ON m.device_id=d.id
+      JOIN public.stores s ON s.id=m.store_id
+      WHERE (d.id::text=$1 OR d.device_code=$1 OR d.device_id=$1)
+        AND COALESCE(d.is_deleted,false)=false AND m.is_deleted=false AND m.is_mapped=true
+        AND s.merchant_id::text=$2 AND s.id::text=$3
+      LIMIT 2
+    `, [deviceId.trim(), merchantId!.trim(), storeId!.trim()]);
+    if (!rows.length) throw new NotFoundException('Device has no active mapping for the specified merchant_id and store_id');
+    if (rows.length > 1) throw new ConflictException('Device has ambiguous store mappings');
+    const row = rows[0];
+    if (actor.role !== 'OWNER') {
+      if (actor.storeId !== row.store_id) throw new ForbiddenException('Device does not belong to your store');
+      if (actor.deviceId && ![row.id,row.device_code,row.device_id].includes(actor.deviceId)) throw new ForbiddenException('Device does not match the authenticated session');
+    }
+    return { storeId: row.store_id as string, deviceId: row.id as string, label: deviceId.trim() };
+  }
+
+private productDataSyncProducts(payload: unknown): Map<string, DataSyncProduct> {
+    if (!Array.isArray(payload)) throw new BadRequestException('Store product payload must be a JSON array');
+    const products = new Map<string, DataSyncProduct>();
+    for (const product of payload) {
+      if (!product || typeof product !== 'object' || !['string', 'number'].includes(typeof product.id) || String(product.id).trim() === '') throw new BadRequestException('Invalid product in store_products payload');
+      products.set(String(product.id), product);
+    }
+    return products;
+  }
+
+async getProductDataChanges(deviceId: string | undefined, merchantId: string | undefined, storeId: string | undefined, actor?: DataSyncActor) {
+    const context = await this.productDataSyncContext(deviceId, merchantId, storeId, actor);
+    return this.requireDataSource().transaction(async manager => {
+      // Serialize snapshots and event allocation per store, including acknowledgements.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1,61))', [context.storeId]);
+      const [table] = await manager.query("SELECT to_regclass('public.store_products') AS name");
+      if (!table?.name) throw new BadRequestException('Sync products for this store first');
+      const [saved] = await manager.query('SELECT payload FROM public.store_products WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false', [context.storeId]);
+      if (!saved) throw new BadRequestException('Sync products for this store first');
+      const [taxSettings] = await manager.query(
+        "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='currency_taxes'",
+        [context.storeId],
+      );
+      const rawProducts = this.productDataSyncProducts(saved.payload);
+      const formatted = [...rawProducts.values()]
+        .filter(product => product.type !== 'variation' && !(Number(product.parent_id) > 0))
+        .map(product => formatDataSyncProduct(product, taxSettings?.configuration_value ?? {}));
+      const current = this.productDataSyncProducts(formatted);
+      const [snapshot] = await manager.query('SELECT payload FROM public.pos_data_sync_snapshots WHERE store_id=$1::uuid', [context.storeId]);
+      const previous = this.productDataSyncProducts(snapshot?.payload ?? []);
+      for (const [id, product] of current) {
+        if (!previous.has(id) || stableDataSyncJson(previous.get(id)) !== stableDataSyncJson(product)) {
+          await manager.query('INSERT INTO public.pos_data_sync_events(store_id,post_id,event_type,payload) VALUES ($1::uuid,$2,$3,$4::jsonb)', [context.storeId,id,previous.has(id) ? 'updated' : 'created',JSON.stringify(product)]);
+        }
+      }
+      for (const id of previous.keys()) {
+        if (!current.has(id)) await manager.query("INSERT INTO public.pos_data_sync_events(store_id,post_id,event_type,payload) VALUES ($1::uuid,$2,'deleted',NULL)", [context.storeId,id]);
+      }
+      await manager.query('INSERT INTO public.pos_data_sync_snapshots(store_id,payload) VALUES ($1::uuid,$2::jsonb) ON CONFLICT(store_id) DO UPDATE SET payload=EXCLUDED.payload', [context.storeId,JSON.stringify(formatted)]);
+      await manager.query('INSERT INTO public.pos_data_sync_devices(store_id,device_id) VALUES ($1::uuid,$2::uuid) ON CONFLICT DO NOTHING', [context.storeId,context.deviceId]);
+      const [device] = await manager.query('SELECT last_sync_version FROM public.pos_data_sync_devices WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId]);
+      const rows = await manager.query(`
+        SELECT * FROM (
+          SELECT DISTINCT ON(post_id) event_id,event_type,post_id,payload
+          FROM public.pos_data_sync_events WHERE store_id=$1::uuid AND event_id>$2::bigint
+          ORDER BY post_id,event_id DESC
+        ) latest ORDER BY event_id
+      `, [context.storeId,device.last_sync_version]);
+      const changes = rows.map((row: any) => {
+        const version = Number(row.event_id);
+        if (!Number.isSafeInteger(version)) throw new ConflictException('Sync version exceeds supported integer range');
+        const numericId = Number(row.post_id);
+        return { event_version: version, event_type: row.event_type, post_id: Number.isSafeInteger(numericId) ? numericId : row.post_id, post_type: 'product', data: row.payload === null ? null : formatDataSyncProduct(row.payload, taxSettings?.configuration_value ?? {}) };
+      });
+      const lastVersion = Number(device.last_sync_version);
+      if (!Number.isSafeInteger(lastVersion)) throw new ConflictException('Sync version exceeds supported integer range');
+      const delivered = changes.length ? changes[changes.length-1].event_version : lastVersion;
+      await manager.query('UPDATE public.pos_data_sync_devices SET delivered_version=GREATEST(delivered_version,$3::bigint) WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,delivered]);
+      return { status: true, device_id: context.label, last_sync_version: lastVersion, changes };
+    });
+  }
+
+async acknowledgeProductDataChanges(deviceId: string | undefined, version: number | undefined, merchantId: string | undefined, storeId: string | undefined, actor?: DataSyncActor) {
+    if (!Number.isSafeInteger(version) || version! <= 0) throw new BadRequestException('last_sync_version must be a positive safe integer');
+    const context = await this.productDataSyncContext(deviceId, merchantId, storeId, actor);
+    return this.requireDataSource().transaction(async manager => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1,61))', [context.storeId]);
+      const [device] = await manager.query('SELECT last_sync_version,delivered_version FROM public.pos_data_sync_devices WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId]);
+      if (!device) throw new BadRequestException('Call get-data-changes before acknowledging');
+      if (version! < Number(device.last_sync_version) || version! > Number(device.delivered_version)) throw new BadRequestException('Version must be between the acknowledged and delivered versions');
+      await manager.query('UPDATE public.pos_data_sync_devices SET last_sync_version=$3::bigint WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,version]);
+      return { status: true, message: 'Sync version updated successfully', device_id: context.label, last_sync_version: version };
+    });
   }
 
   async syncStoreProductsFromWordPress(params: {
