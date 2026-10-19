@@ -568,6 +568,7 @@ export class PosAuthService {
     const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
     const candidates = await scope.dataSource.query(
       `SELECT e.id::text AS id,
+              es.id::text AS "employeeStoreId",
               COALESCE(es.login_pin_hash, e.login_pin_hash) AS "storePinHash",
               e.login_pin_hash AS "employeePinHash",
               COALESCE(es.login_pin, e.login_pin) AS "storePin",
@@ -586,6 +587,7 @@ export class PosAuthService {
     );
 
     let matchedEmployeeId: string | undefined;
+    let matchedEmployeeStoreId: string | undefined;
     for (const candidate of candidates) {
       const plainPins = [candidate.storePin, candidate.employeePin]
         .map((value) => String(value || '').trim())
@@ -597,6 +599,7 @@ export class PosAuthService {
       }
       if (matched) {
         matchedEmployeeId = String(candidate.id);
+        matchedEmployeeStoreId = String(candidate.employeeStoreId || '');
         break;
       }
     }
@@ -616,6 +619,36 @@ export class PosAuthService {
         statusCode: 403,
         code: 'unauthorized_user',
         message: 'You are not authorized to access this resource.',
+        data: {},
+      });
+    }
+    const permissionRows = await scope.dataSource.query(
+      `SELECT true AS allowed
+         FROM public.employee_store_roles AS esr
+         LEFT JOIN public.roles AS role ON role.id = esr.role_id
+         JOIN public.store_roles_permission AS store_permission
+           ON store_permission.role_template_id = COALESCE(role.source_role_template_id, esr.role_id)
+          AND store_permission.merchant_id::text = ANY($2::text[])
+          AND store_permission.store_id::text = ANY($3::text[])
+          AND lower(btrim(store_permission.feature_name)) = 'refunds'
+          AND lower(btrim(store_permission.permission_action)) = 'create'
+          AND store_permission.allowed = true
+        WHERE esr.employee_store_id = $1::uuid
+          AND esr.merchant_id::text = ANY($2::text[])
+          AND esr.store_id::text = ANY($3::text[])
+          AND upper(COALESCE(esr.status::text, 'ACTIVE')) = 'ACTIVE'
+          AND (esr.effective_from IS NULL OR esr.effective_from <= now())
+          AND (esr.effective_until IS NULL OR esr.effective_until > now())
+          AND (role.id IS NULL OR upper(COALESCE(role.status::text, 'ACTIVE')) = 'ACTIVE')
+        LIMIT 1`,
+      [matchedEmployeeStoreId, scope.merchantIds, scope.storeIds],
+    );
+    if (!permissionRows[0]?.allowed) {
+      throw new ForbiddenException({
+        success: false,
+        statusCode: 403,
+        code: 'refund_permission_denied',
+        message: 'This employee is not permitted to process refunds for this store.',
         data: {},
       });
     }

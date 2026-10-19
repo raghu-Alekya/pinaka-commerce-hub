@@ -1782,7 +1782,17 @@ export class OrderRepository implements OnModuleInit {
         if (remainingOrderAmount <= 0) return { kind: 'already_refunded' as const };
 
         const storedLines = Array.isArray(order.line_items) ? order.line_items : [];
-        const allLines = storedLines;
+        const canonicalLines = await manager.query(
+          `SELECT id, product_id, product_name AS name, quantity,
+                  unit_price, total_price AS total, modifiers AS meta_data
+             FROM public.order_line_items
+            WHERE order_id = $1::uuid`,
+          [order.id],
+        );
+        // Prefer the JSON snapshot for order totals because it contains the
+        // original POS representation. Fall back to canonical rows for older
+        // production orders whose snapshot is empty.
+        const allLines = storedLines.length ? storedLines : canonicalLines;
         const positiveTotal = allLines.reduce((sum: number, line: any) => {
           const value = Number(line.total ?? line.total_price ?? 0);
           return value > 0 ? sum + value : sum;
@@ -1802,7 +1812,8 @@ export class OrderRepository implements OnModuleInit {
           // lines: the store_orders JSON snapshot and canonical order_line_items.
           // Their IDs are not guaranteed to be identical. Completed-orders can
           // expose either one, so refund validation must accept both sources.
-          const line = storedLines.find((candidate: any) => String(candidate?.id ?? '') === requested.orderItemId);
+          const line = [...storedLines, ...canonicalLines]
+            .find((candidate: any) => String(candidate?.id ?? '') === requested.orderItemId);
           if (!line) return { kind: 'invalid_item' as const };
           const maxQuantity = Number(line.quantity || 0);
           const refundedQuantity = previousItems
@@ -2157,6 +2168,15 @@ export class OrderRepository implements OnModuleInit {
     `);
     await this.dataSource.query(`
       CREATE INDEX IF NOT EXISTS order_line_items_order_id_idx ON public.order_line_items (order_id)
+    `);
+    // Legacy installations created these tables without primary keys. The
+    // backfills and runtime inserts use ON CONFLICT (id), which requires a
+    // matching unique constraint or index.
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS order_line_items_id_uidx ON public.order_line_items (id)
+    `);
+    await this.dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS order_status_history_id_uidx ON public.order_status_history (id)
     `);
     await this.dataSource.query(`
       CREATE INDEX IF NOT EXISTS order_status_history_order_id_idx ON public.order_status_history (order_id)
