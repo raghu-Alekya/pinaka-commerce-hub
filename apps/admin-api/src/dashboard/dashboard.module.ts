@@ -10,6 +10,8 @@ import { PlatformHealthController } from './dashboard/platform_health/platform_h
 import { PlatformHealthService } from './dashboard/platform_health/platform_health.service';
 import { DashboardFeaturesController } from './dashboard/features/dashboard_features.controller';
 import { DashboardFeaturesService } from './dashboard/features/dashboard_features.service';
+import { AdministrationOverviewController } from './administration-overview/administration-overview.controller';
+import { AdministrationOverviewService } from './administration-overview/dto/administration-overview-service-interface';
 
 @Module({
   controllers: [
@@ -18,6 +20,7 @@ import { DashboardFeaturesService } from './dashboard/features/dashboard_feature
     RolesPermissionsController,
     PlatformHealthController,
     DashboardFeaturesController,
+    AdministrationOverviewController,
   ],
   providers: [
     DashboardDatabase,
@@ -26,6 +29,7 @@ import { DashboardFeaturesService } from './dashboard/features/dashboard_feature
     RolesPermissionsService,
     PlatformHealthService,
     DashboardFeaturesService,
+    AdministrationOverviewService,
   ],
 })
 export class DashboardModule {}
