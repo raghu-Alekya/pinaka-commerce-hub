@@ -17,15 +17,15 @@ export class AppController {
 
   @Get('data-sync/get-data-changes')
   @RequireAuth()
-  getProductDataChanges(@Query('device_id') deviceId: string, @Query('merchant_id') merchantId: string, @Query('store_id') storeId: string, @Req() request: { user?: DataSyncActor }) {
-    return this.merchantRepository.getProductDataChanges(deviceId, merchantId, storeId, request.user);
+  getProductDataChanges(@Query('device_id') deviceId: string, @Query('merchant_id') merchantId: string, @Query('store_id') storeId: string, @Query('deviceCode') deviceCode: string, @Query('device_code') snakeDeviceCode: string, @Req() request: { user?: DataSyncActor }) {
+    return this.merchantRepository.getProductDataChanges(deviceId ?? deviceCode ?? snakeDeviceCode, merchantId, storeId, request.user);
   }
 
   @Post('data-sync/update-data-count')
   @HttpCode(200)
   @RequireAuth()
-  acknowledgeProductDataChanges(@Body() body: { device_id?: string; merchant_id?: string; store_id?: string; last_sync_version?: number }, @Req() request: { user?: DataSyncActor }) {
-    return this.merchantRepository.acknowledgeProductDataChanges(body?.device_id, body?.last_sync_version, body?.merchant_id, body?.store_id, request.user);
+  acknowledgeProductDataChanges(@Body() body: { device_id?: string; deviceCode?: string; device_code?: string; merchant_id?: string; store_id?: string; last_sync_version?: number }, @Req() request: { user?: DataSyncActor }) {
+    return this.merchantRepository.acknowledgeProductDataChanges(body?.device_id ?? body?.deviceCode ?? body?.device_code, body?.last_sync_version, body?.merchant_id, body?.store_id, request.user);
   }
 
   private toBusinessType(value?: string): BusinessType {
