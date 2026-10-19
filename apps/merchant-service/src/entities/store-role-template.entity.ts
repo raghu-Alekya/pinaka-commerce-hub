@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Unique } from 'typeorm';
 
 @Entity('store_role_templates')
+@Unique('uq_store_role_template', ['merchantId', 'storeId', 'roleTemplateId'])
 export class StoreRoleTemplateEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -14,10 +15,10 @@ export class StoreRoleTemplateEntity {
   @Column({ name: 'role_template_id', type: 'uuid' })
   roleTemplateId!: string;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ name: 'enabled', type: 'boolean', default: true })
   enabled!: boolean;
 
-  @Column({ type: 'varchar', length: 20, default: 'ACTIVE' })
+  @Column({ name: 'status', type: 'varchar', length: 20, default: 'ACTIVE' })
   status!: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

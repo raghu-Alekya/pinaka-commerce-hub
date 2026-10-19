@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { MerchantRepository } from '../../merchant.repository';
+import { MerchantRepository } from '../../modules/merchant/merchant.repository';
 import { PosCardPaymentEntity } from './pos-card-payment.entity';
 import { SavePosCardPaymentDto } from './pos-card-payment.dto';
 
