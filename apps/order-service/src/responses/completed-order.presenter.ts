@@ -19,6 +19,7 @@ type CompletedOrderRow = {
   storeOrder: StoreOrderEntity | null;
   items: OrderItemEntity[];
   products: Map<string, unknown>;
+  refunds?: Array<{ amount: unknown; metadata: Record<string, any> | null }>;
 };
 
 @Injectable()
@@ -41,7 +42,7 @@ export class CompletedOrderPresenter {
       perPage,
       merchantId,
       storeId,
-      statuses: ['completed'],
+      statuses: ['completed', 'partial-refund'],
       createdVia: request.createdVia?.trim() || undefined,
       author: request.author?.trim() || undefined,
       after,
@@ -59,7 +60,7 @@ export class CompletedOrderPresenter {
     };
   }
 
-  private order({ order, storeOrder, items, products }: CompletedOrderRow) {
+  private order({ order, storeOrder, items, products, refunds = [] }: CompletedOrderRow) {
     const request = (order.requestPayload || {}) as Record<string, any>;
     const timezone = storeOrder?.timezone || 'UTC';
     const currency = String(storeOrder?.currency || request.currency || 'USD').toUpperCase();
@@ -73,7 +74,7 @@ export class CompletedOrderPresenter {
     const orderDiscount = Number(this.metaValue(order, '_order_discount') || 0);
     const amount = this.money(Math.max(0, Number(total) - Number(itemsTax) - orderDiscount));
     const createdVia = String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api');
-    const lineItems = this.lineItems(storeOrder?.lineItems, items, order.storeId, products);
+    const lineItems = this.lineItems(storeOrder?.lineItems, items, order.storeId, products, refunds);
     return {
       id,
       order_id: clientOrderId,
@@ -101,7 +102,13 @@ export class CompletedOrderPresenter {
     };
   }
 
-  private lineItems(stored: unknown[] | undefined, items: OrderItemEntity[], storeId: string, products: Map<string, unknown>) {
+  private lineItems(
+    stored: unknown[] | undefined,
+    items: OrderItemEntity[],
+    storeId: string,
+    products: Map<string, unknown>,
+    refunds: Array<{ metadata: Record<string, any> | null }>,
+  ) {
     const lines: any[] = Array.isArray(stored) && stored.length ? stored : items.map((item) => ({
       id: item.id,
       name: item.productName,
@@ -111,28 +118,51 @@ export class CompletedOrderPresenter {
       total: item.totalPrice,
       meta_data: item.modifiers || [],
     }));
-    return lines.filter((line) => !line?.is_refund_item).map((line, index) => {
+    const refundedByItem = new Map<string, { quantity: number; amount: number }>();
+    const seenRefunds = new Set<string>();
+    refunds.forEach((refund, index) => {
+      const metadata = refund.metadata || {};
+      const refundKey = String(metadata.refund_id || metadata.legacy_refund_id || `legacy-${index}`);
+      if (seenRefunds.has(refundKey)) return;
+      seenRefunds.add(refundKey);
+      (Array.isArray(metadata.line_items) ? metadata.line_items : []).forEach((item: any) => {
+        const key = String(item?.order_item_id ?? '');
+        if (!key) return;
+        const current = refundedByItem.get(key) || { quantity: 0, amount: 0 };
+        current.quantity += Number(item.quantity ?? item.qty ?? 0);
+        current.amount += Number(item.refund_total ?? item.refundable_amount ?? 0);
+        refundedByItem.set(key, current);
+      });
+    });
+    return lines.filter((line) => !line?.is_refund_item).flatMap((line, index) => {
       const fallback = items[index];
+      const lineId = String(line?.id ?? fallback?.id ?? '');
+      const refunded = refundedByItem.get(lineId) || { quantity: 0, amount: 0 };
+      const originalQuantity = Number(line?.quantity ?? fallback?.quantity ?? 0);
+      const remainingQuantity = Math.max(0, originalQuantity - refunded.quantity);
+      if (remainingQuantity <= 0) return [];
       const productKey = String(line?.product_id ?? line?.productId ?? fallback?.productId ?? '');
       const product = (line?.product_data ?? products.get(`${storeId}:${productKey}`) ?? {}) as Record<string, any>;
       const discountType = String(this.lineMeta(line, '_pos_discount_type') || '');
-      return {
+      const originalSubtotal = Number(line?.subtotal ?? fallback?.totalPrice ?? 0);
+      const originalTotal = Number(line?.total ?? fallback?.totalPrice ?? 0);
+      return [{
         id: line?.id ?? fallback?.id ?? null,
         name: String(line?.name ?? line?.productName ?? fallback?.productName ?? ''),
         product_id: this.numericId(line?.product_id ?? line?.productId ?? fallback?.productId),
         variation_id: Number(line?.variation_id || 0),
-        quantity: Number(line?.quantity ?? fallback?.quantity ?? 0),
+        quantity: remainingQuantity,
         tax_class: String(line?.tax_class || ''),
-        subtotal: String(line?.subtotal ?? fallback?.totalPrice ?? '0'),
+        subtotal: String(Math.max(0, originalSubtotal - refunded.amount)),
         subtotal_tax: String(line?.subtotal_tax ?? '0'),
-        total: String(line?.total ?? fallback?.totalPrice ?? '0'),
+        total: String(Math.max(0, originalTotal - refunded.amount)),
         is_items_has_discount: discountType ? 'Yes' : 'No',
         item_discount_type: this.discountLabel(discountType),
         total_tax: String(line?.total_tax ?? '0'),
         taxes: line?.taxes ?? { total: {}, subtotal: {} },
         image: line?.image ?? { id: product.image?.id ?? product.image_id ?? null, src: product.image?.src ?? product.image_url ?? '' },
         meta_data: Array.isArray(line?.meta_data) ? line.meta_data : (fallback?.modifiers || []),
-      };
+      }];
     });
   }
 

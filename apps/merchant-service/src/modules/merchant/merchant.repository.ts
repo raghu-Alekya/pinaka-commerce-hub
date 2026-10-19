@@ -2003,6 +2003,8 @@ export class MerchantRepository implements OnModuleInit {
          payment.amount,
          payment.order_total,
          payment.remaining,
+         payment.refund_amount,
+         payment.balance_amount,
          payment.currency,
          payment.status,
          payment.entry_type,
@@ -3194,10 +3196,11 @@ private async productDataSyncContext(deviceId: string | undefined, merchantId: s
       if (typeof value !== 'string' || !value.trim()) throw new BadRequestException(`${name} required`);
     }
     const rows = await this.requireDataSource().query(`
-      SELECT d.id::text AS id,d.device_code,d.device_id,m.store_id::text AS store_id
+      SELECT d.id::text AS id,to_jsonb(d)->>'device_code' AS device_code,
+             to_jsonb(d)->>'deviceCode' AS legacy_device_code,d.device_id,m.store_id::text AS store_id
       FROM public.devices d JOIN public.store_devices m ON m.device_id::text=d.id::text
       JOIN public.stores s ON s.id::text=m.store_id::text
-      WHERE (d.id::text=$1 OR d.device_code=$1 OR d.device_id=$1)
+      WHERE (d.id::text=$1 OR to_jsonb(d)->>'device_code'=$1 OR to_jsonb(d)->>'deviceCode'=$1 OR d.device_id=$1)
         AND COALESCE(d.is_deleted,false)=false AND m.is_deleted=false AND m.is_mapped=true
         AND s.merchant_id::text=$2 AND s.id::text=$3
       LIMIT 2
@@ -3207,7 +3210,7 @@ private async productDataSyncContext(deviceId: string | undefined, merchantId: s
     const row = rows[0];
     if (actor.role !== 'OWNER') {
       if (actor.storeId !== row.store_id) throw new ForbiddenException('Device does not belong to your store');
-      if (actor.deviceId && ![row.id,row.device_code,row.device_id].includes(actor.deviceId)) throw new ForbiddenException('Device does not match the authenticated session');
+      if (actor.deviceId && ![row.id,row.device_code,row.legacy_device_code,row.device_id].filter(value => typeof value === 'string').map(value => value.trim()).includes(actor.deviceId.trim())) throw new ForbiddenException('Device does not match the authenticated session');
     }
     return { storeId: row.store_id as string, deviceId: row.id as string, label: deviceId.trim() };
   }

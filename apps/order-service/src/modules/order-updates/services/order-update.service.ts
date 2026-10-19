@@ -61,7 +61,11 @@ export class OrderUpdateService {
       throw new BadRequestException('status must be pending, processing, on-hold, completed, cancelled, refunded, or failed');
     }
     return {
-      orderStatus: status === 'completed' ? OrderStatus.COMPLETED : OrderStatus.CREATED,
+      orderStatus: status === 'completed'
+        ? OrderStatus.COMPLETED
+        : status === 'refunded'
+          ? OrderStatus.REFUNDED
+          : OrderStatus.CREATED,
       storeStatus: status,
       replaceItems: false,
       history: {

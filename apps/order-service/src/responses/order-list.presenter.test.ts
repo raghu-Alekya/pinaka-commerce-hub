@@ -47,6 +47,49 @@ test('total-orders marks only partially refunded lines and reports refund totals
   assert.equal(order.net_payment, 47.82);
 });
 
+test('total-orders uses the repository effective refund status', () => {
+  const partial = row('completed');
+  partial.effectiveStatus = 'partial-refund';
+  const refunded = row('completed');
+  refunded.effectiveStatus = 'refunded';
+  const result = new OrderListPresenter().present(1, 10, 2, [partial, refunded]);
+  assert.equal(result.orders_data[0].status, 'Partial-refund');
+  assert.equal(result.orders_data[1].status, 'Refunded');
+});
+
+test('total-orders requests latest-modified ordering', () => {
+  const criteria = new OrderListPresenter().criteria({});
+  assert.equal(criteria.orderBy, 'modified');
+});
+
+test('total-orders normalizes status aliases and preserves other filters', () => {
+  const presenter = new OrderListPresenter();
+  const criteria = presenter.criteria({
+    page: '2',
+    perPage: '25',
+    status: 'partial_refund, canceled,ON HOLD,partial-refund',
+    createdVia: ' REST-API ',
+    storeId: ' store-1 ',
+  });
+  assert.equal(criteria.page, 2);
+  assert.equal(criteria.perPage, 25);
+  assert.deepEqual(criteria.statuses, ['partial-refund', 'cancelled', 'on-hold']);
+  assert.equal(criteria.createdVia, 'REST-API');
+  assert.equal(criteria.storeId, 'store-1');
+});
+
+test('total-orders treats all and any status aliases as unfiltered', () => {
+  const presenter = new OrderListPresenter();
+  assert.deepEqual(presenter.criteria({ status: 'all' }).statuses, []);
+  assert.deepEqual(presenter.criteria({ status: 'any' }).statuses, []);
+});
+
+test('total-orders rejects invalid pagination', () => {
+  const presenter = new OrderListPresenter();
+  assert.throws(() => presenter.criteria({ page: '0' }), /page must be a whole number greater than 0/);
+  assert.throws(() => presenter.criteria({ perPage: '101' }), /per_page cannot be greater than 100/);
+});
+
 test('total-orders does not mark individual lines on a fully refunded order', () => {
   const result = new OrderListPresenter().present(1, 10, 1, [row('refunded')]);
   assert.equal(result.orders_data[0].line_items[0].is_refund_item, false);
