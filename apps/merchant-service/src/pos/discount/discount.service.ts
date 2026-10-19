@@ -169,6 +169,7 @@ export class DiscountService implements OnModuleInit {
     const connection = await this.requireWordPressConnection(storeId, role);
     const group = this.discountGroup(input.type);
     this.validateCreateInput(group, input);
+    await this.validateDiscountPrice(storeId, group, input);
     await this.assertDiscountIsUnique(connection, group, input);
     if (group === 'multipack') await this.assertMultipackRuleIsUnique(connection, input);
     const body = this.toWordPressPayload({ ...input, type: group });
@@ -235,6 +236,7 @@ export class DiscountService implements OnModuleInit {
     if (input.quantity !== undefined && input.qty === undefined) merged.qty = input.quantity;
     if (input.required_quantity !== undefined && input.qty === undefined && input.quantity === undefined) merged.qty = input.required_quantity;
     this.validateCreateInput(group, merged);
+    await this.validateDiscountPrice(storeId, group, merged);
     await this.assertDiscountIsUnique(connection, group, merged, String(wordpressId));
     if (group === 'multipack') await this.assertMultipackRuleIsUnique(connection, merged, String(wordpressId));
     const body = { ...this.toWordPressPayload(merged), discount_id: Number(wordpressId) };
@@ -302,6 +304,39 @@ export class DiscountService implements OnModuleInit {
   private isPositiveInteger(value: unknown) {
     const number = Number(value);
     return value !== undefined && value !== null && String(value).trim() !== '' && Number.isInteger(number) && number > 0;
+  }
+
+  /** Validate fixed-price offers against the saved product catalog before forwarding them to WordPress. */
+  private async validateDiscountPrice(storeId: string, group: 'auto' | 'mix_match' | 'multipack', input: Record<string, any>) {
+    const discountType = String(input.discount_type ?? '').toLowerCase();
+    if (!['price', 'fixed_item'].includes(discountType) && group !== 'multipack') return;
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException('amount must be a valid discount price');
+
+    let ids: number[];
+    if (group === 'mix_match') ids = this.discountProductIds(input) ?? [];
+    else ids = [Number(input.product_id ?? input.main_product_id)].filter(id => Number.isSafeInteger(id) && id > 0);
+    if (!ids.length) throw new BadRequestException('A product is required to validate the discount price');
+
+    const [table] = await this.merchants.requireDataSource().query("SELECT to_regclass('public.store_products') AS name");
+    if (!table?.name) throw new BadRequestException('Sync products for this store before creating or updating fixed-price discounts');
+    const rows = await this.merchants.requireDataSource().query(
+      `SELECT product->>'id' AS id,
+              COALESCE(NULLIF(product->>'price',''), NULLIF(product->>'sale_price',''), NULLIF(product->>'regular_price','')) AS price
+         FROM public.store_products AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(catalog.payload)='array' THEN catalog.payload ELSE '[]'::jsonb END) AS product
+        WHERE catalog.store_id=$1::uuid AND COALESCE(catalog.is_deleted,false)=false
+          AND product->>'id' ~ '^[0-9]+$' AND (product->>'id')::bigint = ANY($2::bigint[])`,
+      [storeId, ids],
+    );
+    const products = new Map(rows.map((row: { id: string; price: string | null }) => [Number(row.id), row.price === null ? NaN : Number(row.price)]));
+    const missing = ids.filter(id => !products.has(id));
+    if (missing.length) throw new BadRequestException(`Products not found in store catalog: ${missing.join(', ')}`);
+    const invalid = ids.filter(id => !Number.isFinite(products.get(id)) || Number(products.get(id)) < 0);
+    if (invalid.length) throw new BadRequestException(`Product price is missing for: ${invalid.join(', ')}; sync the store products and retry`);
+    const productPrice = ids.reduce((total, id) => total + Number(products.get(id)), 0)
+      * (group === 'multipack' ? Number(input.qty ?? input.quantity ?? input.required_quantity ?? 1) : 1);
+    if (amount >= productPrice) throw new BadRequestException(`Discount price must be lower than the product price (${productPrice.toFixed(2)})`);
   }
 
   private toWordPressPayload(input: Record<string, any>) {

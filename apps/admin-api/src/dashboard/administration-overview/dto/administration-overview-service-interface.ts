@@ -42,11 +42,9 @@ export class AdministrationOverviewService
 
   async onModuleInit(): Promise<void> {
     try {
-      this.dataSource = await connectPostgres(
-        'Admin API PostgreSQL',
-        [],
-        { synchronize: false },
-      );
+      this.dataSource = await connectPostgres('Admin API PostgreSQL', [], {
+        synchronize: false,
+      });
 
       // Dynamically detect available columns for lock status
       const empCols = await this.dataSource.query(
@@ -191,7 +189,10 @@ export class AdministrationOverviewService
         COUNT(*) FILTER (WHERE m.created_at >= $1 AND m.created_at <= $2)::int AS current_period_count,
         COUNT(*) FILTER (WHERE m.created_at >= $3 AND m.created_at < $4)::int AS previous_period_count
       FROM public.merchants m
-      WHERE (m.is_deleted = false OR m.is_deleted IS NULL)${whereClause}
+      -- Merchant management keeps inactive merchants visible even when the
+      -- legacy soft-delete flag is set. The dashboard must use the same
+      -- population so total, active, and inactive counts reconcile.
+      WHERE TRUE${whereClause}
     `;
 
     const [row] = await this.dataSource.query(query, params);
