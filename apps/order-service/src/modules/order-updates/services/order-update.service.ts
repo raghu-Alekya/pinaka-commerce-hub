@@ -1,5 +1,13 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { moneyAmount, withCouponBase } from '../../../calculations/order-update.calculations';
+import {
+  isMerchantDiscountCode,
+  merchantDiscountCoverage,
+  moneyAmount,
+  readCouponLine,
+  selectMinimumEligibleCoupon,
+  withCouponBase,
+  type CouponSpec,
+} from '../../../calculations/order-update.calculations';
 import { OrderRepository } from '../../../order.repository';
 import type { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto, UpdateOrderDto } from '../dto/order-update.dto';
 import { cancelFromDto, couponFromDto, discountFromDto, itemsFromDto } from '../order-update.normalize';
@@ -34,15 +42,8 @@ export class OrderUpdateService {
     }
     let graph = await this.load(orderId);
     if (hasCoupons) {
-      const lines = this.lines.fromGraph(graph).map((line) => withCouponBase(line));
       const requested = dto.coupon_lines || [];
-      const coupons = await Promise.all(requested.map((line) => this.couponCatalog.resolve({
-        storeId: graph.order.storeId,
-        code: line.code,
-        lines,
-        email: this.billingEmail(graph),
-        couponCount: requested.length,
-      })));
+      const coupons = await this.couponsForOrder(graph, requested);
       graph = await this.persist(graph, this.coupons.sync(graph, coupons));
     }
     if (hasStatus) {
@@ -77,6 +78,19 @@ export class OrderUpdateService {
 
   async applyCoupon(orderId: string, dto: ApplyCouponDto) {
     const graph = await this.load(orderId);
+    const coverage = this.coverage(graph);
+    if (coverage.coversOrder) {
+      throw new BadRequestException(
+        'A coupon cannot be applied because the merchant discount already covers the order total',
+      );
+    }
+    if (coverage.merchantDiscount > 0) {
+      const chosen = await this.minimumEligibleCoupon(graph, coverage.remaining);
+      if (chosen) {
+        const saved = await this.persist(graph, this.coupons.sync(graph, [chosen]));
+        return this.presenter.present(saved);
+      }
+    }
     const command = couponFromDto(dto);
     const draft = this.coupons.apply(graph, command);
     const saved = await this.persist(graph, draft);
@@ -86,7 +100,16 @@ export class OrderUpdateService {
   async applyDiscount(orderId: string, dto: ApplyDiscountDto) {
     const graph = await this.load(orderId);
     const draft = this.discounts.apply(graph, discountFromDto(dto));
-    const saved = await this.persist(graph, draft);
+    this.overlay(graph, draft);
+    const coverage = merchantDiscountCoverage(draft.lineItems || [], draft.couponLines || []);
+    let next = draft;
+    if (coverage.coversOrder) {
+      if (this.hasStoreCoupon(draft.couponLines)) next = this.coupons.sync(graph, []);
+    } else if (coverage.merchantDiscount > 0 && coverage.remaining > 0) {
+      const chosen = await this.minimumEligibleCoupon(graph, coverage.remaining);
+      if (chosen) next = this.coupons.sync(graph, [chosen]);
+    }
+    const saved = await this.persist(graph, next);
     return this.presenter.present(saved);
   }
 
@@ -103,6 +126,93 @@ export class OrderUpdateService {
     const draft = this.cancellation.cancel(graph, cancelFromDto(dto));
     const saved = await this.persist(graph, draft);
     return this.presenter.present(saved);
+  }
+
+  private async couponsForOrder(
+    graph: OrderGraph,
+    requested: Array<{ code: string }>,
+  ): Promise<CouponSpec[]> {
+    const coverage = this.coverage(graph);
+    if (requested.length && coverage.coversOrder) {
+      throw new BadRequestException(
+        'A coupon cannot be applied because the merchant discount already covers the order total',
+      );
+    }
+    if (!requested.length) return [];
+    const lines = this.lines.fromGraph(graph).map((line) => withCouponBase(line));
+    const email = this.billingEmail(graph);
+    if (coverage.merchantDiscount > 0) {
+      const chosen = await this.minimumEligibleCoupon(graph, coverage.remaining)
+        ?? await this.minimumResolvedCoupon(graph, requested, lines, email, coverage.remaining);
+      if (!chosen) throw new BadRequestException('No eligible coupon applies to the remaining balance');
+      return [chosen];
+    }
+    return Promise.all(requested.map((line) => this.couponCatalog.resolve({
+      storeId: graph.order.storeId,
+      code: line.code,
+      lines,
+      email,
+      couponCount: requested.length,
+    })));
+  }
+
+  private async minimumResolvedCoupon(
+    graph: OrderGraph,
+    requested: Array<{ code: string }>,
+    lines: ReturnType<OrderLineMapper['fromGraph']>,
+    email: string | undefined,
+    remaining: number,
+  ): Promise<CouponSpec | undefined> {
+    const resolved: CouponSpec[] = [];
+    let firstError: unknown;
+    for (const line of requested) {
+      try {
+        resolved.push(await this.couponCatalog.resolve({
+          storeId: graph.order.storeId,
+          code: line.code,
+          lines,
+          email,
+          couponCount: 1,
+        }));
+      } catch (error) {
+        if (!firstError) firstError = error;
+      }
+    }
+    const chosen = selectMinimumEligibleCoupon(resolved, remaining);
+    if (chosen) return chosen;
+    if (firstError) throw firstError;
+    return undefined;
+  }
+
+  private async minimumEligibleCoupon(graph: OrderGraph, remaining: number): Promise<CouponSpec | undefined> {
+    const lines = this.lines.fromGraph(graph).map((line) => withCouponBase(line));
+    const eligible = await this.couponCatalog.eligible({
+      storeId: graph.order.storeId,
+      lines,
+      email: this.billingEmail(graph),
+    });
+    return selectMinimumEligibleCoupon(eligible, remaining);
+  }
+
+  private coverage(graph: OrderGraph) {
+    const couponLines = Array.isArray(graph.storeOrder?.couponLines) ? graph.storeOrder.couponLines : [];
+    return merchantDiscountCoverage(this.lines.fromGraph(graph), couponLines);
+  }
+
+  private hasStoreCoupon(couponLines: unknown[] | undefined): boolean {
+    return (couponLines || []).some((line) => {
+      const parsed = readCouponLine(line);
+      return parsed ? !isMerchantDiscountCode(parsed.code) : false;
+    });
+  }
+
+  private overlay(graph: OrderGraph, draft: OrderMutationDraft): void {
+    const storeOrder = graph.storeOrder;
+    if (!storeOrder) return;
+    if (draft.lineItems) storeOrder.lineItems = draft.lineItems;
+    if (draft.couponLines) storeOrder.couponLines = draft.couponLines;
+    if (draft.feeLines) storeOrder.feeLines = draft.feeLines;
+    if (draft.taxLines) storeOrder.taxLines = draft.taxLines;
   }
 
   private billingEmail(graph: OrderGraph): string | undefined {

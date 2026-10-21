@@ -1440,6 +1440,32 @@ export class OrderRepository implements OnModuleInit {
     }
   }
 
+  async listStoreCoupons(storeId: string): Promise<Record<string, unknown>[]> {
+    if (!this.dataSource || !storeId) return [];
+    try {
+      return await this.dataSource.query(
+        `SELECT code, amount, discount_type, date_expires, individual_use,
+                product_ids, excluded_product_ids, usage_limit, usage_count,
+                usage_limit_per_user, minimum_amount, maximum_amount,
+                email_restrictions, used_by, exclude_sale_items
+         FROM public.store_coupons
+         WHERE store_id = $1::uuid
+           AND deleted_at IS NULL
+           AND sync_status <> 'DELETED'
+         ORDER BY lower(code)
+         LIMIT 500`,
+        [storeId],
+      );
+    } catch (error: unknown) {
+      const postgresCode = error instanceof QueryFailedError
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (postgresCode === '42P01' || postgresCode === '42703') return [];
+      if (postgresCode === '22P02') throw new BadRequestException('storeId must be a UUID');
+      throw error;
+    }
+  }
+
   async getOrderDetails(id: string, storeId?: string) {
     const key = String(id || '').trim();
     if (!key) return null;
