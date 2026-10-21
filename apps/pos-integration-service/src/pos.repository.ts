@@ -1,10 +1,14 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
-import { PosShiftEntity, ShiftCloseData, ShiftDenominationData, ShiftStatus } from './entities/pos-shift.entity';
+import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
+import { PosShiftMetaEntity } from './entities/pos-shift-meta.entity';
+import { PosShiftTransactionEntity } from './entities/pos-shift-transaction.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
+import { ensureShiftSplitSchema, syncLegacyShiftColumns } from './shift.schema';
+import { ShiftTransactionInput, ShiftView, ShiftWrite, expectedCashInDrawer, roundMoney, toShiftView } from './shift.types';
 
 async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
   try {
@@ -200,23 +204,32 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
 export class PosRepository implements OnModuleInit {
   private dataSource?: DataSource;
   private shiftRepo?: Repository<PosShiftEntity>;
+  private metaRepo?: Repository<PosShiftMetaEntity>;
+  private transactionRepo?: Repository<PosShiftTransactionEntity>;
   private movementRepo?: Repository<CashMovementEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
 
-  private inMemoryShifts: PosShiftEntity[] = [];
+  private memoryShifts: PosShiftEntity[] = [];
+  private memoryMeta: PosShiftMetaEntity[] = [];
+  private memoryTransactions: PosShiftTransactionEntity[] = [];
   private inMemoryMovements: CashMovementEntity[] = [];
 
   async onModuleInit() {
     this.dataSource = await connectPostgres('POS Integration DB', [
       PosShiftEntity,
+      PosShiftMetaEntity,
+      PosShiftTransactionEntity,
       CashMovementEntity,
     ], { synchronize: false });
     await createMissingTables(this.dataSource);
     await ensurePosShiftSnakeCaseSchema(this.dataSource);
+    await ensureShiftSplitSchema(this.dataSource);
     await this.ensureSafeTransactionShiftConstraints();
     this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
+    this.metaRepo = this.dataSource.getRepository(PosShiftMetaEntity);
+    this.transactionRepo = this.dataSource.getRepository(PosShiftTransactionEntity);
     this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
     this.isDbConnected = true;
 
@@ -255,59 +268,96 @@ export class PosRepository implements OnModuleInit {
     `);
   }
 
-  // --- Open Cashier Shift ---
-  async openShift(
-    merchantId: string,
-    storeId: string,
-    terminalId: string,
-    cashierName: string,
-    openingCash: number,
-    registerId?: string,
-    denominationData: ShiftDenominationData = {},
-    openedByEmployeeId?: string,
-  ): Promise<PosShiftEntity> {
-    const shift: PosShiftEntity = {
-      id: `SHIFT-${randomUUID()}`,
-      merchantId,
-      storeId,
-      registerId,
-      openedByEmployeeId,
-      terminalId: terminalId || 'SUNMI-D3-01',
-      cashierName: cashierName || 'Cashier',
-      openingCash: Number(openingCash),
-      totalCashSales: 0.00,
-      totalCardSales: 0.00,
-      totalSafeDrops: 0.00,
-      totalPaidOuts: 0.00,
-      total_orders: 0,
-      total_order_sale_amount: 0.00,
-      total_cashback: 0.00,
-      total_payouts: 0.00,
-      total_ebt_sales: 0.00,
-      total_pay_later: 0.00,
-      total_refunds: 0.00,
-      total_cancelled_orders: 0,
-      total_void_items: 0,
-      ...denominationData,
-      status: ShiftStatus.OPEN,
-      openedAt: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    if (this.isDbConnected && this.shiftRepo) {
-      const entity = this.shiftRepo.create(shift);
-      const saved = await this.shiftRepo.save(entity);
-      await this.cacheActiveShift(storeId, saved);
-      return saved;
-    } else {
-      this.inMemoryShifts.unshift(shift);
-      await this.cacheActiveShift(storeId, shift);
-      return shift;
+  async createShift(write: ShiftWrite): Promise<ShiftView> {
+    const shift = this.masterFromWrite(write, true);
+    const actor = shift.created_by ?? null;
+    if (this.isDbConnected && this.dataSource) {
+      const runner = this.dataSource.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      try {
+        await runner.manager.getRepository(PosShiftEntity).save(shift);
+        await this.writeMeta(runner.manager, shift.id, write.meta);
+        await this.writeTransactions(runner.manager, shift.id, write.transactions, actor, 'create');
+        await this.attachOrderSales(runner.manager, shift.id, actor);
+        await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
+        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
+        await runner.commitTransaction();
+      } catch (error) {
+        await runner.rollbackTransaction();
+        this.rethrowWrite(error);
+      } finally {
+        await runner.release();
+      }
+      const view = await this.getShiftView(shift.id);
+      if (!view) throw new BadRequestException('Shift could not be read after it was created');
+      await this.cacheActiveShift(view.store_id, view);
+      return view;
     }
+
+    this.memoryShifts.unshift(shift);
+    this.memoryMeta.unshift(...this.metaRows(shift.id, write.meta));
+    this.memoryTransactions.unshift(...this.transactionRows(shift.id, write.transactions, actor, 'create'));
+    this.applyMemoryVariance(shift, new Set(write.fields));
+    const view = await this.getShiftView(shift.id);
+    if (!view) throw new BadRequestException('Shift could not be read after it was created');
+    await this.cacheActiveShift(view.store_id, view);
+    return view;
   }
 
-  // --- Record Safe Drop / Cash Movement ---
+  async updateShift(shiftId: string, write: ShiftWrite): Promise<ShiftView | null> {
+    const actor = write.master.updated_by ?? write.master.closed_by ?? write.master.created_by ?? null;
+    if (this.isDbConnected && this.dataSource) {
+      const runner = this.dataSource.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      try {
+        const shift = await runner.manager.getRepository(PosShiftEntity).findOne({
+          where: { id: shiftId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!shift) {
+          await runner.rollbackTransaction();
+          return null;
+        }
+        this.applyMasterPatch(shift, write);
+        await runner.manager.getRepository(PosShiftEntity).save(shift);
+        await this.writeMeta(runner.manager, shift.id, write.meta);
+        await this.writeTransactions(runner.manager, shift.id, write.transactions, actor ?? shift.updated_by ?? shift.created_by ?? null, 'update');
+        await this.attachOrderSales(runner.manager, shift.id, actor ?? shift.created_by ?? null);
+        await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
+        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
+        await runner.commitTransaction();
+      } catch (error) {
+        await runner.rollbackTransaction();
+        this.rethrowWrite(error);
+      } finally {
+        await runner.release();
+      }
+      const view = await this.getShiftView(shiftId);
+      if (view) await this.cacheActiveShift(view.store_id, view);
+      return view;
+    }
+
+    const shift = this.memoryShifts.find((row) => row.id === shiftId);
+    if (!shift) return null;
+    this.applyMasterPatch(shift, write);
+    for (const row of this.metaRows(shift.id, write.meta)) {
+      const existing = this.memoryMeta.find((meta) => meta.shift_id === shift.id && meta.meta_name === row.meta_name);
+      if (existing) {
+        existing.meta_value = row.meta_value;
+        existing.status = row.status;
+      } else {
+        this.memoryMeta.push(row);
+      }
+    }
+    this.memoryTransactions.push(...this.transactionRows(shift.id, write.transactions, actor ?? shift.created_by ?? null, 'update'));
+    this.applyMemoryVariance(shift, new Set(write.fields));
+    const view = await this.getShiftView(shift.id);
+    if (view) await this.cacheActiveShift(view.store_id, view);
+    return view;
+  }
+
   async recordCashMovement(shiftId: string, storeId: string, movementType: MovementType, amount: number, performedBy: string, reason?: string): Promise<CashMovementEntity> {
     const movement: CashMovementEntity = {
       id: `CSH-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -319,118 +369,110 @@ export class PosRepository implements OnModuleInit {
       reason: reason || 'Cash Drawer Management',
       createdAt: new Date(),
     };
-
-    if (this.isDbConnected && this.movementRepo && this.shiftRepo) {
-      const entity = this.movementRepo.create(movement);
-      const saved = await this.movementRepo.save(entity);
-
-      const shift = await this.shiftRepo.findOne({ where: { id: shiftId } });
-      if (shift) {
-        if (movementType === MovementType.SAFE_DROP) shift.totalSafeDrops = Number(shift.totalSafeDrops) + Number(amount);
-        if (movementType === MovementType.PAID_OUT) shift.totalPaidOuts = Number(shift.totalPaidOuts) + Number(amount);
-        await this.shiftRepo.save(shift);
-        await this.cacheActiveShift(storeId, shift);
-      }
-      return saved;
-    } else {
-      this.inMemoryMovements.unshift(movement);
-      const shift = this.inMemoryShifts.find((s) => s.id === shiftId);
-      if (shift) {
-        if (movementType === MovementType.SAFE_DROP) shift.totalSafeDrops = Number(shift.totalSafeDrops) + Number(amount);
-        if (movementType === MovementType.PAID_OUT) shift.totalPaidOuts = Number(shift.totalPaidOuts) + Number(amount);
-      }
-      return movement;
-    }
-  }
-
-  // --- Close Shift & Generate Z-Report ---
-  async closeShift(
-    shiftId: string,
-    closingCashActual: number,
-    closedByEmployeeId?: string,
-    closeData: ShiftCloseData = {},
-  ): Promise<{ success: boolean; shift?: PosShiftEntity; message?: string }> {
-    const applyCloseData = (target: PosShiftEntity) => {
-      if (closedByEmployeeId) target.closedByEmployeeId = closedByEmployeeId;
-      for (const [key, value] of Object.entries(closeData)) {
-        if (value !== undefined) Object.assign(target, { [key]: value });
-      }
+    const transaction: ShiftTransactionInput = {
+      transaction_type: movementType,
+      total_sum: Number(amount),
+      json_payload: {
+        source: 'cash_movement',
+        movement_id: movement.id,
+        store_id: storeId,
+        reason: movement.reason,
+        performed_by: movement.performedBy,
+      },
+      status: 'ACTIVE',
+      created_by: movement.performedBy,
     };
 
-    let shift: PosShiftEntity | null = null;
-
-    if (this.isDbConnected && this.shiftRepo) {
-      shift = await this.shiftRepo.findOne({ where: { id: shiftId } });
+    if (this.isDbConnected && this.movementRepo && this.dataSource) {
+      const saved = await this.movementRepo.save(this.movementRepo.create(movement));
+      const shift = await this.shiftRepo?.findOne({ where: { id: shiftId } });
       if (shift) {
-        const sales = (await this.getSalesByShift([shift.id])).get(shift.id);
-        if (sales) {
-          shift.totalCashSales = sales.cash;
-          shift.totalCardSales = sales.card;
-        }
-        const expected = Number(shift.openingCash) + Number(shift.totalCashSales) - Number(shift.totalSafeDrops) - Number(shift.totalPaidOuts);
-        shift.closingCashActual = Number(closingCashActual);
-        shift.expectedCashInDrawer = expected;
-        shift.discrepancy = Number(closingCashActual) - expected;
-        shift.status = ShiftStatus.CLOSED;
-        shift.closedAt = new Date();
-        applyCloseData(shift);
-        shift = await this.shiftRepo.save(shift);
+        await this.dataSource.transaction(async (manager) => {
+          await this.writeTransactions(manager, shiftId, [transaction], movement.performedBy, 'create');
+          await syncLegacyShiftColumns((sql, params) => manager.query(sql, params), shiftId);
+        });
+        const view = await this.getShiftView(shiftId);
+        if (view) await this.cacheActiveShift(storeId, view);
       }
-    } else {
-      shift = this.inMemoryShifts.find((s) => s.id === shiftId) || null;
-      if (shift) {
-        const expected = Number(shift.openingCash) + Number(shift.totalCashSales) - Number(shift.totalSafeDrops) - Number(shift.totalPaidOuts);
-        shift.closingCashActual = Number(closingCashActual);
-        shift.expectedCashInDrawer = expected;
-        shift.discrepancy = Number(closingCashActual) - expected;
-        shift.status = ShiftStatus.CLOSED;
-        shift.closedAt = new Date();
-        applyCloseData(shift);
-      }
+      return saved;
     }
 
-    if (!shift) {
-      return { success: false, message: `Shift '${shiftId}' not found` };
+    this.inMemoryMovements.unshift(movement);
+    if (this.memoryShifts.some((shift) => shift.id === shiftId)) {
+      this.memoryTransactions.unshift(...this.transactionRows(shiftId, [transaction], movement.performedBy, 'create'));
     }
-
-    return { success: true, shift };
+    return movement;
   }
 
-  async getActiveShifts(storeId: string): Promise<PosShiftEntity[]> {
-    if (this.isDbConnected && this.shiftRepo) {
-      return await this.shiftRepo.find({
-        where: { storeId, status: ShiftStatus.OPEN },
-        order: { openedAt: 'DESC', createdAt: 'DESC' },
-      });
-    }
-    return this.inMemoryShifts
-      .filter((shift) => shift.storeId === storeId && shift.status === ShiftStatus.OPEN)
-      .sort((left, right) => right.openedAt.getTime() - left.openedAt.getTime());
-  }
-  async getShiftsByStore(storeId: string): Promise<PosShiftEntity[]> {
+  async getActiveShifts(storeId: string): Promise<ShiftView[]> {
     if (this.isDbConnected && this.shiftRepo) {
       const shifts = await this.shiftRepo.find({
-        where: { storeId },
-        order: { openedAt: 'DESC', createdAt: 'DESC' },
+        where: { store_id: storeId, status: ShiftStatus.OPEN },
+        order: { opened_at: 'DESC', created_at: 'DESC' },
       });
-      return this.withOrderSales(shifts);
+      return this.viewsFor(shifts);
     }
-    return this.inMemoryShifts
-      .filter(shift => shift.storeId === storeId)
-      .sort((left, right) => right.openedAt.getTime() - left.openedAt.getTime());
+    return this.viewsFor(this.memoryShifts
+      .filter((shift) => shift.store_id === storeId && shift.status === ShiftStatus.OPEN)
+      .sort((left, right) => right.opened_at.getTime() - left.opened_at.getTime()));
   }
 
-  async getShiftsByEmployee(employeeId: string, storeId?: string): Promise<PosShiftEntity[]> {
+  async getShiftsByStore(storeId: string): Promise<ShiftView[]> {
     if (this.isDbConnected && this.shiftRepo) {
       const shifts = await this.shiftRepo.find({
-        where: { openedByEmployeeId: employeeId, ...(storeId ? { storeId } : {}) },
-        order: { openedAt: 'DESC', createdAt: 'DESC' },
+        where: { store_id: storeId },
+        order: { opened_at: 'DESC', created_at: 'DESC' },
       });
-      return this.withOrderSales(shifts);
+      return this.viewsFor(shifts);
     }
-    return this.inMemoryShifts
-      .filter((shift) => shift.openedByEmployeeId === employeeId && (!storeId || shift.storeId === storeId))
-      .sort((left, right) => right.openedAt.getTime() - left.openedAt.getTime());
+    return this.viewsFor(this.memoryShifts
+      .filter((shift) => shift.store_id === storeId)
+      .sort((left, right) => right.opened_at.getTime() - left.opened_at.getTime()));
+  }
+
+  async getShiftsByEmployee(employeeId: string, storeId?: string): Promise<ShiftView[]> {
+    if (this.isDbConnected && this.shiftRepo) {
+      const query = this.shiftRepo.createQueryBuilder('shift')
+        .where('lower(shift.created_by) = lower(:employeeId)', { employeeId })
+        .orderBy('shift.opened_at', 'DESC')
+        .addOrderBy('shift.created_at', 'DESC');
+      if (storeId) query.andWhere('shift.store_id = :storeId', { storeId });
+      return this.viewsFor(await query.getMany());
+    }
+    return this.viewsFor(this.memoryShifts
+      .filter((shift) => shift.created_by?.toLowerCase() === employeeId.toLowerCase() && (!storeId || shift.store_id === storeId))
+      .sort((left, right) => right.opened_at.getTime() - left.opened_at.getTime()));
+  }
+
+  async getShiftView(shiftId: string, storeId?: string): Promise<ShiftView | null> {
+    if (this.isDbConnected && this.shiftRepo) {
+      const shift = await this.shiftRepo.findOne({
+        where: { id: shiftId, ...(storeId ? { store_id: storeId } : {}) },
+      });
+      if (!shift) return null;
+      const [view] = await this.viewsFor([shift]);
+      return view ?? null;
+    }
+    const shift = this.memoryShifts.find((row) => row.id === shiftId && (!storeId || row.store_id === storeId));
+    if (!shift) return null;
+    const [view] = await this.viewsFor([shift]);
+    return view ?? null;
+  }
+
+  async getShiftWithSafeTransactions(shiftId: string, storeId: string) {
+    const shift = await this.getShiftView(shiftId, storeId);
+    if (!shift || !this.dataSource) return shift;
+    const safes = await this.dataSource.query(
+      `SELECT id AS safe_id, title, created_at, safe_data, shift_id, created_by
+       FROM public.pos_safe_transactions WHERE shift_id = $1 ORDER BY created_at DESC, id DESC`,
+      [shiftId],
+    );
+    const safe_drops = await this.dataSource.query(
+      `SELECT id AS safe_drop_id, title, created_at, safe_data, shift_id, created_by
+       FROM public.pos_safe_drop_transactions WHERE shift_id = $1 ORDER BY created_at DESC, id DESC`,
+      [shiftId],
+    );
+    return { ...shift, safes, safe_drops };
   }
 
   // Cash/card sales per shift from store_orders (order-service, same database),
@@ -478,89 +520,322 @@ export class PosRepository implements OnModuleInit {
     return sales;
   }
 
-  // Fills sales from orders and recomputes expected cash / over-short for closed shifts.
-  private async withOrderSales(shifts: PosShiftEntity[]): Promise<PosShiftEntity[]> {
-    const sales = await this.getSalesByShift(shifts.map((shift) => shift.id));
-    for (const shift of shifts) {
-      const totals = sales.get(shift.id);
-      if (!totals) continue;
-      shift.totalCashSales = totals.cash;
-      shift.totalCardSales = totals.card;
-      if (shift.closingCashActual !== null && shift.closingCashActual !== undefined) {
-        const expected = Number(shift.openingCash) + totals.cash - Number(shift.totalSafeDrops) - Number(shift.totalPaidOuts);
-        shift.expectedCashInDrawer = expected;
-        shift.discrepancy = Number(shift.closingCashActual) - expected;
-      }
+  private async viewsFor(shifts: PosShiftEntity[]): Promise<ShiftView[]> {
+    if (!shifts.length) return [];
+    const ids = shifts.map((shift) => shift.id);
+    let meta: PosShiftMetaEntity[] = [];
+    let transactions: PosShiftTransactionEntity[] = [];
+    if (this.isDbConnected && this.metaRepo && this.transactionRepo) {
+      meta = await this.metaRepo.find({ where: { shift_id: In(ids) }, order: { meta_name: 'ASC' } });
+      transactions = await this.transactionRepo.find({ where: { shift_id: In(ids) }, order: { created_at: 'ASC' } });
+    } else {
+      meta = this.memoryMeta
+        .filter((row) => ids.includes(row.shift_id))
+        .sort((left, right) => left.meta_name.localeCompare(right.meta_name));
+      transactions = this.memoryTransactions
+        .filter((row) => ids.includes(row.shift_id))
+        .sort((left, right) => left.created_at.getTime() - right.created_at.getTime());
     }
-    return shifts;
+    const sales = this.isDbConnected ? await this.getSalesByShift(ids) : new Map<string, { cash: number; card: number }>();
+    return shifts.map((shift) => toShiftView(
+      shift,
+      meta.filter((row) => row.shift_id === shift.id).map((row) => ({
+        id: row.id,
+        shift_id: row.shift_id,
+        meta_name: row.meta_name,
+        meta_value: row.meta_value,
+        status: row.status,
+      })),
+      transactions.filter((row) => row.shift_id === shift.id).map((row) => ({
+        id: row.id,
+        shift_id: row.shift_id,
+        transaction_type: row.transaction_type,
+        total_sum: Number(row.total_sum),
+        json_payload: row.json_payload,
+        status: row.status,
+        created_by: row.created_by ?? null,
+        updated_by: row.updated_by ?? null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      })),
+      sales.get(shift.id),
+    ));
   }
 
-  async getShiftWithSafeTransactions(shiftId: string, storeId: string) {
-    const found = await this.shiftRepo?.findOne({ where: { id: shiftId, storeId } });
-    if (!found) return null;
-    const [shift] = await this.withOrderSales([found]);
-    const safes = await this.dataSource!.query(
-      `SELECT id AS safe_id, title, created_at, safe_data, shift_id, created_by
-       FROM public.pos_safe_transactions WHERE shift_id = $1 ORDER BY created_at DESC, id DESC`,
-      [shiftId],
-    );
-    const safe_drops = await this.dataSource!.query(
-      `SELECT id AS safe_drop_id, title, created_at, safe_data, shift_id, created_by
-       FROM public.pos_safe_drop_transactions WHERE shift_id = $1 ORDER BY created_at DESC, id DESC`,
-      [shiftId],
-    );
+  private masterFromWrite(write: ShiftWrite, creating: boolean): PosShiftEntity {
+    const now = new Date();
+    const status = write.master.status ?? ShiftStatus.OPEN;
     return {
-      id: shift.id,
-      merchant_id: shift.merchantId,
-      store_id: shift.storeId,
-      register_id: shift.registerId,
-      device_id: shift.terminalId,
-      opening_device_id: shift.openingDeviceId,
-      opened_by_employee_id: shift.openedByEmployeeId,
-      closed_by_employee_id: shift.closedByEmployeeId,
-      closed_by_device_id: shift.closed_by_device_id,
-      shift_number: shift.shiftNumber,
-      cashier_name: shift.cashierName,
-      opening_cash: shift.openingCash,
-      total_cash_sales: shift.totalCashSales,
-      total_card_sales: shift.totalCardSales,
-      total_safe_drops: shift.totalSafeDrops,
-      total_paid_outs: shift.totalPaidOuts,
-      total_orders: shift.total_orders,
-      total_order_sale_amount: shift.total_order_sale_amount,
-      total_cashback: shift.total_cashback,
-      total_payouts: shift.total_payouts,
-      total_ebt_sales: shift.total_ebt_sales,
-      total_pay_later: shift.total_pay_later,
-      total_refunds: shift.total_refunds,
-      total_cancelled_orders: shift.total_cancelled_orders,
-      total_void_items: shift.total_void_items,
-      drawer_denominations: shift.drawer_denominations,
-      drawer_total_amount: shift.drawer_total_amount,
-      tube_denominations: shift.tube_denominations,
-      tube_total_amount: shift.tube_total_amount,
-      total_amount: shift.total_amount,
-      closing_cash_actual: shift.closingCashActual,
-      expected_cash_in_drawer: shift.expectedCashInDrawer,
-      declared_cash: shift.declaredCash,
-      cash_difference: shift.cashDifference,
-      discrepancy: shift.discrepancy,
-      opening_note: shift.openingNote,
-      closing_note: shift.closingNote,
-      status: shift.status,
-      opened_at: shift.openedAt,
-      closed_at: shift.closedAt,
-      created_at: shift.createdAt,
-      updated_at: shift.updatedAt,
-      safes,
-      safe_drops,
+      id: write.shiftId || `SHIFT-${randomUUID()}`,
+      merchant_id: write.master.merchant_id || '',
+      store_id: write.master.store_id || '',
+      device_id: write.master.device_id || 'SUNMI-D3-01',
+      opening_device_id: write.master.opening_device_id ?? null,
+      closing_device_id: write.master.closing_device_id ?? null,
+      created_by: write.master.created_by ?? null,
+      updated_by: write.master.updated_by ?? null,
+      closed_by: write.master.closed_by ?? null,
+      status,
+      opening_balance: write.master.opening_balance ?? 200,
+      closing_balance: write.master.closing_balance ?? null,
+      over_short: write.master.over_short ?? null,
+      declared_cash: write.master.declared_cash ?? null,
+      discrepancy: write.master.discrepancy ?? null,
+      opened_at: write.master.opened_at ?? now,
+      closed_at: write.fields.includes('closed_at')
+        ? write.master.closed_at ?? null
+        : (creating && status === ShiftStatus.CLOSED ? now : null),
+      created_at: now,
+      updated_at: now,
     };
   }
 
-  private async cacheActiveShift(storeId: string, shift: PosShiftEntity) {
+  private applyMasterPatch(shift: PosShiftEntity, write: ShiftWrite): void {
+    if (write.fields.includes('merchant_id')) {
+      if (!write.master.merchant_id) throw new BadRequestException('merchant_id is required');
+      if (write.master.merchant_id !== shift.merchant_id) {
+        throw new BadRequestException('merchant_id does not match this shift');
+      }
+    }
+    if (write.fields.includes('store_id')) {
+      if (!write.master.store_id) throw new BadRequestException('store_id is required');
+      if (write.master.store_id !== shift.store_id) {
+        throw new BadRequestException('store_id does not match this shift');
+      }
+    }
+    if (write.fields.includes('device_id')) {
+      if (!write.master.device_id) throw new BadRequestException('device_id is required');
+      shift.device_id = write.master.device_id;
+    }
+    if (write.fields.includes('opening_device_id')) shift.opening_device_id = write.master.opening_device_id ?? null;
+    if (write.fields.includes('closing_device_id')) shift.closing_device_id = write.master.closing_device_id ?? null;
+    if (write.fields.includes('created_by')) shift.created_by = write.master.created_by ?? null;
+    if (write.fields.includes('updated_by')) shift.updated_by = write.master.updated_by ?? null;
+    if (write.fields.includes('closed_by')) shift.closed_by = write.master.closed_by ?? null;
+    if (write.fields.includes('status') && write.master.status) shift.status = write.master.status;
+    if (write.fields.includes('opening_balance') && write.master.opening_balance !== undefined) {
+      shift.opening_balance = write.master.opening_balance;
+    }
+    if (write.fields.includes('closing_balance')) shift.closing_balance = write.master.closing_balance ?? null;
+    if (write.fields.includes('over_short')) shift.over_short = write.master.over_short ?? null;
+    if (write.fields.includes('declared_cash')) shift.declared_cash = write.master.declared_cash ?? null;
+    if (write.fields.includes('discrepancy')) shift.discrepancy = write.master.discrepancy ?? null;
+    if (write.fields.includes('opened_at') && write.master.opened_at) shift.opened_at = write.master.opened_at;
+    if (write.fields.includes('closed_at')) shift.closed_at = write.master.closed_at ?? null;
+    if (shift.status === ShiftStatus.CLOSED && !write.fields.includes('closed_at') && !shift.closed_at) {
+      shift.closed_at = new Date();
+    }
+    shift.updated_at = new Date();
+  }
+
+  private async writeMeta(manager: EntityManager, shiftId: string, rows: ShiftWrite['meta']): Promise<void> {
+    for (const row of rows) {
+      await manager.query(
+        `INSERT INTO public.pos_shift_meta (id, shift_id, meta_name, meta_value, status)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
+         ON CONFLICT (shift_id, meta_name) DO UPDATE
+         SET meta_value = EXCLUDED.meta_value, status = EXCLUDED.status`,
+        [randomUUID(), shiftId, row.meta_name, JSON.stringify(row.meta_value), row.status],
+      );
+    }
+  }
+
+  private async writeTransactions(
+    manager: EntityManager,
+    shiftId: string,
+    rows: ShiftTransactionInput[],
+    actor: string | null,
+    mode: 'create' | 'update',
+  ): Promise<void> {
+    for (const row of rows) {
+      const payload = JSON.stringify(row.json_payload ?? {});
+      const createdBy = row.created_by ?? actor;
+      const updatedBy = row.updated_by ?? actor;
+      if (row.upsert_by_type) {
+        await manager.query(
+          `WITH updated AS (
+             UPDATE public.pos_shift_transactions
+             SET total_sum = $3, json_payload = $4::jsonb, status = $5, updated_by = $6, updated_at = CURRENT_TIMESTAMP
+             WHERE id = (
+               SELECT id FROM public.pos_shift_transactions
+               WHERE shift_id = $1 AND transaction_type = $2
+               ORDER BY created_at ASC, id ASC
+               LIMIT 1
+             )
+             RETURNING id
+           )
+           INSERT INTO public.pos_shift_transactions (
+             id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by
+           )
+           SELECT $7, $1, $2, $3, $4::jsonb, $5, $8, $6
+           WHERE NOT EXISTS (SELECT 1 FROM updated)`,
+          [shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy, randomUUID(), createdBy],
+        );
+        continue;
+      }
+      if (row.id && mode === 'update') {
+        const updated: Array<{ id: string }> = await manager.query(
+          `UPDATE public.pos_shift_transactions
+           SET transaction_type = $3, total_sum = $4, json_payload = $5::jsonb, status = $6,
+               updated_by = $7, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND shift_id = $2
+           RETURNING id`,
+          [row.id, shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy],
+        );
+        if (!updated.length) throw new BadRequestException(`Transaction '${row.id}' was not found on this shift`);
+        continue;
+      }
+      await manager.query(
+        `INSERT INTO public.pos_shift_transactions (
+           id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by
+         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+        [row.id ?? randomUUID(), shiftId, row.transaction_type, row.total_sum, payload, row.status, createdBy, updatedBy],
+      );
+    }
+  }
+
+  private async attachOrderSales(manager: EntityManager, shiftId: string, actor: string | null): Promise<void> {
+    const shift = await manager.getRepository(PosShiftEntity).findOne({ where: { id: shiftId } });
+    if (!shift || shift.status !== ShiftStatus.CLOSED) return;
+    const existing: Array<{ transaction_type: string }> = await manager.query(
+      `SELECT DISTINCT transaction_type FROM public.pos_shift_transactions
+       WHERE shift_id = $1 AND status = 'ACTIVE' AND transaction_type = ANY($2)`,
+      [shiftId, ['CASH_SALE', 'CARD_SALE']],
+    );
+    const have = new Set(existing.map((row) => row.transaction_type));
+    const sales = (await this.getSalesByShift([shiftId])).get(shiftId);
+    if (!sales) return;
+    const rows: ShiftTransactionInput[] = [];
+    if (!have.has('CASH_SALE') && sales.cash > 0) {
+      rows.push({
+        transaction_type: 'CASH_SALE',
+        total_sum: sales.cash,
+        json_payload: { source: 'store_orders' },
+        status: 'ACTIVE',
+        upsert_by_type: true,
+      });
+    }
+    if (!have.has('CARD_SALE') && sales.card > 0) {
+      rows.push({
+        transaction_type: 'CARD_SALE',
+        total_sum: sales.card,
+        json_payload: { source: 'store_orders' },
+        status: 'ACTIVE',
+        upsert_by_type: true,
+      });
+    }
+    if (rows.length) await this.writeTransactions(manager, shiftId, rows, actor, 'update');
+  }
+
+  private async applyVariance(manager: EntityManager, shiftId: string, provided: Set<string>): Promise<void> {
+    const shift = await manager.getRepository(PosShiftEntity).findOne({ where: { id: shiftId } });
+    if (!shift || shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
+    const transactions = await manager.getRepository(PosShiftTransactionEntity).find({ where: { shift_id: shiftId } });
+    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
+    let changed = false;
+    if (!provided.has('over_short')) {
+      shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
+      changed = true;
+    }
+    if (!provided.has('discrepancy')) {
+      const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
+      shift.discrepancy = roundMoney(baseline - expected);
+      changed = true;
+    }
+    if (!provided.has('closed_at') && !shift.closed_at) {
+      shift.closed_at = new Date();
+      changed = true;
+    }
+    if (changed) await manager.getRepository(PosShiftEntity).save(shift);
+  }
+
+  private applyMemoryVariance(shift: PosShiftEntity, provided: Set<string>): void {
+    if (shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
+    const transactions = this.memoryTransactions.filter((row) => row.shift_id === shift.id);
+    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
+    if (!provided.has('over_short')) shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
+    if (!provided.has('discrepancy')) {
+      const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
+      shift.discrepancy = roundMoney(baseline - expected);
+    }
+    if (!provided.has('closed_at') && !shift.closed_at) shift.closed_at = new Date();
+  }
+
+  private metaRows(shiftId: string, rows: ShiftWrite['meta']): PosShiftMetaEntity[] {
+    return rows.map((row) => ({
+      id: randomUUID(),
+      shift_id: shiftId,
+      meta_name: row.meta_name,
+      meta_value: row.meta_value,
+      status: row.status,
+    }));
+  }
+
+  private transactionRows(
+    shiftId: string,
+    rows: ShiftTransactionInput[],
+    actor: string | null,
+    mode: 'create' | 'update',
+  ): PosShiftTransactionEntity[] {
+    const now = new Date();
+    const created: PosShiftTransactionEntity[] = [];
+    for (const row of rows) {
+      if (row.upsert_by_type) {
+        const existing = this.memoryTransactions.find((item) => item.shift_id === shiftId && item.transaction_type === row.transaction_type);
+        if (existing) {
+          existing.total_sum = row.total_sum;
+          existing.json_payload = row.json_payload;
+          existing.status = row.status;
+          existing.updated_by = row.updated_by ?? actor;
+          existing.updated_at = now;
+          continue;
+        }
+      }
+      if (row.id && mode === 'update') {
+        const existing = this.memoryTransactions.find((item) => item.id === row.id && item.shift_id === shiftId);
+        if (!existing) throw new BadRequestException(`Transaction '${row.id}' was not found on this shift`);
+        existing.transaction_type = row.transaction_type;
+        existing.total_sum = row.total_sum;
+        existing.json_payload = row.json_payload;
+        existing.status = row.status;
+        existing.updated_by = row.updated_by ?? actor;
+        existing.updated_at = now;
+        continue;
+      }
+      created.push({
+        id: row.id ?? randomUUID(),
+        shift_id: shiftId,
+        transaction_type: row.transaction_type,
+        total_sum: row.total_sum,
+        json_payload: row.json_payload ?? {},
+        status: row.status,
+        created_by: row.created_by ?? actor,
+        updated_by: row.updated_by ?? actor,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    return created;
+  }
+
+  private rethrowWrite(error: unknown): never {
+    const code = typeof error === 'object' && error && 'code' in error
+      ? String((error as { code?: string }).code)
+      : '';
+    if (code === '23505') {
+      throw new BadRequestException('Shift id, meta name, or transaction id already exists');
+    }
+    throw error;
+  }
+
+  private async cacheActiveShift(storeId: string, shift: ShiftView) {
     if (this.isRedisConnected && this.redisClient) {
       try {
-        await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
+        if (shift.status === ShiftStatus.OPEN) {
+          await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
+        } else {
+          await this.redisClient.del(`shift:${storeId}`);
+        }
       } catch {}
     }
   }

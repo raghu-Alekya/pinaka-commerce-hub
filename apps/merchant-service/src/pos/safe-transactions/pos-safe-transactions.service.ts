@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -259,6 +260,30 @@ export class PosSafeTransactionsService implements OnModuleInit {
           `UPDATE public.pos_shifts SET total_safe_drops = COALESCE(total_safe_drops, 0) + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
           [body.total_cash, shift.id],
         );
+        const [relation] = await manager.query(
+          `SELECT to_regclass('public.pos_shift_transactions') AS name`,
+        );
+        if (relation?.name) {
+          await manager.query(
+            `INSERT INTO public.pos_shift_transactions
+               (id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by)
+             VALUES ($1, $2, 'SAFE_DROP', $3, $4::jsonb, 'ACTIVE', $5, $5)`,
+            [
+              randomUUID(),
+              shift.id,
+              Number(body.total_cash),
+              JSON.stringify({
+                source: 'safe_drop',
+                safe_drop_id: result[0].id,
+                title,
+                safe_drop_denom: safeDropData,
+                total_cash: Number(body.total_cash),
+                total_notes: Number(body.total_notes),
+              }),
+              actorId,
+            ],
+          );
+        }
         return result[0];
       });
     const creator = await this.employeeName(actorId);
