@@ -399,6 +399,52 @@ export function totalIncludingTax(input: {
   return fromMinor(Math.max(0, totalMinor), places);
 }
 
+/**
+ * List total: merchandise after coupons and fee discounts, plus tax.
+ * A stored total that left out a merchant discount is rebuilt from the lines.
+ * A stored total the lines cannot explain is left unchanged.
+ */
+export function listOrderTotal(input: {
+  total: unknown;
+  tax?: unknown;
+  couponDiscount?: unknown;
+  lineItems?: ReadonlyArray<{ total?: unknown; subtotal?: unknown; name?: string }>;
+  feeLines?: ReadonlyArray<{ total?: unknown; name?: string }>;
+  shippingTotal?: unknown;
+  tip?: unknown;
+  decimalPlaces?: number;
+}): number {
+  const places = input.decimalPlaces ?? 2;
+  const lines = input.lineItems;
+  if (!lines?.length) return totalIncludingTax(input);
+
+  const lineTotalMinor = toMinor(sumLineTotals(lines as PosLineItem[], places), places);
+  const lineSubtotalMinor = toMinor(sumLineSubtotals(lines as PosLineItem[], places), places);
+  const fees = (input.feeLines || []) as PosFeeLine[];
+  const feeMinorTotal = toMinor(calculateFeeTotal(fees, places), places);
+  const shippingMinor = toMinor(input.shippingTotal ?? 0, places);
+  const tipMinor = toMinor(input.tip ?? 0, places);
+  const taxMinor = Math.max(0, toMinor(input.tax, places));
+  const appliedInLines = Math.max(0, lineSubtotalMinor - lineTotalMinor);
+  const extraDiscount = Math.max(0, toMinor(input.couponDiscount ?? 0, places) - appliedInLines);
+  const payableMinor = lineTotalMinor + feeMinorTotal + shippingMinor + tipMinor - extraDiscount;
+  const storedMinor = toMinor(input.total, places);
+  const close = (amount: number) => Math.abs(storedMinor - amount) <= 2;
+  if (close(payableMinor + taxMinor) && !close(payableMinor)) return fromMinor(storedMinor, places);
+  if (close(payableMinor)) return fromMinor(payableMinor + taxMinor, places);
+
+  const omittedMinor = fees.reduce((sum, fee) => {
+    const amount = toMinor(fee?.total ?? 0, places);
+    const name = String(fee?.name || '').toLowerCase();
+    return name.includes('discount') || amount <= 0 ? sum + amount : sum;
+  }, 0);
+  const withoutOmitted = payableMinor - omittedMinor;
+  if (omittedMinor !== 0 && (close(withoutOmitted) || close(withoutOmitted + taxMinor))) {
+    return fromMinor(payableMinor + taxMinor, places);
+  }
+  return totalIncludingTax(input);
+}
+
 export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
   const places = input.decimalPlaces ?? input.tax?.decimalPlaces ?? 2;
   const sourceLines = input.lineItems || [];

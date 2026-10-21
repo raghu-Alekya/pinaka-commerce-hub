@@ -10,6 +10,7 @@ import {
   applyMerchantDiscountToStoredTax,
   calculateOrderTotal,
   calculateTaxLines,
+  listOrderTotal,
   totalExcludingTax,
   totalIncludingTax,
 } from './store-order.calculations';
@@ -59,6 +60,25 @@ test('stored totals that already exclude tax are left unchanged', () => {
     feeLines: [{ name: 'Bag', total: '0.10' }],
     shippingTotal: 1,
   }), 11.1);
+});
+
+test('order list total is the net after merchant discount plus tax', () => {
+  const lines = [{ name: 'Cheetos mix', subtotal: '189.81', total: '183.81' }];
+  const fees = [{ name: 'merchant_discount', total: '-18.98' }];
+  assert.equal(listOrderTotal({
+    total: 183.81,
+    tax: 15,
+    couponDiscount: 6,
+    lineItems: lines,
+    feeLines: fees,
+  }), 179.83);
+  assert.equal(listOrderTotal({
+    total: 164.83,
+    tax: 15,
+    couponDiscount: 6,
+    lineItems: lines,
+    feeLines: fees,
+  }), 179.83);
 });
 
 test('order list adds tax when the stored total excludes it', () => {

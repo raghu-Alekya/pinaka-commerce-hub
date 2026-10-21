@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { totalIncludingTax } from '../calculations/store-order.calculations';
+import { listOrderTotal } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -66,9 +66,13 @@ export class OrderListPresenter {
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const total = this.money(totalIncludingTax({
+    const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const total = this.money(listOrderTotal({
       total: storeOrder?.total ?? order.totalAmount,
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      couponDiscount: coupons.length
+        ? coupons.reduce((sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0), 0)
+        : (storeOrder?.discountTotal ?? order.discountAmount),
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
       feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
       shippingTotal: request.shipping_total ?? request.shippingTotal,
