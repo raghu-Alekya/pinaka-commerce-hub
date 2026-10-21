@@ -6,7 +6,7 @@ import {
   type CouponSpec,
   type OrderLine,
 } from './order-update.calculations';
-import { calculateOrderTotal } from './store-order.calculations';
+import { calculateOrderTotal, totalExcludingTax } from './store-order.calculations';
 
 const five: CouponSpec = { code: 'SAVE5', discountType: 'fixed_cart', amount: 5 };
 const ten: CouponSpec = { code: 'SAVE10', discountType: 'fixed_cart', amount: 10 };
@@ -43,6 +43,26 @@ test('order total does not include tax', () => {
   });
   assert.equal(totals.taxTotal, 0.82);
   assert.equal(totals.total, 11.1);
+});
+
+test('stored totals that already exclude tax are left unchanged', () => {
+  assert.equal(totalExcludingTax({
+    total: 11.1,
+    tax: 0.82,
+    lineItems: [{ name: 'Item', total: '10.00' }],
+    feeLines: [{ name: 'Bag', total: '0.10' }],
+    shippingTotal: 1,
+  }), 11.1);
+});
+
+test('stored totals that include tax drop total_tax', () => {
+  assert.equal(totalExcludingTax({
+    total: 11.92,
+    tax: 0.82,
+    lineItems: [{ name: 'Item', total: '10.00' }],
+    feeLines: [{ name: 'Bag', total: '0.10' }],
+    shippingTotal: 1,
+  }), 11.1);
 });
 
 test('the smallest eligible coupon is selected for the remaining balance', () => {

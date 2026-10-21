@@ -44,7 +44,7 @@ test('total-orders marks only partially refunded lines and reports refund totals
   assert.equal(order.line_items[0].is_refund_item, true);
   assert.equal(order.line_items[1].is_refund_item, false);
   assert.equal(order.refund_total, 15.98);
-  assert.equal(order.net_payment, 47.82);
+  assert.equal(order.net_payment, 42.96);
 });
 
 test('total-orders uses the repository effective refund status', () => {

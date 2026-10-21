@@ -78,7 +78,7 @@ test('completed order presenter emits the Woo compatibility response', () => {
   assert.equal(response.orders_data[0].status, 'completed');
   assert.equal(response.orders_data[0].amount, '16.88');
   assert.equal(response.orders_data[0].items_tax, '1.54');
-  assert.equal(response.orders_data[0].total, '18.42');
+  assert.equal(response.orders_data[0].total, '16.88');
   assert.equal(response.orders_data[0].transaction_id, '17518');
   assert.equal(response.orders_data[0].order_type, 'Shop Order');
 });
