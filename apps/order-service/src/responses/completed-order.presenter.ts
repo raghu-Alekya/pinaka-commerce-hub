@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { totalExcludingTax } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
 import type { StoreOrderEntity } from '../entities/store-order.entity';
@@ -69,10 +70,17 @@ export class CompletedOrderPresenter {
       : (Array.isArray(request.payments) ? request.payments : []);
     const id = this.orderId(order);
     const clientOrderId = this.clientOrderId(order, storeOrder) ?? id;
-    const total = this.money(storeOrder?.total ?? order.totalAmount);
     const itemsTax = this.decimal(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount);
+    const total = this.money(totalExcludingTax({
+      total: storeOrder?.total ?? order.totalAmount,
+      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      shippingTotal: request.shipping_total ?? request.shippingTotal,
+      tip: storeOrder?.tipAmount ?? order.tipAmount,
+    }));
     const orderDiscount = Number(this.metaValue(order, '_order_discount') || 0);
-    const amount = this.money(Math.max(0, Number(total) - Number(itemsTax) - orderDiscount));
+    const amount = this.money(Math.max(0, Number(total) - orderDiscount));
     const createdVia = String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api');
     const lineItems = this.lineItems(storeOrder?.lineItems, items, order.storeId, products, refunds);
     return {

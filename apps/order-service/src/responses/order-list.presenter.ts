@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { totalExcludingTax } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -65,7 +66,14 @@ export class OrderListPresenter {
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const total = this.money(storeOrder?.total ?? order.totalAmount);
+    const total = this.money(totalExcludingTax({
+      total: storeOrder?.total ?? order.totalAmount,
+      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      shippingTotal: request.shipping_total ?? request.shippingTotal,
+      tip: storeOrder?.tipAmount ?? order.tipAmount,
+    }));
     const totalNumber = Number(total);
     const refundTotal = row.refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
     const refundedItemIds = new Set(row.refunds.flatMap((refund) => {

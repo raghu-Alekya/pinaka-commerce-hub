@@ -237,6 +237,34 @@ export function calculateOrderTotal(input: {
   return { subtotal, discountTotal, lineTotal, feeTotal, taxTotal, shippingTotal, total };
 }
 
+/**
+ * Older orders stored a tax-inclusive total. Orders saved after tax was removed
+ * already match the line, fee, shipping, and tip sum, so tax is not removed twice.
+ */
+export function totalExcludingTax(input: {
+  total: unknown;
+  tax?: unknown;
+  lineItems?: ReadonlyArray<{ total?: unknown; subtotal?: unknown; name?: string }>;
+  feeLines?: ReadonlyArray<{ total?: unknown; name?: string }>;
+  shippingTotal?: unknown;
+  tip?: unknown;
+  decimalPlaces?: number;
+}): number {
+  const places = input.decimalPlaces ?? 2;
+  const totalMinor = toMinor(input.total, places);
+  const taxMinor = Math.max(0, toMinor(input.tax, places));
+  if (taxMinor <= 0 || totalMinor <= 0) return fromMinor(Math.max(0, totalMinor), places);
+
+  if (input.lineItems) {
+    const exclusiveMinor = toMinor(sumLineTotals(input.lineItems as PosLineItem[], places), places)
+      + toMinor(calculateFeeTotal(input.feeLines as PosFeeLine[], places), places)
+      + toMinor(input.shippingTotal ?? 0, places)
+      + toMinor(input.tip ?? 0, places);
+    if (Math.abs(totalMinor - exclusiveMinor) <= 2) return fromMinor(totalMinor, places);
+  }
+  return fromMinor(Math.max(0, totalMinor - taxMinor), places);
+}
+
 export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
   const places = input.decimalPlaces ?? input.tax?.decimalPlaces ?? 2;
   const sourceLines = input.lineItems || [];

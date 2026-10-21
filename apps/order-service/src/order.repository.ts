@@ -1338,7 +1338,7 @@ export class OrderRepository implements OnModuleInit {
       const storedSubtotal = Number(storeOrder.subtotal ?? 0);
       storeOrder.subtotal = (Number.isFinite(storedSubtotal) ? storedSubtotal : 0) + addedLineSubtotal;
       const storedOrderTotal = Number(storeOrder.total ?? 0);
-      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal + addedTaxTotal;
+      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal;
       storeOrder.taxLines = existingTaxLines;
     });
   }
