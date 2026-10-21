@@ -4,6 +4,7 @@ export interface PosLineItem {
   quantity?: number | string;
   subtotal?: number | string;
   total?: number | string;
+  tax_status?: string;
   meta_data?: Array<{ key?: string; value?: unknown }>;
 }
 
@@ -50,6 +51,8 @@ export interface StoreOrderCalculationInput {
   tax?: Omit<TaxCalculationInput, 'lineItems' | 'feeLines'>;
   /** When omitted, fee lines are not included in the total. */
   includeFees?: boolean;
+  /** Fee lines seen by tax. Defaults to feeLines so a merchant_discount fee reduces the tax base. */
+  taxFeeLines?: PosFeeLine[];
   /** When omitted, payments stay as an empty contribution to the total. */
   includePayments?: boolean;
   /** When omitted, the cashback tier fee is not looked up. */
@@ -162,6 +165,53 @@ function isEbtEligible(line: PosLineItem): boolean {
   return value === 1 || value === '1' || value === true;
 }
 
+function feeKey(fee: { name?: string; fee_name?: string } | null | undefined): string {
+  return String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+export function isMerchantDiscountFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
+  const name = feeKey(fee);
+  return name === 'merchant_discount' || name.startsWith('merchant_discount_');
+}
+
+/** A payout is a cash disbursement, not a supply, so it is outside the tax base. */
+export function isPayoutFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
+  const name = feeKey(fee);
+  return name === 'payout' || name.startsWith('payout_');
+}
+
+export function isTaxableSaleLine(line: PosLineItem): boolean {
+  if (!isMerchandiseLine(line) || isEbtEligible(line)) return false;
+  if (String(line?.tax_status || '').trim().toLowerCase() === 'none') return false;
+  const meta = Array.isArray(line.meta_data) ? line.meta_data : [];
+  const lineType = String(meta.find((entry) => entry?.key === '_pos_line_type')?.value || '').trim().toLowerCase();
+  return lineType !== 'cashback' && lineType !== 'payout';
+}
+
+export function merchantDiscountMinor(
+  feeLines: Array<{ name?: string; fee_name?: string; total?: unknown }> = [],
+  places = 2,
+): number {
+  return feeLines.reduce((sum, fee) => {
+    if (!isMerchantDiscountFee(fee)) return sum;
+    return sum + Math.abs(toMinor(fee?.total ?? 0, places));
+  }, 0);
+}
+
+function amountsAfterDiscount(amounts: number[], discountMinor: number): number[] {
+  const base = amounts.reduce((sum, amount) => sum + amount, 0);
+  const discount = Math.min(Math.max(0, discountMinor), base);
+  if (!discount || !base) return amounts;
+  let allocated = 0;
+  return amounts.map((amount, index) => {
+    const isLast = index === amounts.length - 1;
+    const share = isLast ? discount - allocated : Math.round((discount * amount) / base);
+    const reduction = Math.min(amount, Math.max(0, share));
+    allocated += reduction;
+    return amount - reduction;
+  });
+}
+
 function taxOn(amountMinor: number, ratePercent: number, pricesIncludeTax: boolean): number {
   if (amountMinor === 0 || ratePercent <= 0) return 0;
   const rate = ratePercent / 100;
@@ -180,11 +230,15 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   if (rate <= 0) return [];
 
   const pricesIncludeTax = Boolean(input.pricesIncludeTax);
-  const lineAmounts = (input.lineItems || [])
-    .filter((line) => isMerchandiseLine(line) && !isEbtEligible(line))
-    .map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
+  const taxableLines = (input.lineItems || []).filter((line) => isTaxableSaleLine(line));
+  const rawLineAmounts = taxableLines.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
+  const lineBase = rawLineAmounts.reduce((sum, amount) => sum + amount, 0);
+  const merchantDiscount = Math.min(merchantDiscountMinor(input.feeLines, places), lineBase);
+  const lineAmounts = amountsAfterDiscount(rawLineAmounts, merchantDiscount);
   const feeAmounts = (input.feeLines || [])
-    .filter((fee) => String(fee?.tax_status || 'taxable').toLowerCase() !== 'none')
+    .filter((fee) => !isMerchantDiscountFee(fee)
+      && !isPayoutFee(fee)
+      && String(fee?.tax_status || 'taxable').toLowerCase() !== 'none')
     .map((fee) => toMinor(fee?.total ?? 0, places));
 
   const mode = input.calculation || 'item-price';
@@ -204,6 +258,61 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
     tax_total: fromMinor(taxMinor, places).toFixed(places),
     shipping_tax_total: fromMinor(0, places).toFixed(places),
   }];
+}
+
+/**
+ * A merchant_discount fee is not part of the line total. Scale tax that was
+ * calculated on the pre-discount price down to the post-discount price.
+ */
+export function applyMerchantDiscountToStoredTax(
+  lines: Array<PosLineItem & { total_tax?: unknown; subtotal_tax?: unknown; taxes?: unknown }>,
+  feeLines: PosFeeLine[] | undefined,
+  orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
+  places = 2,
+): void {
+  const taxable = lines.filter((line) => isTaxableSaleLine(line));
+  const amounts = taxable.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
+  const base = amounts.reduce((sum, amount) => sum + amount, 0);
+  const discount = Math.min(merchantDiscountMinor(feeLines, places), base);
+  if (!discount || !base) return;
+
+  const reduced = amountsAfterDiscount(amounts, discount);
+  let oldLineTax = 0;
+  const nextTax = taxable.map((line, index) => {
+    const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
+    const nextMinor = amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0;
+    oldLineTax += oldMinor;
+    return nextMinor;
+  });
+  taxable.forEach((line, index) => {
+    const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
+    if (!oldMinor) return;
+    const next = fromMinor(nextTax[index], places).toFixed(places);
+    const subtotalMatched = toMinor(line.subtotal_tax ?? 0, places) === oldMinor;
+    line.total_tax = next;
+    if (subtotalMatched) line.subtotal_tax = next;
+    if (Array.isArray(line.taxes)) {
+      line.taxes.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+        const record = entry as { total?: unknown; subtotal?: unknown };
+        record.total = next;
+        if (subtotalMatched) record.subtotal = next;
+      });
+    }
+  });
+
+  const previousOrderTax = Math.max(0, toMinor(orderTax.total_tax ?? 0, places));
+  const basisOld = oldLineTax > 0 ? oldLineTax : previousOrderTax;
+  const basisNew = oldLineTax > 0
+    ? nextTax.reduce((sum, amount) => sum + amount, 0)
+    : Math.round((previousOrderTax * (base - discount)) / base);
+  if (basisOld <= 0 || basisNew === basisOld) return;
+  orderTax.total_tax = fromMinor(basisNew, places).toFixed(places);
+  if (orderTax.cart_tax !== undefined) orderTax.cart_tax = orderTax.total_tax;
+  (orderTax.tax_lines || []).forEach((taxLine) => {
+    const current = toMinor(taxLine.tax_total ?? 0, places);
+    taxLine.tax_total = fromMinor(Math.round((current * basisNew) / basisOld), places).toFixed(places);
+  });
 }
 
 /**
@@ -299,7 +408,12 @@ export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
   const feeLines = input.feeLines || [];
   const appliedFees = input.includeFees ? feeLines : [];
   const taxLines = input.tax
-    ? calculateTaxLines({ ...input.tax, lineItems, feeLines: appliedFees, decimalPlaces: places })
+    ? calculateTaxLines({
+      ...input.tax,
+      lineItems,
+      feeLines: input.taxFeeLines ?? feeLines,
+      decimalPlaces: places,
+    })
     : (input.taxLines || []);
   const payments = input.includePayments ? (input.payments || []) : [];
   return {

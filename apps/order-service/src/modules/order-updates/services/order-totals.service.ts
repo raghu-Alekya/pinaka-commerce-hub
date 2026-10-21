@@ -34,6 +34,7 @@ export class OrderTotalsService {
     const calculated = calculateStoreOrder({
       lineItems,
       feeLines: feesForTotal,
+      taxFeeLines: feeLines,
       taxLines: tax ? [] : existingTax,
       tax,
       includeFees: feesForTotal.length > 0,

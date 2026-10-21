@@ -6,7 +6,13 @@ import {
   type CouponSpec,
   type OrderLine,
 } from './order-update.calculations';
-import { calculateOrderTotal, totalExcludingTax, totalIncludingTax } from './store-order.calculations';
+import {
+  applyMerchantDiscountToStoredTax,
+  calculateOrderTotal,
+  calculateTaxLines,
+  totalExcludingTax,
+  totalIncludingTax,
+} from './store-order.calculations';
 
 const five: CouponSpec = { code: 'SAVE5', discountType: 'fixed_cart', amount: 5 };
 const ten: CouponSpec = { code: 'SAVE10', discountType: 'fixed_cart', amount: 10 };
@@ -83,6 +89,85 @@ test('stored totals that include tax drop total_tax', () => {
     feeLines: [{ name: 'Bag', total: '0.10' }],
     shippingTotal: 1,
   }), 11.1);
+});
+
+test('tax is calculated after a merchant_discount fee', () => {
+  const before = calculateTaxLines({
+    lineItems: [
+      { name: 'Tama Tarrro', total: '9.98' },
+      { name: 'Cosbytoys', total: '13.98' },
+      { name: 'Cashback', total: '50.00' },
+    ],
+    rate: 7.22,
+    decimalPlaces: 2,
+  });
+  const after = calculateTaxLines({
+    lineItems: [
+      { name: 'Tama Tarrro', total: '9.98' },
+      { name: 'Cosbytoys', total: '13.98' },
+      { name: 'Cashback', total: '50.00' },
+    ],
+    feeLines: [{ name: 'merchant_discount', total: '-11.98' }],
+    rate: 7.22,
+    decimalPlaces: 2,
+  });
+  assert.equal(before[0].tax_total, '1.73');
+  assert.equal(after[0].tax_total, '0.86');
+});
+
+test('a payout is excluded from tax and does not reduce the merchandise base', () => {
+  const lineItems = [
+    { name: 'Tama Tarrro', total: '9.98' },
+    { name: 'Cosbytoys', total: '13.98' },
+    {
+      name: 'Cashback',
+      total: '10.00',
+      tax_status: 'none',
+      meta_data: [{ key: '_pos_line_type', value: 'cashback' }],
+    },
+  ];
+  const feeLines = [
+    { name: 'Payout', tax_status: 'none', total: '-10.00' },
+    { name: 'Cashback Fee', tax_status: 'none', total: '10.00' },
+    { name: 'merchant_discount', total: '-2.40', tax_status: 'none' },
+  ];
+  const exclusive = calculateTaxLines({ lineItems, feeLines, rate: 10, decimalPlaces: 2 });
+  const inclusive = calculateTaxLines({
+    lineItems,
+    feeLines,
+    rate: 10,
+    pricesIncludeTax: true,
+    decimalPlaces: 2,
+  });
+  const withoutPayout = calculateTaxLines({
+    lineItems,
+    feeLines: feeLines.filter((fee) => fee.name !== 'Payout'),
+    rate: 10,
+    decimalPlaces: 2,
+  });
+  assert.equal(exclusive[0].tax_total, '2.16');
+  assert.equal(withoutPayout[0].tax_total, '2.16');
+  assert.equal(inclusive[0].tax_total, '1.96');
+});
+
+test('stored tax is scaled to the total after merchant_discount', () => {
+  const lines = [
+    { name: 'Tama Tarrro', total: '9.98', total_tax: '0.72', subtotal_tax: '0.72', taxes: [{ total: '0.72', subtotal: '0.72' }] },
+    { name: 'Cosbytoys', total: '13.98', total_tax: '1.01', subtotal_tax: '1.01', taxes: [{ total: '1.01', subtotal: '1.01' }] },
+    { name: 'Cashback', total: '50.00', total_tax: '0.00', subtotal_tax: '0.00' },
+  ];
+  const order = {
+    total_tax: '1.73',
+    cart_tax: '1.73',
+    tax_lines: [{ tax_total: '1.73' }],
+  };
+  applyMerchantDiscountToStoredTax(lines, [{ name: 'merchant_discount', total: '-11.98' }], order);
+  assert.equal(lines[0].total_tax, '0.36');
+  assert.equal(lines[1].total_tax, '0.51');
+  assert.equal(lines[2].total_tax, '0.00');
+  assert.equal(order.total_tax, '0.87');
+  assert.equal(order.cart_tax, '0.87');
+  assert.equal(order.tax_lines[0].tax_total, '0.87');
 });
 
 test('the smallest eligible coupon is selected for the remaining balance', () => {
