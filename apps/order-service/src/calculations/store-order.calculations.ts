@@ -265,6 +265,31 @@ export function totalExcludingTax(input: {
   return fromMinor(Math.max(0, totalMinor - taxMinor), places);
 }
 
+/** Order-list total. Adds tax only when the stored total does not already include it. */
+export function totalIncludingTax(input: {
+  total: unknown;
+  tax?: unknown;
+  lineItems?: ReadonlyArray<{ total?: unknown; subtotal?: unknown; name?: string }>;
+  feeLines?: ReadonlyArray<{ total?: unknown; name?: string }>;
+  shippingTotal?: unknown;
+  tip?: unknown;
+  decimalPlaces?: number;
+}): number {
+  const places = input.decimalPlaces ?? 2;
+  const totalMinor = toMinor(input.total, places);
+  const taxMinor = Math.max(0, toMinor(input.tax, places));
+  if (taxMinor <= 0) return fromMinor(Math.max(0, totalMinor), places);
+
+  if (input.lineItems) {
+    const exclusiveMinor = toMinor(sumLineTotals(input.lineItems as PosLineItem[], places), places)
+      + toMinor(calculateFeeTotal(input.feeLines as PosFeeLine[], places), places)
+      + toMinor(input.shippingTotal ?? 0, places)
+      + toMinor(input.tip ?? 0, places);
+    if (Math.abs(totalMinor - exclusiveMinor) <= 2) return fromMinor(totalMinor + taxMinor, places);
+  }
+  return fromMinor(Math.max(0, totalMinor), places);
+}
+
 export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
   const places = input.decimalPlaces ?? input.tax?.decimalPlaces ?? 2;
   const sourceLines = input.lineItems || [];

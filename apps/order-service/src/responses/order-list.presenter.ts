@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { totalExcludingTax } from '../calculations/store-order.calculations';
+import { totalIncludingTax } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -66,7 +66,7 @@ export class OrderListPresenter {
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const total = this.money(totalExcludingTax({
+    const total = this.money(totalIncludingTax({
       total: storeOrder?.total ?? order.totalAmount,
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
