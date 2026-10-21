@@ -1824,8 +1824,7 @@ export class OrderRepository implements OnModuleInit {
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
-           VALUES ($1, $2::uuid, $3, 'REFUNDED', $4, $5, now())
-           ON CONFLICT (id) DO NOTHING`,
+           VALUES ($1, $2::uuid, $3, 'REFUNDED', $4, $5, now())`,
           [`HST-${refundId}`, order.id, String(order.order_status || 'COMPLETED'), input.performedBy, input.reason],
         );
 
@@ -1855,8 +1854,7 @@ export class OrderRepository implements OnModuleInit {
                   `INSERT INTO public.inventory_adjustments
                      (id, "storeId", "productId", "adjustmentType", "quantityChanged",
                       "newQuantityAvailable", "performedBy", reason, "createdAt")
-                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())
-                   ON CONFLICT (id) DO NOTHING`,
+                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())`,
                   [`ADJ-REFUND-${refundId}-${index + 1}`, input.storeId, String(item.product_id),
                     Number(item.quantity || 0), available, input.performedBy,
                     `Full refund ${refundId}: ${input.reason}`],
@@ -2029,8 +2027,7 @@ export class OrderRepository implements OnModuleInit {
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
-           VALUES ($1, $2::uuid, $3, $4, $5, $6, now())
-           ON CONFLICT (id) DO NOTHING`,
+           VALUES ($1, $2::uuid, $3, $4, $5, $6, now())`,
           [`HST-${refundId}`, order.id, String(order.order_status || 'COMPLETED'),
             refundOrderStatus, input.performedBy, input.reason],
         );
@@ -2062,8 +2059,7 @@ export class OrderRepository implements OnModuleInit {
                   `INSERT INTO public.inventory_adjustments
                      (id, "storeId", "productId", "adjustmentType", "quantityChanged",
                       "newQuantityAvailable", "performedBy", reason, "createdAt")
-                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())
-                   ON CONFLICT (id) DO NOTHING`,
+                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())`,
                   [`ADJ-REFUND-${refundId}-${index + 1}`, input.storeId, String(item.product_id),
                     Number(item.quantity || 0), available, input.performedBy,
                     `Partial refund ${refundId}: ${input.reason}`],
