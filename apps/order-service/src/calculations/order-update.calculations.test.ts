@@ -6,7 +6,7 @@ import {
   type CouponSpec,
   type OrderLine,
 } from './order-update.calculations';
-import { calculateOrderTotal, totalExcludingTax } from './store-order.calculations';
+import { calculateOrderTotal, totalExcludingTax, totalIncludingTax } from './store-order.calculations';
 
 const five: CouponSpec = { code: 'SAVE5', discountType: 'fixed_cart', amount: 5 };
 const ten: CouponSpec = { code: 'SAVE10', discountType: 'fixed_cart', amount: 10 };
@@ -53,6 +53,26 @@ test('stored totals that already exclude tax are left unchanged', () => {
     feeLines: [{ name: 'Bag', total: '0.10' }],
     shippingTotal: 1,
   }), 11.1);
+});
+
+test('order list adds tax when the stored total excludes it', () => {
+  assert.equal(totalIncludingTax({
+    total: 11.1,
+    tax: 0.82,
+    lineItems: [{ name: 'Item', total: '10.00' }],
+    feeLines: [{ name: 'Bag', total: '0.10' }],
+    shippingTotal: 1,
+  }), 11.92);
+});
+
+test('order list keeps a stored total that already includes tax', () => {
+  assert.equal(totalIncludingTax({
+    total: 11.92,
+    tax: 0.82,
+    lineItems: [{ name: 'Item', total: '10.00' }],
+    feeLines: [{ name: 'Bag', total: '0.10' }],
+    shippingTotal: 1,
+  }), 11.92);
 });
 
 test('stored totals that include tax drop total_tax', () => {
