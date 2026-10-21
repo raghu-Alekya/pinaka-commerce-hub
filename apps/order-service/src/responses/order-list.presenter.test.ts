@@ -38,6 +38,23 @@ function row(status: string) {
   } as any;
 }
 
+test('total-orders shows net total plus tax when a merchant discount was left out of the stored total', () => {
+  const sample = row('completed');
+  sample.order.totalAmount = 183.81;
+  sample.order.taxAmount = 15;
+  sample.order.discountAmount = 6;
+  sample.storeOrder.total = 183.81;
+  sample.storeOrder.taxTotal = 15;
+  sample.storeOrder.discountTotal = 6;
+  sample.storeOrder.couponLines = [{ code: '2027', discount: '6.00' }];
+  sample.storeOrder.lineItems = [{ name: 'Cheetos mix', quantity: 19, subtotal: '189.81', total: '183.81' }];
+  sample.storeOrder.feeLines = [{ name: 'merchant_discount', total: '-18.98' }];
+  sample.refunds = [];
+  const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
+  assert.equal(order.total, '179.83');
+  assert.equal(order.total_tax, '15');
+});
+
 test('total-orders marks only partially refunded lines and reports refund totals', () => {
   const result = new OrderListPresenter().present(1, 10, 1, [row('partial-refund')]);
   const order = result.orders_data[0];
