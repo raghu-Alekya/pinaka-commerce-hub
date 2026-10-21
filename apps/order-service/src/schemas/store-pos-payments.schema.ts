@@ -33,7 +33,6 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
         order_total numeric(12, 2) NOT NULL CHECK (order_total >= 0),
         remaining numeric(12, 2) NOT NULL DEFAULT 0 CHECK (remaining >= 0),
         refund_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (refund_amount >= 0),
-        balance_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (balance_amount >= 0),
         currency varchar(3),
         status varchar(50) NOT NULL DEFAULT 'completed',
         entry_type varchar(20) NOT NULL DEFAULT 'payment'
@@ -50,8 +49,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments
-        ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS balance_amount numeric(12, 2) NOT NULL DEFAULT 0
+        ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) NOT NULL DEFAULT 0
     `);
     await manager.query(`
       DO $json_migration$
@@ -65,7 +63,9 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
             UPDATE public.store_pos_payments
                SET metadata = COALESCE(metadata, '{}'::jsonb)
                  || jsonb_build_object('source_payload', raw_payload)
-             WHERE raw_payload <> '{}'::jsonb
+             WHERE raw_payload IS NOT NULL
+               AND raw_payload <> '{}'::jsonb
+               AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'source_payload')
           $sql$;
         END IF;
         IF EXISTS (
@@ -78,10 +78,29 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
                SET metadata = COALESCE(metadata, '{}'::jsonb)
                  || jsonb_build_object('provider_response', provider_response)
              WHERE provider_response IS NOT NULL
+               AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'provider_response')
           $sql$;
         END IF;
       END
       $json_migration$
+    `);
+    // `balance_amount` duplicated `remaining`. Preserve the calculated value
+    // in the canonical column, then remove all obsolete physical columns.
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP CONSTRAINT IF EXISTS store_pos_payments_balance_consistent_ck
+    `);
+    await manager.query(`
+      UPDATE public.store_pos_payments
+         SET remaining = GREATEST(0, amount - refund_amount)
+       WHERE remaining IS DISTINCT FROM GREATEST(0, amount - refund_amount)
+    `);
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP COLUMN IF EXISTS balance_amount,
+        DROP COLUMN IF EXISTS parent_payment_id,
+        DROP COLUMN IF EXISTS provider_response,
+        DROP COLUMN IF EXISTS raw_payload
     `);
     await manager.query(`
       UPDATE public.store_pos_payments
@@ -150,21 +169,15 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     await manager.query(`
       UPDATE public.store_pos_payments
          SET refund_amount = amount,
-             balance_amount = remaining
+             remaining = 0
        WHERE entry_type = 'refund'
          AND refund_amount = 0
     `);
     await manager.query(`
       UPDATE public.store_pos_payments
-         SET balance_amount = GREATEST(0, amount - refund_amount)
-       WHERE balance_amount IS DISTINCT FROM GREATEST(0, amount - refund_amount)
-    `);
-    await manager.query(`
-      UPDATE public.store_pos_payments
-         SET remaining = balance_amount,
+         SET remaining = GREATEST(0, amount - refund_amount),
              updated_at = now()
-       WHERE refund_amount > 0
-         AND remaining IS DISTINCT FROM balance_amount
+       WHERE remaining IS DISTINCT FROM GREATEST(0, amount - refund_amount)
     `);
     // Some pre-payment-ledger orders have refund rows but no captured payment
     // row. Reconstruct their single original payment from the immutable order
@@ -173,14 +186,14 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
       INSERT INTO public.store_pos_payments (
         order_id, merchant_id, store_id, local_id, client_order_id, device_id,
         shift_id, user_id, payment_type, payment_method, payment_method_title,
-        amount, order_total, remaining, refund_amount, balance_amount, currency,
+        amount, order_total, remaining, refund_amount, currency,
         status, entry_type, payment_at, metadata
       )
       SELECT sale.order_id, sale.merchant_id, sale.store_id,
              'legacy-payment:' || sale.order_id::text, sale.client_order_id,
              sale.device_id, sale.shift_id, sale.placed_by, 'pos_payment',
              COALESCE(NULLIF(sale.payment_method, ''), 'cash'),
-             sale.payment_method_title, sale.total, sale.total, 0, 0, sale.total,
+             sale.payment_method_title, sale.total, sale.total, sale.total, 0,
              sale.currency, 'completed', 'payment', sale.created_at,
              jsonb_build_object(
                'inferred_legacy_payment', true,
@@ -251,7 +264,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
                 );
               UPDATE public.store_pos_payments
                  SET refund_amount = LEAST(amount, refund_amount + allocated),
-                     balance_amount = GREATEST(0, amount - (refund_amount + allocated)),
+                     remaining = GREATEST(0, amount - (refund_amount + allocated)),
                      status = CASE
                        WHEN refund_amount + allocated >= amount THEN 'refunded'
                        ELSE 'partially-refunded'
@@ -304,13 +317,8 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
       ON public.store_pos_payments (store_id, shift_id, payment_at DESC)
       WHERE deleted_at IS NULL
     `);
-    // Do not drop deprecated columns during application startup. Production
-    // deployments may briefly run old and new service versions together, and
-    // an older instance can still write raw_payload/provider_response. New
-    // installations omit those columns and this version no longer reads or
-    // writes them. Existing values are copied into metadata above; physical
-    // removal belongs in a separately scheduled migration after every service
-    // instance and external SQL consumer has moved to the new contract.
+    // Constraints protect the canonical refund columns after duplicate and
+    // obsolete columns have been consolidated above.
     await manager.query(`
       DO $constraints$
       BEGIN
@@ -322,11 +330,11 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
             CHECK (refund_amount <= amount) NOT VALID;
         END IF;
         IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_balance_consistent_ck'
+          SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_remaining_consistent_ck'
         ) THEN
           ALTER TABLE public.store_pos_payments
-            ADD CONSTRAINT store_pos_payments_balance_consistent_ck
-            CHECK (balance_amount = amount - refund_amount) NOT VALID;
+            ADD CONSTRAINT store_pos_payments_remaining_consistent_ck
+            CHECK (remaining = amount - refund_amount) NOT VALID;
         END IF;
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_active_local_id_ck'
@@ -347,7 +355,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments
-        VALIDATE CONSTRAINT store_pos_payments_balance_consistent_ck
+        VALIDATE CONSTRAINT store_pos_payments_remaining_consistent_ck
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments

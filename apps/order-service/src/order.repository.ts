@@ -210,12 +210,12 @@ export class OrderRepository implements OnModuleInit {
               `INSERT INTO public.store_pos_payments (
                  order_id, merchant_id, store_id, local_id, client_order_id, device_id,
                  shift_id, user_id, payment_type, payment_method, payment_method_title,
-                 amount, order_total, remaining, refund_amount, balance_amount,
+                 amount, order_total, remaining, refund_amount,
                  currency, status, entry_type, provider,
                  provider_transaction_id, payment_at, metadata
                ) VALUES ${paymentRows.map((_, index) => {
-                 const offset = index * 23;
-                 return `(${Array.from({ length: 23 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
+                 const offset = index * 22;
+                 return `(${Array.from({ length: 22 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
                }).join(', ')}
                ON CONFLICT DO NOTHING`,
               paymentRows.flat(),
@@ -391,10 +391,9 @@ export class OrderRepository implements OnModuleInit {
       const localId = suppliedLocalId ?? `generated:${index + 1}`;
       const deviceId = payment?.device_id ?? payment?.deviceId ?? orderData?.device_id ?? orderData?.deviceId
         ?? storeOrder.deviceId ?? null;
-      const calculatedRemaining = Math.max(0, orderTotal - normalizedAmounts
-        .slice(0, index + 1)
-        .reduce((sum: number, value: number) => sum + (Number.isFinite(value) ? value : 0), 0));
-      const remaining = Number(payment?.remaining ?? calculatedRemaining);
+      // `remaining` is the refundable balance of this payment row, not the
+      // outstanding total of the whole order.
+      const remaining = Number.isFinite(amount) ? Math.max(0, amount) : 0;
       const rawPayload = payment && typeof payment === 'object' ? payment : { value: payment };
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
@@ -421,9 +420,8 @@ export class OrderRepository implements OnModuleInit {
           sourcePayload?.payment_method_title ?? orderData?.paymentMethodTitle ?? storeOrder.paymentMethodTitle ?? null,
         Number.isFinite(amount) ? amount : 0,
         orderTotal,
-        Number.isFinite(remaining) ? Math.max(0, remaining) : calculatedRemaining,
+        remaining,
         0,
-        Number.isFinite(amount) ? Math.max(0, amount) : 0,
         String(payment?.currency ?? orderData?.currency ?? '').trim().toUpperCase() || null,
         String(payment?.status ?? (orderData?.paymentStatus === PaymentStatus.PENDING ? 'pending' : 'completed'))
           .trim().toLowerCase(),
@@ -1549,8 +1547,8 @@ export class OrderRepository implements OnModuleInit {
          payment.amount,
          payment.order_total,
          payment.remaining,
+         payment.remaining AS balance_amount,
          payment.refund_amount,
-         payment.balance_amount,
          payment.currency,
          payment.status,
          payment.entry_type,
@@ -1605,7 +1603,7 @@ export class OrderRepository implements OnModuleInit {
     if (!graph) return null;
 
     const payments = await this.dataSource.query(
-      `SELECT id::text AS id, payment_method, amount, refund_amount, balance_amount,
+      `SELECT id::text AS id, payment_method, amount, refund_amount, remaining,
               status, entry_type, is_void, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
@@ -1707,7 +1705,6 @@ export class OrderRepository implements OnModuleInit {
       await manager.query(
         `UPDATE public.store_pos_payments
             SET refund_amount = LEAST(amount, COALESCE(refund_amount, 0) + $2::numeric),
-                balance_amount = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
                 remaining = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
                 status = CASE
                   WHEN COALESCE(refund_amount, 0) + $2::numeric >= amount THEN 'refunded'

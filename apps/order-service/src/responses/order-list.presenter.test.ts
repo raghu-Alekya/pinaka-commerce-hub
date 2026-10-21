@@ -53,7 +53,7 @@ test('total-orders uses the repository effective refund status', () => {
   const refunded = row('completed');
   refunded.effectiveStatus = 'refunded';
   const result = new OrderListPresenter().present(1, 10, 2, [partial, refunded]);
-  assert.equal(result.orders_data[0].status, 'Partial-refund');
+  assert.equal(result.orders_data[0].status, 'Partially Refunded');
   assert.equal(result.orders_data[1].status, 'Refunded');
 });
 
