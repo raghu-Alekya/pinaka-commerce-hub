@@ -72,7 +72,8 @@ export class CouponService implements OnModuleInit {
     await this.validateOwner(merchantId, storeId);
     page = Math.max(1, page); perPage = Math.min(100, Math.max(1, perPage));
     const qb = this.repository().createQueryBuilder('coupon')
-      .where('coupon.merchant_id = :merchantId AND coupon.store_id = :storeId', { merchantId, storeId });
+      .where('coupon.merchant_id = :merchantId AND coupon.store_id = :storeId', { merchantId, storeId })
+      .andWhere('LEFT(coupon.code, LENGTH(:excludedCodePrefix)) <> :excludedCodePrefix', { excludedCodePrefix: 'merchant_discount_' });
     if (!includeDeleted) qb.andWhere('coupon.deleted_at IS NULL');
     const [coupons, total] = await qb.orderBy('coupon.updated_at', 'DESC').skip((page - 1) * perPage).take(perPage).getManyAndCount();
     return { coupons, total, page, perPage };
