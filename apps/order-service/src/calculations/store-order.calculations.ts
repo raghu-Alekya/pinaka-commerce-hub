@@ -207,9 +207,10 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
 }
 
 /**
- * WooCommerce total: line totals + fees + tax + shipping.
+ * Order total: line totals + fees + shipping.
+ * Tax is reported separately and is not added into the total.
  * Discount is already inside line totals, so it is not subtracted again.
- * Fees, tax, and payments are included only when the caller asks for them.
+ * Fees and payments are included only when the caller asks for them.
  */
 export function calculateOrderTotal(input: {
   lineItems?: PosLineItem[];
@@ -230,7 +231,7 @@ export function calculateOrderTotal(input: {
   const shippingTotal = fromMinor(toMinor(input.shippingTotal ?? 0, places), places);
   const discountTotal = fromMinor(Math.max(0, toMinor(subtotal, places) - toMinor(lineTotal, places)), places);
   const total = fromMinor(
-    toMinor(lineTotal, places) + toMinor(feeTotal, places) + taxMinor + toMinor(shippingTotal, places),
+    toMinor(lineTotal, places) + toMinor(feeTotal, places) + toMinor(shippingTotal, places),
     places,
   );
   return { subtotal, discountTotal, lineTotal, feeTotal, taxTotal, shippingTotal, total };

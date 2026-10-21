@@ -146,7 +146,7 @@ export class OrderRepository implements OnModuleInit {
     const tipAmount = Number(orderData.tipAmount || 0);
     const totalAmount = orderData.totalAmount !== undefined
       ? Number(orderData.totalAmount)
-      : subtotal + taxAmount - discountAmount + tipAmount;
+      : subtotal - discountAmount + tipAmount;
 
     const order: OrderEntity = {
       id,
@@ -638,7 +638,13 @@ export class OrderRepository implements OnModuleInit {
     const shippingTotal = Number(sourcePayload.shipping_total || 0);
     if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
     if (sourcePayload.total === undefined || normalizedCustomItem) {
-      sourcePayload.total = (lineTotal + feeTotal + taxTotal + shippingTotal).toFixed(places);
+      sourcePayload.total = (lineTotal + feeTotal + shippingTotal).toFixed(places);
+    } else {
+      const supplied = Number(sourcePayload.total);
+      if (Number.isFinite(supplied)) {
+        const exclusive = Math.round((supplied - taxTotal) * factor) / factor;
+        sourcePayload.total = Math.max(0, exclusive).toFixed(places);
+      }
     }
 
     orderData.items = lines.map((line: any) => {
