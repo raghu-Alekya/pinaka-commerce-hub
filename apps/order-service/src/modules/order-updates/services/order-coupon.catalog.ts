@@ -25,8 +25,31 @@ export class OrderCouponCatalog {
     if (!code) throw new BadRequestException('Coupon code is required');
     const row = await this.orders.findStoreCoupon(lookup.storeId, code);
     if (!row) throw new BadRequestException(`Coupon '${code}' was not found`);
+    return this.specFromRow(row, lookup, code);
+  }
 
-    const savedCode = String(row.code || code);
+  /** Store coupons that pass the same checks as resolve. Ineligible rows are skipped. */
+  async eligible(lookup: Omit<CouponLookup, 'code' | 'couponCount'>): Promise<CouponSpec[]> {
+    const rows = await this.orders.listStoreCoupons(lookup.storeId);
+    const specs: CouponSpec[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const code = String(row.code || '').trim();
+      if (!code || seen.has(code.toLowerCase())) continue;
+      try {
+        const spec = this.specFromRow(row, { ...lookup, code, couponCount: 1 }, code);
+        seen.add(spec.code.toLowerCase());
+        specs.push(spec);
+      } catch (error) {
+        if (error instanceof BadRequestException) continue;
+        throw error;
+      }
+    }
+    return specs;
+  }
+
+  private specFromRow(row: Record<string, unknown>, lookup: CouponLookup, requestedCode: string): CouponSpec {
+    const savedCode = String(row.code || requestedCode);
     const discountType = this.discountType(savedCode, row.discount_type);
     const amount = Number(row.amount || 0);
     if (!Number.isFinite(amount) || amount <= 0) {

@@ -2,6 +2,9 @@ import { BadRequestException, ConflictException, Inject, Injectable } from '@nes
 import {
   applyCoupon,
   buildCouponLine,
+  isMerchantDiscountCode,
+  merchantDiscountCoverage,
+  readCouponLine,
   withCouponBase,
   type CouponSpec,
 } from '../../../calculations/order-update.calculations';
@@ -64,16 +67,47 @@ export class OrderCouponService {
 
   sync(graph: OrderGraph, coupons: CouponSpec[]): OrderMutationDraft {
     this.policy.assertMutable(graph);
-    this.policy.requireStoreOrder(graph);
+    const store = this.policy.requireStoreOrder(graph);
     const seen = new Set<string>();
     coupons.forEach((coupon) => {
       const code = coupon.code.trim().toLowerCase();
+      if (!code || isMerchantDiscountCode(coupon.code)) {
+        throw new BadRequestException(`Coupon '${coupon.code}' is not a store coupon`);
+      }
       if (seen.has(code)) throw new BadRequestException(`Coupon '${coupon.code}' is repeated`);
       seen.add(code);
     });
 
+    const existing = Array.isArray(store.couponLines) ? store.couponLines : [];
+    const merchantLines = existing.filter((line) => {
+      const parsed = readCouponLine(line);
+      return parsed ? isMerchantDiscountCode(parsed.code) : false;
+    });
+
     let lineItems = this.lines.fromGraph(graph).map((line) => withCouponBase(line));
-    const couponLines: unknown[] = [];
+    const embedded = merchantDiscountCoverage(lineItems, []).merchantDiscount;
+    const recorded = merchantLines.reduce((sum: number, line) => sum + (readCouponLine(line)?.discount || 0), 0);
+    if (recorded > embedded + 0.004) {
+      merchantLines.forEach((line) => {
+        const parsed = readCouponLine(line);
+        if (!parsed || parsed.discount <= 0) return;
+        const applied = applyCoupon(lineItems, {
+          code: parsed.code,
+          discountType: 'fixed_cart',
+          amount: parsed.discount,
+        });
+        if (applied.discount > 0) lineItems = applied.lineItems;
+      });
+    }
+
+    const coverage = merchantDiscountCoverage(lineItems, merchantLines);
+    if (coupons.length && coverage.coversOrder) {
+      throw new BadRequestException(
+        'A coupon cannot be applied because the merchant discount already covers the order total',
+      );
+    }
+
+    const couponLines: unknown[] = [...merchantLines];
     coupons.forEach((coupon) => {
       const applied = applyCoupon(lineItems, coupon);
       if (applied.discount <= 0) {

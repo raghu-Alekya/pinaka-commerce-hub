@@ -223,6 +223,91 @@ export function addCouponDiscount(
   });
 }
 
+/** POS merchant discounts are stored as coupon lines with these generated codes. */
+export function isMerchantDiscountCode(code: string): boolean {
+  return /^pos-discount(?:-\d+)?$/i.test(String(code || '').trim());
+}
+
+export function readCouponLine(line: unknown): { code: string; discount: number } | null {
+  if (!line || typeof line !== 'object') return null;
+  const record = line as { code?: unknown; discount?: unknown };
+  const code = String(record.code || '').trim();
+  if (!code) return null;
+  return { code, discount: Math.max(0, moneyAmount(record.discount ?? 0)) };
+}
+
+export interface MerchantDiscountCoverage {
+  subtotal: number;
+  merchantDiscount: number;
+  remaining: number;
+  coversOrder: boolean;
+}
+
+/**
+ * Merchant discount is the POS discount (pos-discount lines) plus any merchandise
+ * reduction that is not already recorded as a store coupon.
+ * `coversOrder` is true when that discount consumes the merchandise subtotal.
+ */
+export function merchantDiscountCoverage(
+  lines: OrderLine[],
+  couponLines: unknown[] = [],
+  places = 2,
+): MerchantDiscountCoverage {
+  let subtotalMinor = 0;
+  let payableMinor = 0;
+  lines.forEach((line) => {
+    if (!isMerchandiseLine(line)) return;
+    subtotalMinor += Math.max(0, toMinor(line.subtotal ?? line.total ?? 0, places));
+    payableMinor += Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places));
+  });
+
+  let recordedMerchant = 0;
+  let recordedStore = 0;
+  couponLines.forEach((line) => {
+    const parsed = readCouponLine(line);
+    if (!parsed) return;
+    const minor = toMinor(parsed.discount, places);
+    if (isMerchantDiscountCode(parsed.code)) recordedMerchant += minor;
+    else recordedStore += minor;
+  });
+
+  const lineReduction = Math.max(0, subtotalMinor - payableMinor);
+  const unrecorded = Math.max(0, lineReduction - recordedStore - recordedMerchant);
+  const merchantMinor = recordedMerchant + unrecorded;
+  const remainingMinor = Math.max(0, subtotalMinor - merchantMinor);
+  return {
+    subtotal: fromMinor(subtotalMinor, places),
+    merchantDiscount: fromMinor(merchantMinor, places),
+    remaining: fromMinor(remainingMinor, places),
+    coversOrder: subtotalMinor > 0 && merchantMinor >= subtotalMinor,
+  };
+}
+
+/** Face value used to choose the smallest eligible coupon. Percent is priced against the remaining balance. */
+export function couponOfferValue(coupon: CouponSpec, remaining: number, places = 2): number {
+  const amount = moneyAmount(coupon.amount, places);
+  if (amount <= 0) return 0;
+  if (coupon.discountType === 'percent') {
+    const basisPoints = Math.round(amount * 100);
+    const minor = Math.round((toMinor(remaining, places) * basisPoints) / 10000);
+    return fromMinor(minor, places);
+  }
+  return amount;
+}
+
+/** Smallest eligible coupon. A $5 coupon is chosen over a $10 coupon when both qualify. */
+export function selectMinimumEligibleCoupon<T extends CouponSpec>(
+  coupons: readonly T[],
+  remaining: number,
+  places = 2,
+): T | undefined {
+  const ranked = coupons
+    .map((coupon) => ({ coupon, value: couponOfferValue(coupon, remaining, places) }))
+    .filter((entry) => entry.value > 0)
+    .sort((left, right) => left.value - right.value || left.coupon.code.localeCompare(right.coupon.code));
+  return ranked[0]?.coupon;
+}
+
 export function nextDiscountCode(couponLines: unknown[] = []): string {
   const used = new Set(
     couponLines
