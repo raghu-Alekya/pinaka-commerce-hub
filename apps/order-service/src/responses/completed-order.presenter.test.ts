@@ -20,7 +20,9 @@ test('completed order criteria mirrors Woo defaults and filters', () => {
   });
   assert.equal(criteria.page, 1);
   assert.equal(criteria.perPage, 100);
-  assert.deepEqual(criteria.statuses, ['completed']);
+  // A partially refunded order still has a positive balance and therefore
+  // remains in completed-orders until its final balance is refunded.
+  assert.deepEqual(criteria.statuses, ['completed', 'partial-refund']);
   assert.equal(criteria.author, '11');
   assert.equal(criteria.after?.toISOString(), '2026-02-11T00:00:00.000Z');
   assert.equal(criteria.before?.toISOString(), '2026-02-18T23:59:59.999Z');

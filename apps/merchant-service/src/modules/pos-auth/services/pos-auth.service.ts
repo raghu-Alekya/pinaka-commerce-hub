@@ -177,7 +177,8 @@ export class PosAuthService {
                        (dto as any)?.['device_serial number'] || 
                        dto?.serialNumber;
 
-    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || (dto as any)?.device?.id;
+    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId
+      || dto?.device_id || dto?.['device-id'] || dto?.deviceService || (dto as any)?.device?.id;
     const bodyMerchantId = (dto as any)?.merchantId || (dto as any)?.merchantCode || (dto as any)?.merchant?.id;
     const bodyStoreId = (dto as any)?.storeId || (dto as any)?.storeCode || (dto as any)?.store?.id;
     const bodyRegisterId = (dto as any)?.registerId || (dto as any)?.device?.registerId;
