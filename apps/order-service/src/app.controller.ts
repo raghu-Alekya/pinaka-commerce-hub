@@ -57,8 +57,9 @@ export class AppController {
     @Body() body: any,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
+    @Headers('x-device-id') deviceHeader?: string,
   ) {
-    const normalized = this.normalizeCreateOrder(body, storeHeader, merchantHeader);
+    const normalized = this.normalizeCreateOrder(body, storeHeader, merchantHeader, deviceHeader);
     if (!normalized.storeId || !normalized.items.length) {
       throw new BadRequestException('storeId and at least 1 item are required to create an order');
     }
@@ -134,7 +135,7 @@ export class AppController {
     };
   }
 
-  private normalizeCreateOrder(body: any, storeHeader?: string, merchantHeader?: string) {
+  private normalizeCreateOrder(body: any, storeHeader?: string, merchantHeader?: string, deviceHeader?: string) {
     const metadata = Array.isArray(body?.meta_data) ? body.meta_data : [];
     const metaValue = (key: string) => metadata.find((entry: any) => entry?.key === key)?.value;
     const sourceItems = Array.isArray(body?.line_items) ? body.line_items : body?.items;
@@ -160,6 +161,10 @@ export class AppController {
       ...body,
       storeId: storeHeader || body?.storeId || body?.store_id,
       merchantId: merchantHeader || body?.merchantId || body?.merchant_id,
+      deviceId: String(
+        deviceHeader ?? body?.device_id ?? body?.deviceId
+        ?? metaValue('pos_device_id') ?? metaValue('_pos_device_id') ?? metaValue('device_id') ?? '',
+      ).trim() || undefined,
       shiftId: String(body?.shift_id ?? body?.shiftId ?? metaValue('shift_id') ?? '').trim() || undefined,
       localShiftId: String(body?.local_shift_id ?? body?.localShiftId ?? metaValue('local_shift_id') ?? ''),
       clientOrderId: String(metaValue('_pos_client_order_id') ?? body?.clientOrderId ?? ''),

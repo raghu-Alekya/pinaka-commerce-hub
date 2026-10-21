@@ -415,9 +415,12 @@ export class PosAuthService {
         store = stores[0];
       }
 
-    const activeMerchantId = targetMerchantId || store?.merchantId || employee?.merchantId || 'ce7e95a3-5dd3-4063-af03-251825c9a2d9';
-    const activeStoreId = store?.id || targetStoreId || '5066038f-0e26-40f5-a4bf-44a1bdd300ac';
-    const activeDeviceId = deviceId || deviceCtx.deviceId || 'DEV-99881';
+    const activeMerchantId = String(targetMerchantId || store?.merchantId || employee?.merchantId || '').trim();
+    const activeStoreId = String(store?.id || targetStoreId || '').trim();
+    const activeDeviceId = String(deviceId || deviceCtx.deviceId || '').trim();
+    if (!activeMerchantId) throw new BadRequestException('Unable to resolve merchant for POS session');
+    if (!activeStoreId) throw new BadRequestException('Unable to resolve store for POS session');
+    if (!activeDeviceId) throw new BadRequestException('A registered device ID is required for POS session');
 
     const session = await this.posSessionService.createSession({
       employeeId: employee.id,

@@ -55,15 +55,20 @@ export class RefundAmountService {
             }];
       const totals = new Map<string, number>();
       fallbackPayments.forEach((payment: any) => {
-        const amount = Number(payment.amount ?? payment.payment_amount ?? 0);
+        const originalAmount = Number(payment.amount ?? payment.payment_amount ?? 0);
+        const amount = payment.entry_type === 'payment'
+          ? Math.max(0, originalAmount - Number(payment.refund_amount || 0))
+          : originalAmount;
         if (!Number.isFinite(amount) || amount <= 0) return;
         const method = this.methodName(payment.payment_method || payment.method || 'Cash');
         totals.set(method, (totals.get(method) || 0) + amount);
       });
       methods = [...totals.entries()].map(([method, amount]) => ({ method, amount: this.round(amount) }));
       const refunded = context.payments
-        .filter((payment: any) => payment.entry_type === 'refund' && !payment.is_void)
-        .reduce((sum: number, payment: any) => sum + Number(payment.amount || 0), 0);
+        .filter((payment: any) => !payment.is_void)
+        .reduce((sum: number, payment: any) => sum + (payment.entry_type === 'payment'
+          ? Number(payment.refund_amount || 0)
+          : payment.entry_type === 'refund' ? Number(payment.amount || 0) : 0), 0);
       total = Math.max(0, orderTotal - refunded);
     }
 

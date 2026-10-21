@@ -46,7 +46,7 @@ export class PartialOrderRefundService {
       success: true,
       order_id: Number.isSafeInteger(numericOrderNumber) && numericOrderNumber > 0 ? numericOrderNumber : result.orderId,
       refunded_amount: result.refundedAmount.toFixed(2),
-      order_status: 'partial-refund',
+      order_status: result.orderStatus,
       restock,
       refund_id: result.refundId,
     };

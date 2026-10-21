@@ -24,6 +24,7 @@ export class OrderListPresenter {
       perPage,
       statuses: this.statuses(request.status),
       createdVia: request.createdVia?.trim() || undefined,
+      orderBy: 'modified' as const,
     };
   }
 
@@ -37,6 +38,7 @@ export class OrderListPresenter {
       items: OrderItemEntity[];
       products: Map<string, unknown>;
       refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>;
+      effectiveStatus?: string;
     }>,
   ) {
     return {
@@ -53,12 +55,13 @@ export class OrderListPresenter {
     items: OrderItemEntity[];
     products: Map<string, unknown>;
     refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>;
+    effectiveStatus?: string;
   }) {
     const { order, storeOrder } = row;
     const request = (order.requestPayload || {}) as Record<string, unknown>;
     const timeZone = storeOrder?.timezone || 'UTC';
     const currency = String(storeOrder?.currency || request.currency || 'USD').toUpperCase();
-    const status = this.displayStatus(storeOrder?.status || this.statusFromOrder(order));
+    const status = this.displayStatus(row.effectiveStatus || storeOrder?.status || this.statusFromOrder(order));
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
@@ -171,10 +174,13 @@ export class OrderListPresenter {
 
   private statuses(value?: string): string[] {
     if (!value?.trim()) return [];
-    return value.split(',').map((status) => {
-      const normalized = status.trim().toLowerCase().replace(/\s+/g, '-');
+    const statuses = value.split(',').map((status) => {
+      const normalized = status.trim().toLowerCase().replace(/[\s_]+/g, '-');
       return normalized === 'canceled' ? 'cancelled' : normalized;
     }).filter(Boolean);
+    return statuses.some((status) => status === 'all' || status === 'any')
+      ? []
+      : [...new Set(statuses)];
   }
 
   private pageNumber(value: string | undefined, fallback: number, name: string): number {
