@@ -9,7 +9,9 @@ import { OrderStatusHistoryEntity } from './entities/order-status-history.entity
 import { StoreOrderEntity } from './entities/store-order.entity';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import {
+  applyMerchantDiscountToStoredTax,
   calculateStoreOrder,
+  isTaxableSaleLine,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
   sumLineTotals,
@@ -575,6 +577,12 @@ export class OrderRepository implements OnModuleInit {
       if (line.tax_class === undefined) line.tax_class = String(product.tax_class || '');
 
       if (explicitTax) return;
+      if (!isTaxableSaleLine(line)) {
+        line.subtotal_tax = (0).toFixed(places);
+        line.total_tax = (0).toFixed(places);
+        line.taxes = [];
+        return;
+      }
       const taxable = String(product.tax_status || '').toLowerCase() === 'taxable';
       const taxClass = taxClassKey(product.tax_class);
       const rate = taxable ? (taxClass ? (classRates.get(taxClass) ?? defaultRate) : defaultRate) : 0;
@@ -628,6 +636,14 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
+    const clientTax = Number(sourcePayload.total_tax || 0);
+    applyMerchantDiscountToStoredTax(
+      lines,
+      Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
+      sourcePayload,
+      places,
+    );
+
     const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
     const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
     const feeTotal = (Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [])
@@ -640,7 +656,8 @@ export class OrderRepository implements OnModuleInit {
     } else {
       const supplied = Number(sourcePayload.total);
       if (Number.isFinite(supplied)) {
-        const exclusive = Math.round((supplied - taxTotal) * factor) / factor;
+        const includedTax = Number.isFinite(clientTax) ? clientTax : 0;
+        const exclusive = Math.round((supplied - includedTax) * factor) / factor;
         sourcePayload.total = Math.max(0, exclusive).toFixed(places);
       }
     }
