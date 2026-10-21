@@ -234,6 +234,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
              AND is_void = false
              AND deleted_at IS NULL
              AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+             AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
            ORDER BY created_at, id
            FOR UPDATE
         LOOP

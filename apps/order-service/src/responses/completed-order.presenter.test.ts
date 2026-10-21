@@ -83,6 +83,73 @@ test('completed order presenter emits the Woo compatibility response', () => {
   assert.equal(response.orders_data[0].order_type, 'Shop Order');
 });
 
+test('completed-orders reports partial-refund only for a partially refunded order', () => {
+  const createdAt = new Date('2026-10-15T03:08:08.000Z');
+  const order = {
+    id: '93a2367d-7b2a-42c7-8da8-4262dc92acde',
+    orderNumber: '17517',
+    merchantId: scope.merchantId,
+    storeId: scope.storeId,
+    orderType: OrderType.IN_STORE_POS,
+    paymentMethod: PaymentMethod.CASH,
+    paymentStatus: PaymentStatus.PAID,
+    totalAmount: 18.42,
+    requestPayload: {},
+    metadata: [],
+    createdAt,
+    updatedAt: createdAt,
+  } as OrderEntity;
+  const row = { order, storeOrder: null, items: [], products: new Map() };
+
+  const completed = presenter.present(1, 100, 1, [{ ...row, effectiveStatus: 'completed' }]);
+  const partial = presenter.present(1, 100, 1, [{ ...row, effectiveStatus: 'partial-refund' }]);
+
+  assert.equal(completed.orders_data[0].status, 'completed');
+  assert.equal(partial.orders_data[0].status, 'Partially Refunded');
+});
+
+test('completed-orders shows only tax belonging to the remaining item quantities', () => {
+  const createdAt = new Date('2026-10-15T03:08:08.000Z');
+  const order = {
+    id: '93a2367d-7b2a-42c7-8da8-4262dc92acde',
+    orderNumber: '17517',
+    merchantId: scope.merchantId,
+    storeId: scope.storeId,
+    orderType: OrderType.IN_STORE_POS,
+    paymentMethod: PaymentMethod.CASH,
+    paymentStatus: PaymentStatus.PAID,
+    totalAmount: 22,
+    taxAmount: 2,
+    requestPayload: {},
+    metadata: [],
+    createdAt,
+    updatedAt: createdAt,
+  } as OrderEntity;
+  const storeOrder = {
+    taxTotal: 2,
+    lineItems: [{
+      id: 'item-1', product_id: 'product-1', name: 'Item', quantity: 2,
+      subtotal: '20.00', total: '20.00', subtotal_tax: '2.00', total_tax: '2.00',
+      taxes: [{ id: 1, subtotal: '2.00', total: '2.00' }],
+    }],
+  } as unknown as StoreOrderEntity;
+  const refunds = [{ metadata: {
+    refund_id: 'refund-1',
+    line_items: [{ order_item_id: 'item-1', quantity: 1, refund_total: 10 }],
+  } }];
+
+  const response = presenter.present(1, 100, 1, [{
+    order, storeOrder, items: [], products: new Map(), refunds, effectiveStatus: 'partial-refund',
+  }]);
+
+  assert.equal(response.orders_data[0].items_tax, '1.00');
+  assert.equal(response.orders_data[0].amount, '11.00');
+  assert.equal(response.orders_data[0].total, '11.00');
+  assert.equal(response.orders_data[0].line_items[0].subtotal_tax, '1.00');
+  assert.equal(response.orders_data[0].line_items[0].total_tax, '1.00');
+  assert.equal(response.orders_data[0].line_items[0].taxes[0].total, '1.00');
+});
+
 test('completed order criteria rejects invalid pagination and date ranges', () => {
   assert.throws(() => presenter.criteria({ ...scope, perPage: '101' }), BadRequestException);
   assert.throws(
