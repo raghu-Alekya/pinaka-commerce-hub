@@ -215,6 +215,9 @@ export class OrderListPresenter {
         return 'On-hold';
       case 'cancelled':
         return 'Cancelled';
+      case 'partial-refund':
+      case 'partially-refunded':
+        return 'Partially Refunded';
       default:
         return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Processing';
     }
