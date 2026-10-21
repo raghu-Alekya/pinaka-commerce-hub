@@ -6,6 +6,7 @@ import {
   type CouponSpec,
   type OrderLine,
 } from './order-update.calculations';
+import { calculateOrderTotal } from './store-order.calculations';
 
 const five: CouponSpec = { code: 'SAVE5', discountType: 'fixed_cart', amount: 5 };
 const ten: CouponSpec = { code: 'SAVE10', discountType: 'fixed_cart', amount: 10 };
@@ -31,6 +32,17 @@ test('a partial merchant discount leaves the unpaid balance', () => {
   assert.equal(coverage.coversOrder, false);
   assert.equal(coverage.merchantDiscount, 6);
   assert.equal(coverage.remaining, 4);
+});
+
+test('order total does not include tax', () => {
+  const totals = calculateOrderTotal({
+    lineItems: [{ name: 'Item', subtotal: '10.00', total: '10.00' }],
+    feeLines: [{ name: 'Bag', total: '0.10' }],
+    taxLines: [{ tax_total: '0.82', shipping_tax_total: '0' }],
+    shippingTotal: 1,
+  });
+  assert.equal(totals.taxTotal, 0.82);
+  assert.equal(totals.total, 11.1);
 });
 
 test('the smallest eligible coupon is selected for the remaining balance', () => {
