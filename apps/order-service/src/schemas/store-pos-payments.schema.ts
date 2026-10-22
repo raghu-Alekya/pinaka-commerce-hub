@@ -30,7 +30,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
         payment_method varchar(100) NOT NULL,
         payment_method_title varchar(150),
         amount numeric(12, 2) NOT NULL CHECK (amount >= 0),
-        order_total numeric(12, 2) NOT NULL CHECK (order_total >= 0),
+        order_total numeric(12, 2) NOT NULL,
         remaining numeric(12, 2) NOT NULL DEFAULT 0 CHECK (remaining >= 0),
         refund_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (refund_amount >= 0),
         currency varchar(3),
@@ -50,6 +50,30 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     await manager.query(`
       ALTER TABLE public.store_pos_payments
         ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) NOT NULL DEFAULT 0
+    `);
+    // A payout-only order has a negative net. The cash received stays in amount
+    // (zero or positive). order_total keeps the signed net so the line item and
+    // the payment row describe the same cash movement.
+    await manager.query(`
+      DO $drop_order_total_floor$
+      DECLARE
+        constraint_name text;
+      BEGIN
+        FOR constraint_name IN
+          SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+           WHERE n.nspname = 'public'
+             AND t.relname = 'store_pos_payments'
+             AND c.contype = 'c'
+             AND pg_get_constraintdef(c.oid) ILIKE '%order_total%'
+             AND pg_get_constraintdef(c.oid) ILIKE '%>= 0%'
+        LOOP
+          EXECUTE format('ALTER TABLE public.store_pos_payments DROP CONSTRAINT %I', constraint_name);
+        END LOOP;
+      END
+      $drop_order_total_floor$
     `);
     await manager.query(`
       DO $json_migration$
