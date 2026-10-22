@@ -26,6 +26,9 @@ export class ActivateDeviceDto {
   device_Id?: string;
   device_id?: string;
   deviceId?: string;
+  deviceIdentifier?: string;
+  terminal_id?: string;
+  terminalId?: string;
 
   serial_number?: string;
   serialNumber?: string;
@@ -36,7 +39,9 @@ export class ActivateDeviceDto {
   device_serialnumber?: string;
   device_serial_number?: string;
   deviceSerialNumber?: string;
-  deviceIdentifier?: string;
+
+  store_id?: string;
+  storeId?: string;
 }
 
 type ActivationDevice = {
@@ -110,7 +115,7 @@ export class DeviceActivationController {
     let merchant: any;
     let store: any;
     try {
-      const result = await this.merchantRepository
+      const result = await this.merchants
         .requireDataSource()
         .transaction(async (manager) => {
           const [found] = await manager.query(
@@ -149,30 +154,58 @@ export class DeviceActivationController {
             throw new NotFoundException('Merchant not found for device');
           }
 
-          let [associatedStore] = await manager.query(
-            `SELECT s.id, s.store_code AS "storeCode", s.store_name AS "storeName",
-                    s.store_website_url AS "storeWebsiteUrl", s.status
-             FROM public.store_devices sd
-             JOIN public.stores s ON s.id::text = sd.store_id::text
-             WHERE sd.device_id::text = $1::text AND sd.is_deleted = false AND s.status = 'ACTIVE'
-             LIMIT 1`,
-            [String(found.id)],
-          );
-          if (!associatedStore) {
-            [associatedStore] = await manager.query(
+          let associatedStore: any = null;
+          const requestedStoreId = body?.store_id || body?.storeId;
+          if (requestedStoreId) {
+            const [storeByReq] = await manager.query(
               `SELECT id, store_code AS "storeCode", store_name AS "storeName",
-                    store_website_url AS "storeWebsiteUrl", status
-             FROM public.stores
-             WHERE merchant_id::text = $1 AND status = 'ACTIVE'
-             ORDER BY created_at ASC
-             LIMIT 1`,
+                      store_website_url AS "storeWebsiteUrl", status
+               FROM public.stores
+               WHERE (id::text = $1 OR store_code = $1) AND merchant_id::text = $2 AND status = 'ACTIVE'
+               LIMIT 1`,
+              [String(requestedStoreId).trim(), String(associatedMerchant.id)],
+            );
+            if (storeByReq) {
+              associatedStore = storeByReq;
+            }
+          }
+
+          if (!associatedStore) {
+            const [storeByDevice] = await manager.query(
+              `SELECT s.id, s.store_code AS "storeCode", s.store_name AS "storeName",
+                      s.store_website_url AS "storeWebsiteUrl", s.status
+               FROM public.store_devices sd
+               JOIN public.stores s ON s.id::text = sd.store_id::text
+               WHERE sd.device_id::text = $1::text AND sd.is_deleted = false AND s.status = 'ACTIVE'
+               LIMIT 1`,
+              [String(found.id)],
+            );
+            if (storeByDevice) {
+              associatedStore = storeByDevice;
+            }
+          }
+
+          if (!associatedStore) {
+            const [firstActiveStore] = await manager.query(
+              `SELECT id, store_code AS "storeCode", store_name AS "storeName",
+                      store_website_url AS "storeWebsiteUrl", status
+               FROM public.stores
+               WHERE merchant_id::text = $1 AND status = 'ACTIVE'
+               ORDER BY created_at ASC
+               LIMIT 1`,
               [String(associatedMerchant.id)],
             );
+            if (firstActiveStore) {
+              associatedStore = firstActiveStore;
+            }
           }
+
           if (!associatedStore) {
             throw new NotFoundException('No active store found for merchant');
           }
 
+          const isUnassignedDeviceId = !found.deviceId || found.deviceId === found.deviceCode || ['UNASSIGNED', 'NONE', 'N/A', ''].includes(String(found.deviceId).toUpperCase());
+          const isUnassignedSerial = !found.serialNumber || ['SN-UNASSIGNED', 'UNASSIGNED', 'NONE', 'N/A', ''].includes(String(found.serialNumber).toUpperCase());
           const deviceIdMatches = Boolean(found.deviceId && found.deviceId === targetDeviceId);
           const serialNumberMatches = Boolean(found.serialNumber && found.serialNumber === targetSerialNumber);
           const isAlreadyActive = Boolean(
@@ -180,15 +213,12 @@ export class DeviceActivationController {
               found.status === 'ACTIVE'
           );
           const hasDifferentDeviceId = Boolean(
-            found.deviceId &&
-              !deviceIdMatches &&
-              found.deviceId !== found.deviceCode &&
-              found.deviceId !== ''
+            !isUnassignedDeviceId &&
+              !deviceIdMatches
           );
           const hasDifferentSerialNumber = Boolean(
-            found.serialNumber &&
-              !serialNumberMatches &&
-              found.serialNumber !== ''
+            !isUnassignedSerial &&
+              !serialNumberMatches
           );
           if (hasDifferentDeviceId || hasDifferentSerialNumber) {
             throw new ConflictException(
@@ -196,21 +226,60 @@ export class DeviceActivationController {
             );
           }
 
-          if (!deviceIdMatches || !serialNumberMatches) {
+          await manager.query(
+            `UPDATE public.devices
+             SET device_id = $1, serial_number = $2, status = 'ACTIVE', is_deleted = false, updated_at = NOW()
+             WHERE id = $3`,
+            [targetDeviceId, targetSerialNumber, found.id],
+          );
+          try {
             await manager.query(
-              `UPDATE public.devices
-               SET device_id = $1, serial_number = $2, status = 'ACTIVE', is_deleted = false, updated_at = NOW()
-               WHERE id = $3`,
-              [targetDeviceId, targetSerialNumber, found.id],
+              `UPDATE public.devices SET "serialNumber" = $1 WHERE id = $2`,
+              [targetSerialNumber, found.id],
             );
-            try {
-              await manager.query(
-                `UPDATE public.devices SET "serialNumber" = $1 WHERE id = $2`,
-                [targetSerialNumber, found.id],
-              );
-            } catch {}
-            found.deviceId = targetDeviceId;
-            found.serialNumber = targetSerialNumber;
+          } catch {}
+          found.deviceId = targetDeviceId;
+          found.serialNumber = targetSerialNumber;
+          found.status = 'ACTIVE';
+
+          // Ensure store_devices mapping exists and links to associatedStore
+          const [existingStoreDevice] = await manager.query(
+            `SELECT id FROM public.store_devices WHERE device_id::text = $1::text LIMIT 1`,
+            [String(found.id)],
+          );
+          if (existingStoreDevice) {
+            await manager.query(
+              `UPDATE public.store_devices
+               SET store_id = $1, merchant_id = $2, is_mapped = true, is_deleted = false, updated_at = NOW()
+               WHERE id = $3`,
+              [String(associatedStore.id), String(associatedMerchant.id), existingStoreDevice.id],
+            );
+          } else {
+            await manager.query(
+              `INSERT INTO public.store_devices (id, store_id, device_id, merchant_id, is_mapped, is_deleted, created_at, updated_at)
+               VALUES (gen_random_uuid(), $1, $2, $3, true, false, NOW(), NOW())`,
+              [String(associatedStore.id), String(found.id), String(associatedMerchant.id)],
+            );
+          }
+
+          // Ensure merchant_devices mapping exists
+          const [existingMerchantDevice] = await manager.query(
+            `SELECT id FROM public.merchant_devices WHERE device_id::text = $1::text LIMIT 1`,
+            [String(found.id)],
+          );
+          if (!existingMerchantDevice) {
+            await manager.query(
+              `INSERT INTO public.merchant_devices (id, merchant_id, device_id, is_deleted, created_at, updated_at)
+               VALUES (gen_random_uuid(), $1, $2, false, NOW(), NOW())`,
+              [String(associatedMerchant.id), String(found.id)],
+            );
+          } else {
+            await manager.query(
+              `UPDATE public.merchant_devices
+               SET merchant_id = $1, is_deleted = false, updated_at = NOW()
+               WHERE id = $2`,
+              [String(associatedMerchant.id), existingMerchantDevice.id],
+            );
           }
 
           return {
@@ -281,6 +350,10 @@ export class DeviceActivationController {
           storeName: store.storeName,
           storeWebsiteUrl: storeUrl,
         },
+        storeId: store.id,
+        store_id: store.id,
+        storeName: store.storeName,
+        store_name: store.storeName,
         registerId: 'REG-01',
         deviceAccessToken: session.accessToken,
         accessToken: session.accessToken,
