@@ -94,13 +94,14 @@ export class CompletedOrderPresenter {
       ? Math.max(0, originalTotalExcludingTax - originalLineTotal + remainingLineTotal + Number(itemsTax))
       : originalTotalExcludingTax;
     const total = this.money(remainingTotal);
-    const amount = this.money(Math.max(0, remainingTotal - orderDiscount));
+    const remainingTax = effectiveStatus === 'partial-refund' ? Number(itemsTax) : 0;
+    const amount = this.money(Math.max(0, remainingTotal - remainingTax - orderDiscount));
     return {
       id,
       order_id: clientOrderId,
       status: effectiveStatus === 'partial-refund' ? 'Partially Refunded' : 'completed',
-      date: this.localDate(order.createdAt, timezone),
-      date_modified: this.localDate(order.updatedAt, timezone),
+      date: this.displayDate(order.createdAt, timezone),
+      date_modified: this.displayDate(order.updatedAt, timezone),
       currency,
       amount,
       items_tax: itemsTax,
@@ -252,12 +253,12 @@ export class CompletedOrderPresenter {
     return ({ EUR: '€', GBP: '£', INR: '₹', USD: '$' } as Record<string, string>)[currency] || '$';
   }
 
-  private localDate(value: Date, timeZone: string): string {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-    }).formatToParts(new Date(value));
-    const part = (type: string) => parts.find((entry) => entry.type === type)?.value || '00';
-    return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+  private displayDate(value: Date, timeZone: string): string {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    }).format(new Date(value));
   }
 }

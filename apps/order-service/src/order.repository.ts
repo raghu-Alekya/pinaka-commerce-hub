@@ -1729,11 +1729,14 @@ export class OrderRepository implements OnModuleInit {
       }
     }
     let paymentMethod = '';
-    for (const { payment, allocationCents } of allocations) {
+    for (const { payment, allocationCents, capacityCents } of allocations) {
       if (allocationCents <= 0) continue;
       const allocation = allocationCents / 100;
       if (!paymentMethod) paymentMethod = String(payment.payment_method || 'Cash');
       const historyEvent = { ...event, amount: allocation, payment_id: payment.id };
+      const dailyRefundStatus = allocationCents >= capacityCents
+        ? 'refunded'
+        : 'partially-refunded';
       await manager.query(
         `UPDATE public.store_pos_payments
             SET refund_amount = LEAST(amount, COALESCE(refund_amount, 0) + $2::numeric),
@@ -1758,6 +1761,7 @@ export class OrderRepository implements OnModuleInit {
           `UPDATE public.store_pos_payments
               SET amount = amount + $2::numeric,
                   refund_amount = refund_amount + $2::numeric,
+                  status = $6::varchar,
                   metadata = jsonb_set(
                     COALESCE(metadata, '{}'::jsonb),
                     '{refund_history}',
@@ -1776,9 +1780,16 @@ export class OrderRepository implements OnModuleInit {
                 OR (metadata->>'refund_date' IS NULL AND local_id LIKE '%:refund:' || $5::text)
               )
           RETURNING id`,
-          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate],
+          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate, dailyRefundStatus],
         );
-        const createDailyRefundRow = updatedDailyRows.length === 0
+        // TypeORM's Postgres query runner can return DML results as
+        // [returnedRows, affectedCount], whereas test and alternative drivers
+        // return the rows array directly. Only returned rows indicate that a
+        // daily refund record was actually updated.
+        const returnedDailyRows = Array.isArray(updatedDailyRows?.[0])
+          ? updatedDailyRows[0]
+          : updatedDailyRows;
+        const createDailyRefundRow = returnedDailyRows.length === 0
           && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(historyEvent.created_at || Date.now()));
         if (!createDailyRefundRow) continue;
         await manager.query(
@@ -1789,7 +1800,7 @@ export class OrderRepository implements OnModuleInit {
               entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
            VALUES ($1, $2, $3, LEFT(COALESCE($4, 'generated:' || $5::text), 120) || ':refund:' || $6,
                    $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, $15, $16,
-                   'refunded', 'refund', false, $17, $18, now(), $19::jsonb)`,
+                   $20, 'refund', false, $17, $18, now(), $19::jsonb)`,
           [payment.order_id, payment.merchant_id, payment.store_id, payment.local_id,
             payment.id, refundDate, payment.client_order_id, payment.device_id,
             payment.shift_id, payment.user_id, payment.payment_type, payment.payment_method,
@@ -1799,7 +1810,7 @@ export class OrderRepository implements OnModuleInit {
               refund_date: refundDate,
               source_payment_id: payment.id,
               refund_history: [historyEvent],
-            })],
+            }), dailyRefundStatus],
         );
       }
     }
