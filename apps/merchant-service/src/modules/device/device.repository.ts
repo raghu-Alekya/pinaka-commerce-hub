@@ -93,7 +93,7 @@ export class DeviceRepository {
     const rows = await this.repository()
       .createQueryBuilder('mapping')
       .innerJoinAndSelect('mapping.device', 'device', 'device.isDeleted = false')
-      .where('mapping.merchantId = :merchantId', { merchantId })
+      .where('mapping.merchantId = CAST(:merchantId AS uuid)', { merchantId })
       .andWhere('mapping.isDeleted = false')
       .orderBy('mapping.createdAt', 'DESC')
       .getMany();
@@ -138,7 +138,7 @@ export class DeviceRepository {
           'mapping',
           'mapping.device_id = device.id AND mapping.is_deleted = false',
         )
-        .where('mapping.merchant_id = :merchantId', { merchantId: filters.merchantId })
+        .where('mapping.merchant_id = CAST(:merchantId AS uuid)', { merchantId: filters.merchantId })
         .andWhere('device.is_deleted = false');
 
       if (!withFilters) return query;

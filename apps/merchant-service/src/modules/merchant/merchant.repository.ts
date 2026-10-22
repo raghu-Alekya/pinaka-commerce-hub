@@ -6742,7 +6742,24 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     existing.updatedAt = new Date();
     return this.dataSource.transaction(async (manager) => {
       const saved = await manager.getRepository(EmployeeEntity).save(existing);
-      if (saved.userId) {
+      // Older employee rows may not have user_id populated even though the
+      // corresponding login account is already linked through users.employeeId.
+      let userId = saved.userId;
+      if (!userId) {
+        const [linkedUser] = await manager.query(
+          'SELECT id FROM public.users WHERE "employeeId"=$1::uuid LIMIT 1',
+          [saved.id],
+        );
+        userId = linkedUser?.id;
+        if (userId) {
+          saved.userId = userId;
+          await manager.query(
+            'UPDATE public.employees SET user_id=$2 WHERE id=$1::uuid',
+            [saved.id, userId],
+          );
+        }
+      }
+      if (userId) {
         const updates: string[] = [
           '"firstName"=$2',
           '"lastName"=$3',
@@ -6751,7 +6768,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           '"updatedAt"=clock_timestamp()',
         ];
         const values: unknown[] = [
-          saved.userId,
+          userId,
           saved.firstName,
           saved.lastName,
           saved.phone || '',
