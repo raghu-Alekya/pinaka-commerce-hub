@@ -25,7 +25,27 @@ export class WorkforceValidationPipe extends ValidationPipe {
 export class EmployeeValidationPipe extends WorkforceValidationPipe {
   override transform(value: unknown, metadata: ArgumentMetadata) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('Provide an employee object');
-    const convert = (input: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(input).map(([key, field]) => {
+    const convert = (input: Record<string, unknown>): Record<string, unknown> => {
+      const normalized = { ...input };
+      const alias = (aliasKey: string, canonicalKey: string) => {
+        if (normalized[aliasKey] === undefined) return;
+        if (normalized[canonicalKey] !== undefined) throw new BadRequestException(`Send either ${aliasKey} or ${canonicalKey}, not both`);
+        normalized[canonicalKey] = normalized[aliasKey];
+        delete normalized[aliasKey];
+      };
+      alias('contact_no', 'phone');
+      alias('email_address', 'email');
+      if (normalized.full_name !== undefined) {
+        if (normalized.first_name !== undefined || normalized.last_name !== undefined) {
+          throw new BadRequestException('Send either full_name or first_name/last_name, not both');
+        }
+        const fullName = String(normalized.full_name).trim().split(/\s+/);
+        if (!fullName[0]) throw new BadRequestException('full_name must not be empty');
+        normalized.first_name = fullName.shift();
+        normalized.last_name = fullName.join(' ');
+        delete normalized.full_name;
+      }
+      return Object.fromEntries(Object.entries(normalized).map(([key, field]) => {
       if (/[A-Z]/.test(key)) throw new BadRequestException(`Use snake_case field names: ${key.replace(/[A-Z]/g, c => '_' + c.toLowerCase())}`);
       if (['created_by', 'updated_by', 'employee_code', 'is_deleted'].includes(key)) throw new BadRequestException(`${key} is server-managed`);
       const name = key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -35,6 +55,7 @@ export class EmployeeValidationPipe extends WorkforceValidationPipe {
       }
       return [name, field];
     }));
+    };
     return super.transform(convert(value as Record<string, unknown>), metadata);
   }
 }
