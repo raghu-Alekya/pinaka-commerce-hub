@@ -55,10 +55,16 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     // (zero or positive). order_total keeps the signed net so the line item and
     // the payment row describe the same cash movement.
     await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP CONSTRAINT IF EXISTS store_pos_payments_order_total_check
+    `);
+    await manager.query(`
       DO $drop_order_total_floor$
       DECLARE
         constraint_name text;
       BEGIN
+        -- Postgres stores the rule as CHECK ((order_total >= (0)::numeric)),
+        -- so a search for the literal ">= 0" does not see it.
         FOR constraint_name IN
           SELECT c.conname
             FROM pg_constraint c
@@ -67,8 +73,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
            WHERE n.nspname = 'public'
              AND t.relname = 'store_pos_payments'
              AND c.contype = 'c'
-             AND pg_get_constraintdef(c.oid) ILIKE '%order_total%'
-             AND pg_get_constraintdef(c.oid) ILIKE '%>= 0%'
+             AND regexp_replace(pg_get_constraintdef(c.oid), '[[:space:]()]+', '', 'g') ILIKE '%order_total>=0%'
         LOOP
           EXECUTE format('ALTER TABLE public.store_pos_payments DROP CONSTRAINT %I', constraint_name);
         END LOOP;
