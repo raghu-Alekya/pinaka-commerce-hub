@@ -1011,15 +1011,21 @@ export class OrderRepository implements OnModuleInit {
       throw new BadRequestException(`Invalid order status '${String(toStatus || '')}'`);
     }
     if (this.isDbConnected && this.storeOrderRepo) {
-      const storeOrder = await this.storeOrderRepo.findOne({ where: { orderId } });
+      const graph = await this.getOrderByReference(orderId);
+      const storeOrder = graph?.storeOrder;
       if (!storeOrder) return null;
+      if (String(storeOrder.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+        && normalizedStatus !== OrderStatus.CANCELLED) {
+        throw new ConflictException('Cancelled orders cannot change status');
+      }
+      const internalOrderId = storeOrder.orderId;
       const fromStatus = storeOrder.orderStatus;
       storeOrder.orderStatus = normalizedStatus;
       storeOrder.status = normalizedStatus.toLowerCase().replace(/_/g, '-');
       storeOrder.updatedAt = new Date();
       storeOrder.statusHistory = [...(Array.isArray(storeOrder.statusHistory) ? storeOrder.statusHistory : []), {
         id: `HST-${randomUUID()}`,
-        orderId,
+        orderId: internalOrderId,
         fromStatus,
         toStatus: normalizedStatus,
         changedBy: changedBy || 'POS System',
@@ -1033,8 +1039,13 @@ export class OrderRepository implements OnModuleInit {
       await this.cacheOrder(order);
       return order;
     }
-    const order = this.inMemoryOrders.find(entry => entry.id === orderId) || null;
+    const graph = await this.getOrderByReference(orderId);
+    const order = graph?.order || null;
     if (!order) return null;
+    if (String(order.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+      && normalizedStatus !== OrderStatus.CANCELLED) {
+      throw new ConflictException('Cancelled orders cannot change status');
+    }
     order.orderStatus = normalizedStatus;
     await this.cacheOrder(order);
     return order;
@@ -2277,6 +2288,30 @@ export class OrderRepository implements OnModuleInit {
     const items = this.inMemoryItems.filter(item => item.orderId === orderId);
     const history = this.inMemoryHistory.filter(entry => entry.orderId === orderId);
     return { order, items, history, storeOrder: null };
+  }
+
+  async getOrderByReference(reference: string): Promise<{ order: OrderEntity; items: OrderItemEntity[]; history: OrderStatusHistoryEntity[]; storeOrder: StoreOrderEntity | null } | null> {
+    const key = String(reference || '').trim();
+    if (!key) return null;
+    if (this.isUuid(key)) return this.getOrderById(key);
+
+    if (this.isDbConnected && this.storeOrderRepo) {
+      const orderNumbers = key.startsWith('#') ? [key, key.slice(1)] : [key, `#${key}`];
+      const storeOrder = await this.storeOrderRepo.findOne({
+        where: [
+          { clientOrderId: key },
+          ...orderNumbers.map(orderNumber => ({ orderNumber })),
+        ],
+        order: { createdAt: 'DESC' },
+      });
+      return storeOrder ? this.getOrderById(storeOrder.orderId) : null;
+    }
+
+    const normalizedNumber = key.replace(/^#/, '');
+    const order = this.inMemoryOrders.find(entry =>
+      entry.clientOrderId === key || String(entry.orderNumber || '').replace(/^#/, '') === normalizedNumber,
+    );
+    return order ? this.getOrderById(order.id) : null;
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {
