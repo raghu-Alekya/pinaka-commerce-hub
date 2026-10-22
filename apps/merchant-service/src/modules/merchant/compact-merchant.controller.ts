@@ -1298,6 +1298,17 @@ export class CompactMerchantController {
       );
       if (body.status === 'INACTIVE') {
         await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id IN (
+             SELECT related.id
+             FROM public.merchants related
+             WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+           )
+             AND COALESCE(is_deleted, false)=false`,
+          [target.merchantId],
+        );
+        await manager.query(
           `UPDATE public.subscriptions
            SET status='INACTIVE',
                updated_by=COALESCE($2::uuid, updated_by),
@@ -1394,6 +1405,12 @@ export class CompactMerchantController {
                updated_at=clock_timestamp()
            WHERE merchant_id=$1 AND status='ACTIVE'`,
           [merchant.id, updatedBy],
+        );
+        await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id=$1 AND COALESCE(is_deleted, false)=false`,
+          [merchant.id],
         );
       });
       return {

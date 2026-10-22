@@ -1294,6 +1294,14 @@ export class MerchantRepository implements OnModuleInit {
       updatedAt: new Date(),
     });
     const saved = await this.merchantRepo.save(merchant);
+    // A store cannot remain operational after its owning merchant is disabled.
+    // Scope this by the merchant UUID so unrelated merchants are never changed.
+    if (saved.status === MerchantStatus.INACTIVE) {
+      await this.storeRepo.update(
+        { merchantId: saved.id, isDeleted: false },
+        { status: StoreStatus.INACTIVE, updatedAt: new Date() },
+      );
+    }
     await this.recordAuditLog('MERCHANT_UPDATED', id, undefined, saved.email, {
       businessName: saved.businessName,
     });
@@ -1493,6 +1501,12 @@ export class MerchantRepository implements OnModuleInit {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity)
       throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    if (String(data.status || StoreStatus.ACTIVE).toUpperCase() === StoreStatus.ACTIVE) {
+      const merchant = await this.merchantRepo.findOneBy({ id: identity.merchantUuid });
+      if (!merchant || merchant.status !== MerchantStatus.ACTIVE) {
+        throw new BadRequestException('Merchant is inactive');
+      }
+    }
     const storeTypeId = await this.resolveStoreTypeId(data);
     const generatedId = this.isUuid(data.id) ? data.id : crypto.randomUUID();
     const storeCode =
@@ -1539,6 +1553,12 @@ export class MerchantRepository implements OnModuleInit {
     const identity = await this.merchantIdentity(merchantId);
     if (!identity)
       throw new NotFoundException(`Merchant '${merchantId}' not found`);
+    if (data.some((item) => String(item.status || StoreStatus.ACTIVE).toUpperCase() === StoreStatus.ACTIVE)) {
+      const merchant = await this.merchantRepo.findOneBy({ id: identity.merchantUuid });
+      if (!merchant || merchant.status !== MerchantStatus.ACTIVE) {
+        throw new BadRequestException('Merchant is inactive');
+      }
+    }
     const stores = await Promise.all(
       data.map(async (item) => {
         const storeTypeId = await this.resolveStoreTypeId(item);
@@ -1604,6 +1624,14 @@ export class MerchantRepository implements OnModuleInit {
       if (existing) {
         if (!(await this.storeMatchesMerchant(existing, identity.merchantId)))
           throw new Error(`Store ID '${data.id}' belongs to another merchant`);
+        if (String(data.status || '').toUpperCase() === StoreStatus.ACTIVE) {
+          const merchant = await this.merchantRepo.findOneBy({
+            id: identity.merchantUuid,
+          });
+          if (!merchant || merchant.status !== MerchantStatus.ACTIVE) {
+            throw new BadRequestException('Merchant is inactive');
+          }
+        }
         Object.assign(existing, data, {
           merchantId: identity.merchantUuid,
           updatedAt: new Date(),
@@ -1818,6 +1846,12 @@ export class MerchantRepository implements OnModuleInit {
     if (!store) return null;
     const { id: _ignoredId, merchantId: _ignoredMerchantId, ...safeFields } =
       fields;
+    if (String(safeFields.status || '').toUpperCase() === StoreStatus.ACTIVE) {
+      const merchant = await this.merchantRepo.findOneBy({ id: store.merchantId });
+      if (!merchant || merchant.status !== MerchantStatus.ACTIVE) {
+        throw new BadRequestException('Merchant is inactive');
+      }
+    }
     const updated = {
       ...store,
       ...safeFields,
