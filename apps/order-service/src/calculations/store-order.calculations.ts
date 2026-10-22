@@ -184,8 +184,10 @@ export function isTaxableSaleLine(line: PosLineItem): boolean {
   if (!isMerchandiseLine(line) || isEbtEligible(line)) return false;
   if (String(line?.tax_status || '').trim().toLowerCase() === 'none') return false;
   const meta = Array.isArray(line.meta_data) ? line.meta_data : [];
-  const lineType = String(meta.find((entry) => entry?.key === '_pos_line_type')?.value || '').trim().toLowerCase();
-  return lineType !== 'cashback' && lineType !== 'payout';
+  const lineTypes = meta
+    .filter((entry) => entry?.key === '_pos_line_type' || entry?.key === '_pos_item_type')
+    .map((entry) => String(entry?.value || '').trim().toLowerCase());
+  return !lineTypes.includes('cashback') && !lineTypes.includes('payout');
 }
 
 export function merchantDiscountMinor(

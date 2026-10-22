@@ -658,7 +658,8 @@ export class OrderRepository implements OnModuleInit {
       if (Number.isFinite(supplied)) {
         const includedTax = Number.isFinite(clientTax) ? clientTax : 0;
         const exclusive = Math.round((supplied - includedTax) * factor) / factor;
-        sourcePayload.total = Math.max(0, exclusive).toFixed(places);
+        const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+        sourcePayload.total = (netBeforeTax < 0 ? exclusive : Math.max(0, exclusive)).toFixed(places);
       }
     }
 
