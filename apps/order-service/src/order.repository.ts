@@ -1221,6 +1221,7 @@ export class OrderRepository implements OnModuleInit {
         WHERE order_id = ANY($1::uuid[])
           AND entry_type = 'refund' AND is_void = false AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY refunded_at ASC`,
       [ids],
     );
@@ -1632,8 +1633,10 @@ export class OrderRepository implements OnModuleInit {
         WHERE order_id = $1::uuid
           AND merchant_id = $2::uuid
           AND store_id = $3::uuid
+          AND is_void = false
           AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY payment_at ASC, created_at ASC`,
       [graph.order.id, merchantId, storeId],
     );
@@ -1657,7 +1660,11 @@ export class OrderRepository implements OnModuleInit {
 
   private async loadRefundState(manager: EntityManager, orderId: string) {
     const payments = await manager.query(
-      `SELECT id::text AS id, payment_method, amount, refund_amount, metadata
+      `SELECT id::text AS id, order_id, merchant_id, store_id, local_id, client_order_id,
+              device_id, shift_id, user_id, payment_type, payment_method,
+              payment_method_title, amount, order_total, remaining, refund_amount,
+              currency, status, entry_type, provider, provider_transaction_id,
+              payment_at, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid AND entry_type = 'payment'
           AND is_void = false AND deleted_at IS NULL
@@ -1672,6 +1679,7 @@ export class OrderRepository implements OnModuleInit {
         WHERE order_id = $1::uuid AND entry_type = 'refund'
           AND is_void = false AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY created_at ASC`,
       [orderId],
     );
@@ -1695,6 +1703,7 @@ export class OrderRepository implements OnModuleInit {
     paymentRows: any[],
     refundAmount: number,
     event: Record<string, unknown>,
+    timeZone = 'UTC',
   ): Promise<string> {
     const requestedCents = Math.round(refundAmount * 100);
     const eligible = paymentRows.map((payment) => ({
@@ -1743,8 +1752,106 @@ export class OrderRepository implements OnModuleInit {
           WHERE id = $1::uuid`,
         [payment.id, allocation, JSON.stringify([historyEvent])],
       );
+      if (payment.order_id && payment.merchant_id && payment.store_id) {
+        const refundDate = this.localDateKey(new Date(historyEvent.created_at || Date.now()), timeZone);
+        const updatedDailyRows = await manager.query(
+          `UPDATE public.store_pos_payments
+              SET amount = amount + $2::numeric,
+                  refund_amount = refund_amount + $2::numeric,
+                  metadata = jsonb_set(
+                    COALESCE(metadata, '{}'::jsonb),
+                    '{refund_history}',
+                    COALESCE(metadata->'refund_history', '[]'::jsonb) || $3::jsonb,
+                    true
+                  ),
+                  updated_at = now()
+            WHERE order_id = $4::uuid
+              AND entry_type = 'refund'
+              AND is_void = false
+              AND deleted_at IS NULL
+              AND metadata->>'daily_refund_tracking' = 'true'
+              AND metadata->>'source_payment_id' = $1::text
+              AND (
+                metadata->>'refund_date' = $5::text
+                OR (metadata->>'refund_date' IS NULL AND local_id LIKE '%:refund:' || $5::text)
+              )
+          RETURNING id`,
+          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate],
+        );
+        const createDailyRefundRow = updatedDailyRows.length === 0
+          && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(historyEvent.created_at || Date.now()));
+        if (!createDailyRefundRow) continue;
+        await manager.query(
+          `INSERT INTO public.store_pos_payments
+             (order_id, merchant_id, store_id, local_id, client_order_id, device_id,
+              shift_id, user_id, payment_type, payment_method, payment_method_title,
+              amount, order_total, remaining, refund_amount, currency, status,
+              entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
+           VALUES ($1, $2, $3, LEFT(COALESCE($4, 'generated:' || $5::text), 120) || ':refund:' || $6,
+                   $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, $15, $16,
+                   'refunded', 'refund', false, $17, $18, now(), $19::jsonb)`,
+          [payment.order_id, payment.merchant_id, payment.store_id, payment.local_id,
+            payment.id, refundDate, payment.client_order_id, payment.device_id,
+            payment.shift_id, payment.user_id, payment.payment_type, payment.payment_method,
+            payment.payment_method_title, payment.order_total, allocation, payment.currency,
+            payment.provider, payment.provider_transaction_id, JSON.stringify({
+              daily_refund_tracking: true,
+              refund_date: refundDate,
+              source_payment_id: payment.id,
+              refund_history: [historyEvent],
+            })],
+        );
+      }
     }
     return paymentMethod;
+  }
+
+  private remainingPaymentAmount(paymentRows: any[]): number {
+    const cents = paymentRows.reduce((sum, payment) => sum + Math.max(0, Math.round(
+      (Number(payment.amount || 0) - Number(payment.refund_amount || 0)) * 100,
+    )), 0);
+    return cents / 100;
+  }
+
+  private shouldCreateDailyRefundRow(payment: any, timeZone: string, refundAt = new Date()): boolean {
+    const history = Array.isArray(payment?.metadata?.refund_history)
+      ? payment.metadata.refund_history : [];
+    const latest = history.map((entry: any) => new Date(entry?.created_at || 0))
+      .filter((date: Date) => !Number.isNaN(date.getTime()))
+      .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0];
+    return Boolean(latest && this.localDateKey(latest, timeZone) !== this.localDateKey(refundAt, timeZone));
+  }
+
+  private localDateKey(value: Date, timeZone: string): string {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(value);
+      const part = (type: string) => parts.find((entry) => entry.type === type)?.value || '00';
+      return `${part('year')}-${part('month')}-${part('day')}`;
+    } catch {
+      return value.toISOString().slice(0, 10);
+    }
+  }
+
+  private areAllLineItemsRefunded(
+    lines: any[],
+    previousItems: any[],
+    currentItems: Array<Record<string, unknown>>,
+  ): boolean {
+    const refundableLines = lines.filter((line) => Number(line?.quantity || 0) > 0
+      && !line?.is_refund_item
+      && Number(line?.total ?? line?.total_price ?? 0) >= 0);
+    if (!refundableLines.length) return false;
+    const refundedItems = [...previousItems, ...currentItems];
+    return refundableLines.every((line) => {
+      const lineId = String(line?.id ?? '');
+      if (!lineId) return false;
+      const refundedQuantity = refundedItems
+        .filter((item: any) => String(item?.order_item_id ?? '') === lineId)
+        .reduce((sum: number, item: any) => sum + Number(item?.quantity ?? item?.qty ?? 0), 0);
+      return refundedQuantity >= Number(line.quantity);
+    });
   }
 
   async createFullOrderRefund(input: {
@@ -1763,7 +1870,7 @@ export class OrderRepository implements OnModuleInit {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
           `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.line_items
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -1782,9 +1889,7 @@ export class OrderRepository implements OnModuleInit {
         if (!order) return { kind: 'missing' as const };
 
         const refundState = await this.loadRefundState(manager, order.id);
-        const orderTotal = Number(order.total_amount || 0);
-        const alreadyRefunded = refundState.refunded;
-        const remaining = Math.max(0, orderTotal - alreadyRefunded);
+        const remaining = this.remainingPaymentAmount(refundState.payments);
         if (remaining <= 0) return { kind: 'already_refunded' as const };
         // This is the full-refund endpoint: refund the entire outstanding
         // balance. The submitted amount is still validated by the service but
@@ -1819,7 +1924,7 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             items_reusable: input.restock ? 'yes' : 'no',
           },
-        }) || String(order.payment_method || 'Cash');
+        }, String(order.timezone || 'UTC')) || String(order.payment_method || 'Cash');
         await manager.query(
           `UPDATE public.store_orders
               SET order_status = 'REFUNDED',
@@ -1915,7 +2020,7 @@ export class OrderRepository implements OnModuleInit {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
           `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.line_items
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -1996,8 +2101,18 @@ export class OrderRepository implements OnModuleInit {
         if (refundTotal > remainingOrderAmount) return { kind: 'exceeds_remaining' as const };
 
         const refundId = randomUUID();
-        const remainingAfter = Math.max(0, remainingOrderAmount - refundTotal);
-        const fullyRefunded = remainingAfter <= 0.005;
+        // Canonical line IDs are what completed-orders exposes and what refund
+        // requests send back. Older POS JSON snapshots can omit IDs entirely,
+        // so use canonical lines for the final-item completion check.
+        const refundCompletionLines = canonicalLines.length ? canonicalLines : storedLines;
+        const fullyRefunded = remainingOrderAmount - refundTotal <= 0.005
+          || this.areAllLineItemsRefunded(refundCompletionLines, previousItems, refundItems);
+        // The final item refund also closes out tax, tip, rounding, or other
+        // captured residuals so a fully refunded payment cannot retain balance.
+        const appliedRefundTotal = fullyRefunded
+          ? this.remainingPaymentAmount(refundState.payments)
+          : refundTotal;
+        const remainingAfter = fullyRefunded ? 0 : Math.max(0, remainingOrderAmount - refundTotal);
         const refundOrderStatus = fullyRefunded ? 'REFUNDED' : 'PARTIAL_REFUND';
         const refundStoreStatus = fullyRefunded ? 'refunded' : 'partial-refund';
         const metadata = {
@@ -2007,9 +2122,9 @@ export class OrderRepository implements OnModuleInit {
           refund_type: 'partial',
           line_items: refundItems,
         };
-        await this.applyRefundToPayments(manager, refundState.payments, refundTotal, {
+        await this.applyRefundToPayments(manager, refundState.payments, appliedRefundTotal, {
           refund_id: refundId,
-          order_refund_amount: refundTotal,
+          order_refund_amount: appliedRefundTotal,
           created_at: new Date().toISOString(),
           ...metadata,
           raw_payload: {
@@ -2018,7 +2133,7 @@ export class OrderRepository implements OnModuleInit {
             items_reusable: input.restock ? 'yes' : 'no',
             items: input.items,
           },
-        });
+        }, String(order.timezone || 'UTC'));
         await manager.query(
           `UPDATE public.store_orders
               SET order_status = $4::varchar,
@@ -2087,7 +2202,7 @@ export class OrderRepository implements OnModuleInit {
           }
         }
         return { kind: 'created' as const, orderId: order.id,
-          orderNumber: String(order.order_number || ''), refundedAmount: refundTotal, refundId,
+          orderNumber: String(order.order_number || ''), refundedAmount: appliedRefundTotal, refundId,
           orderStatus: refundStoreStatus };
       });
     } catch (error: unknown) {
