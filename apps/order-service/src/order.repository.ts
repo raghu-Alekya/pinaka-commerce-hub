@@ -367,7 +367,11 @@ export class OrderRepository implements OnModuleInit {
           provider: sourcePayload?.provider,
         }];
 
-    const orderTotal = Number(order.totalAmount || 0);
+    const rawOrderTotal = Number(order.totalAmount || 0);
+    // Payout lines represent cash leaving the register, not a customer payment.
+    // The order may therefore have a negative total, while the payment ledger
+    // only stores non-negative captured/refundable amounts.
+    const orderTotal = Number.isFinite(rawOrderTotal) ? Math.max(0, rawOrderTotal) : 0;
     const normalizedAmounts = payments.map((payment: any) => Number(
       payment?.amount ?? payment?.total ?? payment?.value ?? 0,
     ));
@@ -1824,6 +1828,21 @@ export class OrderRepository implements OnModuleInit {
     return cents / 100;
   }
 
+  private refundAuditBreakdown(
+    appliedRefundTotal: number,
+    itemRefundTotal: number,
+    outstandingTax: number,
+  ): { items_refund_total: number; tax_refund_total: number; adjustment_refund_total: number } {
+    const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const additional = Math.max(0, round(appliedRefundTotal - itemRefundTotal));
+    const taxRefund = Math.min(additional, Math.max(0, round(outstandingTax)));
+    return {
+      items_refund_total: round(itemRefundTotal),
+      tax_refund_total: round(taxRefund),
+      adjustment_refund_total: round(Math.max(0, additional - taxRefund)),
+    };
+  }
+
   private shouldCreateDailyRefundRow(payment: any, timeZone: string, refundAt = new Date()): boolean {
     const history = Array.isArray(payment?.metadata?.refund_history)
       ? payment.metadata.refund_history : [];
@@ -1880,7 +1899,7 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
+          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
                   sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
@@ -2123,6 +2142,14 @@ export class OrderRepository implements OnModuleInit {
         const appliedRefundTotal = fullyRefunded
           ? this.remainingPaymentAmount(refundState.payments)
           : refundTotal;
+        const previouslyRefundedTax = refundState.events.reduce(
+          (sum: number, refund: any) => sum + Number(refund?.tax_refund_total || 0), 0,
+        );
+        const refundBreakdown = this.refundAuditBreakdown(
+          appliedRefundTotal,
+          refundTotal,
+          Math.max(0, Number(order.tax_total || 0) - previouslyRefundedTax),
+        );
         const remainingAfter = fullyRefunded ? 0 : Math.max(0, remainingOrderAmount - refundTotal);
         const refundOrderStatus = fullyRefunded ? 'REFUNDED' : 'PARTIAL_REFUND';
         const refundStoreStatus = fullyRefunded ? 'refunded' : 'partial-refund';
@@ -2132,6 +2159,7 @@ export class OrderRepository implements OnModuleInit {
           performed_by: input.performedBy,
           refund_type: 'partial',
           line_items: refundItems,
+          ...refundBreakdown,
         };
         await this.applyRefundToPayments(manager, refundState.payments, appliedRefundTotal, {
           refund_id: refundId,
