@@ -75,7 +75,12 @@ export interface StoreOrderTotals {
 const NON_MERCHANDISE = new Set(['cashback', 'payout']);
 
 export function isMerchandiseLine(line: PosLineItem): boolean {
-  return !NON_MERCHANDISE.has(String(line?.name || '').trim().toLowerCase());
+  const name = String(line?.name || '').trim().toLowerCase();
+  const meta = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  const lineTypes = meta
+    .filter((entry) => entry?.key === '_pos_line_type' || entry?.key === '_pos_item_type')
+    .map((entry) => String(entry?.value || '').trim().toLowerCase());
+  return !NON_MERCHANDISE.has(name) && !lineTypes.some((type) => NON_MERCHANDISE.has(type));
 }
 
 export function toMinor(value: unknown, places = 2): number {
@@ -178,6 +183,11 @@ export function isMerchantDiscountFee(fee: { name?: string; fee_name?: string } 
 export function isPayoutFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
   const name = feeKey(fee);
   return name === 'payout' || name.startsWith('payout_');
+}
+
+export function isCashbackFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
+  const name = feeKey(fee);
+  return name === 'cashback' || name.startsWith('cashback_');
 }
 
 export function isTaxableSaleLine(line: PosLineItem): boolean {
@@ -420,9 +430,14 @@ export function listOrderTotal(input: {
   const lines = input.lineItems;
   if (!lines?.length) return totalIncludingTax(input);
 
-  const lineTotalMinor = toMinor(sumLineTotals(lines as PosLineItem[], places), places);
-  const lineSubtotalMinor = toMinor(sumLineSubtotals(lines as PosLineItem[], places), places);
-  const fees = (input.feeLines || []) as PosFeeLine[];
+  const sourceLines = lines as PosLineItem[];
+  const merchandiseLines = sourceLines.filter((line) => isMerchandiseLine(line));
+  const hasCashMovement = merchandiseLines.length !== sourceLines.length;
+  const lineTotalMinor = toMinor(sumLineTotals(merchandiseLines, places), places);
+  const lineSubtotalMinor = toMinor(sumLineSubtotals(merchandiseLines, places), places);
+  const sourceFees = (input.feeLines || []) as PosFeeLine[];
+  const fees = sourceFees.filter((fee) => !isPayoutFee(fee) && !isCashbackFee(fee));
+  const hasCashMovementFee = fees.length !== sourceFees.length;
   const feeMinorTotal = toMinor(calculateFeeTotal(fees, places), places);
   const shippingMinor = toMinor(input.shippingTotal ?? 0, places);
   const tipMinor = toMinor(input.tip ?? 0, places);
@@ -430,6 +445,9 @@ export function listOrderTotal(input: {
   const appliedInLines = Math.max(0, lineSubtotalMinor - lineTotalMinor);
   const extraDiscount = Math.max(0, toMinor(input.couponDiscount ?? 0, places) - appliedInLines);
   const payableMinor = lineTotalMinor + feeMinorTotal + shippingMinor + tipMinor - extraDiscount;
+  if (hasCashMovement || hasCashMovementFee) {
+    return fromMinor(Math.max(0, payableMinor + taxMinor), places);
+  }
   const storedMinor = toMinor(input.total, places);
   const close = (amount: number) => Math.abs(storedMinor - amount) <= 2;
   if (close(payableMinor + taxMinor) && !close(payableMinor)) return fromMinor(storedMinor, places);

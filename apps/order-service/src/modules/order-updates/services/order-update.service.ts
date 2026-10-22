@@ -225,7 +225,7 @@ export class OrderUpdateService {
   }
 
   private async load(orderId: string): Promise<OrderGraph> {
-    const graph = await this.orders.getOrderById(orderId);
+    const graph = await this.orders.getOrderByReference(orderId);
     if (!graph) throw new NotFoundException(`Order '${orderId}' not found`);
     return graph;
   }
