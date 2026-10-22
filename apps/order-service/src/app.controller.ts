@@ -155,10 +155,31 @@ export class AppController {
       (sum: number, item: any) => sum + Number(item.quantity) * Number(item.unitPrice),
       0,
     );
-    const status = String(body?.status || '').toUpperCase();
+    const isPayoutLine = (item: any) => {
+      const itemMetadata = Array.isArray(item?.meta_data) ? item.meta_data : [];
+      const itemType = itemMetadata.find((entry: any) => entry?.key === '_pos_item_type')?.value;
+      return String(itemType || item?.name || '').trim().toLowerCase() === 'payout';
+    };
+    const hasPayout = Array.isArray(sourceItems) && sourceItems.some(isPayoutLine);
+    const payoutOnly = hasPayout && sourceItems.every(isPayoutLine);
+    const hasEbtItem = Array.isArray(sourceItems) && sourceItems.some((item: any) => {
+      const itemMetadata = Array.isArray(item?.meta_data) ? item.meta_data : [];
+      const value = itemMetadata.find((entry: any) => entry?.key === '_is_ebt_eligible')?.value;
+      return value === 1 || value === '1' || value === true;
+    });
+    const completedFinancialMovement = payoutOnly || (hasPayout && hasEbtItem);
+    const declaredPayments = metaValue('_pos_payments');
+    const paymentsCompleted = Array.isArray(declaredPayments) && declaredPayments.length > 0
+      && declaredPayments.every((payment: any) => String(payment?.status || '').trim().toLowerCase() === 'completed');
+    const normalizedStatus = completedFinancialMovement && paymentsCompleted ? 'completed' : body?.status;
+    const status = String(normalizedStatus || '').toUpperCase();
+    const requestPayload = completedFinancialMovement && paymentsCompleted
+      ? { ...body, status: normalizedStatus }
+      : body;
     const method = String(body?.payment_method || body?.paymentMethod || 'CASH').toUpperCase();
     return {
       ...body,
+      status: normalizedStatus,
       storeId: storeHeader || body?.storeId || body?.store_id,
       merchantId: merchantHeader || body?.merchantId || body?.merchant_id,
       deviceId: String(
@@ -170,7 +191,7 @@ export class AppController {
       clientOrderId: String(metaValue('_pos_client_order_id') ?? body?.clientOrderId ?? ''),
       offline: Boolean(body?.offline ?? metaValue('offline') ?? metaValue('is_offline')),
       metadata,
-      requestPayload: body,
+      requestPayload,
       source: Array.isArray(body?.line_items) ? 'WORDPRESS_COMPATIBLE' : 'PCH',
       items,
       subtotal: body?.subtotal !== undefined ? Number(body.subtotal) : lineSubtotal,

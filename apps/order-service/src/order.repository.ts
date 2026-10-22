@@ -377,6 +377,10 @@ export class OrderRepository implements OnModuleInit {
     ));
     return payments.map((payment: any, index: number) => {
       const amount = normalizedAmounts[index];
+      // A payout may be represented as a negative tender alongside a positive
+      // EBT tender. It is cash leaving the drawer, not a captured customer
+      // payment, so it must not create a negative payment-ledger balance.
+      const capturedAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
       const method = String(payment?.payment_method ?? payment?.paymentMethod ?? payment?.method ??
         sourcePayload?.payment_method ?? order.paymentMethod ?? 'cash').trim().toLowerCase();
       const paymentAtValue = payment?.payment_at ?? payment?.paymentAt ?? payment?.created_at ?? payment?.createdAt;
@@ -399,7 +403,7 @@ export class OrderRepository implements OnModuleInit {
         ?? storeOrder.deviceId ?? null;
       // `remaining` is the refundable balance of this payment row, not the
       // outstanding total of the whole order.
-      const remaining = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+      const remaining = capturedAmount;
       const rawPayload = payment && typeof payment === 'object' ? payment : { value: payment };
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
@@ -424,7 +428,7 @@ export class OrderRepository implements OnModuleInit {
         method,
         payment?.payment_method_title ?? payment?.paymentMethodTitle ?? payment?.method_title ?? payment?.methodTitle ??
           sourcePayload?.payment_method_title ?? orderData?.paymentMethodTitle ?? storeOrder.paymentMethodTitle ?? null,
-        Number.isFinite(amount) ? amount : 0,
+        capturedAmount,
         orderTotal,
         remaining,
         0,

@@ -72,6 +72,7 @@ export class CompletedOrderPresenter {
     const id = this.orderId(order);
     const clientOrderId = this.clientOrderId(order, storeOrder) ?? id;
     const originalItemsTax = this.decimal(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount);
+    const originalGrossTotal = Math.max(0, Number(storeOrder?.total ?? order.totalAmount ?? 0));
     const originalTotalExcludingTax = Number(this.money(totalExcludingTax({
       total: storeOrder?.total ?? order.totalAmount,
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
@@ -92,9 +93,9 @@ export class CompletedOrderPresenter {
     const remainingLineTotal = lineItems.reduce((sum, line) => sum + Number(line.total || 0), 0);
     const remainingTotal = effectiveStatus === 'partial-refund'
       ? Math.max(0, originalTotalExcludingTax - originalLineTotal + remainingLineTotal + Number(itemsTax))
-      : originalTotalExcludingTax;
+      : originalGrossTotal;
     const total = this.money(remainingTotal);
-    const remainingTax = effectiveStatus === 'partial-refund' ? Number(itemsTax) : 0;
+    const remainingTax = Number(itemsTax);
     const amount = this.money(Math.max(0, remainingTotal - remainingTax - orderDiscount));
     return {
       id,
