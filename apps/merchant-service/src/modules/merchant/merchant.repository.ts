@@ -6548,6 +6548,11 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     const storeAssignments = assignmentRows;
     return {
       ...details,
+      // Compatibility names used by the POS Settings screen. Canonical employee
+      // columns remain available alongside these aliases.
+      fullName: [details.firstName, details.lastName].filter(Boolean).join(' '),
+      contactNo: details.phone ?? null,
+      emailAddress: details.email ?? null,
       pinSet: Boolean(row?.pinSet),
       storeAssignments,
       merchantCode: merchants[0]?.merchantCode || null,
