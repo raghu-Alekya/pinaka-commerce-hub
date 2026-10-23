@@ -77,7 +77,7 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
     await manager.query(`
       INSERT INTO public.merchant_devices (device_id, merchant_id, created_by, updated_by)
       SELECT d.id,
-             COALESCE(NULLIF(to_jsonb(d)->>'merchant_id', ''), NULLIF(to_jsonb(d)->>'merchantId', '')),
+             NULLIF(COALESCE(to_jsonb(d)->>'merchant_id', to_jsonb(d)->>'merchantId'), '')::uuid,
              NULLIF(COALESCE(to_jsonb(d)->>'created_by', to_jsonb(d)->>'createdBy'), ''),
              NULLIF(COALESCE(to_jsonb(d)->>'updated_by', to_jsonb(d)->>'updatedBy'), '')
       FROM public.devices d

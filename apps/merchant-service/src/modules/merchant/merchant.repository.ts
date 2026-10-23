@@ -953,7 +953,8 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async onModuleInit() {
-    this.dataSource = await connectPostgres(
+    try {
+      this.dataSource = await connectPostgres(
       'PCH Merchant DB',
       [
         MerchantEntity,
@@ -1007,11 +1008,11 @@ export class MerchantRepository implements OnModuleInit {
         StoreEmployeeFastkeyEntity,
       ],
       { synchronize: false, legacyQueryColumns: true },
-    );
+      );
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
-    const createdTables = await createMissingTables(this.dataSource);
+      const createdTables = await createMissingTables(this.dataSource);
     await ensurePosDataSyncSchema(this.dataSource);
     await ensurePosSafeDropSchema(this.dataSource);
     if (createdTables.length) {
@@ -1058,9 +1059,20 @@ export class MerchantRepository implements OnModuleInit {
     this.isDbConnected = true;
 
     // 2. Safely seed master reference data once all repos are initialized
-    await this.seedAllMasterData();
-    await this.seedDefaultCommercialPlans();
-    await this.seedDefaultPlans();
+      await this.seedAllMasterData();
+      await this.seedDefaultCommercialPlans();
+      await this.seedDefaultPlans();
+    } catch (error) {
+      this.isDbConnected = false;
+      this.databaseError = error instanceof Error ? error.message : String(error);
+      if (this.dataSource?.isInitialized) {
+        await this.dataSource.destroy().catch(() => undefined);
+      }
+      this.dataSource = undefined;
+      console.warn(
+        `⚠️ [PCH Merchant DB] Offline (${this.databaseError}). Merchant database features will return service unavailable until PostgreSQL is online.`,
+      );
+    }
 
     // 3. Redis Connection
     try {
@@ -2650,6 +2662,11 @@ export class MerchantRepository implements OnModuleInit {
         email: 'employee@pch.com',
         role: 'CASHIER',
       };
+    }
+    if (!this.isDbConnected || !this.sessionRepo) {
+      throw new ServiceUnavailableException(
+        'Session validation is unavailable because PostgreSQL is not initialized',
+      );
     }
     const accessTokenHash = crypto
       .createHash('sha256')
