@@ -30,7 +30,16 @@ export class PosSafeTransactionsService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const db = this.merchants.requireDataSource();
+    let db;
+    try {
+      db = this.merchants.requireDataSource();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[POS safe transactions] Database unavailable during startup (${message}); safe transaction endpoints will require PostgreSQL.`,
+      );
+      return;
+    }
     await db.query(`
       CREATE TABLE IF NOT EXISTS public.pos_safe_transactions (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), store_id uuid NOT NULL,

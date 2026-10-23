@@ -13,8 +13,19 @@ export class DiscountService implements OnModuleInit {
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
   async onModuleInit(): Promise<void> {
+    let merchantDataSource: DataSource;
+    try {
+      merchantDataSource = this.merchants.requireDataSource();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[Discount sync] Database unavailable during startup (${message}); scheduled sync is disabled until PostgreSQL is available.`,
+      );
+      return;
+    }
+
     const source = new DataSource({
-      ...this.merchants.requireDataSource().options,
+      ...merchantDataSource.options,
       entities: [StoreDiscountEntity],
       synchronize: false,
       migrationsRun: false,
