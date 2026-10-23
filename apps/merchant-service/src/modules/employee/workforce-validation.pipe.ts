@@ -34,7 +34,6 @@ export class EmployeeValidationPipe extends WorkforceValidationPipe {
         delete normalized[aliasKey];
       };
       alias('contact_no', 'phone');
-      alias('phone_number', 'phone');
       alias('email_address', 'email');
       if (normalized.full_name !== undefined) {
         if (normalized.first_name !== undefined || normalized.last_name !== undefined) {

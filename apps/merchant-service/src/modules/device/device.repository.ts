@@ -90,12 +90,14 @@ export class DeviceRepository {
   }
 
   async findDevicesByMerchant(merchantId: string): Promise<DeviceEntity[]> {
-    const rows = await this.repository()
-      .createQueryBuilder('mapping')
-      .innerJoinAndSelect('mapping.device', 'device', 'device.isDeleted = false')
-      .where('mapping.merchantId = CAST(:merchantId AS uuid)', { merchantId })
-      .andWhere('mapping.isDeleted = false')
-      .orderBy('mapping.createdAt', 'DESC')
+    return this.merchants.requireDataSource().getRepository(DeviceEntity)
+      .createQueryBuilder('device')
+      .where('device.is_deleted = false')
+      .andWhere(
+        '(device.merchant_id = :merchantId OR device.id IN (SELECT md.device_id FROM public.merchant_devices md WHERE md.merchant_id = :merchantId AND md.is_deleted = false))',
+        { merchantId },
+      )
+      .orderBy('device.created_at', 'DESC')
       .getMany();
   }
 
@@ -137,7 +139,7 @@ export class DeviceRepository {
           'mapping',
           'mapping.device_id = device.id AND mapping.is_deleted = false',
         )
-        .where('mapping.merchant_id = CAST(:merchantId AS uuid)', { merchantId: filters.merchantId })
+        .where('mapping.merchant_id = :merchantId', { merchantId: filters.merchantId })
         .andWhere('device.is_deleted = false');
 
       if (!withFilters) return query;

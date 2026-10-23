@@ -21,7 +21,7 @@ export class MerchantDeviceEntity {
   @JoinColumn({ name: 'device_id', referencedColumnName: 'id' })
   device?: DeviceEntity;
 
-  @Column({ name: 'merchant_id', type: 'uuid' })
+  @Column({ name: 'merchant_id', type: 'varchar', length: 100 })
   merchantId!: string;
 
   @Column({ name: 'created_by', type: 'varchar', length: 100, nullable: true })

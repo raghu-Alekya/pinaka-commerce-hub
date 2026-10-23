@@ -31,39 +31,13 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
       CREATE TABLE IF NOT EXISTS public.merchant_devices (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         device_id uuid NOT NULL,
-        merchant_id uuid NOT NULL,
+        merchant_id varchar(100) NOT NULL,
         created_by varchar(100),
         updated_by varchar(100),
         is_deleted boolean NOT NULL DEFAULT false,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       )
-    `);
-    // Merchant IDs are UUID primary keys in public.merchants and public.devices.
-    // Older deployments created this mapping column as varchar; convert it only
-    // after verifying every stored value is a valid UUID.
-    await manager.query(`
-      DO $migration$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'merchant_devices'
-            AND column_name = 'merchant_id'
-            AND data_type <> 'uuid'
-        ) THEN
-          IF EXISTS (
-            SELECT 1 FROM public.merchant_devices
-            WHERE merchant_id IS NULL
-               OR merchant_id::text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-          ) THEN
-            RAISE EXCEPTION 'merchant_devices.merchant_id contains non-UUID values; refusing automatic type conversion';
-          END IF;
-          ALTER TABLE public.merchant_devices
-            ALTER COLUMN merchant_id TYPE uuid USING merchant_id::text::uuid;
-        END IF;
-      END
-      $migration$
     `);
     await manager.query(`
       DO $migration$
