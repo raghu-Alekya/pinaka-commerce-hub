@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -419,6 +419,13 @@ export class PosRepository implements OnModuleInit {
     if (!shift) return null;
     const [view] = await this.viewsFor([shift]);
     return view ?? null;
+  }
+
+  requireDataSource(): DataSource {
+    if (!this.isDbConnected || !this.dataSource) {
+      throw new ServiceUnavailableException('POS database is unavailable');
+    }
+    return this.dataSource;
   }
 
   async getShiftWithSafeTransactions(shiftId: string, storeId: string) {
