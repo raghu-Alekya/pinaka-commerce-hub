@@ -52,6 +52,10 @@ export function nationalPhone(phone: unknown, country?: unknown): unknown {
   for (const dial of dials) {
     if ((marked || dial === preferred) && digits.startsWith(dial) && digits.length - dial.length >= 6) {
       digits = digits.slice(dial.length);
+      // Strip duplicate country dialing code (e.g., +9191 or +11)
+      if (digits.startsWith(dial) && digits.length - dial.length >= 6) {
+        digits = digits.slice(dial.length);
+      }
       break;
     }
   }

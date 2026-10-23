@@ -1,4 +1,4 @@
-import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { MerchantStatus } from './commerce-enums';
 
 export { MerchantStatus } from './commerce-enums';
@@ -28,28 +28,20 @@ export interface KycDocument {
   uploadedAt: string;
 }
 
-@Check('merchants_distinct_identity_code', `"merchant_code" <> "merchant_id"`)
 @Entity('merchants')
 export class MerchantEntity {
   // =========================================================
   // IDENTITY
   // =========================================================
 
-  @Column({
-    name: 'id',
-    type: 'uuid',
-    unique: true,
-    default: () => 'gen_random_uuid()',
-  })
+  @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @PrimaryColumn({
-    name: 'merchant_code',
-    type: 'varchar',
-    length: 100,
-  })
-  merchantCode!: string;
-
+  /**
+   * Human-readable merchant reference code (e.g. MER-0001).
+   * This is the canonical business identifier used across the platform.
+   * Previously also stored as merchant_code; consolidated to merchant_id.
+   */
   @Column({
     name: 'merchant_id',
     type: 'varchar',

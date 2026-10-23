@@ -1,42 +1,35 @@
--- Device fields are stored as queryable columns. Store assignment is not part
--- of the Device record.
+-- Device schema documentation (current snake_case standard).
+-- Applied automatically by ensureMerchantDevicesSchema() on service startup.
+-- All camelCase legacy columns (deviceCode, merchantId, etc.) and the old
+-- device_activation_code column have been removed; snake_case equivalents are
+-- the only live columns.
+
 CREATE TABLE IF NOT EXISTS devices (
-  id uuid PRIMARY KEY,
-  "deviceName" varchar(255) NOT NULL,
-  "deviceCode" varchar(100) NOT NULL,
-  "merchantId" varchar(100) NOT NULL,
-  "merchantName" varchar(255) NOT NULL,
-  "serialNumber" varchar(100) NOT NULL UNIQUE,
-  "deviceType" varchar(100) NOT NULL,
-  status varchar(20) NOT NULL DEFAULT 'Active',
-  "createdAt" timestamp NOT NULL DEFAULT now()
+  id                  uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_name         varchar(255) NOT NULL,
+  device_code         varchar(100) NOT NULL UNIQUE,
+  device_id           text,
+  device_active_code  varchar(100),
+  authorization_code  varchar(100),
+  merchant_id         varchar(100) NOT NULL,
+  merchant_name       varchar(255) NOT NULL,
+  serial_number       varchar(100) UNIQUE,
+  notes               text,
+  device_type         varchar(100) NOT NULL,
+  status              varchar(20)  NOT NULL DEFAULT 'Active',
+  created_at          timestamptz  NOT NULL DEFAULT now(),
+  updated_at          timestamptz  NOT NULL DEFAULT now()
 );
 
--- Upgrade databases created by earlier versions of the device schema.
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS "deviceName" varchar(255);
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS "deviceCode" varchar(100);
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS "merchantName" varchar(255);
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS "deviceType" varchar(100);
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS status varchar(20) DEFAULT 'Active';
+-- Unique partial indexes for activation codes.
+CREATE UNIQUE INDEX IF NOT EXISTS devices_device_active_code_uidx
+  ON devices (device_active_code)
+  WHERE device_active_code IS NOT NULL AND device_active_code <> '';
 
--- Remove store fields from databases created with the earlier Device schema.
-DROP INDEX IF EXISTS devices_store_idx;
-ALTER TABLE devices DROP COLUMN IF EXISTS "storeId";
-ALTER TABLE devices DROP COLUMN IF EXISTS "storeName";
+CREATE UNIQUE INDEX IF NOT EXISTS devices_authorization_code_uidx
+  ON devices (authorization_code)
+  WHERE authorization_code IS NOT NULL AND authorization_code <> '';
 
--- Preserve the queryable values from older details JSON and fill merchant names.
-UPDATE devices d
-SET "deviceName" = COALESCE(NULLIF(to_jsonb(d)->'details'->>'deviceName', ''), NULLIF(d."deviceName", ''), 'Unnamed device'),
-    "deviceCode" = COALESCE(NULLIF(d."deviceCode", ''), 'DEV-' || LEFT(REPLACE(d.id::text, '-', ''), 12)),
-    "merchantName" = COALESCE((SELECT m."businessName" FROM merchants m WHERE m."merchantId" = d."merchantId" OR m."merchantCode" = d."merchantId" OR m.id::text = d."merchantId"), d."merchantId"),
-    "deviceType" = COALESCE(NULLIF(to_jsonb(d)->'details'->>'deviceType', ''), NULLIF(d."deviceType", ''), 'Other'),
-    status = COALESCE(NULLIF(to_jsonb(d)->'details'->>'status', ''), d.status, 'Active');
-
-ALTER TABLE devices ALTER COLUMN "deviceName" SET NOT NULL;
-ALTER TABLE devices ALTER COLUMN "deviceCode" SET NOT NULL;
-ALTER TABLE devices ALTER COLUMN "merchantName" SET NOT NULL;
-ALTER TABLE devices ALTER COLUMN "deviceType" SET NOT NULL;
-ALTER TABLE devices ALTER COLUMN status SET NOT NULL;
-ALTER TABLE devices DROP COLUMN IF EXISTS details;
-
-CREATE UNIQUE INDEX IF NOT EXISTS devices_device_code_unique_idx ON devices (lower("deviceCode"));
+-- Lookup index for merchant-scoped device queries.
+CREATE INDEX IF NOT EXISTS devices_merchant_id_idx
+  ON devices (merchant_id);
