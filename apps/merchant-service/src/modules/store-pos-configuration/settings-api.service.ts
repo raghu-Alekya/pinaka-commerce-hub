@@ -7,32 +7,47 @@ export class SettingsApiService {
 
   async general(body: Json, scope: SettingsScope) {
     const current = (await this.repository.read(scope)).general ?? {};
-    // Keep omitted keys during partial updates and always expose the complete
-    // supported settings shape to older clients and newly initialized stores.
-    const general: Json = {
-      business_name: '', company_name: '', email: '', language: '', nav_bar_location: '',
-      pos_theme: '', contact_info: '', address: '', currency: '', timezone: '',
-      email_notification: 0, sound_notification: 0, version: '', image_url: false, logo_url: false,
-      gstin: '', receipt_header: '', receipt_footer: '', device_id: '', ...current,
-    };
+    // Preserve populated settings, but clean empty placeholders left by older saves.
+    const general: Json = Object.fromEntries(Object.entries(current).filter(([, value]) =>
+      value !== null && value !== undefined && value !== false && !(typeof value === 'string' && !value.trim()),
+    ));
     const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
-    for (const key of textFields) if (body[key] !== undefined) general[key] = this.sanitizeText(body[key]);
-    if (body.company_name !== undefined) general.company_name = this.sanitizeText(body.company_name);
+    for (const key of textFields) {
+      if (body[key] === undefined) continue;
+      const value = this.sanitizeText(body[key]);
+      if (value) general[key] = value;
+      else delete general[key];
+    }
+    if (body.company_name !== undefined) {
+      const value = this.sanitizeText(body.company_name);
+      if (value) general.company_name = value;
+      else delete general.company_name;
+    }
     else if (body.business_name !== undefined && !current.company_name) general.company_name = general.business_name;
-    if (body.email !== undefined) general.email = this.sanitizeEmail(body.email);
+    if (body.email !== undefined) {
+      const email = this.sanitizeEmail(body.email);
+      if (email) general.email = email;
+      else delete general.email;
+    }
     if (body.email_notification !== undefined) general.email_notification = this.phpNotEmpty(body.email_notification) ? 1 : 0;
     if (body.sound_notification !== undefined) general.sound_notification = this.phpNotEmpty(body.sound_notification) ? 1 : 0;
-    general.image_url ??= false;
-    general.logo_url ??= false;
-    if (this.phpNotEmpty(body.image_url)) general.image_url = this.sanitizeUrl(body.image_url);
-    if (this.phpNotEmpty(body.logo_url)) general.logo_url = this.sanitizeUrl(body.logo_url);
+    if (this.phpNotEmpty(body.image_url)) {
+      const imageUrl = this.sanitizeUrl(body.image_url);
+      if (imageUrl) general.image_url = imageUrl;
+    }
+    if (this.phpNotEmpty(body.logo_url)) {
+      const logoUrl = this.sanitizeUrl(body.logo_url);
+      if (logoUrl) general.logo_url = logoUrl;
+    }
     const data = await this.repository.merge(scope, { general });
     const responseFields = [
       'company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
       'gstin', 'receipt_header', 'receipt_footer', 'device_id',
     ];
     const responseData = Object.fromEntries(
-      responseFields.filter((key) => body[key] !== undefined).map((key) => [key, data.general[key]]),
+      responseFields.filter((key) => body[key] !== undefined && data.general[key] !== undefined
+        && data.general[key] !== false && !(typeof data.general[key] === 'string' && !data.general[key].trim()))
+        .map((key) => [key, data.general[key]]),
     );
     return { success: true, message: 'Settings updated successfully', data: responseData };
   }
@@ -40,18 +55,14 @@ export class SettingsApiService {
   async getGeneral(scope: SettingsScope) {
     const value = await this.repository.read(scope);
     const general = value.general ?? {};
-    const data: Json = {
-      company_name: general.company_name ?? general.business_name ?? '',
-      nav_bar_location: general.nav_bar_location ?? '',
-      pos_theme: general.pos_theme ?? '',
-      version: general.version ?? '',
-      image_url: general.image_url ?? false,
-      logo_url: general.logo_url ?? false,
-      gstin: general.gstin ?? '',
-      receipt_header: general.receipt_header ?? '',
-      receipt_footer: general.receipt_footer ?? '',
-      device_id: general.device_id ?? '',
-    };
+    const fields = ['company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
+      'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const data: Json = {};
+    for (const key of fields) {
+      const raw = key === 'company_name' ? general.company_name ?? general.business_name : general[key];
+      if (raw === null || raw === undefined || raw === false || (typeof raw === 'string' && !raw.trim())) continue;
+      data[key] = raw;
+    }
     return { success: true, data };
   }
 
