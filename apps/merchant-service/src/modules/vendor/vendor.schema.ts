@@ -92,6 +92,7 @@ export async function ensureVendorSchema(dataSource: DataSource): Promise<void> 
             ELSE NULL
           END
     `);
+    await runner.query(`ALTER TABLE public.vendors DROP COLUMN IF EXISTS "vendorCode"`);
     await runner.query(`
       ALTER TABLE public.vendors
         ALTER COLUMN vendor_code SET NOT NULL,

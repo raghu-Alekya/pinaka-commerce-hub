@@ -1033,13 +1033,16 @@ export class CompactMerchantController {
         setCol('firstName', input.firstName ?? existing.firstName ?? existing.first_name);
         setCol('last_name', input.lastName ?? existing.last_name ?? existing.lastName);
         setCol('lastName', input.lastName ?? existing.lastName ?? existing.last_name);
+        const phoneCountry = input.country ?? existing.country;
         setCol(
           'alternate_phone',
           input.alternatePhone !== undefined
             ? input.alternatePhone
-              ? String(input.alternatePhone)
+              ? nationalPhone(String(input.alternatePhone), phoneCountry)
               : null
-            : existing.alternate_phone,
+            : existing.alternate_phone
+              ? nationalPhone(String(existing.alternate_phone), phoneCountry)
+              : existing.alternate_phone,
         );
         setCol(
           'tax_id',
@@ -1067,18 +1070,14 @@ export class CompactMerchantController {
           'postal_code',
           input.pinCode ?? existing.postal_code ?? existing.pinCode,
         );
-        setCol(
-          'merchantPhoneNumber',
+        const phoneValue = nationalPhone(
           input.merchantPhoneNumber ??
             existing.merchantPhoneNumber ??
             existing.phone,
+          phoneCountry,
         );
-        setCol(
-          'phone',
-          input.merchantPhoneNumber ??
-            existing.phone ??
-            existing.merchantPhoneNumber,
-        );
+        setCol('merchantPhoneNumber', phoneValue);
+        setCol('phone', phoneValue);
         setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
         setCol('addressLine2', input.addressLine2 ?? existing.addressLine2);
         setCol(
@@ -1247,9 +1246,7 @@ export class CompactMerchantController {
     if (!current?.id) {
       const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
       setSubCol('id', subId);
-      setSubCol('subscriptionId', subId);
       setSubCol('subscription_code', subId);
-      setSubCol('subscriptionCode', subId);
       setSubCol('createdAt', new Date());
       setSubCol('created_at', new Date());
     }

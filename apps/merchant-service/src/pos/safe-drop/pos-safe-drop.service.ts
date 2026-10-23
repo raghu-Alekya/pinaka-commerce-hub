@@ -76,7 +76,7 @@ export class PosSafeDropService {
               OR EXISTS (
                 SELECT 1 FROM public.users u
                  WHERE u.id::text = $2
-                   AND u."accountId"::text = $3
+                   AND u.account_id::text = $3
                    AND lower(u.email) = lower(m.email)
               )
             )

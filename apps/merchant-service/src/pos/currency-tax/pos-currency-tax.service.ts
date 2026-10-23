@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosCurrencyTaxEntity } from './pos-currency-tax.entity';
-import { PosTaxClassEntity } from './pos-tax-class.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { SavePosCurrencyTaxDto } from './pos-currency-tax.dto';
 
 export interface PosCurrencyTaxRecord {
@@ -33,7 +33,7 @@ export class PosCurrencyTaxService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Currency and tax settings are not configured for this store');
-    return { success: true, currencyTax: await this.withClasses(record) };
+    return { success: true, currencyTax: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosCurrencyTaxDto) {
@@ -69,71 +69,38 @@ export class PosCurrencyTaxService {
     if (blank) throw new BadRequestException('Each tax class needs a name');
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosCurrencyTaxEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.repo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'currency_taxes');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosCurrencyTaxDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosCurrencyTaxRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosCurrencyTaxEntity);
-      const classes = manager.getRepository(PosTaxClassEntity);
-      const row = existingId
-        ? await settings.save({
-            id: existingId,
-            storeId,
-            merchantId,
-            currency: body.currency,
-            rounding: body.rounding,
-            decimalPlaces: body.decimalPlaces,
-            taxEnabled: body.taxEnabled,
-            defaultTaxRate: body.taxEnabled ? String(body.defaultTaxRate) : null,
-            taxCalculation: body.taxCalculation,
-          })
-        : await settings.save(settings.create({
-            storeId,
-            merchantId,
-            currency: body.currency,
-            rounding: body.rounding,
-            decimalPlaces: body.decimalPlaces,
-            taxEnabled: body.taxEnabled,
-            defaultTaxRate: body.taxEnabled ? String(body.defaultTaxRate) : null,
-            taxCalculation: body.taxCalculation,
-          }));
-
-      await classes.delete({ currencyTaxId: row.id });
-      const namedClasses = (body.taxClasses || []).filter(item => item.name?.trim());
-      const taxClasses = namedClasses.length
-        ? await classes.save(namedClasses.map((item, index) => classes.create({
-            currencyTaxId: row.id,
-            name: item.name.trim(),
-            rate: String(item.rate),
-            sortOrder: index,
-          })))
-        : [];
-
-      return this.present(row, taxClasses);
+    const current = await this.findByStore(storeId);
+    const namedClasses = (body.taxClasses || []).filter(item => item.name?.trim());
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'currency_taxes', {
+      ...(current || {}),
+      merchantId,
+      currency: body.currency,
+      rounding: body.rounding,
+      decimalPlaces: body.decimalPlaces,
+      taxEnabled: body.taxEnabled,
+      defaultTaxRate: body.taxEnabled ? Number(body.defaultTaxRate) : null,
+      taxCalculation: body.taxCalculation,
+      taxClasses: namedClasses.map(item => ({
+        id: randomUUID(),
+        name: item.name.trim(),
+        rate: Number(item.rate),
+      })),
     });
+    return this.present(saved);
   }
 
-  private async withClasses(record: PosCurrencyTaxEntity): Promise<PosCurrencyTaxRecord> {
-    const classes = await this.merchants.requireDataSource().getRepository(PosTaxClassEntity).find({
-      where: { currencyTaxId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, classes);
-  }
-
-  private present(record: PosCurrencyTaxEntity, classes: PosTaxClassEntity[]): PosCurrencyTaxRecord {
+  private present(record: Record<string, any>): PosCurrencyTaxRecord {
+    const classes = Array.isArray(record.taxClasses) ? record.taxClasses : [];
     return {
       id: record.id,
       storeId: record.storeId,
@@ -141,14 +108,14 @@ export class PosCurrencyTaxService {
       currency: record.currency,
       rounding: record.rounding,
       decimalPlaces: Number(record.decimalPlaces),
-      taxEnabled: record.taxEnabled,
+      taxEnabled: record.taxEnabled !== false,
       defaultTaxRate: record.defaultTaxRate === null || record.defaultTaxRate === undefined
         ? null
         : Number(record.defaultTaxRate),
       taxCalculation: record.taxCalculation,
-      taxClasses: classes.map(item => ({
-        id: item.id,
-        name: item.name,
+      taxClasses: classes.map((item: Record<string, any>) => ({
+        id: String(item.id),
+        name: String(item.name),
         rate: Number(item.rate),
       })),
       createdAt: record.createdAt,

@@ -50,12 +50,15 @@ export function nationalPhone(phone: unknown, country?: unknown): unknown {
     .sort((left, right) => right.length - left.length);
   const marked = phone.trim().startsWith('+') || phone.replace(/[^\d+]/g, '').startsWith('+');
   for (const dial of dials) {
+    if (!digits.startsWith(dial + dial)) continue;
+    const national = digits.slice(dial.length * 2);
+    if (national.length >= 6 && national.length <= 15) {
+      return national.replace(/^0+/, '');
+    }
+  }
+  for (const dial of dials) {
     if ((marked || dial === preferred) && digits.startsWith(dial) && digits.length - dial.length >= 6) {
       digits = digits.slice(dial.length);
-      // Strip duplicate country dialing code (e.g., +9191 or +11)
-      if (digits.startsWith(dial) && digits.length - dial.length >= 6) {
-        digits = digits.slice(dial.length);
-      }
       break;
     }
   }

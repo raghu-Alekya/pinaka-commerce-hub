@@ -1,6 +1,7 @@
 import { fetchPosTaxConfiguration } from '../store-pos-configuration/pos-tax-sync';
 import { groupFeaturesByCategory } from '../master/common/master-list';
 import { MerchantOnboardingDto } from './onboarding.dto';
+import { nationalPhone } from './countries';
 import { storeSetup } from '../master/store-setup/store-setup';
 import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
@@ -112,26 +113,8 @@ import { ensureVendorSchema } from '../vendor/vendor.schema';
 import { ensureStoreAccessSchema } from '../master/store-setup/store-access.schema';
 import { ensureStoreRoleTemplateSchema } from '../master/store-setup/store-role-template.schema';
 import { ensureEmployeeStoreSchema } from '../store/employee-store.schema';
-import { PosCurrencyTaxEntity } from '../../pos/currency-tax/pos-currency-tax.entity';
-import { PosTaxClassEntity } from '../../pos/currency-tax/pos-tax-class.entity';
-import { PosServiceChargeEntity } from '../../pos/service-charges/pos-service-charge.entity';
-import { PosServiceChargeTierEntity } from '../../pos/service-charges/pos-service-charge-tier.entity';
-import { PosCashbackEntity } from '../../pos/cashback/pos-cashback.entity';
-import { PosCashbackTierEntity } from '../../pos/cashback/pos-cashback-tier.entity';
-import { PosOpeningBalanceEntity } from '../../pos/opening-balance/pos-opening-balance.entity';
-import { PosCashDenominationEntity } from '../../pos/cash-denominations/pos-cash-denomination.entity';
-import { PosCashDenominationItemEntity } from '../../pos/cash-denominations/pos-cash-denomination-item.entity';
-import { PosCashRegisterSettingsEntity } from '../../pos/cash-registers/pos-cash-register-settings.entity';
-import { PosCashRegisterEntity } from '../../pos/cash-registers/pos-cash-register.entity';
-import { PosSafeDropEntity } from '../../pos/safe-drop/pos-safe-drop.entity';
-import { PosSafeDropTubeEntity } from '../../pos/safe-drop/pos-safe-drop-tube.entity';
-import { PosSafeDropDenominationEntity } from '../../pos/safe-drop/pos-safe-drop-denomination.entity';
-import { ensurePosSafeDropSchema } from '../../pos/safe-drop/pos-safe-drop.schema';
 import { PosSafeTransactionEntity } from '../../pos/safe-transactions/pos-safe-transaction.entity';
 import { PosSafeDropTransactionEntity } from '../../pos/safe-transactions/pos-safe-drop-transaction.entity';
-import { PosCardPaymentEntity } from '../../pos/card-payments/pos-card-payment.entity';
-import { PosTerminalMappingSettingsEntity } from '../../pos/terminal-mappings/pos-terminal-mapping-settings.entity';
-import { PosTerminalMappingEntity } from '../../pos/terminal-mappings/pos-terminal-mapping.entity';
 import { StoreEmployeeFastkeyEntity } from '../../pos/fastkeys/store-employee-fastkey.entity';
 import { ensureStoreDevicesSchema } from '../store-pos-configuration/device-mappings/store-devices.schema';
 import { ensureVendorStoreSchema } from '../dynamic-query/vendor-store.schema';
@@ -972,25 +955,8 @@ export class MerchantRepository implements OnModuleInit {
         WebsiteConnectionEntity,
         DeviceEntity,
         MerchantDeviceEntity,
-        PosCurrencyTaxEntity,
-        PosTaxClassEntity,
-        PosServiceChargeEntity,
-        PosServiceChargeTierEntity,
-        PosCashbackEntity,
-        PosCashbackTierEntity,
-        PosOpeningBalanceEntity,
-        PosCashDenominationEntity,
-        PosCashDenominationItemEntity,
-        PosCashRegisterSettingsEntity,
-        PosCashRegisterEntity,
-        PosSafeDropEntity,
-        PosSafeDropTubeEntity,
-        PosSafeDropDenominationEntity,
         PosSafeTransactionEntity,
         PosSafeDropTransactionEntity,
-        PosCardPaymentEntity,
-        PosTerminalMappingSettingsEntity,
-        PosTerminalMappingEntity,
         StorePosConfigurationEntity,
         PosEmployeeAttendanceEntity,
         StoreEmployeeFastkeyEntity,
@@ -1013,7 +979,6 @@ export class MerchantRepository implements OnModuleInit {
     // dies with "tables can have at most 1600 columns".
     const createdTables = await createMissingTables(this.dataSource);
     await ensurePosDataSyncSchema(this.dataSource);
-    await ensurePosSafeDropSchema(this.dataSource);
     if (createdTables.length) {
       console.log(
         `🐘 [PCH Merchant DB] Created missing tables: ${createdTables.join(', ')}`,
@@ -1209,10 +1174,7 @@ export class MerchantRepository implements OnModuleInit {
         const stores = manager.getRepository(StoreEntity);
         const subscriptions = manager.getRepository(SubscriptionEntity);
         const existing = await merchants.findOne({
-          where: [
-            { merchantId: m.merchantId },
-            { merchantCode: m.merchantCode || m.merchantId },
-          ],
+          where: { merchantId: m.merchantId },
           lock: { mode: 'pessimistic_write' },
         });
         if (editing && !existing)
@@ -1223,24 +1185,22 @@ export class MerchantRepository implements OnModuleInit {
           existing?.id && this.isUuid(existing.id)
             ? existing.id
             : crypto.randomUUID();
-        const merchantCode =
-          m.merchantCode || existing?.merchantCode || m.merchantId;
         const merchantBusinessId =
-          m.merchantId === merchantCode
-            ? `MID-${rowId.slice(0, 8).toUpperCase()}`
-            : m.merchantId;
+          m.merchantId || existing?.merchantId || `MID-${rowId.slice(0, 8).toUpperCase()}`;
         const merchant = await merchants.save(
           merchants.create({
             ...existing,
             id: rowId,
-            merchantCode,
             merchantId: merchantBusinessId,
             businessDisplayName: m.businessDisplayName,
             firstName: m.firstName,
             lastName: m.lastName,
             email: m.email.toLowerCase(),
-            phone: m.phone,
-            alternatePhone: m.alternatePhone,
+            phone: String(nationalPhone(m.phone, m.country) ?? m.phone),
+            alternatePhone:
+              m.alternatePhone == null
+                ? m.alternatePhone
+                : (nationalPhone(m.alternatePhone, m.country) as string),
             taxId: m.taxId,
             addressLine1: m.addressLine1,
             addressLine2: m.addressLine2,
@@ -1254,11 +1214,7 @@ export class MerchantRepository implements OnModuleInit {
               : m.onboardingStep || existing?.onboardingStep || 'STEP2_STORE',
           }),
         );
-        const ownerKeys = new Set([
-          merchant.id,
-          merchant.merchantId,
-          merchant.merchantCode,
-        ]);
+        const ownerKeys = new Set([merchant.id, merchant.merchantId]);
         if (
           incoming.some(
             (store) => store.merchantId && !ownerKeys.has(store.merchantId),
@@ -1382,14 +1338,7 @@ export class MerchantRepository implements OnModuleInit {
     },
   ): Promise<MerchantEntity> {
     const rowId = crypto.randomUUID();
-    const requestedCode =
-      data.merchantCode ||
-      data.merchantId ||
-      `MCH-${rowId.slice(0, 8).toUpperCase()}`;
-    const merchantId =
-      data.merchantId && data.merchantId !== requestedCode
-        ? data.merchantId
-        : `MID-${rowId.slice(0, 8).toUpperCase()}`;
+    const merchantId = data.merchantId || `MCH-${rowId.slice(0, 8).toUpperCase()}`;
     const owner = data.ownerName || data.firstName || 'Owner';
     const [firstName, ...rest] = owner.split(' ');
     const saved = await this.merchantRepo.save(
@@ -1398,7 +1347,6 @@ export class MerchantRepository implements OnModuleInit {
         createdBy: data.createdBy ?? null,
         updatedBy: null,
         updatedAt: null as unknown as Date,
-        merchantCode: requestedCode,
         merchantId,
         businessDisplayName:
           data.businessDisplayName ||
@@ -1407,14 +1355,17 @@ export class MerchantRepository implements OnModuleInit {
         firstName: data.firstName || firstName,
         lastName: data.lastName || rest.join(' '),
         email: data.email || `owner_${Date.now()}@pinaka.com`,
-        phone: data.phone || '0000000000',
+        phone: String(nationalPhone(data.phone, data.country) || data.phone || '0000000000'),
         taxId: data.taxId || null,
         country: data.country,
         state: data.state,
         city: data.city,
         postalCode: data.postalCode,
         addressLine1: data.addressLine1 || data.businessAddress || null,
-        alternatePhone: data.alternatePhone,
+        alternatePhone:
+          data.alternatePhone == null
+            ? data.alternatePhone
+            : (nationalPhone(data.alternatePhone, data.country) as string),
         status: data.status || MerchantStatus.PENDING,
         onboardingStep: data.onboardingStep || 'STEP1_BUSINESS',
       }),
@@ -1427,7 +1378,7 @@ export class MerchantRepository implements OnModuleInit {
       { businessName: saved.businessName },
     );
     await this.files?.ensureMerchantFolder(
-      saved.businessDisplayName || saved.merchantCode || saved.merchantId || 'merchant',
+      saved.businessDisplayName || saved.merchantId || 'merchant',
     );
     return saved;
   }
@@ -4122,22 +4073,6 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   private async getStoreProductTaxConfiguration(
     storeId: string,
   ): Promise<StoreProductTaxConfiguration | null> {
-    const settings = await this.dataSource.getRepository(PosCurrencyTaxEntity).findOne({ where: { storeId } });
-    if (settings) {
-      const classes = await this.dataSource.getRepository(PosTaxClassEntity).find({
-        where: { currencyTaxId: settings.id },
-        order: { sortOrder: 'ASC' },
-      });
-      return {
-        currency: settings.currency,
-        decimalPlaces: Number(settings.decimalPlaces),
-        taxEnabled: settings.taxEnabled,
-        defaultTaxRate: settings.defaultTaxRate === null ? null : Number(settings.defaultTaxRate),
-        taxCalculation: settings.taxCalculation,
-        taxClasses: classes.map((taxClass) => ({ name: taxClass.name, rate: Number(taxClass.rate) })),
-      };
-    }
-
     const legacy = await this.dataSource.getRepository(StorePosConfigurationEntity).findOne({
       where: { storeId, configurationName: 'currency_taxes' },
     });
@@ -6840,12 +6775,12 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           }),
         );
         const account = await manager.query(
-          `SELECT u."accountId" FROM public.merchants m LEFT JOIN public.users u ON lower(u.email)=lower(m.email)
+          `SELECT u.account_id AS "accountId" FROM public.merchants m LEFT JOIN public.users u ON lower(u.email)=lower(m.email)
            WHERE m.id=$1::uuid LIMIT 1`,
           [dto.merchantId],
         );
         const [user] = await manager.query(
-          `INSERT INTO public.users("accountId","firstName","lastName",email,"phoneNumber",role,"notificationEnabled",status,"passwordHash",username,"merchantId","employeeId")
+          `INSERT INTO public.users(account_id,first_name,last_name,email,phone_number,role,notification_enabled,status,password_hash,username,merchant_id,employee_id)
            VALUES($1,$2,$3,$4,$5,'USER',true,$6,$7,$8,$9,$10) RETURNING id`,
           [
             account[0]?.accountId || null,
@@ -6935,11 +6870,11 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       const saved = await manager.getRepository(EmployeeEntity).save(existing);
       if (saved.userId) {
         const updates: string[] = [
-          '"firstName"=$2',
-          '"lastName"=$3',
-          '"phoneNumber"=$4',
+          'first_name=$2',
+          'last_name=$3',
+          'phone_number=$4',
           'status=$5',
-          '"updatedAt"=clock_timestamp()',
+          'updated_at=clock_timestamp()',
         ];
         const values: unknown[] = [
           saved.userId,
@@ -6958,7 +6893,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
         }
         if (dto.temporaryPassword !== undefined) {
           values.push(this.hashUserPassword(dto.temporaryPassword));
-          updates.push(`"passwordHash"=$${values.length}`);
+          updates.push(`password_hash=$${values.length}`);
         }
         await manager.query(
           `UPDATE public.users SET ${updates.join(',')} WHERE id=$1`,
@@ -7004,7 +6939,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       );
       if (existing.userId)
         await manager.query(
-          'UPDATE public.users SET status=\'DISABLED\',"updatedAt"=clock_timestamp() WHERE id=$1',
+          'UPDATE public.users SET status=\'DISABLED\',updated_at=clock_timestamp() WHERE id=$1',
           [existing.userId],
         );
     });

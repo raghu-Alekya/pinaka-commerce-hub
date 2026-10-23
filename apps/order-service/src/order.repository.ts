@@ -509,31 +509,6 @@ export class OrderRepository implements OnModuleInit {
       if (code !== '42P01' && code !== '42703') throw error;
     }
 
-    // Backward compatibility for stores that still use the dedicated tax endpoint.
-    if (!taxSetting) {
-      try {
-        const settings = await this.dataSource.query(
-          `SELECT id, "taxEnabled", "defaultTaxRate", "taxCalculation", "decimalPlaces"
-             FROM public.pos_currency_tax_settings
-            WHERE "storeId" = $1
-            LIMIT 1`,
-          [orderData.storeId],
-        );
-        taxSetting = settings[0] || null;
-        if (taxSetting?.id) {
-          taxClasses = await this.dataSource.query(
-            `SELECT name, rate FROM public.pos_tax_classes WHERE "currencyTaxId" = $1 ORDER BY "sortOrder" ASC`,
-            [taxSetting.id],
-          );
-        }
-      } catch (error: unknown) {
-        const code = error && typeof error === 'object'
-          ? (error as { driverError?: { code?: string } }).driverError?.code
-          : undefined;
-        if (code !== '42P01' && code !== '42703') throw error;
-      }
-    }
-
     const places = Number(taxSetting?.decimalPlaces ?? 2);
     const factor = 10 ** places;
     const taxClassKey = (value: unknown) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -692,19 +667,25 @@ export class OrderRepository implements OnModuleInit {
   private async cashbackFeeForAmount(storeId: string, amount: number): Promise<number> {
     if (!this.dataSource || amount <= 0) return 0;
     try {
-      const rows = await this.dataSource.query(
-        `SELECT t.fee
-           FROM public.pos_cashback_settings s
-           JOIN public.pos_cashback_tiers t ON t."cashbackId" = s.id
-          WHERE s."storeId" = $1
-            AND s.enabled = true
-            AND ($2::numeric <= COALESCE(NULLIF(s."maxCashback", 0), $2::numeric))
-            AND $2::numeric BETWEEN t."fromAmount" AND t."toAmount"
-          ORDER BY t."sortOrder" ASC
+      const rows: Array<{ configuration_value?: Record<string, any> }> = await this.dataSource.query(
+        `SELECT configuration_value
+           FROM public.store_pos_configurations
+          WHERE store_id = $1::uuid
+            AND configuration_name = 'cashback_settings'
           LIMIT 1`,
-        [storeId, amount],
+        [storeId],
       );
-      return Number(rows[0]?.fee || 0);
+      const settings = rows[0]?.configuration_value;
+      if (!settings || settings.enabled === false) return 0;
+      const maxCashback = Number(settings.maxCashback ?? settings.max_cashback ?? 0);
+      if (maxCashback > 0 && amount > maxCashback) return 0;
+      const tiers = Array.isArray(settings.tiers) ? settings.tiers : [];
+      const match = tiers.find((tier: Record<string, any>) => {
+        const from = Number(tier.from ?? tier.fromAmount);
+        const to = Number(tier.to ?? tier.toAmount);
+        return Number.isFinite(from) && Number.isFinite(to) && amount >= from && amount <= to;
+      });
+      return Number(match?.fee || 0);
     } catch {
       return 0;
     }

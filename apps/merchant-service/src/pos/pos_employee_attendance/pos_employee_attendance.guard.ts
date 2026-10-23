@@ -219,7 +219,7 @@ export class PosEmployeeAttendanceGuard implements CanActivate {
            AND u.status = 'ACTIVE'
            AND (
              (upper(u.role) IN ('OWNER', 'MANAGER') AND
-               u."merchantId" IN (m.id::text, m.merchant_code, m.merchant_id))
+               u.merchant_id IN (m.id::text, m.merchant_code, m.merchant_id))
              OR (m.created_by::text = u.id::text AND upper(u.role) IN ('OWNER', 'MANAGER'))
              OR (upper(u.role) = 'OWNER' AND lower(u.email) = lower(m.email))
              OR (upper($5) = 'OWNER' AND lower($4) = lower(m.email))

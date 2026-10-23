@@ -1,6 +1,37 @@
 import { DataSource } from 'typeorm';
 
-const UUID_SQL = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+const LEGACY_SHIFT_COLUMNS = [
+  'register_id', 'registerId',
+  'opened_by_employee_id', 'openedByEmployeeId',
+  'closed_by_employee_id', 'closedByEmployeeId',
+  'closed_by_device_id',
+  'shift_number', 'shiftNumber',
+  'cashier_name', 'cashierName',
+  'opening_cash', 'openingCash',
+  'total_cash_sales', 'totalCashSales',
+  'total_card_sales', 'totalCardSales',
+  'total_safe_drops', 'totalSafeDrops',
+  'total_paid_outs', 'totalPaidOuts',
+  'total_orders',
+  'total_order_sale_amount',
+  'total_cashback',
+  'total_payouts',
+  'total_ebt_sales',
+  'total_pay_later',
+  'total_refunds',
+  'total_cancelled_orders',
+  'total_void_items',
+  'drawer_denominations',
+  'drawer_total_amount',
+  'tube_denominations',
+  'tube_total_amount',
+  'total_amount',
+  'closing_cash_actual', 'closingCashActual',
+  'expected_cash_in_drawer', 'expectedCashInDrawer',
+  'cash_difference', 'cashDifference',
+  'opening_note', 'openingNote',
+  'closing_note', 'closingNote',
+];
 
 export async function ensureShiftSplitSchema(dataSource: DataSource): Promise<void> {
   await dataSource.query(`
@@ -52,21 +83,66 @@ export async function ensureShiftSplitSchema(dataSource: DataSource): Promise<vo
   `);
 
   await dataSource.query(`
-    UPDATE public.pos_shifts SET
-      opening_balance = COALESCE(opening_balance, opening_cash, 0),
-      closing_balance = COALESCE(closing_balance, closing_cash_actual),
-      over_short = COALESCE(over_short, cash_difference, discrepancy),
-      closing_device_id = COALESCE(closing_device_id, closed_by_device_id),
-      created_by = COALESCE(created_by, opened_by_employee_id::text),
-      closed_by = COALESCE(closed_by, closed_by_employee_id::text),
-      updated_by = COALESCE(updated_by, closed_by_employee_id::text)
-    WHERE opening_balance IS NULL
-      OR (closing_balance IS NULL AND closing_cash_actual IS NOT NULL)
-      OR (over_short IS NULL AND (cash_difference IS NOT NULL OR discrepancy IS NOT NULL))
-      OR (closing_device_id IS NULL AND closed_by_device_id IS NOT NULL)
-      OR (created_by IS NULL AND opened_by_employee_id IS NOT NULL)
-      OR (closed_by IS NULL AND closed_by_employee_id IS NOT NULL)
-      OR (updated_by IS NULL AND closed_by_employee_id IS NOT NULL);
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'opening_cash'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET opening_balance = COALESCE(opening_balance, opening_cash, 0)
+         WHERE opening_balance IS NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closing_cash_actual'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET closing_balance = COALESCE(closing_balance, closing_cash_actual)
+         WHERE closing_balance IS NULL AND closing_cash_actual IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'cash_difference'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET over_short = COALESCE(over_short, cash_difference, discrepancy)
+         WHERE over_short IS NULL AND (cash_difference IS NOT NULL OR discrepancy IS NOT NULL);
+      ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'discrepancy'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET over_short = COALESCE(over_short, discrepancy)
+         WHERE over_short IS NULL AND discrepancy IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closed_by_device_id'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET closing_device_id = COALESCE(closing_device_id, closed_by_device_id)
+         WHERE closing_device_id IS NULL AND closed_by_device_id IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'opened_by_employee_id'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET created_by = COALESCE(created_by, opened_by_employee_id::text)
+         WHERE created_by IS NULL AND opened_by_employee_id IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closed_by_employee_id'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET closed_by = COALESCE(closed_by, closed_by_employee_id::text),
+               updated_by = COALESCE(updated_by, closed_by_employee_id::text)
+         WHERE closed_by_employee_id IS NOT NULL
+           AND (closed_by IS NULL OR updated_by IS NULL);
+      END IF;
+    END $$;
     UPDATE public.pos_shifts SET opening_balance = 0 WHERE opening_balance IS NULL;
     ALTER TABLE public.pos_shifts ALTER COLUMN opening_balance SET DEFAULT 0;
     ALTER TABLE public.pos_shifts ALTER COLUMN opening_balance SET NOT NULL;
@@ -129,6 +205,40 @@ export async function ensureShiftSplitSchema(dataSource: DataSource): Promise<vo
     DECLARE
       spec RECORD;
     BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'cashierName'
+      ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'cashier_name'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET cashier_name = "cashierName"
+         WHERE (cashier_name IS NULL OR btrim(cashier_name) = '') AND "cashierName" IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'openingNote'
+      ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'opening_note'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET opening_note = "openingNote"
+         WHERE opening_note IS NULL AND "openingNote" IS NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closingNote'
+      ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closing_note'
+      ) THEN
+        UPDATE public.pos_shifts
+           SET closing_note = "closingNote"
+         WHERE closing_note IS NULL AND "closingNote" IS NOT NULL;
+      END IF;
+
       FOR spec IN
         SELECT * FROM (VALUES
           ('cashier_name', 'text'),
@@ -257,132 +367,77 @@ export async function ensureShiftSplitSchema(dataSource: DataSource): Promise<vo
       END LOOP;
     END $$;
   `);
-}
 
-type SqlQuery = (sql: string, parameters?: unknown[]) => Promise<unknown>;
+  await dataSource.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'cashierName'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'cashier_name'
+      ) THEN
+        INSERT INTO public.pos_shift_meta (id, shift_id, meta_name, meta_value, status)
+        SELECT gen_random_uuid(), s.id, 'cashier_name', to_jsonb(s."cashierName"), 'ACTIVE'
+        FROM public.pos_shifts s
+        WHERE s."cashierName" IS NOT NULL AND btrim(s."cashierName") <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM public.pos_shift_meta m
+            WHERE m.shift_id = s.id AND m.meta_name = 'cashier_name'
+          );
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'openingNote'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'opening_note'
+      ) THEN
+        INSERT INTO public.pos_shift_meta (id, shift_id, meta_name, meta_value, status)
+        SELECT gen_random_uuid(), s.id, 'opening_note', to_jsonb(s."openingNote"), 'ACTIVE'
+        FROM public.pos_shifts s
+        WHERE s."openingNote" IS NOT NULL AND btrim(s."openingNote") <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM public.pos_shift_meta m
+            WHERE m.shift_id = s.id AND m.meta_name = 'opening_note'
+          );
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closingNote'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = 'closing_note'
+      ) THEN
+        INSERT INTO public.pos_shift_meta (id, shift_id, meta_name, meta_value, status)
+        SELECT gen_random_uuid(), s.id, 'closing_note', to_jsonb(s."closingNote"), 'ACTIVE'
+        FROM public.pos_shifts s
+        WHERE s."closingNote" IS NOT NULL AND btrim(s."closingNote") <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM public.pos_shift_meta m
+            WHERE m.shift_id = s.id AND m.meta_name = 'closing_note'
+          );
+      END IF;
+    END $$;
+  `);
 
-export async function syncLegacyShiftColumns(query: SqlQuery, shiftId: string): Promise<void> {
-  await query(
-    `UPDATE public.pos_shifts AS s SET
-      opening_cash = s.opening_balance,
-      closing_cash_actual = s.closing_balance,
-      cash_difference = s.over_short,
-      declared_cash = s.declared_cash,
-      discrepancy = s.discrepancy,
-      closed_by_device_id = s.closing_device_id,
-      opened_by_employee_id = CASE
-        WHEN s.created_by ~* '${UUID_SQL}' THEN s.created_by::uuid
-        ELSE s.opened_by_employee_id
-      END,
-      closed_by_employee_id = CASE
-        WHEN s.closed_by ~* '${UUID_SQL}' THEN s.closed_by::uuid
-        ELSE s.closed_by_employee_id
-      END,
-      cashier_name = COALESCE(NULLIF(left((
-        SELECT m.meta_value #>> '{}' FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'cashier_name' AND m.status = 'ACTIVE'
-      ), 150), ''), s.cashier_name),
-      opening_note = (
-        SELECT m.meta_value #>> '{}' FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'opening_note' AND m.status = 'ACTIVE'
-      ),
-      closing_note = (
-        SELECT m.meta_value #>> '{}' FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'closing_note' AND m.status = 'ACTIVE'
-      ),
-      shift_number = left((
-        SELECT m.meta_value #>> '{}' FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'shift_number' AND m.status = 'ACTIVE'
-      ), 100),
-      register_id = COALESCE((
-        SELECT CASE
-          WHEN (m.meta_value #>> '{}') ~* '${UUID_SQL}' THEN (m.meta_value #>> '{}')::uuid
-          ELSE NULL
-        END
-        FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'register_id' AND m.status = 'ACTIVE'
-      ), s.register_id),
-      drawer_denominations = (
-        SELECT m.meta_value FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'drawer_denominations' AND m.status = 'ACTIVE'
-      ),
-      tube_denominations = (
-        SELECT m.meta_value FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'tube_denominations' AND m.status = 'ACTIVE'
-      ),
-      drawer_total_amount = (
-        SELECT (m.meta_value #>> '{}')::numeric FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'drawer_total_amount' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ),
-      tube_total_amount = (
-        SELECT (m.meta_value #>> '{}')::numeric FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'tube_total_amount' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ),
-      total_amount = (
-        SELECT (m.meta_value #>> '{}')::numeric FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'total_amount' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ),
-      total_order_sale_amount = COALESCE((
-        SELECT (m.meta_value #>> '{}')::numeric FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'total_order_sale_amount' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ), s.total_order_sale_amount),
-      total_orders = COALESCE((
-        SELECT (m.meta_value #>> '{}')::integer FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'total_orders' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ), s.total_orders),
-      total_cancelled_orders = COALESCE((
-        SELECT (m.meta_value #>> '{}')::integer FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'total_cancelled_orders' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ), s.total_cancelled_orders),
-      total_void_items = COALESCE((
-        SELECT (m.meta_value #>> '{}')::integer FROM public.pos_shift_meta m
-        WHERE m.shift_id = s.id AND m.meta_name = 'total_void_items' AND m.status = 'ACTIVE'
-          AND jsonb_typeof(m.meta_value) = 'number'
-      ), s.total_void_items),
-      total_cash_sales = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'CASH_SALE' AND t.status = 'ACTIVE'
-      ), s.total_cash_sales),
-      total_card_sales = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'CARD_SALE' AND t.status = 'ACTIVE'
-      ), s.total_card_sales),
-      total_safe_drops = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'SAFE_DROP' AND t.status = 'ACTIVE'
-      ), s.total_safe_drops),
-      total_paid_outs = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'PAID_OUT' AND t.status = 'ACTIVE'
-      ), s.total_paid_outs),
-      total_cashback = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'CASHBACK' AND t.status = 'ACTIVE'
-      ), s.total_cashback),
-      total_payouts = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'PAYOUT' AND t.status = 'ACTIVE'
-      ), s.total_payouts),
-      total_ebt_sales = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'EBT_SALE' AND t.status = 'ACTIVE'
-      ), s.total_ebt_sales),
-      total_pay_later = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'PAY_LATER' AND t.status = 'ACTIVE'
-      ), s.total_pay_later),
-      total_refunds = COALESCE((
-        SELECT SUM(t.total_sum) FROM public.pos_shift_transactions t
-        WHERE t.shift_id = s.id AND t.transaction_type = 'REFUND' AND t.status = 'ACTIVE'
-      ), s.total_refunds),
-      updated_at = CURRENT_TIMESTAMP
-    WHERE s.id = $1`,
-    [shiftId],
-  );
+  const legacyList = LEGACY_SHIFT_COLUMNS.map((column) => `'${column}'`).join(', ');
+  await dataSource.query(`
+    DO $$
+    DECLARE
+      legacy_column text;
+    BEGIN
+      FOR legacy_column IN
+        SELECT unnest(ARRAY[${legacyList}]::text[])
+      LOOP
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = legacy_column
+        ) THEN
+          EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN %I', legacy_column);
+        END IF;
+      END LOOP;
+    END $$;
+  `);
 }

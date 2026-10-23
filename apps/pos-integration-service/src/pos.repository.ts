@@ -7,7 +7,7 @@ import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
 import { PosShiftMetaEntity } from './entities/pos-shift-meta.entity';
 import { PosShiftTransactionEntity } from './entities/pos-shift-transaction.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
-import { ensureShiftSplitSchema, syncLegacyShiftColumns } from './shift.schema';
+import { ensureShiftSplitSchema } from './shift.schema';
 import { ShiftTransactionInput, ShiftView, ShiftWrite, expectedCashInDrawer, roundMoney, toShiftView } from './shift.types';
 
 async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
@@ -18,41 +18,18 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
         id VARCHAR(100) PRIMARY KEY,
         merchant_id VARCHAR(100) NOT NULL,
         store_id VARCHAR(100) NOT NULL,
-        register_id UUID,
         device_id VARCHAR(100) NOT NULL,
-        opening_device_id UUID,
-        opened_by_employee_id UUID,
-        closed_by_employee_id UUID,
-        closed_by_device_id VARCHAR(100),
-        shift_number VARCHAR(100),
-        cashier_name VARCHAR(150) NOT NULL,
-        opening_cash DECIMAL(10,2) DEFAULT 200.00,
-        total_cash_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_card_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_safe_drops DECIMAL(10,2) DEFAULT 0.00,
-        total_paid_outs DECIMAL(10,2) DEFAULT 0.00,
-        total_orders INTEGER DEFAULT 0,
-        total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00,
-        total_cashback DECIMAL(10,2) DEFAULT 0.00,
-        total_payouts DECIMAL(10,2) DEFAULT 0.00,
-        total_ebt_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_pay_later DECIMAL(10,2) DEFAULT 0.00,
-        total_refunds DECIMAL(10,2) DEFAULT 0.00,
-        total_cancelled_orders INTEGER DEFAULT 0,
-        total_void_items INTEGER DEFAULT 0,
-        drawer_denominations JSONB,
-        drawer_total_amount DECIMAL(12,2),
-        tube_denominations JSONB,
-        tube_total_amount DECIMAL(12,2),
-        total_amount DECIMAL(12,2),
-        closing_cash_actual DECIMAL(10,2),
-        expected_cash_in_drawer DECIMAL(10,2),
-        declared_cash DECIMAL(10,2),
-        cash_difference DECIMAL(10,2),
-        discrepancy DECIMAL(10,2),
-        opening_note TEXT,
-        closing_note TEXT,
+        opening_device_id VARCHAR(100),
+        closing_device_id VARCHAR(100),
+        created_by VARCHAR(100),
+        updated_by VARCHAR(100),
+        closed_by VARCHAR(100),
         status VARCHAR(50) DEFAULT 'OPEN',
+        opening_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+        closing_balance DECIMAL(12,2),
+        over_short DECIMAL(12,2),
+        declared_cash DECIMAL(12,2),
+        discrepancy DECIMAL(12,2),
         opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         closed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -60,91 +37,79 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
       );
     `);
 
-    // 2. Add any missing snake_case columns to existing pos_shifts table
+    // 2. Add the master columns. Legacy totals, notes, and denominations are not added back.
     await dataSource.query(`
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS register_id UUID;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS shift_number VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cashier_name VARCHAR(150);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_cash DECIMAL(10,2) DEFAULT 200.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cash_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_card_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_safe_drops DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_paid_outs DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cashback DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_payouts DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_ebt_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_pay_later DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_refunds DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cancelled_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_void_items INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_cash_actual DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS expected_cash_in_drawer DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cash_difference DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_note TEXT;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_note TEXT;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'OPEN';
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_balance DECIMAL(12,2) DEFAULT 0;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_balance DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS over_short DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(12,2);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
     `);
 
-    // 3. Migrate legacy camelCase column values to snake_case column values and drop legacy columns
+    await dataSource.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'pos_shifts'
+            AND column_name = 'opening_device_id' AND udt_name = 'uuid'
+        ) THEN
+          ALTER TABLE public.pos_shifts
+            ALTER COLUMN opening_device_id TYPE VARCHAR(100) USING opening_device_id::text;
+        END IF;
+      END $$;
+    `);
+
+    // 3. Migrate legacy camelCase column values onto the master columns and drop those camelCase columns
     await dataSource.query(`
       DO $$
       DECLARE
         col RECORD;
       BEGIN
         FOR col IN
-          SELECT legacy_col, snake_col FROM (VALUES
-            ('merchantId', 'merchant_id'),
-            ('storeId', 'store_id'),
-            ('registerId', 'register_id'),
-            ('terminalId', 'device_id'),
-            ('terminal_id', 'device_id'),
-            ('openingDeviceId', 'opening_device_id'),
-            ('openedByEmployeeId', 'opened_by_employee_id'),
-            ('closedByEmployeeId', 'closed_by_employee_id'),
-            ('shiftNumber', 'shift_number'),
-            ('cashierName', 'cashier_name'),
-            ('openingCash', 'opening_cash'),
-            ('totalCashSales', 'total_cash_sales'),
-            ('totalCardSales', 'total_card_sales'),
-            ('totalSafeDrops', 'total_safe_drops'),
-            ('totalPaidOuts', 'total_paid_outs'),
-            ('closingCashActual', 'closing_cash_actual'),
-            ('expectedCashInDrawer', 'expected_cash_in_drawer'),
-            ('declaredCash', 'declared_cash'),
-            ('cashDifference', 'cash_difference'),
-            ('openingNote', 'opening_note'),
-            ('closingNote', 'closing_note'),
-            ('openedAt', 'opened_at'),
-            ('closedAt', 'closed_at'),
-            ('createdAt', 'created_at'),
-            ('updatedAt', 'updated_at')
-          ) AS t(legacy_col, snake_col)
+          SELECT legacy_col, snake_col, cast_text FROM (VALUES
+            ('merchantId', 'merchant_id', false),
+            ('storeId', 'store_id', false),
+            ('terminalId', 'device_id', false),
+            ('terminal_id', 'device_id', false),
+            ('openingDeviceId', 'opening_device_id', true),
+            ('openedByEmployeeId', 'created_by', true),
+            ('closedByEmployeeId', 'closed_by', true),
+            ('openingCash', 'opening_balance', false),
+            ('closingCashActual', 'closing_balance', false),
+            ('declaredCash', 'declared_cash', false),
+            ('cashDifference', 'over_short', false),
+            ('openedAt', 'opened_at', false),
+            ('closedAt', 'closed_at', false),
+            ('createdAt', 'created_at', false),
+            ('updatedAt', 'updated_at', false)
+          ) AS t(legacy_col, snake_col, cast_text)
         LOOP
           IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
+            SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.legacy_col
+          ) AND EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.snake_col
           ) THEN
-            EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            IF col.cast_text THEN
+              EXECUTE format('UPDATE public.pos_shifts SET %I = %I::text WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            ELSE
+              EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            END IF;
             IF col.legacy_col <> col.snake_col THEN
               EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS %I', col.legacy_col);
             END IF;
@@ -281,7 +246,6 @@ export class PosRepository implements OnModuleInit {
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor, 'create');
         await this.attachOrderSales(runner.manager, shift.id, actor);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
-        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
         await runner.commitTransaction();
       } catch (error) {
         await runner.rollbackTransaction();
@@ -326,7 +290,6 @@ export class PosRepository implements OnModuleInit {
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor ?? shift.updated_by ?? shift.created_by ?? null, 'update');
         await this.attachOrderSales(runner.manager, shift.id, actor ?? shift.created_by ?? null);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
-        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
         await runner.commitTransaction();
       } catch (error) {
         await runner.rollbackTransaction();
@@ -389,7 +352,6 @@ export class PosRepository implements OnModuleInit {
       if (shift) {
         await this.dataSource.transaction(async (manager) => {
           await this.writeTransactions(manager, shiftId, [transaction], movement.performedBy, 'create');
-          await syncLegacyShiftColumns((sql, params) => manager.query(sql, params), shiftId);
         });
         const view = await this.getShiftView(shiftId);
         if (view) await this.cacheActiveShift(storeId, view);

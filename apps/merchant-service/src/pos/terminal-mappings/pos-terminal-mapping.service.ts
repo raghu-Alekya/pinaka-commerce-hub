@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosTerminalMappingSettingsEntity } from './pos-terminal-mapping-settings.entity';
-import { PosTerminalMappingEntity } from './pos-terminal-mapping.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { PosTerminalMappingDto, SavePosTerminalMappingDto } from './pos-terminal-mapping.dto';
 
 export interface PosTerminalMappingItem {
@@ -36,7 +36,7 @@ export class PosTerminalMappingService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Terminal mappings are not configured for this store');
-    return { success: true, terminalMapping: await this.withMappings(record) };
+    return { success: true, terminalMapping: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosTerminalMappingDto) {
@@ -83,15 +83,9 @@ export class PosTerminalMappingService {
       if (drawer) drawers.add(drawer);
     }
     if (!mappings.length) return;
-    const rows = await this.merchants.requireDataSource().query(
-      `SELECT register.id::text AS id, register.status
-       FROM public.pos_cash_registers register
-       INNER JOIN public.pos_cash_register_settings settings
-         ON settings.id = register."registerSettingsId"
-       WHERE settings."storeId" = $1 AND register.id = ANY($2::uuid[])`,
-      [storeId, mappings.map(item => item.registerId)],
-    );
-    const byId = new Map(rows.map((row: { id: string; status: string }) => [row.id, row.status]));
+    const registerSettings = await readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'cash_register_settings');
+    const rows = Array.isArray(registerSettings?.registers) ? registerSettings.registers : [];
+    const byId = new Map(rows.map((row: { id: string; status: string }) => [String(row.id), row.status]));
     for (const mapping of mappings) {
       const status = byId.get(mapping.registerId);
       if (!status) throw new BadRequestException('Choose a register saved in Cash Register Settings');
@@ -101,60 +95,39 @@ export class PosTerminalMappingService {
     }
   }
 
-  private settingsRepo() {
-    return this.merchants.requireDataSource().getRepository(PosTerminalMappingSettingsEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.settingsRepo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'terminal_register_mapping');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosTerminalMappingDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosTerminalMappingRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosTerminalMappingSettingsEntity);
-      const mappings = manager.getRepository(PosTerminalMappingEntity);
-      const row = existingId
-        ? await settings.save({ id: existingId, storeId, merchantId })
-        : await settings.save(settings.create({ storeId, merchantId }));
-      await mappings.delete({ mappingSettingsId: row.id });
-      const saved = (body.mappings || []).length
-        ? await mappings.save(body.mappings.map((item, index) => mappings.create({
-            ...(item.id ? { id: item.id } : {}),
-            mappingSettingsId: row.id,
-            registerId: item.registerId,
-            terminal: item.terminal.trim(),
-            printer: item.printer.trim(),
-            drawer: item.drawer.trim(),
-            status: item.status,
-            sortOrder: index,
-          })))
-        : [];
-      return this.present(row, saved);
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'terminal_register_mapping', {
+      merchantId,
+      mappings: (body.mappings || []).map(item => ({
+        id: item.id || randomUUID(),
+        registerId: item.registerId,
+        terminal: item.terminal.trim(),
+        printer: item.printer.trim(),
+        drawer: item.drawer.trim(),
+        status: item.status,
+      })),
     });
+    return this.present(saved);
   }
 
-  private async withMappings(record: PosTerminalMappingSettingsEntity): Promise<PosTerminalMappingRecord> {
-    const mappings = await this.merchants.requireDataSource().getRepository(PosTerminalMappingEntity).find({
-      where: { mappingSettingsId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, mappings);
-  }
-
-  private present(record: PosTerminalMappingSettingsEntity, mappings: PosTerminalMappingEntity[]): PosTerminalMappingRecord {
+  private present(record: Record<string, any>): PosTerminalMappingRecord {
+    const mappings = Array.isArray(record.mappings) ? record.mappings : [];
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      mappings: mappings.map(item => ({
-        id: item.id,
-        registerId: item.registerId,
+      mappings: mappings.map((item: Record<string, any>) => ({
+        id: String(item.id),
+        registerId: String(item.registerId),
         terminal: item.terminal,
         printer: item.printer,
         drawer: item.drawer,
