@@ -97,7 +97,6 @@ export class DeviceRepository {
       .andWhere('mapping.isDeleted = false')
       .orderBy('mapping.createdAt', 'DESC')
       .getMany();
-    return rows.flatMap(mapping => mapping.device ? [mapping.device] : []);
   }
 
   async findAvailableDevicesByMerchant(merchantId: string): Promise<DeviceEntity[]> {

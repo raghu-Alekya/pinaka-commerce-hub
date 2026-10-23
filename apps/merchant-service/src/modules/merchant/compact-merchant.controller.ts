@@ -125,6 +125,30 @@ export class CompactMerchantController {
       delete input.legalBusinessName;
     }
     delete input.storeTypeId;
+    if (input.first_name !== undefined && input.firstName === undefined) {
+      input.firstName = input.first_name;
+      delete input.first_name;
+    }
+    if (input.last_name !== undefined && input.lastName === undefined) {
+      input.lastName = input.last_name;
+      delete input.last_name;
+    }
+    if (input.address_line1 !== undefined && input.addressLine1 === undefined) {
+      input.addressLine1 = input.address_line1;
+      delete input.address_line1;
+    }
+    if (input.address_line2 !== undefined && input.addressLine2 === undefined) {
+      input.addressLine2 = input.address_line2;
+      delete input.address_line2;
+    }
+    if (input.postal_code !== undefined && input.pinCode === undefined) {
+      input.pinCode = input.postal_code;
+      delete input.postal_code;
+    }
+    if (input.postalCode !== undefined && input.pinCode === undefined) {
+      input.pinCode = input.postalCode;
+      delete input.postalCode;
+    }
     const allowed = new Set<string>(fields);
     const blocked = removed.filter((key) =>
       Object.prototype.hasOwnProperty.call(input, key),
@@ -284,6 +308,67 @@ export class CompactMerchantController {
       if (code) (merchant as Input).merchant_code = code;
       const values = merchant as Input;
       if (values.ein == null) values.ein = values.taxId ?? values.tax_id ?? null;
+      values.firstName = values.firstName ?? values.first_name ?? null;
+      values.lastName = values.lastName ?? values.last_name ?? null;
+      values.first_name = values.first_name ?? values.firstName ?? null;
+      values.last_name = values.last_name ?? values.lastName ?? null;
+
+      values.addressLine1 =
+        values.addressLine1 ??
+        values.address_line1 ??
+        values.address_line_1 ??
+        (typeof values.businessAddress === 'string'
+          ? values.businessAddress
+          : (typeof values.address === 'string'
+              ? values.address
+              : (values.address as Input)?.addressLine1 ??
+                (values.address as Input)?.address_line1 ??
+                (values.address as Input)?.street ??
+                null)) ??
+        null;
+      values.address_line1 = values.address_line1 ?? values.addressLine1 ?? null;
+
+      values.addressLine2 =
+        values.addressLine2 ??
+        values.address_line2 ??
+        values.address_line_2 ??
+        ((values.address as Input)?.addressLine2 ??
+          (values.address as Input)?.address_line2 ??
+          (values.address as Input)?.unit ??
+          null) ??
+        null;
+      values.address_line2 = values.address_line2 ?? values.addressLine2 ?? null;
+
+      values.postalCode =
+        values.postalCode ??
+        values.postal_code ??
+        values.pinCode ??
+        values.pin_code ??
+        ((values.address as Input)?.postalCode ??
+          (values.address as Input)?.postal_code ??
+          (values.address as Input)?.zipCode ??
+          (values.address as Input)?.zip ??
+          null) ??
+        null;
+      values.pinCode = values.pinCode ?? values.postalCode ?? null;
+      values.postal_code = values.postal_code ?? values.postalCode ?? null;
+
+      values.businessDisplayName =
+        values.businessDisplayName ??
+        values.business_display_name ??
+        values.businessName ??
+        null;
+      values.business_display_name =
+        values.business_display_name ?? values.businessDisplayName ?? null;
+      values.businessName =
+        values.businessName ?? values.businessDisplayName ?? null;
+
+      values.email = values.email ?? values.merchantEmail ?? null;
+      values.merchantEmail = values.merchantEmail ?? values.email ?? null;
+
+      values.phone = values.phone ?? values.merchantPhoneNumber ?? null;
+      values.merchantPhoneNumber =
+        values.merchantPhoneNumber ?? values.phone ?? null;
     }
     const subscription = record?.subscription;
     if (
@@ -313,9 +398,16 @@ export class CompactMerchantController {
     for (const key of fields) {
       let value =
         row[key] ??
+        (key === 'firstName' ? row.first_name : undefined) ??
+        (key === 'lastName' ? row.last_name : undefined) ??
+        (key === 'addressLine1' ? row.address_line1 ?? row.address_line_1 : undefined) ??
+        (key === 'addressLine2' ? row.address_line2 ?? row.address_line_2 : undefined) ??
+        (key === 'pinCode' ? row.postalCode ?? row.postal_code ?? row.pin_code : undefined) ??
         (key === 'merchantEmail' ? row.email : undefined) ??
         (key === 'merchantPhoneNumber' ? row.phone : undefined) ??
-        (key === 'pinCode' ? row.postalCode : undefined);
+        (key === 'businessDisplayName' ? row.business_display_name : undefined) ??
+        (key === 'businessName' ? row.business_display_name : undefined) ??
+        (key === 'taxId' ? row.tax_id ?? row.ein : undefined);
       if (key === 'startDate' || key === 'renewalDate')
         value = this.dateOnly(value);
       merchant[key] =
@@ -455,7 +547,9 @@ export class CompactMerchantController {
           input.businessDisplayName || input.businessName,
         );
         setCol('first_name', firstName || null);
+        setCol('firstName', firstName || null);
         setCol('last_name', lastName || null);
+        setCol('lastName', lastName || null);
         setCol(
           'alternate_phone',
           input.alternatePhone ? String(input.alternatePhone) : null,
@@ -935,8 +1029,10 @@ export class CompactMerchantController {
           'email',
           input.merchantEmail ?? existing.email ?? existing.merchantEmail,
         );
-        setCol('first_name', input.firstName ?? existing.first_name);
-        setCol('last_name', input.lastName ?? existing.last_name);
+        setCol('first_name', input.firstName ?? existing.first_name ?? existing.firstName);
+        setCol('firstName', input.firstName ?? existing.firstName ?? existing.first_name);
+        setCol('last_name', input.lastName ?? existing.last_name ?? existing.lastName);
+        setCol('lastName', input.lastName ?? existing.lastName ?? existing.last_name);
         setCol(
           'alternate_phone',
           input.alternatePhone !== undefined
@@ -1298,6 +1394,17 @@ export class CompactMerchantController {
       );
       if (body.status === 'INACTIVE') {
         await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id IN (
+             SELECT related.id
+             FROM public.merchants related
+             WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+           )
+             AND COALESCE(is_deleted, false)=false`,
+          [target.merchantId],
+        );
+        await manager.query(
           `UPDATE public.subscriptions
            SET status='INACTIVE',
                updated_by=COALESCE($2::uuid, updated_by),
@@ -1394,6 +1501,12 @@ export class CompactMerchantController {
                updated_at=clock_timestamp()
            WHERE merchant_id=$1 AND status='ACTIVE'`,
           [merchant.id, updatedBy],
+        );
+        await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id=$1 AND COALESCE(is_deleted, false)=false`,
+          [merchant.id],
         );
       });
       return {

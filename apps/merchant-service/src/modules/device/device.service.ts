@@ -38,4 +38,21 @@ export class DeviceService {
   }
   deleteDevice(id: string, actorId: string) { return this.merchants.deleteDevice(id, actorId); }
 
+  async getStoreMappingsForDevices(deviceIds: string[]): Promise<Map<string, { storeId: string; storeName: string }>> {
+    if (!deviceIds.length) return new Map();
+    try {
+      const rows: Array<{ deviceId: string; storeId: string; storeName: string }> =
+        await this.merchants.requireDataSource().query(
+          `SELECT sd.device_id AS "deviceId", s.id AS "storeId", s.store_name AS "storeName"
+           FROM public.store_devices sd
+           JOIN public.stores s ON s.id::text = sd.store_id::text
+           WHERE sd.device_id = ANY($1::uuid[]) AND sd.is_deleted = false AND sd.is_mapped = true`,
+          [deviceIds],
+        );
+      return new Map(rows.map(r => [String(r.deviceId), { storeId: String(r.storeId), storeName: String(r.storeName) }]));
+    } catch {
+      return new Map();
+    }
+  }
+
 }

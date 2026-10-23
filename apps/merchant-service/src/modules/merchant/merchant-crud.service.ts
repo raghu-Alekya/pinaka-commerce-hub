@@ -324,6 +324,11 @@ export class MerchantCrudService {
       }
       await this.extras(manager,root,input);
       await this.saveMerchantRecord(manager,root,merchant,changes,planChanged);
+      if (changes.status === 'INACTIVE') {
+        await manager.query(`UPDATE public.stores SET status='INACTIVE',updated_at=clock_timestamp()
+          WHERE merchant_id IN (SELECT id FROM public.merchants WHERE merchant_id=$1)
+            AND COALESCE(is_deleted,false)=false`, [root]);
+      }
     });
     return this.getMerchant(code);
   }

@@ -41,6 +41,22 @@ test('a partial merchant discount leaves the unpaid balance', () => {
   assert.equal(coverage.remaining, 4);
 });
 
+test('a payout line stays negative and is excluded from tax', () => {
+  const payout = {
+    name: 'Payout',
+    total: '-10.00',
+    subtotal: '-10.00',
+    tax_status: 'none',
+    meta_data: [{ key: '_pos_item_type', value: 'payout' }],
+  };
+  const product = { name: 'Cheetos mix', total: '20.00', subtotal: '20.00' };
+  assert.equal(calculateOrderTotal({ lineItems: [product] }).total, 20);
+  assert.equal(calculateOrderTotal({ lineItems: [payout] }).total, -10);
+  assert.equal(calculateOrderTotal({ lineItems: [product, payout] }).total, 10);
+  assert.equal(calculateTaxLines({ lineItems: [product, payout], rate: 10 }).at(0)?.tax_total, '2.00');
+  assert.equal(calculateTaxLines({ lineItems: [payout], rate: 10 }).length, 0);
+});
+
 test('order total does not include tax', () => {
   const totals = calculateOrderTotal({
     lineItems: [{ name: 'Item', subtotal: '10.00', total: '10.00' }],

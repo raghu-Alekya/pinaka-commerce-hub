@@ -57,6 +57,9 @@ export class OrderUpdateService {
     if (status === 'cancelled' || status === 'canceled') {
       return this.cancellation.cancel(graph, cancelFromDto({}));
     }
+    // Cancellation is terminal. A delayed coupon/navigation request may still
+    // carry the order's former `processing` status and must not reopen it.
+    this.cancellation.assertStatusChangeAllowed(graph);
     const allowed = new Set(['pending', 'processing', 'on-hold', 'completed', 'refunded', 'failed']);
     if (!allowed.has(status)) {
       throw new BadRequestException('status must be pending, processing, on-hold, completed, cancelled, refunded, or failed');
@@ -222,7 +225,7 @@ export class OrderUpdateService {
   }
 
   private async load(orderId: string): Promise<OrderGraph> {
-    const graph = await this.orders.getOrderById(orderId);
+    const graph = await this.orders.getOrderByReference(orderId);
     if (!graph) throw new NotFoundException(`Order '${orderId}' not found`);
     return graph;
   }

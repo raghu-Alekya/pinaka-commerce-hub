@@ -367,12 +367,20 @@ export class OrderRepository implements OnModuleInit {
           provider: sourcePayload?.provider,
         }];
 
-    const orderTotal = Number(order.totalAmount || 0);
+    const rawOrderTotal = Number(order.totalAmount || 0);
+    // Payout lines represent cash leaving the register, not a customer payment.
+    // The order may therefore have a negative total, while the payment ledger
+    // only stores non-negative captured/refundable amounts.
+    const orderTotal = Number.isFinite(rawOrderTotal) ? Math.max(0, rawOrderTotal) : 0;
     const normalizedAmounts = payments.map((payment: any) => Number(
       payment?.amount ?? payment?.total ?? payment?.value ?? 0,
     ));
     return payments.map((payment: any, index: number) => {
       const amount = normalizedAmounts[index];
+      // A payout may be represented as a negative tender alongside a positive
+      // EBT tender. It is cash leaving the drawer, not a captured customer
+      // payment, so it must not create a negative payment-ledger balance.
+      const capturedAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
       const method = String(payment?.payment_method ?? payment?.paymentMethod ?? payment?.method ??
         sourcePayload?.payment_method ?? order.paymentMethod ?? 'cash').trim().toLowerCase();
       const paymentAtValue = payment?.payment_at ?? payment?.paymentAt ?? payment?.created_at ?? payment?.createdAt;
@@ -395,7 +403,7 @@ export class OrderRepository implements OnModuleInit {
         ?? storeOrder.deviceId ?? null;
       // `remaining` is the refundable balance of this payment row, not the
       // outstanding total of the whole order.
-      const remaining = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+      const remaining = capturedAmount;
       const rawPayload = payment && typeof payment === 'object' ? payment : { value: payment };
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
@@ -420,7 +428,7 @@ export class OrderRepository implements OnModuleInit {
         method,
         payment?.payment_method_title ?? payment?.paymentMethodTitle ?? payment?.method_title ?? payment?.methodTitle ??
           sourcePayload?.payment_method_title ?? orderData?.paymentMethodTitle ?? storeOrder.paymentMethodTitle ?? null,
-        Number.isFinite(amount) ? amount : 0,
+        capturedAmount,
         orderTotal,
         remaining,
         0,
@@ -658,7 +666,8 @@ export class OrderRepository implements OnModuleInit {
       if (Number.isFinite(supplied)) {
         const includedTax = Number.isFinite(clientTax) ? clientTax : 0;
         const exclusive = Math.round((supplied - includedTax) * factor) / factor;
-        sourcePayload.total = Math.max(0, exclusive).toFixed(places);
+        const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+        sourcePayload.total = (netBeforeTax < 0 ? exclusive : Math.max(0, exclusive)).toFixed(places);
       }
     }
 
@@ -1002,15 +1011,21 @@ export class OrderRepository implements OnModuleInit {
       throw new BadRequestException(`Invalid order status '${String(toStatus || '')}'`);
     }
     if (this.isDbConnected && this.storeOrderRepo) {
-      const storeOrder = await this.storeOrderRepo.findOne({ where: { orderId } });
+      const graph = await this.getOrderByReference(orderId);
+      const storeOrder = graph?.storeOrder;
       if (!storeOrder) return null;
+      if (String(storeOrder.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+        && normalizedStatus !== OrderStatus.CANCELLED) {
+        throw new ConflictException('Cancelled orders cannot change status');
+      }
+      const internalOrderId = storeOrder.orderId;
       const fromStatus = storeOrder.orderStatus;
       storeOrder.orderStatus = normalizedStatus;
       storeOrder.status = normalizedStatus.toLowerCase().replace(/_/g, '-');
       storeOrder.updatedAt = new Date();
       storeOrder.statusHistory = [...(Array.isArray(storeOrder.statusHistory) ? storeOrder.statusHistory : []), {
         id: `HST-${randomUUID()}`,
-        orderId,
+        orderId: internalOrderId,
         fromStatus,
         toStatus: normalizedStatus,
         changedBy: changedBy || 'POS System',
@@ -1024,8 +1039,13 @@ export class OrderRepository implements OnModuleInit {
       await this.cacheOrder(order);
       return order;
     }
-    const order = this.inMemoryOrders.find(entry => entry.id === orderId) || null;
+    const graph = await this.getOrderByReference(orderId);
+    const order = graph?.order || null;
     if (!order) return null;
+    if (String(order.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+      && normalizedStatus !== OrderStatus.CANCELLED) {
+      throw new ConflictException('Cancelled orders cannot change status');
+    }
     order.orderStatus = normalizedStatus;
     await this.cacheOrder(order);
     return order;
@@ -1729,11 +1749,14 @@ export class OrderRepository implements OnModuleInit {
       }
     }
     let paymentMethod = '';
-    for (const { payment, allocationCents } of allocations) {
+    for (const { payment, allocationCents, capacityCents } of allocations) {
       if (allocationCents <= 0) continue;
       const allocation = allocationCents / 100;
       if (!paymentMethod) paymentMethod = String(payment.payment_method || 'Cash');
       const historyEvent = { ...event, amount: allocation, payment_id: payment.id };
+      const dailyRefundStatus = allocationCents >= capacityCents
+        ? 'refunded'
+        : 'partially-refunded';
       await manager.query(
         `UPDATE public.store_pos_payments
             SET refund_amount = LEAST(amount, COALESCE(refund_amount, 0) + $2::numeric),
@@ -1758,6 +1781,7 @@ export class OrderRepository implements OnModuleInit {
           `UPDATE public.store_pos_payments
               SET amount = amount + $2::numeric,
                   refund_amount = refund_amount + $2::numeric,
+                  status = $6::varchar,
                   metadata = jsonb_set(
                     COALESCE(metadata, '{}'::jsonb),
                     '{refund_history}',
@@ -1776,9 +1800,16 @@ export class OrderRepository implements OnModuleInit {
                 OR (metadata->>'refund_date' IS NULL AND local_id LIKE '%:refund:' || $5::text)
               )
           RETURNING id`,
-          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate],
+          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate, dailyRefundStatus],
         );
-        const createDailyRefundRow = updatedDailyRows.length === 0
+        // TypeORM's Postgres query runner can return DML results as
+        // [returnedRows, affectedCount], whereas test and alternative drivers
+        // return the rows array directly. Only returned rows indicate that a
+        // daily refund record was actually updated.
+        const returnedDailyRows = Array.isArray(updatedDailyRows?.[0])
+          ? updatedDailyRows[0]
+          : updatedDailyRows;
+        const createDailyRefundRow = returnedDailyRows.length === 0
           && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(historyEvent.created_at || Date.now()));
         if (!createDailyRefundRow) continue;
         await manager.query(
@@ -1789,7 +1820,7 @@ export class OrderRepository implements OnModuleInit {
               entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
            VALUES ($1, $2, $3, LEFT(COALESCE($4, 'generated:' || $5::text), 120) || ':refund:' || $6,
                    $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, $15, $16,
-                   'refunded', 'refund', false, $17, $18, now(), $19::jsonb)`,
+                   $20, 'refund', false, $17, $18, now(), $19::jsonb)`,
           [payment.order_id, payment.merchant_id, payment.store_id, payment.local_id,
             payment.id, refundDate, payment.client_order_id, payment.device_id,
             payment.shift_id, payment.user_id, payment.payment_type, payment.payment_method,
@@ -1799,7 +1830,7 @@ export class OrderRepository implements OnModuleInit {
               refund_date: refundDate,
               source_payment_id: payment.id,
               refund_history: [historyEvent],
-            })],
+            }), dailyRefundStatus],
         );
       }
     }
@@ -1811,6 +1842,21 @@ export class OrderRepository implements OnModuleInit {
       (Number(payment.amount || 0) - Number(payment.refund_amount || 0)) * 100,
     )), 0);
     return cents / 100;
+  }
+
+  private refundAuditBreakdown(
+    appliedRefundTotal: number,
+    itemRefundTotal: number,
+    outstandingTax: number,
+  ): { items_refund_total: number; tax_refund_total: number; adjustment_refund_total: number } {
+    const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const additional = Math.max(0, round(appliedRefundTotal - itemRefundTotal));
+    const taxRefund = Math.min(additional, Math.max(0, round(outstandingTax)));
+    return {
+      items_refund_total: round(itemRefundTotal),
+      tax_refund_total: round(taxRefund),
+      adjustment_refund_total: round(Math.max(0, additional - taxRefund)),
+    };
   }
 
   private shouldCreateDailyRefundRow(payment: any, timeZone: string, refundAt = new Date()): boolean {
@@ -1869,7 +1915,7 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
+          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
                   sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
@@ -2112,6 +2158,14 @@ export class OrderRepository implements OnModuleInit {
         const appliedRefundTotal = fullyRefunded
           ? this.remainingPaymentAmount(refundState.payments)
           : refundTotal;
+        const previouslyRefundedTax = refundState.events.reduce(
+          (sum: number, refund: any) => sum + Number(refund?.tax_refund_total || 0), 0,
+        );
+        const refundBreakdown = this.refundAuditBreakdown(
+          appliedRefundTotal,
+          refundTotal,
+          Math.max(0, Number(order.tax_total || 0) - previouslyRefundedTax),
+        );
         const remainingAfter = fullyRefunded ? 0 : Math.max(0, remainingOrderAmount - refundTotal);
         const refundOrderStatus = fullyRefunded ? 'REFUNDED' : 'PARTIAL_REFUND';
         const refundStoreStatus = fullyRefunded ? 'refunded' : 'partial-refund';
@@ -2121,6 +2175,7 @@ export class OrderRepository implements OnModuleInit {
           performed_by: input.performedBy,
           refund_type: 'partial',
           line_items: refundItems,
+          ...refundBreakdown,
         };
         await this.applyRefundToPayments(manager, refundState.payments, appliedRefundTotal, {
           refund_id: refundId,
@@ -2233,6 +2288,30 @@ export class OrderRepository implements OnModuleInit {
     const items = this.inMemoryItems.filter(item => item.orderId === orderId);
     const history = this.inMemoryHistory.filter(entry => entry.orderId === orderId);
     return { order, items, history, storeOrder: null };
+  }
+
+  async getOrderByReference(reference: string): Promise<{ order: OrderEntity; items: OrderItemEntity[]; history: OrderStatusHistoryEntity[]; storeOrder: StoreOrderEntity | null } | null> {
+    const key = String(reference || '').trim();
+    if (!key) return null;
+    if (this.isUuid(key)) return this.getOrderById(key);
+
+    if (this.isDbConnected && this.storeOrderRepo) {
+      const orderNumbers = key.startsWith('#') ? [key, key.slice(1)] : [key, `#${key}`];
+      const storeOrder = await this.storeOrderRepo.findOne({
+        where: [
+          { clientOrderId: key },
+          ...orderNumbers.map(orderNumber => ({ orderNumber })),
+        ],
+        order: { createdAt: 'DESC' },
+      });
+      return storeOrder ? this.getOrderById(storeOrder.orderId) : null;
+    }
+
+    const normalizedNumber = key.replace(/^#/, '');
+    const order = this.inMemoryOrders.find(entry =>
+      entry.clientOrderId === key || String(entry.orderNumber || '').replace(/^#/, '') === normalizedNumber,
+    );
+    return order ? this.getOrderById(order.id) : null;
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {

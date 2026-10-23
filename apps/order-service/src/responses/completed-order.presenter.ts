@@ -72,6 +72,7 @@ export class CompletedOrderPresenter {
     const id = this.orderId(order);
     const clientOrderId = this.clientOrderId(order, storeOrder) ?? id;
     const originalItemsTax = this.decimal(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount);
+    const originalGrossTotal = Math.max(0, Number(storeOrder?.total ?? order.totalAmount ?? 0));
     const originalTotalExcludingTax = Number(this.money(totalExcludingTax({
       total: storeOrder?.total ?? order.totalAmount,
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
@@ -92,15 +93,16 @@ export class CompletedOrderPresenter {
     const remainingLineTotal = lineItems.reduce((sum, line) => sum + Number(line.total || 0), 0);
     const remainingTotal = effectiveStatus === 'partial-refund'
       ? Math.max(0, originalTotalExcludingTax - originalLineTotal + remainingLineTotal + Number(itemsTax))
-      : originalTotalExcludingTax;
+      : originalGrossTotal;
     const total = this.money(remainingTotal);
-    const amount = this.money(Math.max(0, remainingTotal - orderDiscount));
+    const remainingTax = Number(itemsTax);
+    const amount = this.money(Math.max(0, remainingTotal - remainingTax - orderDiscount));
     return {
       id,
       order_id: clientOrderId,
       status: effectiveStatus === 'partial-refund' ? 'Partially Refunded' : 'completed',
-      date: this.localDate(order.createdAt, timezone),
-      date_modified: this.localDate(order.updatedAt, timezone),
+      date: this.displayDate(order.createdAt, timezone),
+      date_modified: this.displayDate(order.updatedAt, timezone),
       currency,
       amount,
       items_tax: itemsTax,
@@ -252,12 +254,12 @@ export class CompletedOrderPresenter {
     return ({ EUR: '€', GBP: '£', INR: '₹', USD: '$' } as Record<string, string>)[currency] || '$';
   }
 
-  private localDate(value: Date, timeZone: string): string {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-    }).formatToParts(new Date(value));
-    const part = (type: string) => parts.find((entry) => entry.type === type)?.value || '00';
-    return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+  private displayDate(value: Date, timeZone: string): string {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    }).format(new Date(value));
   }
 }
