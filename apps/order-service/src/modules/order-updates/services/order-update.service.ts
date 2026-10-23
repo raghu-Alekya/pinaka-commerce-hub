@@ -43,8 +43,18 @@ export class OrderUpdateService {
     let graph = await this.load(orderId);
     if (hasCoupons) {
       const requested = dto.coupon_lines || [];
-      const coupons = await this.couponsForOrder(graph, requested);
-      graph = await this.persist(graph, this.coupons.sync(graph, coupons));
+      const existing = Array.isArray(graph.storeOrder?.couponLines)
+        ? graph.storeOrder.couponLines
+        : [];
+      // Some POS clients send their default empty coupon array again with the
+      // final status transition. That is not an explicit coupon-removal action
+      // and must not erase a coupon already persisted for the order. A
+      // coupon-only update with [] still performs the intentional removal.
+      const staleEmptyCouponsOnStatus = hasStatus && requested.length === 0 && existing.length > 0;
+      if (!staleEmptyCouponsOnStatus) {
+        const coupons = await this.couponsForOrder(graph, requested);
+        graph = await this.persist(graph, this.coupons.sync(graph, coupons));
+      }
     }
     if (hasStatus) {
       graph = await this.persist(graph, this.statusChange(graph, String(dto.status)));
@@ -258,6 +268,20 @@ export class OrderUpdateService {
         storeOrder.total = moneyAmount(draft.totals.total + tipAmount);
       }
       if (draft.storeStatus) storeOrder.status = draft.storeStatus;
+      const requestPayload = { ...((storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>) };
+      if (draft.lineItems) requestPayload.line_items = storeOrder.lineItems;
+      if (draft.couponLines) requestPayload.coupon_lines = storeOrder.couponLines;
+      if (draft.feeLines) requestPayload.fee_lines = storeOrder.feeLines;
+      if (draft.taxLines) requestPayload.tax_lines = storeOrder.taxLines;
+      if (draft.totals) {
+        requestPayload.subtotal = moneyAmount(storeOrder.subtotal).toFixed(2);
+        requestPayload.discount_total = moneyAmount(storeOrder.discountTotal).toFixed(2);
+        requestPayload.total_tax = moneyAmount(storeOrder.taxTotal).toFixed(2);
+        requestPayload.total = moneyAmount(storeOrder.total).toFixed(2);
+      }
+      if (draft.storeStatus) requestPayload.status = storeOrder.status;
+      storeOrder.requestPayload = requestPayload;
+      order.requestPayload = requestPayload;
       storeOrder.updatedAt = new Date();
     }
 

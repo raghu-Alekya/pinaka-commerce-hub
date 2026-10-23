@@ -11,6 +11,18 @@ import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configura
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 import { CashBackSettingsResponse, mapCashbackSettings } from './cashback-settings.model';
 
+export const WOOCOMMERCE_ORDER_STATUSES = [
+  { slug: 'pending', name: 'Pending payment' },
+  { slug: 'processing', name: 'Processing' },
+  { slug: 'on-hold', name: 'On hold' },
+  { slug: 'completed', name: 'Completed' },
+  { slug: 'cancelled', name: 'Cancelled' },
+  { slug: 'partial-refund', name: 'Partially refunded' },
+  { slug: 'refunded', name: 'Refunded' },
+  { slug: 'failed', name: 'Failed' },
+  { slug: 'checkout-draft', name: 'Draft' },
+] as const;
+
 @Injectable()
 export class StorePosConfigurationsService {
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
@@ -304,6 +316,7 @@ export class StorePosConfigurationsService {
         { slug: 'uber-eats', name: 'Uber Eats Order' },
         { slug: 'online', name: 'Online Order' },
       ],
+      order_statuses: WOOCOMMERCE_ORDER_STATUSES.map((status) => ({ ...status })),
     };
   }
 

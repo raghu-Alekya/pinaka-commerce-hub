@@ -42,6 +42,7 @@ import {
 } from '../master/role-templates/merchant-role-template.dto';
 import { CreateStoreRolePermissionDto } from '../master/permissions/role-permission.dto';
 import { EmployeeEntity, EmployeeStatus } from '../../entities/employee.entity';
+import { EmployeeStoreEntity } from '../../entities/employee-store.entity';
 import {
   CreateFeatureDto,
   UpdateFeatureDto,
@@ -950,6 +951,7 @@ export class MerchantRepository implements OnModuleInit {
         RoleEntity,
         MerchantRoleTemplateEntity,
         EmployeeEntity,
+        EmployeeStoreEntity,
         SubscriptionEntity,
         OnboardingAuditEntity,
         SubscriptionPlanEntity,
