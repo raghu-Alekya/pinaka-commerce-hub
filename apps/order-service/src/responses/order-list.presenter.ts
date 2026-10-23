@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { listOrderTotal } from '../calculations/store-order.calculations';
+import { listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -67,9 +67,16 @@ export class OrderListPresenter {
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
     const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const tax = listOrderTax({
+      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
+    });
     const total = this.money(listOrderTotal({
       total: storeOrder?.total ?? order.totalAmount,
-      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      tax,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
       couponDiscount: coupons.length
         ? coupons.reduce((sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0), 0)
         : (storeOrder?.discountTotal ?? order.discountAmount),
@@ -104,7 +111,7 @@ export class OrderListPresenter {
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
-      total_tax: this.taxText(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount),
+      total_tax: this.taxText(tax),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,

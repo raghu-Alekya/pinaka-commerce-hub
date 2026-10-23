@@ -118,9 +118,42 @@ export class OrderRepository implements OnModuleInit {
       orderData.currency = stores[0].currency || 'USD';
       orderData.timezone = stores[0].timezone || 'UTC';
     }
-    await this.enrichWooCommerceCreateOrder(orderData, sourcePayload);
     const clientOrderId = String(orderData.clientOrderId || '').trim() || undefined;
-    if (clientOrderId) await this.rejectDuplicateClientOrder(orderData.storeId, clientOrderId);
+    // A POS cancellation is sent through the create endpoint with the original
+    // client order id. Resolve and cancel it before product/tax enrichment: the
+    // navigation snapshot may contain stale coupon/item data, but cancellation
+    // must only depend on the persisted order identity and requested status.
+    const incomingStatus = String(orderData.orderStatus || orderData.status || sourcePayload?.status || '')
+      .trim().replace(/-/g, '_').toUpperCase();
+    if (clientOrderId && incomingStatus === OrderStatus.CANCELLED) {
+      const duplicate = await this.findDuplicateClientOrder(orderData.storeId, clientOrderId);
+      if (duplicate) {
+        const cancelled = await this.cancelDuplicateIfRequested(duplicate.orderId, orderData, sourcePayload);
+        if (!cancelled) throw new ServiceUnavailableException('The existing order could not be cancelled');
+        return {
+          order: cancelled.order,
+          items: cancelled.items,
+          storeOrder: cancelled.storeOrder,
+          duplicate: true,
+        };
+      }
+    }
+    await this.enrichWooCommerceCreateOrder(orderData, sourcePayload);
+    if (clientOrderId) {
+      const duplicate = await this.findDuplicateClientOrder(orderData.storeId, clientOrderId);
+      if (duplicate) {
+        const cancelled = await this.cancelDuplicateIfRequested(duplicate.orderId, orderData, sourcePayload);
+        if (!cancelled) {
+          throw new ConflictException(`An order with client order ID '${clientOrderId}' already exists`);
+        }
+        return {
+          order: cancelled.order,
+          items: cancelled.items,
+          storeOrder: cancelled.storeOrder,
+          duplicate: true,
+        };
+      }
+    }
     const id = randomUUID();
     const orderNumber = `#${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -259,13 +292,30 @@ export class OrderRepository implements OnModuleInit {
     }
   }
 
-  private async rejectDuplicateClientOrder(storeId: string, clientOrderId: string): Promise<void> {
+  private async findDuplicateClientOrder(
+    storeId: string,
+    clientOrderId: string,
+  ): Promise<{ orderId: string } | undefined> {
     const existing = this.isDbConnected && this.storeOrderRepo
       ? await this.storeOrderRepo.findOne({ where: { storeId, clientOrderId } })
       : this.inMemoryOrders.find(order => order.storeId === storeId && order.clientOrderId === clientOrderId);
-    if (existing) {
-      throw new ConflictException(`An order with client order ID '${clientOrderId}' already exists`);
-    }
+    if (!existing) return undefined;
+    return { orderId: 'orderId' in existing ? existing.orderId : existing.id };
+  }
+
+  private async cancelDuplicateIfRequested(orderId: string, orderData: any, sourcePayload: any) {
+    const incomingStatus = String(orderData.orderStatus || orderData.status || sourcePayload?.status || '')
+      .trim().replace(/-/g, '_').toUpperCase();
+    if (incomingStatus !== OrderStatus.CANCELLED) return null;
+    const updated = await this.updateOrderStatus(
+      orderId,
+      OrderStatus.CANCELLED,
+      String(orderData.placedBy || 'POS System'),
+      'Duplicate POS sync requested cancellation',
+    );
+    const graph = updated ? await this.getOrderById(updated.id) : null;
+    if (!graph) throw new ServiceUnavailableException('The existing order could not be cancelled');
+    return graph;
   }
 
   private buildStoreOrder(orderId: string, orderData: any, sourcePayload: any): StoreOrderEntity {
@@ -1003,6 +1053,10 @@ export class OrderRepository implements OnModuleInit {
       const fromStatus = storeOrder.orderStatus;
       storeOrder.orderStatus = normalizedStatus;
       storeOrder.status = normalizedStatus.toLowerCase().replace(/_/g, '-');
+      storeOrder.requestPayload = {
+        ...(storeOrder.requestPayload || {}),
+        status: storeOrder.status,
+      };
       storeOrder.updatedAt = new Date();
       storeOrder.statusHistory = [...(Array.isArray(storeOrder.statusHistory) ? storeOrder.statusHistory : []), {
         id: `HST-${randomUUID()}`,
@@ -1028,6 +1082,10 @@ export class OrderRepository implements OnModuleInit {
       throw new ConflictException('Cancelled orders cannot change status');
     }
     order.orderStatus = normalizedStatus;
+    order.requestPayload = {
+      ...(order.requestPayload || {}),
+      status: normalizedStatus.toLowerCase().replace(/_/g, '-'),
+    };
     await this.cacheOrder(order);
     return order;
   }

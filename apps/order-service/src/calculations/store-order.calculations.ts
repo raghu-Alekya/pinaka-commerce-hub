@@ -6,6 +6,7 @@ export interface PosLineItem {
   total?: number | string;
   tax_status?: string;
   meta_data?: Array<{ key?: string; value?: unknown }>;
+  taxes?: Array<{ id?: unknown; rate_percent?: unknown; total?: unknown; subtotal?: unknown }>;
 }
 
 export interface PosFeeLine {
@@ -187,7 +188,9 @@ export function isPayoutFee(fee: { name?: string; fee_name?: string } | null | u
 
 export function isCashbackFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
   const name = feeKey(fee);
-  return name === 'cashback' || name.startsWith('cashback_');
+  // The cashback principal is a cash movement, but "Cashback Fee" is a real
+  // order charge and must remain in receipt/list totals.
+  return name === 'cashback' || name === 'cashback_amount';
 }
 
 export function isTaxableSaleLine(line: PosLineItem): boolean {
@@ -270,6 +273,43 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
     tax_total: fromMinor(taxMinor, places).toFixed(places),
     shipping_tax_total: fromMinor(0, places).toFixed(places),
   }];
+}
+
+/**
+ * Corrects legacy one-cent tax snapshots using receipt-style total rounding.
+ * Larger differences are preserved because they can represent tax rules that
+ * are not available to the read-side presenter.
+ */
+export function listOrderTax(input: {
+  tax?: unknown;
+  lineItems?: ReadonlyArray<PosLineItem>;
+  feeLines?: ReadonlyArray<PosFeeLine>;
+  taxLines?: ReadonlyArray<PosTaxLine>;
+  decimalPlaces?: number;
+}): number {
+  const places = input.decimalPlaces ?? 2;
+  const storedMinor = Math.max(0, toMinor(input.tax, places));
+  const taxLineRate = input.taxLines?.find((line) => Number(line?.rate_percent) > 0)?.rate_percent;
+  const lineRate = input.lineItems
+    ?.flatMap((line) => Array.isArray(line?.taxes) ? line.taxes : [])
+    .map((tax) => Number(tax?.rate_percent ?? tax?.id))
+    .find((value) => Number.isFinite(value) && value > 0);
+  const rate = Number(taxLineRate || lineRate || 0);
+  if (rate <= 0 || !input.lineItems?.length) return fromMinor(storedMinor, places);
+
+  const calculated = calculateTaxLines({
+    lineItems: [...input.lineItems],
+    // Cashback/payout fees are cash movements or separately presented
+    // charges. Only merchant discount changes the merchandise tax base.
+    feeLines: (input.feeLines || []).filter((fee) => isMerchantDiscountFee(fee)),
+    rate,
+    calculation: 'total',
+    decimalPlaces: places,
+  });
+  const calculatedMinor = Math.max(0, toMinor(calculated[0]?.tax_total ?? 0, places));
+  return Math.abs(calculatedMinor - storedMinor) <= 1
+    ? fromMinor(calculatedMinor, places)
+    : fromMinor(storedMinor, places);
 }
 
 /**
@@ -412,13 +452,17 @@ export function totalIncludingTax(input: {
 }
 
 /**
- * List total: merchandise after coupons and fee discounts, plus tax.
+ * List total: receipt net payable after coupons and fees, plus tax.
+ * Payout and cashback are cash-movement lines, but they are still part of the
+ * amount printed as Net Payable on the receipt and therefore remain in this
+ * presentation total.
  * A stored total that left out a merchant discount is rebuilt from the lines.
  * A stored total the lines cannot explain is left unchanged.
  */
 export function listOrderTotal(input: {
   total: unknown;
   tax?: unknown;
+  taxLines?: ReadonlyArray<PosTaxLine>;
   couponDiscount?: unknown;
   lineItems?: ReadonlyArray<{ total?: unknown; subtotal?: unknown; name?: string }>;
   feeLines?: ReadonlyArray<{ total?: unknown; name?: string }>;
@@ -431,17 +475,21 @@ export function listOrderTotal(input: {
   if (!lines?.length) return totalIncludingTax(input);
 
   const sourceLines = lines as PosLineItem[];
-  const merchandiseLines = sourceLines.filter((line) => isMerchandiseLine(line));
-  const hasCashMovement = merchandiseLines.length !== sourceLines.length;
-  const lineTotalMinor = toMinor(sumLineTotals(merchandiseLines, places), places);
-  const lineSubtotalMinor = toMinor(sumLineSubtotals(merchandiseLines, places), places);
+  const hasCashMovement = sourceLines.some((line) => !isMerchandiseLine(line));
+  const lineTotalMinor = toMinor(sumLineTotals(sourceLines, places), places);
+  const lineSubtotalMinor = toMinor(sumLineSubtotals(sourceLines, places), places);
   const sourceFees = (input.feeLines || []) as PosFeeLine[];
-  const fees = sourceFees.filter((fee) => !isPayoutFee(fee) && !isCashbackFee(fee));
-  const hasCashMovementFee = fees.length !== sourceFees.length;
-  const feeMinorTotal = toMinor(calculateFeeTotal(fees, places), places);
+  const hasCashMovementFee = sourceFees.some((fee) => isPayoutFee(fee) || isCashbackFee(fee));
+  const feeMinorTotal = toMinor(calculateFeeTotal(sourceFees, places), places);
   const shippingMinor = toMinor(input.shippingTotal ?? 0, places);
   const tipMinor = toMinor(input.tip ?? 0, places);
-  const taxMinor = Math.max(0, toMinor(input.tax, places));
+  const taxMinor = Math.max(0, toMinor(listOrderTax({
+    tax: input.tax,
+    lineItems: sourceLines,
+    feeLines: sourceFees,
+    taxLines: input.taxLines,
+    decimalPlaces: places,
+  }), places));
   const appliedInLines = Math.max(0, lineSubtotalMinor - lineTotalMinor);
   const extraDiscount = Math.max(0, toMinor(input.couponDiscount ?? 0, places) - appliedInLines);
   const payableMinor = lineTotalMinor + feeMinorTotal + shippingMinor + tipMinor - extraDiscount;
@@ -453,7 +501,7 @@ export function listOrderTotal(input: {
   if (close(payableMinor + taxMinor) && !close(payableMinor)) return fromMinor(storedMinor, places);
   if (close(payableMinor)) return fromMinor(payableMinor + taxMinor, places);
 
-  const omittedMinor = fees.reduce((sum, fee) => {
+  const omittedMinor = sourceFees.reduce((sum, fee) => {
     const amount = toMinor(fee?.total ?? 0, places);
     const name = String(fee?.name || '').toLowerCase();
     return name.includes('discount') || amount <= 0 ? sum + amount : sum;

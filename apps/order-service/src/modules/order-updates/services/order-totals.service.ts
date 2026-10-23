@@ -67,7 +67,10 @@ export class OrderTotalsService {
     return {
       rate,
       pricesIncludeTax: false,
-      calculation: 'item-price',
+      // POS receipts round tax once on the final taxable balance. Per-item
+      // rounding can differ by a cent after a fixed-cart coupon is allocated
+      // across several lines (for example, 0.88 instead of 0.89).
+      calculation: 'total',
       label: existing[0]?.label,
       decimalPlaces: 2,
     };
