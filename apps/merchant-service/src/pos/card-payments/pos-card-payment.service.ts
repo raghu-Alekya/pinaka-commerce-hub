@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosCardPaymentEntity } from './pos-card-payment.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { SavePosCardPaymentDto } from './pos-card-payment.dto';
 
 export interface PosCardPaymentRecord {
@@ -23,27 +24,37 @@ export class PosCardPaymentService {
 
   async get(storeId: string): Promise<{ success: true; cardPayments: PosCardPaymentRecord[] }> {
     const store = await this.requireStore(storeId);
-    const records = await this.repo().find({ where: { storeId: store.id }, order: { provider: 'ASC' } });
-    return { success: true, cardPayments: records.map(record => this.present(record)) };
+    const document = await this.findDocument(store.id);
+    return {
+      success: true,
+      cardPayments: this.providers(document).map(record => this.present(record, document || { storeId: store.id, merchantId: store.merchantId })),
+    };
   }
 
   async create(storeId: string, body: SavePosCardPaymentDto) {
     const store = await this.requireStore(storeId);
     this.assertFields(body);
-    if (await this.findByStoreAndProvider(store.id, body.provider)) {
+    const document = await this.findDocument(store.id);
+    const providers = this.providers(document);
+    if (providers.some(item => item.provider === body.provider)) {
       throw new ConflictException(`Card payment settings already exist for ${body.provider}`);
     }
-    const saved = await this.repo().save(this.repo().create(this.fields(store.id, store.merchantId, body)));
-    return { success: true, cardPayment: this.present(saved) };
+    const saved = await this.write(store.id, store.merchantId, [...providers, { id: randomUUID(), ...this.fields(body) }]);
+    const created = this.providers(saved).find(item => item.provider === body.provider);
+    return { success: true, cardPayment: this.present(created, saved) };
   }
 
   async update(storeId: string, body: SavePosCardPaymentDto) {
     const store = await this.requireStore(storeId);
     this.assertFields(body);
-    const current = await this.findByStoreAndProvider(store.id, body.provider);
+    const document = await this.findDocument(store.id);
+    const providers = this.providers(document);
+    const current = providers.find(item => item.provider === body.provider);
     if (!current) throw new NotFoundException(`Card payment settings are not configured for ${body.provider}`);
-    const saved = await this.repo().save({ id: current.id, ...this.fields(store.id, store.merchantId, body) });
-    return { success: true, cardPayment: this.present(saved) };
+    const next = providers.map(item => item.provider === body.provider ? { ...item, ...this.fields(body) } : item);
+    const saved = await this.write(store.id, store.merchantId, next);
+    const updated = this.providers(saved).find(item => item.provider === body.provider);
+    return { success: true, cardPayment: this.present(updated, saved) };
   }
 
   private async requireStore(storeId: string) {
@@ -61,18 +72,23 @@ export class PosCardPaymentService {
     }
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosCardPaymentEntity);
+  private async findDocument(storeId: string) {
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'card_payment_settings');
   }
 
-  private async findByStoreAndProvider(storeId: string, provider: string) {
-    return this.repo().findOne({ where: { storeId, provider } });
+  private providers(document: Record<string, any> | null): Array<Record<string, any>> {
+    return Array.isArray(document?.providers) ? document.providers : [];
   }
 
-  private fields(storeId: string, merchantId: string, body: SavePosCardPaymentDto) {
-    return {
-      storeId,
+  private async write(storeId: string, merchantId: string, providers: Array<Record<string, any>>) {
+    return savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'card_payment_settings', {
       merchantId,
+      providers,
+    });
+  }
+
+  private fields(body: SavePosCardPaymentDto) {
+    return {
       provider: body.provider,
       deviceId: body.deviceId.trim(),
       processorMerchantId: body.processorMerchantId.trim(),
@@ -82,19 +98,19 @@ export class PosCardPaymentService {
     };
   }
 
-  private present(record: PosCardPaymentEntity): PosCardPaymentRecord {
+  private present(record: Record<string, any> | undefined, document: Record<string, any>): PosCardPaymentRecord {
     return {
-      id: record.id,
-      storeId: record.storeId,
-      merchantId: record.merchantId,
-      provider: record.provider,
-      deviceId: record.deviceId,
-      processorMerchantId: record.processorMerchantId,
-      terminalId: record.terminalId,
-      secretKey: record.secretKey,
-      webhookUrl: record.webhookUrl,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
+      id: String(record?.id || ''),
+      storeId: document.storeId,
+      merchantId: document.merchantId,
+      provider: record?.provider,
+      deviceId: record?.deviceId,
+      processorMerchantId: record?.processorMerchantId,
+      terminalId: record?.terminalId || '',
+      secretKey: record?.secretKey,
+      webhookUrl: record?.webhookUrl,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
     };
   }
 }

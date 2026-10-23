@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosCashDenominationEntity } from './pos-cash-denomination.entity';
-import { PosCashDenominationItemEntity } from './pos-cash-denomination-item.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { PosCashDenominationItemDto, SavePosCashDenominationDto } from './pos-cash-denomination.dto';
 
 const imagePattern = /^data:image\/(png|jpeg|jpg|webp);base64,/i;
@@ -37,7 +37,7 @@ export class PosCashDenominationService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Cash denominations are not configured for this store');
-    return { success: true, cashDenominations: await this.withItems(record) };
+    return { success: true, cashDenominations: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosCashDenominationDto) {
@@ -70,70 +70,48 @@ export class PosCashDenominationService {
     }
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosCashDenominationEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.repo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'cash_denominations');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosCashDenominationDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosCashDenominationRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosCashDenominationEntity);
-      const items = manager.getRepository(PosCashDenominationItemEntity);
-      const row = existingId
-        ? await settings.save({ id: existingId, storeId, merchantId })
-        : await settings.save(settings.create({ storeId, merchantId }));
-
-      await items.delete({ denominationId: row.id });
-      const rows = [
-        ...this.itemRows(row.id, 'cash', body.cashDenominations || []),
-        ...this.itemRows(row.id, 'coin', body.coinDenominations || []),
-      ];
-      const saved = rows.length ? await items.save(rows.map(item => items.create(item))) : [];
-      return this.present(row, saved);
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'cash_denominations', {
+      merchantId,
+      cashDenominations: this.itemRows(body.cashDenominations || []),
+      coinDenominations: this.itemRows(body.coinDenominations || []),
     });
+    return this.present(saved);
   }
 
-  private itemRows(denominationId: string, kind: 'cash' | 'coin', list: PosCashDenominationItemDto[]) {
-    return list.map((item, index) => ({
-      denominationId,
-      kind,
-      amount: String(item.amount),
+  private itemRows(list: PosCashDenominationItemDto[]) {
+    return list.map(item => ({
+      id: randomUUID(),
+      amount: Number(item.amount),
       imageName: item.imageName.trim() || 'denomination',
       imageData: item.imageData,
-      sortOrder: index,
     }));
   }
 
-  private async withItems(record: PosCashDenominationEntity): Promise<PosCashDenominationRecord> {
-    const items = await this.merchants.requireDataSource().getRepository(PosCashDenominationItemEntity).find({
-      where: { denominationId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, items);
-  }
-
-  private present(record: PosCashDenominationEntity, items: PosCashDenominationItemEntity[]): PosCashDenominationRecord {
-    const mapItem = (item: PosCashDenominationItemEntity): PosCashDenominationItem => ({
-      id: item.id,
+  private present(record: Record<string, any>): PosCashDenominationRecord {
+    const mapItem = (item: Record<string, any>): PosCashDenominationItem => ({
+      id: String(item.id),
       amount: Number(item.amount),
       imageName: item.imageName,
       imageData: item.imageData,
     });
+    const cash = Array.isArray(record.cashDenominations) ? record.cashDenominations : [];
+    const coins = Array.isArray(record.coinDenominations) ? record.coinDenominations : [];
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      cashDenominations: items.filter(item => item.kind === 'cash').map(mapItem),
-      coinDenominations: items.filter(item => item.kind === 'coin').map(mapItem),
+      cashDenominations: cash.map(mapItem),
+      coinDenominations: coins.map(mapItem),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
