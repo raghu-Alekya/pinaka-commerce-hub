@@ -13,6 +13,15 @@ import type { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto
 import { cancelFromDto, couponFromDto, discountFromDto, itemsFromDto } from '../order-update.normalize';
 import { OrderUpdatePresenter } from '../order-update.presenter';
 import { OrderStatus } from '../../../entities/order.entity';
+import {
+  calculateDiscountTotal,
+  listOrderTotal,
+  sumCouponDiscounts,
+  type PosCouponLine,
+  type PosFeeLine,
+  type PosLineItem,
+  type PosTaxLine,
+} from '../../../calculations/store-order.calculations';
 import type { OrderGraph, OrderMutationDraft } from '../order-update.types';
 import { OrderCancellationService } from './order-cancellation.service';
 import { OrderCouponCatalog } from './order-coupon.catalog';
@@ -262,11 +271,26 @@ export class OrderUpdateService {
       if (draft.taxLines) storeOrder.taxLines = draft.taxLines;
       if (draft.totals) {
         storeOrder.subtotal = moneyAmount(draft.totals.subtotal);
-        storeOrder.discountTotal = moneyAmount(draft.totals.discountTotal);
         storeOrder.feeTotal = moneyAmount(draft.totals.feeTotal);
         storeOrder.taxTotal = moneyAmount(draft.totals.taxTotal);
         storeOrder.total = moneyAmount(draft.totals.total + tipAmount);
       }
+      const lineItems = (Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems : []) as PosLineItem[];
+      const couponLines = (Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines : []) as PosCouponLine[];
+      const feeLines = (Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines : []) as PosFeeLine[];
+      const taxLines = (Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines : []) as PosTaxLine[];
+      storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+      const payloadForTotals = (storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>;
+      storeOrder.grandTotal = listOrderTotal({
+        total: storeOrder.total,
+        tax: storeOrder.taxTotal,
+        taxLines,
+        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+        lineItems,
+        feeLines,
+        shippingTotal: payloadForTotals.shipping_total ?? payloadForTotals.shippingTotal,
+        tip: storeOrder.tipAmount,
+      });
       if (draft.storeStatus) storeOrder.status = draft.storeStatus;
       const requestPayload = { ...((storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>) };
       if (draft.lineItems) requestPayload.line_items = storeOrder.lineItems;
@@ -278,6 +302,7 @@ export class OrderUpdateService {
         requestPayload.discount_total = moneyAmount(storeOrder.discountTotal).toFixed(2);
         requestPayload.total_tax = moneyAmount(storeOrder.taxTotal).toFixed(2);
         requestPayload.total = moneyAmount(storeOrder.total).toFixed(2);
+        requestPayload.grand_total = moneyAmount(storeOrder.grandTotal).toFixed(2);
       }
       if (draft.storeStatus) requestPayload.status = storeOrder.status;
       storeOrder.requestPayload = requestPayload;

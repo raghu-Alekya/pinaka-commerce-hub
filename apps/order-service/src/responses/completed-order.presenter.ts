@@ -49,7 +49,7 @@ export class CompletedOrderPresenter {
       author: request.author?.trim() || undefined,
       after,
       before,
-      orderBy: 'modified' as const,
+      orderBy: 'created' as const,
     };
   }
 
