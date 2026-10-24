@@ -110,6 +110,7 @@ export class OrderListPresenter {
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
+      grand_total: this.money(storeOrder?.grandTotal ?? total),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
