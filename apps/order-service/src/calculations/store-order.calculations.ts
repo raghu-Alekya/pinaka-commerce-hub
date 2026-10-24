@@ -29,6 +29,11 @@ export interface PosPayment {
   status?: string;
 }
 
+export interface PosCouponLine {
+  code?: string;
+  discount?: number | string;
+}
+
 export type TaxCalculationMode = 'item-price' | 'subtotal' | 'total';
 
 export interface TaxCalculationInput {
@@ -106,6 +111,53 @@ export function sumLineSubtotals(lineItems: PosLineItem[] = [], places = 2): num
 export function sumLineTotals(lineItems: PosLineItem[] = [], places = 2): number {
   const minor = lineItems.reduce(
     (sum, line) => sum + toMinor(line?.total ?? line?.subtotal ?? 0, places),
+    0,
+  );
+  return fromMinor(minor, places);
+}
+
+/**
+ * Complete order discount without double-counting reductions already applied
+ * to line totals. POS discounts may be represented by a generated coupon line,
+ * a negative merchant_discount fee, or both.
+ */
+export function calculateDiscountTotal(
+  lineItems: PosLineItem[] = [],
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const merchandise = lineItems.filter(isMerchandiseLine);
+  const lineReduction = Math.max(
+    0,
+    toMinor(sumLineSubtotals(merchandise, places), places)
+      - toMinor(sumLineTotals(merchandise, places), places),
+  );
+  let couponDiscount = 0;
+  let merchantCouponDiscount = 0;
+  const promotionDiscount = merchandise.reduce((sum, line) => {
+    const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+    const amount = metadata.find((entry) => entry?.key === '_pos_auto_discount')?.value;
+    return sum + Math.max(0, toMinor(amount ?? 0, places));
+  }, 0);
+  couponLines.forEach((line) => {
+    const amount = Math.max(0, toMinor(line?.discount ?? 0, places));
+    couponDiscount += amount;
+    if (/^pos-discount(?:-\d+)?$/i.test(String(line?.code || '').trim())) {
+      merchantCouponDiscount += amount;
+    }
+  });
+  // Coupon application can rewrite line totals, so the original automatic,
+  // multipack, and mix-and-match amounts must be retained from POS metadata.
+  const representedByLines = Math.max(lineReduction, promotionDiscount + couponDiscount);
+  const merchantFeeDiscount = merchantDiscountMinor(feeLines, places);
+  const unrepresentedMerchantFee = Math.max(0, merchantFeeDiscount - merchantCouponDiscount);
+  return fromMinor(representedByLines + unrepresentedMerchantFee, places);
+}
+
+export function sumCouponDiscounts(couponLines: PosCouponLine[] = [], places = 2): number {
+  const minor = couponLines.reduce(
+    (sum, line) => sum + Math.max(0, toMinor(line?.discount ?? 0, places)),
     0,
   );
   return fromMinor(minor, places);

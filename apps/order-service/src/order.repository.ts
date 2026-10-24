@@ -10,8 +10,11 @@ import { StoreOrderEntity } from './entities/store-order.entity';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import {
   applyMerchantDiscountToStoredTax,
+  calculateDiscountTotal,
   calculateStoreOrder,
   isTaxableSaleLine,
+  listOrderTotal,
+  sumCouponDiscounts,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
   sumLineTotals,
@@ -338,6 +341,13 @@ export class OrderRepository implements OnModuleInit {
           total: item.totalPrice,
           meta_data: item.modifiers || [],
         }));
+    const feeLines = Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [];
+    const couponLines = Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const taxTotal = Number(sourcePayload?.total_tax ?? orderData.taxAmount ?? 0);
+    const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
+    const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
+    const tipAmount = Number(orderData.tipAmount || 0);
+    const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
       id: randomUUID(),
@@ -350,7 +360,7 @@ export class OrderRepository implements OnModuleInit {
       orderType: orderData.orderType || 'IN_STORE_POS',
       paymentMethodCode: orderData.paymentMethod,
       paymentStatus: orderData.paymentStatus || 'PAID',
-      tipAmount: Number(orderData.tipAmount || 0),
+      tipAmount,
       offline: Boolean(orderData.offline),
       localShiftId: orderData.localShiftId,
       metadata: Array.isArray(orderData.metadata) ? orderData.metadata : metadata,
@@ -370,14 +380,23 @@ export class OrderRepository implements OnModuleInit {
       payLater: Boolean(metadata.find((entry: any) => entry?.key === '_pay_later')?.value),
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
-      discountTotal: Number(sourcePayload?.discount_total ?? orderData.discountAmount ?? 0),
-      feeTotal: (Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [])
-        .reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
-      taxTotal: Number(sourcePayload?.total_tax ?? orderData.taxAmount ?? 0),
-      total: Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems)),
+      discountTotal,
+      feeTotal: feeLines.reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
+      taxTotal,
+      total,
+      grandTotal: listOrderTotal({
+        total,
+        tax: taxTotal,
+        taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
+        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : discountTotal,
+        lineItems,
+        feeLines,
+        shippingTotal,
+        tip: tipAmount,
+      }),
       lineItems,
-      feeLines: Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [],
-      couponLines: Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [],
+      feeLines,
+      couponLines,
       taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
       payments: Array.isArray(sourcePayload?.payments)
         ? sourcePayload.payments
@@ -916,6 +935,7 @@ export class OrderRepository implements OnModuleInit {
         fee_total numeric(12,2) NOT NULL DEFAULT 0,
         tax_total numeric(12,2) NOT NULL DEFAULT 0,
         total numeric(12,2) NOT NULL DEFAULT 0,
+        grand_total numeric(12,2) NOT NULL DEFAULT 0,
         line_items jsonb NOT NULL DEFAULT '[]'::jsonb,
         fee_lines jsonb NOT NULL DEFAULT '[]'::jsonb,
         coupon_lines jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -925,6 +945,29 @@ export class OrderRepository implements OnModuleInit {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       )
+    `);
+    await this.dataSource.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+            FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'store_orders'
+             AND column_name = 'final_total'
+        ) AND NOT EXISTS (
+          SELECT 1
+            FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'store_orders'
+             AND column_name = 'grand_total'
+        ) THEN
+          ALTER TABLE public.store_orders RENAME COLUMN final_total TO grand_total;
+        END IF;
+      END $$;
+
+      ALTER TABLE public.store_orders
+        ADD COLUMN IF NOT EXISTS grand_total numeric(12,2) NOT NULL DEFAULT 0;
     `);
     await this.ensureClientOrderUniqueIndex(
       'store_orders_store_client_order_idx',
@@ -1103,10 +1146,25 @@ export class OrderRepository implements OnModuleInit {
     const storeOrder = input.storeOrder;
     storeOrder.orderStatus = input.order.orderStatus;
     storeOrder.subtotal = input.order.subtotal;
-    storeOrder.discountTotal = input.order.discountAmount;
     storeOrder.taxTotal = input.order.taxAmount;
     storeOrder.tipAmount = input.order.tipAmount;
     storeOrder.total = input.order.totalAmount;
+    const lineItems = Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems as any[] : [];
+    const couponLines = Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines as any[] : [];
+    const feeLines = Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines as any[] : [];
+    const taxLines = Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines as any[] : [];
+    const payload = (storeOrder.requestPayload || input.order.requestPayload || {}) as Record<string, unknown>;
+    storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+    storeOrder.grandTotal = listOrderTotal({
+      total: storeOrder.total,
+      tax: storeOrder.taxTotal,
+      taxLines,
+      couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+      lineItems,
+      feeLines,
+      shippingTotal: payload.shipping_total ?? payload.shippingTotal,
+      tip: storeOrder.tipAmount,
+    });
     storeOrder.paymentStatus = input.order.paymentStatus;
     storeOrder.updatedAt = new Date();
     if (input.history) {
