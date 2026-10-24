@@ -1898,6 +1898,10 @@ export class OrderRepository implements OnModuleInit {
     };
   }
 
+  private partialRefundLineAmount(refundableAmount: number): number {
+    return Math.round(Math.max(0, refundableAmount) * 100) / 100;
+  }
+
   private shouldCreateDailyRefundRow(payment: any, timeZone: string, refundAt = new Date()): boolean {
     const history = Array.isArray(payment?.metadata?.refund_history)
       ? payment.metadata.refund_history : [];
@@ -2139,16 +2143,6 @@ export class OrderRepository implements OnModuleInit {
         // Prefer the JSON snapshot for order totals because it contains the
         // original POS representation. Fall back to canonical rows for older
         // production orders whose snapshot is empty.
-        const allLines = storedLines.length ? storedLines : canonicalLines;
-        const positiveTotal = allLines.reduce((sum: number, line: any) => {
-          const value = Number(line.total ?? line.total_price ?? 0);
-          return value > 0 ? sum + value : sum;
-        }, 0);
-        const payoutTotal = allLines.reduce((sum: number, line: any) => {
-          const value = Number(line.total ?? line.total_price ?? 0);
-          return value < 0 ? sum + Math.abs(value) : sum;
-        }, 0);
-        const payoutRatio = positiveTotal > 0 && payoutTotal > 0 ? payoutTotal / positiveTotal : 0;
         const previousItems = refundState.events.flatMap((event: any) =>
           Array.isArray(event?.line_items) ? event.line_items : [],
         );
@@ -2170,15 +2164,17 @@ export class OrderRepository implements OnModuleInit {
           if (requested.quantity > remainingQuantity) {
             return { kind: 'qty_error' as const, remainingQuantity };
           }
-          const adjustedAmount = Math.max(0, requested.refundableAmount * (1 - payoutRatio));
-          refundTotal += adjustedAmount;
+          // Payout lines are separate cash movements that remain on the order.
+          // They must not be prorated across selected merchandise refunds.
+          const lineRefundAmount = this.partialRefundLineAmount(requested.refundableAmount);
+          refundTotal += lineRefundAmount;
           refundItems.push({
             order_item_id: requested.orderItemId,
             product_id: line.variation_id || line.product_id || line.productId || null,
             name: line.name || line.product_name || '',
             quantity: requested.quantity,
             refundable_amount: requested.refundableAmount,
-            refund_total: Math.round(adjustedAmount * 100) / 100,
+            refund_total: Math.round(lineRefundAmount * 100) / 100,
           });
         }
         refundTotal = Math.round(refundTotal * 100) / 100;
