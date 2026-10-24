@@ -16,7 +16,7 @@ import {
   UnauthorizedException,
   ValidationPipe,
 } from "@nestjs/common";
-import { randomInt, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { CreateDeviceDto, UpdateDeviceDto } from "./dto/device.dto";
 import { MerchantEntity } from "../../entities/merchant.entity";
 import { DeviceEntity } from "../../entities/device.entity";
@@ -133,12 +133,23 @@ export class DeviceController {
         offline_devices: result.summary.active ?? 0,
         inactive_devices: result.summary.inactive ?? 0,
       },
-      devices: result.devices.map((device: DeviceEntity) =>
-        this.publicDevice(
-          device,
-          merchantNames.get(device.merchantId),
-        ),
-      ),
+      devices: await (async () => {
+        const storeMap = await this.service.getStoreMappingsForDevices(result.devices.map((d: DeviceEntity) => d.id));
+        return result.devices.map((device: DeviceEntity) => {
+          const storeInfo = storeMap.get(device.id);
+          return {
+            ...this.publicDevice(
+              device,
+              merchantNames.get(device.merchantId),
+            ),
+            store_id: storeInfo?.storeId ?? null,
+            storeId: storeInfo?.storeId ?? null,
+            store_name: storeInfo?.storeName ?? null,
+            storeName: storeInfo?.storeName ?? null,
+            store: storeInfo?.storeName ?? null,
+          };
+        });
+      })(),
     };
     if (query.page !== undefined || query.limit !== undefined) {
       response.pagination = {
@@ -157,9 +168,20 @@ export class DeviceController {
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.id;
     const devices = await this.service.listDevicesByMerchantId(merchantId);
+    const storeMap = await this.service.getStoreMappingsForDevices(devices.map((d) => d.id));
     return {
       count: devices.length,
-      devices: devices.map((device) => this.publicDevice(device, merchant.businessDisplayName ?? merchant.id)),
+      devices: devices.map((device) => {
+        const storeInfo = storeMap.get(device.id);
+        return {
+          ...this.publicDevice(device, merchant.businessDisplayName ?? merchant.id),
+          store_id: storeInfo?.storeId ?? null,
+          storeId: storeInfo?.storeId ?? null,
+          store_name: storeInfo?.storeName ?? null,
+          storeName: storeInfo?.storeName ?? null,
+          store: storeInfo?.storeName ?? null,
+        };
+      }),
     };
   }
 
@@ -178,12 +200,21 @@ export class DeviceController {
     const device = await this.service.getDevice(deviceId);
     if (!device) throw new NotFoundException("Device not found");
     const merchants = await this.service.getAllMerchants();
+    const storeMap = await this.service.getStoreMappingsForDevices([device.id]);
+    const storeInfo = storeMap.get(device.id);
     return {
       success: true,
-      device: this.publicDevice(
-        device,
-        merchants.find((item) => item.id === device.merchantId)?.businessName ?? undefined,
-      ),
+      device: {
+        ...this.publicDevice(
+          device,
+          merchants.find((item) => item.id === device.merchantId)?.businessName ?? undefined,
+        ),
+        store_id: storeInfo?.storeId ?? null,
+        storeId: storeInfo?.storeId ?? null,
+        store_name: storeInfo?.storeName ?? null,
+        storeName: storeInfo?.storeName ?? null,
+        store: storeInfo?.storeName ?? null,
+      },
     };
   }
 

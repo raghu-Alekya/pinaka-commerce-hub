@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -65,9 +66,27 @@ export class OrderListPresenter {
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const total = this.money(storeOrder?.total ?? order.totalAmount);
+    const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const tax = listOrderTax({
+      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
+    });
+    const total = this.money(listOrderTotal({
+      total: storeOrder?.total ?? order.totalAmount,
+      tax,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
+      couponDiscount: coupons.length
+        ? coupons.reduce((sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0), 0)
+        : (storeOrder?.discountTotal ?? order.discountAmount),
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      shippingTotal: request.shipping_total ?? request.shippingTotal,
+      tip: storeOrder?.tipAmount ?? order.tipAmount,
+    }));
     const totalNumber = Number(total);
-    const refundTotal = row.refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    const refundTotal = this.refundTotal(row.refunds, status);
     const refundedItemIds = new Set(row.refunds.flatMap((refund) => {
       const lines = refund.metadata?.line_items;
       return Array.isArray(lines)
@@ -91,8 +110,9 @@ export class OrderListPresenter {
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
+      grand_total: this.money(storeOrder?.grandTotal ?? total),
       discount_tax: this.taxText(request.discount_tax),
-      total_tax: this.taxText(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount),
+      total_tax: this.taxText(tax),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,
@@ -138,6 +158,29 @@ export class OrderListPresenter {
       refundedItemIds,
       fullyRefunded,
     ));
+  }
+
+  private refundTotal(
+    refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>,
+    status: string,
+  ): number {
+    if (status.toLowerCase() !== 'partially refunded') {
+      return refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    }
+
+    const seen = new Set<string>();
+    return refunds.reduce((sum, refund, index) => {
+      const metadata = refund.metadata || {};
+      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${index}`);
+      if (seen.has(refundId)) return sum;
+      seen.add(refundId);
+
+      const lines = Array.isArray(metadata.line_items) ? metadata.line_items : [];
+      const requestedTotal = lines.reduce((lineSum, line: any) => (
+        lineSum + Number(line?.refundable_amount ?? line?.refund_total ?? 0)
+      ), 0);
+      return sum + (requestedTotal > 0 ? requestedTotal : Number(refund.amount || 0));
+    }, 0);
   }
 
   private lineItem(
@@ -215,6 +258,9 @@ export class OrderListPresenter {
         return 'On-hold';
       case 'cancelled':
         return 'Cancelled';
+      case 'partial-refund':
+      case 'partially-refunded':
+        return 'Partially Refunded';
       default:
         return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Processing';
     }

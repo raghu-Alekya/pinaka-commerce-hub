@@ -4,6 +4,7 @@ import { PosConfigRepository } from './pos-config.repository';
 import { FastkeyItem } from './pos-config.entity';
 import { MovementType } from './entities/cash-movement.entity';
 import { normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
+import { ShiftReportService } from './shift-report.service';
 
 const SHIFT_REQUEST_ALIASES = [
   ['merchant_id', 'merchantId'],
@@ -36,6 +37,7 @@ export class AppController {
   constructor(
     @Inject(PosRepository) private readonly posRepository: PosRepository,
     @Inject(PosConfigRepository) private readonly posConfigRepository: PosConfigRepository,
+    @Inject(ShiftReportService) private readonly shiftReport: ShiftReportService,
   ) {}
 
   @Get('health')
@@ -177,6 +179,16 @@ export class AppController {
       shift,
       reportType: 'Z_REPORT',
     };
+  }
+
+  @Get('shifts/get-shift-by-id')
+  async getShiftById(
+    @Query('shiftId') shiftId?: string,
+    @Query('shift_id') shift_id?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('employee_id') employee_id?: string,
+  ) {
+    return this.shiftReport.getShiftById(shiftId || shift_id, employeeId || employee_id);
   }
 
   @Get('shifts/active')

@@ -9,7 +9,12 @@ import { OrderStatusHistoryEntity } from './entities/order-status-history.entity
 import { StoreOrderEntity } from './entities/store-order.entity';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import {
+  applyMerchantDiscountToStoredTax,
+  calculateDiscountTotal,
   calculateStoreOrder,
+  isTaxableSaleLine,
+  listOrderTotal,
+  sumCouponDiscounts,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
   sumLineTotals,
@@ -116,9 +121,42 @@ export class OrderRepository implements OnModuleInit {
       orderData.currency = stores[0].currency || 'USD';
       orderData.timezone = stores[0].timezone || 'UTC';
     }
-    await this.enrichWooCommerceCreateOrder(orderData, sourcePayload);
     const clientOrderId = String(orderData.clientOrderId || '').trim() || undefined;
-    if (clientOrderId) await this.rejectDuplicateClientOrder(orderData.storeId, clientOrderId);
+    // A POS cancellation is sent through the create endpoint with the original
+    // client order id. Resolve and cancel it before product/tax enrichment: the
+    // navigation snapshot may contain stale coupon/item data, but cancellation
+    // must only depend on the persisted order identity and requested status.
+    const incomingStatus = String(orderData.orderStatus || orderData.status || sourcePayload?.status || '')
+      .trim().replace(/-/g, '_').toUpperCase();
+    if (clientOrderId && incomingStatus === OrderStatus.CANCELLED) {
+      const duplicate = await this.findDuplicateClientOrder(orderData.storeId, clientOrderId);
+      if (duplicate) {
+        const cancelled = await this.cancelDuplicateIfRequested(duplicate.orderId, orderData, sourcePayload);
+        if (!cancelled) throw new ServiceUnavailableException('The existing order could not be cancelled');
+        return {
+          order: cancelled.order,
+          items: cancelled.items,
+          storeOrder: cancelled.storeOrder,
+          duplicate: true,
+        };
+      }
+    }
+    await this.enrichWooCommerceCreateOrder(orderData, sourcePayload);
+    if (clientOrderId) {
+      const duplicate = await this.findDuplicateClientOrder(orderData.storeId, clientOrderId);
+      if (duplicate) {
+        const cancelled = await this.cancelDuplicateIfRequested(duplicate.orderId, orderData, sourcePayload);
+        if (!cancelled) {
+          throw new ConflictException(`An order with client order ID '${clientOrderId}' already exists`);
+        }
+        return {
+          order: cancelled.order,
+          items: cancelled.items,
+          storeOrder: cancelled.storeOrder,
+          duplicate: true,
+        };
+      }
+    }
     const id = randomUUID();
     const orderNumber = `#${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -146,7 +184,7 @@ export class OrderRepository implements OnModuleInit {
     const tipAmount = Number(orderData.tipAmount || 0);
     const totalAmount = orderData.totalAmount !== undefined
       ? Number(orderData.totalAmount)
-      : subtotal + taxAmount - discountAmount + tipAmount;
+      : subtotal - discountAmount + tipAmount;
 
     const order: OrderEntity = {
       id,
@@ -210,12 +248,12 @@ export class OrderRepository implements OnModuleInit {
               `INSERT INTO public.store_pos_payments (
                  order_id, merchant_id, store_id, local_id, client_order_id, device_id,
                  shift_id, user_id, payment_type, payment_method, payment_method_title,
-                 amount, order_total, remaining, refund_amount, balance_amount,
+                 amount, order_total, remaining, refund_amount,
                  currency, status, entry_type, provider,
                  provider_transaction_id, payment_at, metadata
                ) VALUES ${paymentRows.map((_, index) => {
-                 const offset = index * 23;
-                 return `(${Array.from({ length: 23 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
+                 const offset = index * 22;
+                 return `(${Array.from({ length: 22 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
                }).join(', ')}
                ON CONFLICT DO NOTHING`,
               paymentRows.flat(),
@@ -257,13 +295,30 @@ export class OrderRepository implements OnModuleInit {
     }
   }
 
-  private async rejectDuplicateClientOrder(storeId: string, clientOrderId: string): Promise<void> {
+  private async findDuplicateClientOrder(
+    storeId: string,
+    clientOrderId: string,
+  ): Promise<{ orderId: string } | undefined> {
     const existing = this.isDbConnected && this.storeOrderRepo
       ? await this.storeOrderRepo.findOne({ where: { storeId, clientOrderId } })
       : this.inMemoryOrders.find(order => order.storeId === storeId && order.clientOrderId === clientOrderId);
-    if (existing) {
-      throw new ConflictException(`An order with client order ID '${clientOrderId}' already exists`);
-    }
+    if (!existing) return undefined;
+    return { orderId: 'orderId' in existing ? existing.orderId : existing.id };
+  }
+
+  private async cancelDuplicateIfRequested(orderId: string, orderData: any, sourcePayload: any) {
+    const incomingStatus = String(orderData.orderStatus || orderData.status || sourcePayload?.status || '')
+      .trim().replace(/-/g, '_').toUpperCase();
+    if (incomingStatus !== OrderStatus.CANCELLED) return null;
+    const updated = await this.updateOrderStatus(
+      orderId,
+      OrderStatus.CANCELLED,
+      String(orderData.placedBy || 'POS System'),
+      'Duplicate POS sync requested cancellation',
+    );
+    const graph = updated ? await this.getOrderById(updated.id) : null;
+    if (!graph) throw new ServiceUnavailableException('The existing order could not be cancelled');
+    return graph;
   }
 
   private buildStoreOrder(orderId: string, orderData: any, sourcePayload: any): StoreOrderEntity {
@@ -286,6 +341,13 @@ export class OrderRepository implements OnModuleInit {
           total: item.totalPrice,
           meta_data: item.modifiers || [],
         }));
+    const feeLines = Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [];
+    const couponLines = Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const taxTotal = Number(sourcePayload?.total_tax ?? orderData.taxAmount ?? 0);
+    const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
+    const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
+    const tipAmount = Number(orderData.tipAmount || 0);
+    const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
       id: randomUUID(),
@@ -298,7 +360,7 @@ export class OrderRepository implements OnModuleInit {
       orderType: orderData.orderType || 'IN_STORE_POS',
       paymentMethodCode: orderData.paymentMethod,
       paymentStatus: orderData.paymentStatus || 'PAID',
-      tipAmount: Number(orderData.tipAmount || 0),
+      tipAmount,
       offline: Boolean(orderData.offline),
       localShiftId: orderData.localShiftId,
       metadata: Array.isArray(orderData.metadata) ? orderData.metadata : metadata,
@@ -318,14 +380,23 @@ export class OrderRepository implements OnModuleInit {
       payLater: Boolean(metadata.find((entry: any) => entry?.key === '_pay_later')?.value),
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
-      discountTotal: Number(sourcePayload?.discount_total ?? orderData.discountAmount ?? 0),
-      feeTotal: (Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [])
-        .reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
-      taxTotal: Number(sourcePayload?.total_tax ?? orderData.taxAmount ?? 0),
-      total: Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems)),
+      discountTotal,
+      feeTotal: feeLines.reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
+      taxTotal,
+      total,
+      grandTotal: listOrderTotal({
+        total,
+        tax: taxTotal,
+        taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
+        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : discountTotal,
+        lineItems,
+        feeLines,
+        shippingTotal,
+        tip: tipAmount,
+      }),
       lineItems,
-      feeLines: Array.isArray(sourcePayload?.fee_lines) ? sourcePayload.fee_lines : [],
-      couponLines: Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [],
+      feeLines,
+      couponLines,
       taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
       payments: Array.isArray(sourcePayload?.payments)
         ? sourcePayload.payments
@@ -365,12 +436,20 @@ export class OrderRepository implements OnModuleInit {
           provider: sourcePayload?.provider,
         }];
 
-    const orderTotal = Number(order.totalAmount || 0);
+    const rawOrderTotal = Number(order.totalAmount || 0);
+    // Payout lines represent cash leaving the register, not a customer payment.
+    // The order may therefore have a negative total, while the payment ledger
+    // only stores non-negative captured/refundable amounts.
+    const orderTotal = Number.isFinite(rawOrderTotal) ? Math.max(0, rawOrderTotal) : 0;
     const normalizedAmounts = payments.map((payment: any) => Number(
       payment?.amount ?? payment?.total ?? payment?.value ?? 0,
     ));
     return payments.map((payment: any, index: number) => {
       const amount = normalizedAmounts[index];
+      // A payout may be represented as a negative tender alongside a positive
+      // EBT tender. It is cash leaving the drawer, not a captured customer
+      // payment, so it must not create a negative payment-ledger balance.
+      const capturedAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
       const method = String(payment?.payment_method ?? payment?.paymentMethod ?? payment?.method ??
         sourcePayload?.payment_method ?? order.paymentMethod ?? 'cash').trim().toLowerCase();
       const paymentAtValue = payment?.payment_at ?? payment?.paymentAt ?? payment?.created_at ?? payment?.createdAt;
@@ -391,10 +470,9 @@ export class OrderRepository implements OnModuleInit {
       const localId = suppliedLocalId ?? `generated:${index + 1}`;
       const deviceId = payment?.device_id ?? payment?.deviceId ?? orderData?.device_id ?? orderData?.deviceId
         ?? storeOrder.deviceId ?? null;
-      const calculatedRemaining = Math.max(0, orderTotal - normalizedAmounts
-        .slice(0, index + 1)
-        .reduce((sum: number, value: number) => sum + (Number.isFinite(value) ? value : 0), 0));
-      const remaining = Number(payment?.remaining ?? calculatedRemaining);
+      // `remaining` is the refundable balance of this payment row, not the
+      // outstanding total of the whole order.
+      const remaining = capturedAmount;
       const rawPayload = payment && typeof payment === 'object' ? payment : { value: payment };
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
@@ -419,11 +497,10 @@ export class OrderRepository implements OnModuleInit {
         method,
         payment?.payment_method_title ?? payment?.paymentMethodTitle ?? payment?.method_title ?? payment?.methodTitle ??
           sourcePayload?.payment_method_title ?? orderData?.paymentMethodTitle ?? storeOrder.paymentMethodTitle ?? null,
-        Number.isFinite(amount) ? amount : 0,
+        capturedAmount,
         orderTotal,
-        Number.isFinite(remaining) ? Math.max(0, remaining) : calculatedRemaining,
+        remaining,
         0,
-        Number.isFinite(amount) ? Math.max(0, amount) : 0,
         String(payment?.currency ?? orderData?.currency ?? '').trim().toUpperCase() || null,
         String(payment?.status ?? (orderData?.paymentStatus === PaymentStatus.PENDING ? 'pending' : 'completed'))
           .trim().toLowerCase(),
@@ -501,31 +578,6 @@ export class OrderRepository implements OnModuleInit {
       if (code !== '42P01' && code !== '42703') throw error;
     }
 
-    // Backward compatibility for stores that still use the dedicated tax endpoint.
-    if (!taxSetting) {
-      try {
-        const settings = await this.dataSource.query(
-          `SELECT id, "taxEnabled", "defaultTaxRate", "taxCalculation", "decimalPlaces"
-             FROM public.pos_currency_tax_settings
-            WHERE "storeId" = $1
-            LIMIT 1`,
-          [orderData.storeId],
-        );
-        taxSetting = settings[0] || null;
-        if (taxSetting?.id) {
-          taxClasses = await this.dataSource.query(
-            `SELECT name, rate FROM public.pos_tax_classes WHERE "currencyTaxId" = $1 ORDER BY "sortOrder" ASC`,
-            [taxSetting.id],
-          );
-        }
-      } catch (error: unknown) {
-        const code = error && typeof error === 'object'
-          ? (error as { driverError?: { code?: string } }).driverError?.code
-          : undefined;
-        if (code !== '42P01' && code !== '42703') throw error;
-      }
-    }
-
     const places = Number(taxSetting?.decimalPlaces ?? 2);
     const factor = 10 ** places;
     const taxClassKey = (value: unknown) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -577,6 +629,12 @@ export class OrderRepository implements OnModuleInit {
       if (line.tax_class === undefined) line.tax_class = String(product.tax_class || '');
 
       if (explicitTax) return;
+      if (!isTaxableSaleLine(line)) {
+        line.subtotal_tax = (0).toFixed(places);
+        line.total_tax = (0).toFixed(places);
+        line.taxes = [];
+        return;
+      }
       const taxable = String(product.tax_status || '').toLowerCase() === 'taxable';
       const taxClass = taxClassKey(product.tax_class);
       const rate = taxable ? (taxClass ? (classRates.get(taxClass) ?? defaultRate) : defaultRate) : 0;
@@ -630,6 +688,14 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
+    const clientTax = Number(sourcePayload.total_tax || 0);
+    applyMerchantDiscountToStoredTax(
+      lines,
+      Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
+      sourcePayload,
+      places,
+    );
+
     const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
     const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
     const feeTotal = (Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [])
@@ -638,7 +704,15 @@ export class OrderRepository implements OnModuleInit {
     const shippingTotal = Number(sourcePayload.shipping_total || 0);
     if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
     if (sourcePayload.total === undefined || normalizedCustomItem) {
-      sourcePayload.total = (lineTotal + feeTotal + taxTotal + shippingTotal).toFixed(places);
+      sourcePayload.total = (lineTotal + feeTotal + shippingTotal).toFixed(places);
+    } else {
+      const supplied = Number(sourcePayload.total);
+      if (Number.isFinite(supplied)) {
+        const includedTax = Number.isFinite(clientTax) ? clientTax : 0;
+        const exclusive = Math.round((supplied - includedTax) * factor) / factor;
+        const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+        sourcePayload.total = (netBeforeTax < 0 ? exclusive : Math.max(0, exclusive)).toFixed(places);
+      }
     }
 
     orderData.items = lines.map((line: any) => {
@@ -662,19 +736,25 @@ export class OrderRepository implements OnModuleInit {
   private async cashbackFeeForAmount(storeId: string, amount: number): Promise<number> {
     if (!this.dataSource || amount <= 0) return 0;
     try {
-      const rows = await this.dataSource.query(
-        `SELECT t.fee
-           FROM public.pos_cashback_settings s
-           JOIN public.pos_cashback_tiers t ON t."cashbackId" = s.id
-          WHERE s."storeId" = $1
-            AND s.enabled = true
-            AND ($2::numeric <= COALESCE(NULLIF(s."maxCashback", 0), $2::numeric))
-            AND $2::numeric BETWEEN t."fromAmount" AND t."toAmount"
-          ORDER BY t."sortOrder" ASC
+      const rows: Array<{ configuration_value?: Record<string, any> }> = await this.dataSource.query(
+        `SELECT configuration_value
+           FROM public.store_pos_configurations
+          WHERE store_id = $1::uuid
+            AND configuration_name = 'cashback_settings'
           LIMIT 1`,
-        [storeId, amount],
+        [storeId],
       );
-      return Number(rows[0]?.fee || 0);
+      const settings = rows[0]?.configuration_value;
+      if (!settings || settings.enabled === false) return 0;
+      const maxCashback = Number(settings.maxCashback ?? settings.max_cashback ?? 0);
+      if (maxCashback > 0 && amount > maxCashback) return 0;
+      const tiers = Array.isArray(settings.tiers) ? settings.tiers : [];
+      const match = tiers.find((tier: Record<string, any>) => {
+        const from = Number(tier.from ?? tier.fromAmount);
+        const to = Number(tier.to ?? tier.toAmount);
+        return Number.isFinite(from) && Number.isFinite(to) && amount >= from && amount <= to;
+      });
+      return Number(match?.fee || 0);
     } catch {
       return 0;
     }
@@ -855,6 +935,7 @@ export class OrderRepository implements OnModuleInit {
         fee_total numeric(12,2) NOT NULL DEFAULT 0,
         tax_total numeric(12,2) NOT NULL DEFAULT 0,
         total numeric(12,2) NOT NULL DEFAULT 0,
+        grand_total numeric(12,2) NOT NULL DEFAULT 0,
         line_items jsonb NOT NULL DEFAULT '[]'::jsonb,
         fee_lines jsonb NOT NULL DEFAULT '[]'::jsonb,
         coupon_lines jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -864,6 +945,29 @@ export class OrderRepository implements OnModuleInit {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       )
+    `);
+    await this.dataSource.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+            FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'store_orders'
+             AND column_name = 'final_total'
+        ) AND NOT EXISTS (
+          SELECT 1
+            FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'store_orders'
+             AND column_name = 'grand_total'
+        ) THEN
+          ALTER TABLE public.store_orders RENAME COLUMN final_total TO grand_total;
+        END IF;
+      END $$;
+
+      ALTER TABLE public.store_orders
+        ADD COLUMN IF NOT EXISTS grand_total numeric(12,2) NOT NULL DEFAULT 0;
     `);
     await this.ensureClientOrderUniqueIndex(
       'store_orders_store_client_order_idx',
@@ -981,15 +1085,25 @@ export class OrderRepository implements OnModuleInit {
       throw new BadRequestException(`Invalid order status '${String(toStatus || '')}'`);
     }
     if (this.isDbConnected && this.storeOrderRepo) {
-      const storeOrder = await this.storeOrderRepo.findOne({ where: { orderId } });
+      const graph = await this.getOrderByReference(orderId);
+      const storeOrder = graph?.storeOrder;
       if (!storeOrder) return null;
+      if (String(storeOrder.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+        && normalizedStatus !== OrderStatus.CANCELLED) {
+        throw new ConflictException('Cancelled orders cannot change status');
+      }
+      const internalOrderId = storeOrder.orderId;
       const fromStatus = storeOrder.orderStatus;
       storeOrder.orderStatus = normalizedStatus;
       storeOrder.status = normalizedStatus.toLowerCase().replace(/_/g, '-');
+      storeOrder.requestPayload = {
+        ...(storeOrder.requestPayload || {}),
+        status: storeOrder.status,
+      };
       storeOrder.updatedAt = new Date();
       storeOrder.statusHistory = [...(Array.isArray(storeOrder.statusHistory) ? storeOrder.statusHistory : []), {
         id: `HST-${randomUUID()}`,
-        orderId,
+        orderId: internalOrderId,
         fromStatus,
         toStatus: normalizedStatus,
         changedBy: changedBy || 'POS System',
@@ -1003,9 +1117,18 @@ export class OrderRepository implements OnModuleInit {
       await this.cacheOrder(order);
       return order;
     }
-    const order = this.inMemoryOrders.find(entry => entry.id === orderId) || null;
+    const graph = await this.getOrderByReference(orderId);
+    const order = graph?.order || null;
     if (!order) return null;
+    if (String(order.orderStatus).toUpperCase() === OrderStatus.CANCELLED
+      && normalizedStatus !== OrderStatus.CANCELLED) {
+      throw new ConflictException('Cancelled orders cannot change status');
+    }
     order.orderStatus = normalizedStatus;
+    order.requestPayload = {
+      ...(order.requestPayload || {}),
+      status: normalizedStatus.toLowerCase().replace(/_/g, '-'),
+    };
     await this.cacheOrder(order);
     return order;
   }
@@ -1023,10 +1146,25 @@ export class OrderRepository implements OnModuleInit {
     const storeOrder = input.storeOrder;
     storeOrder.orderStatus = input.order.orderStatus;
     storeOrder.subtotal = input.order.subtotal;
-    storeOrder.discountTotal = input.order.discountAmount;
     storeOrder.taxTotal = input.order.taxAmount;
     storeOrder.tipAmount = input.order.tipAmount;
     storeOrder.total = input.order.totalAmount;
+    const lineItems = Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems as any[] : [];
+    const couponLines = Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines as any[] : [];
+    const feeLines = Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines as any[] : [];
+    const taxLines = Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines as any[] : [];
+    const payload = (storeOrder.requestPayload || input.order.requestPayload || {}) as Record<string, unknown>;
+    storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+    storeOrder.grandTotal = listOrderTotal({
+      total: storeOrder.total,
+      tax: storeOrder.taxTotal,
+      taxLines,
+      couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+      lineItems,
+      feeLines,
+      shippingTotal: payload.shipping_total ?? payload.shippingTotal,
+      tip: storeOrder.tipAmount,
+    });
     storeOrder.paymentStatus = input.order.paymentStatus;
     storeOrder.updatedAt = new Date();
     if (input.history) {
@@ -1200,6 +1338,7 @@ export class OrderRepository implements OnModuleInit {
         WHERE order_id = ANY($1::uuid[])
           AND entry_type = 'refund' AND is_void = false AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY refunded_at ASC`,
       [ids],
     );
@@ -1332,7 +1471,7 @@ export class OrderRepository implements OnModuleInit {
       const storedSubtotal = Number(storeOrder.subtotal ?? 0);
       storeOrder.subtotal = (Number.isFinite(storedSubtotal) ? storedSubtotal : 0) + addedLineSubtotal;
       const storedOrderTotal = Number(storeOrder.total ?? 0);
-      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal + addedTaxTotal;
+      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal;
       storeOrder.taxLines = existingTaxLines;
     });
   }
@@ -1549,8 +1688,8 @@ export class OrderRepository implements OnModuleInit {
          payment.amount,
          payment.order_total,
          payment.remaining,
+         payment.remaining AS balance_amount,
          payment.refund_amount,
-         payment.balance_amount,
          payment.currency,
          payment.status,
          payment.entry_type,
@@ -1605,14 +1744,16 @@ export class OrderRepository implements OnModuleInit {
     if (!graph) return null;
 
     const payments = await this.dataSource.query(
-      `SELECT id::text AS id, payment_method, amount, refund_amount, balance_amount,
+      `SELECT id::text AS id, payment_method, amount, refund_amount, remaining,
               status, entry_type, is_void, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
           AND merchant_id = $2::uuid
           AND store_id = $3::uuid
+          AND is_void = false
           AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY payment_at ASC, created_at ASC`,
       [graph.order.id, merchantId, storeId],
     );
@@ -1636,7 +1777,11 @@ export class OrderRepository implements OnModuleInit {
 
   private async loadRefundState(manager: EntityManager, orderId: string) {
     const payments = await manager.query(
-      `SELECT id::text AS id, payment_method, amount, refund_amount, metadata
+      `SELECT id::text AS id, order_id, merchant_id, store_id, local_id, client_order_id,
+              device_id, shift_id, user_id, payment_type, payment_method,
+              payment_method_title, amount, order_total, remaining, refund_amount,
+              currency, status, entry_type, provider, provider_transaction_id,
+              payment_at, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid AND entry_type = 'payment'
           AND is_void = false AND deleted_at IS NULL
@@ -1651,6 +1796,7 @@ export class OrderRepository implements OnModuleInit {
         WHERE order_id = $1::uuid AND entry_type = 'refund'
           AND is_void = false AND deleted_at IS NULL
           AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
         ORDER BY created_at ASC`,
       [orderId],
     );
@@ -1674,6 +1820,7 @@ export class OrderRepository implements OnModuleInit {
     paymentRows: any[],
     refundAmount: number,
     event: Record<string, unknown>,
+    timeZone = 'UTC',
   ): Promise<string> {
     const requestedCents = Math.round(refundAmount * 100);
     const eligible = paymentRows.map((payment) => ({
@@ -1699,15 +1846,17 @@ export class OrderRepository implements OnModuleInit {
       }
     }
     let paymentMethod = '';
-    for (const { payment, allocationCents } of allocations) {
+    for (const { payment, allocationCents, capacityCents } of allocations) {
       if (allocationCents <= 0) continue;
       const allocation = allocationCents / 100;
       if (!paymentMethod) paymentMethod = String(payment.payment_method || 'Cash');
       const historyEvent = { ...event, amount: allocation, payment_id: payment.id };
+      const dailyRefundStatus = allocationCents >= capacityCents
+        ? 'refunded'
+        : 'partially-refunded';
       await manager.query(
         `UPDATE public.store_pos_payments
             SET refund_amount = LEAST(amount, COALESCE(refund_amount, 0) + $2::numeric),
-                balance_amount = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
                 remaining = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
                 status = CASE
                   WHEN COALESCE(refund_amount, 0) + $2::numeric >= amount THEN 'refunded'
@@ -1723,8 +1872,133 @@ export class OrderRepository implements OnModuleInit {
           WHERE id = $1::uuid`,
         [payment.id, allocation, JSON.stringify([historyEvent])],
       );
+      if (payment.order_id && payment.merchant_id && payment.store_id) {
+        const refundDate = this.localDateKey(new Date(historyEvent.created_at || Date.now()), timeZone);
+        const updatedDailyRows = await manager.query(
+          `UPDATE public.store_pos_payments
+              SET amount = amount + $2::numeric,
+                  refund_amount = refund_amount + $2::numeric,
+                  status = $6::varchar,
+                  metadata = jsonb_set(
+                    COALESCE(metadata, '{}'::jsonb),
+                    '{refund_history}',
+                    COALESCE(metadata->'refund_history', '[]'::jsonb) || $3::jsonb,
+                    true
+                  ),
+                  updated_at = now()
+            WHERE order_id = $4::uuid
+              AND entry_type = 'refund'
+              AND is_void = false
+              AND deleted_at IS NULL
+              AND metadata->>'daily_refund_tracking' = 'true'
+              AND metadata->>'source_payment_id' = $1::text
+              AND (
+                metadata->>'refund_date' = $5::text
+                OR (metadata->>'refund_date' IS NULL AND local_id LIKE '%:refund:' || $5::text)
+              )
+          RETURNING id`,
+          [payment.id, allocation, JSON.stringify([historyEvent]), payment.order_id, refundDate, dailyRefundStatus],
+        );
+        // TypeORM's Postgres query runner can return DML results as
+        // [returnedRows, affectedCount], whereas test and alternative drivers
+        // return the rows array directly. Only returned rows indicate that a
+        // daily refund record was actually updated.
+        const returnedDailyRows = Array.isArray(updatedDailyRows?.[0])
+          ? updatedDailyRows[0]
+          : updatedDailyRows;
+        const createDailyRefundRow = returnedDailyRows.length === 0
+          && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(historyEvent.created_at || Date.now()));
+        if (!createDailyRefundRow) continue;
+        await manager.query(
+          `INSERT INTO public.store_pos_payments
+             (order_id, merchant_id, store_id, local_id, client_order_id, device_id,
+              shift_id, user_id, payment_type, payment_method, payment_method_title,
+              amount, order_total, remaining, refund_amount, currency, status,
+              entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
+           VALUES ($1, $2, $3, LEFT(COALESCE($4, 'generated:' || $5::text), 120) || ':refund:' || $6,
+                   $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, $15, $16,
+                   $20, 'refund', false, $17, $18, now(), $19::jsonb)`,
+          [payment.order_id, payment.merchant_id, payment.store_id, payment.local_id,
+            payment.id, refundDate, payment.client_order_id, payment.device_id,
+            payment.shift_id, payment.user_id, payment.payment_type, payment.payment_method,
+            payment.payment_method_title, payment.order_total, allocation, payment.currency,
+            payment.provider, payment.provider_transaction_id, JSON.stringify({
+              daily_refund_tracking: true,
+              refund_date: refundDate,
+              source_payment_id: payment.id,
+              refund_history: [historyEvent],
+            }), dailyRefundStatus],
+        );
+      }
     }
     return paymentMethod;
+  }
+
+  private remainingPaymentAmount(paymentRows: any[]): number {
+    const cents = paymentRows.reduce((sum, payment) => sum + Math.max(0, Math.round(
+      (Number(payment.amount || 0) - Number(payment.refund_amount || 0)) * 100,
+    )), 0);
+    return cents / 100;
+  }
+
+  private refundAuditBreakdown(
+    appliedRefundTotal: number,
+    itemRefundTotal: number,
+    outstandingTax: number,
+  ): { items_refund_total: number; tax_refund_total: number; adjustment_refund_total: number } {
+    const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const additional = Math.max(0, round(appliedRefundTotal - itemRefundTotal));
+    const taxRefund = Math.min(additional, Math.max(0, round(outstandingTax)));
+    return {
+      items_refund_total: round(itemRefundTotal),
+      tax_refund_total: round(taxRefund),
+      adjustment_refund_total: round(Math.max(0, additional - taxRefund)),
+    };
+  }
+
+  private partialRefundLineAmount(refundableAmount: number): number {
+    return Math.round(Math.max(0, refundableAmount) * 100) / 100;
+  }
+
+  private shouldCreateDailyRefundRow(payment: any, timeZone: string, refundAt = new Date()): boolean {
+    const history = Array.isArray(payment?.metadata?.refund_history)
+      ? payment.metadata.refund_history : [];
+    const latest = history.map((entry: any) => new Date(entry?.created_at || 0))
+      .filter((date: Date) => !Number.isNaN(date.getTime()))
+      .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0];
+    return Boolean(latest && this.localDateKey(latest, timeZone) !== this.localDateKey(refundAt, timeZone));
+  }
+
+  private localDateKey(value: Date, timeZone: string): string {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(value);
+      const part = (type: string) => parts.find((entry) => entry.type === type)?.value || '00';
+      return `${part('year')}-${part('month')}-${part('day')}`;
+    } catch {
+      return value.toISOString().slice(0, 10);
+    }
+  }
+
+  private areAllLineItemsRefunded(
+    lines: any[],
+    previousItems: any[],
+    currentItems: Array<Record<string, unknown>>,
+  ): boolean {
+    const refundableLines = lines.filter((line) => Number(line?.quantity || 0) > 0
+      && !line?.is_refund_item
+      && Number(line?.total ?? line?.total_price ?? 0) >= 0);
+    if (!refundableLines.length) return false;
+    const refundedItems = [...previousItems, ...currentItems];
+    return refundableLines.every((line) => {
+      const lineId = String(line?.id ?? '');
+      if (!lineId) return false;
+      const refundedQuantity = refundedItems
+        .filter((item: any) => String(item?.order_item_id ?? '') === lineId)
+        .reduce((sum: number, item: any) => sum + Number(item?.quantity ?? item?.qty ?? 0), 0);
+      return refundedQuantity >= Number(line.quantity);
+    });
   }
 
   async createFullOrderRefund(input: {
@@ -1742,8 +2016,8 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.line_items
+          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -1762,9 +2036,7 @@ export class OrderRepository implements OnModuleInit {
         if (!order) return { kind: 'missing' as const };
 
         const refundState = await this.loadRefundState(manager, order.id);
-        const orderTotal = Number(order.total_amount || 0);
-        const alreadyRefunded = refundState.refunded;
-        const remaining = Math.max(0, orderTotal - alreadyRefunded);
+        const remaining = this.remainingPaymentAmount(refundState.payments);
         if (remaining <= 0) return { kind: 'already_refunded' as const };
         // This is the full-refund endpoint: refund the entire outstanding
         // balance. The submitted amount is still validated by the service but
@@ -1799,7 +2071,7 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             items_reusable: input.restock ? 'yes' : 'no',
           },
-        }) || String(order.payment_method || 'Cash');
+        }, String(order.timezone || 'UTC')) || String(order.payment_method || 'Cash');
         await manager.query(
           `UPDATE public.store_orders
               SET order_status = 'REFUNDED',
@@ -1821,8 +2093,7 @@ export class OrderRepository implements OnModuleInit {
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
-           VALUES ($1, $2::uuid, $3, 'REFUNDED', $4, $5, now())
-           ON CONFLICT (id) DO NOTHING`,
+           VALUES ($1, $2::uuid, $3, 'REFUNDED', $4, $5, now())`,
           [`HST-${refundId}`, order.id, String(order.order_status || 'COMPLETED'), input.performedBy, input.reason],
         );
 
@@ -1852,8 +2123,7 @@ export class OrderRepository implements OnModuleInit {
                   `INSERT INTO public.inventory_adjustments
                      (id, "storeId", "productId", "adjustmentType", "quantityChanged",
                       "newQuantityAvailable", "performedBy", reason, "createdAt")
-                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())
-                   ON CONFLICT (id) DO NOTHING`,
+                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())`,
                   [`ADJ-REFUND-${refundId}-${index + 1}`, input.storeId, String(item.product_id),
                     Number(item.quantity || 0), available, input.performedBy,
                     `Full refund ${refundId}: ${input.reason}`],
@@ -1897,7 +2167,7 @@ export class OrderRepository implements OnModuleInit {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
           `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.line_items
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -1931,16 +2201,6 @@ export class OrderRepository implements OnModuleInit {
         // Prefer the JSON snapshot for order totals because it contains the
         // original POS representation. Fall back to canonical rows for older
         // production orders whose snapshot is empty.
-        const allLines = storedLines.length ? storedLines : canonicalLines;
-        const positiveTotal = allLines.reduce((sum: number, line: any) => {
-          const value = Number(line.total ?? line.total_price ?? 0);
-          return value > 0 ? sum + value : sum;
-        }, 0);
-        const payoutTotal = allLines.reduce((sum: number, line: any) => {
-          const value = Number(line.total ?? line.total_price ?? 0);
-          return value < 0 ? sum + Math.abs(value) : sum;
-        }, 0);
-        const payoutRatio = positiveTotal > 0 && payoutTotal > 0 ? payoutTotal / positiveTotal : 0;
         const previousItems = refundState.events.flatMap((event: any) =>
           Array.isArray(event?.line_items) ? event.line_items : [],
         );
@@ -1962,15 +2222,17 @@ export class OrderRepository implements OnModuleInit {
           if (requested.quantity > remainingQuantity) {
             return { kind: 'qty_error' as const, remainingQuantity };
           }
-          const adjustedAmount = Math.max(0, requested.refundableAmount * (1 - payoutRatio));
-          refundTotal += adjustedAmount;
+          // Payout lines are separate cash movements that remain on the order.
+          // They must not be prorated across selected merchandise refunds.
+          const lineRefundAmount = this.partialRefundLineAmount(requested.refundableAmount);
+          refundTotal += lineRefundAmount;
           refundItems.push({
             order_item_id: requested.orderItemId,
             product_id: line.variation_id || line.product_id || line.productId || null,
             name: line.name || line.product_name || '',
             quantity: requested.quantity,
             refundable_amount: requested.refundableAmount,
-            refund_total: Math.round(adjustedAmount * 100) / 100,
+            refund_total: Math.round(lineRefundAmount * 100) / 100,
           });
         }
         refundTotal = Math.round(refundTotal * 100) / 100;
@@ -1978,8 +2240,26 @@ export class OrderRepository implements OnModuleInit {
         if (refundTotal > remainingOrderAmount) return { kind: 'exceeds_remaining' as const };
 
         const refundId = randomUUID();
-        const remainingAfter = Math.max(0, remainingOrderAmount - refundTotal);
-        const fullyRefunded = remainingAfter <= 0.005;
+        // Canonical line IDs are what completed-orders exposes and what refund
+        // requests send back. Older POS JSON snapshots can omit IDs entirely,
+        // so use canonical lines for the final-item completion check.
+        const refundCompletionLines = canonicalLines.length ? canonicalLines : storedLines;
+        const fullyRefunded = remainingOrderAmount - refundTotal <= 0.005
+          || this.areAllLineItemsRefunded(refundCompletionLines, previousItems, refundItems);
+        // The final item refund also closes out tax, tip, rounding, or other
+        // captured residuals so a fully refunded payment cannot retain balance.
+        const appliedRefundTotal = fullyRefunded
+          ? this.remainingPaymentAmount(refundState.payments)
+          : refundTotal;
+        const previouslyRefundedTax = refundState.events.reduce(
+          (sum: number, refund: any) => sum + Number(refund?.tax_refund_total || 0), 0,
+        );
+        const refundBreakdown = this.refundAuditBreakdown(
+          appliedRefundTotal,
+          refundTotal,
+          Math.max(0, Number(order.tax_total || 0) - previouslyRefundedTax),
+        );
+        const remainingAfter = fullyRefunded ? 0 : Math.max(0, remainingOrderAmount - refundTotal);
         const refundOrderStatus = fullyRefunded ? 'REFUNDED' : 'PARTIAL_REFUND';
         const refundStoreStatus = fullyRefunded ? 'refunded' : 'partial-refund';
         const metadata = {
@@ -1988,10 +2268,11 @@ export class OrderRepository implements OnModuleInit {
           performed_by: input.performedBy,
           refund_type: 'partial',
           line_items: refundItems,
+          ...refundBreakdown,
         };
-        await this.applyRefundToPayments(manager, refundState.payments, refundTotal, {
+        await this.applyRefundToPayments(manager, refundState.payments, appliedRefundTotal, {
           refund_id: refundId,
-          order_refund_amount: refundTotal,
+          order_refund_amount: appliedRefundTotal,
           created_at: new Date().toISOString(),
           ...metadata,
           raw_payload: {
@@ -2000,7 +2281,7 @@ export class OrderRepository implements OnModuleInit {
             items_reusable: input.restock ? 'yes' : 'no',
             items: input.items,
           },
-        });
+        }, String(order.timezone || 'UTC'));
         await manager.query(
           `UPDATE public.store_orders
               SET order_status = $4::varchar,
@@ -2026,8 +2307,7 @@ export class OrderRepository implements OnModuleInit {
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
-           VALUES ($1, $2::uuid, $3, $4, $5, $6, now())
-           ON CONFLICT (id) DO NOTHING`,
+           VALUES ($1, $2::uuid, $3, $4, $5, $6, now())`,
           [`HST-${refundId}`, order.id, String(order.order_status || 'COMPLETED'),
             refundOrderStatus, input.performedBy, input.reason],
         );
@@ -2059,8 +2339,7 @@ export class OrderRepository implements OnModuleInit {
                   `INSERT INTO public.inventory_adjustments
                      (id, "storeId", "productId", "adjustmentType", "quantityChanged",
                       "newQuantityAvailable", "performedBy", reason, "createdAt")
-                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())
-                   ON CONFLICT (id) DO NOTHING`,
+                   VALUES ($1, $2, $3, 'REFUND_RESTOCK', $4, $5, $6, $7, now())`,
                   [`ADJ-REFUND-${refundId}-${index + 1}`, input.storeId, String(item.product_id),
                     Number(item.quantity || 0), available, input.performedBy,
                     `Partial refund ${refundId}: ${input.reason}`],
@@ -2071,7 +2350,7 @@ export class OrderRepository implements OnModuleInit {
           }
         }
         return { kind: 'created' as const, orderId: order.id,
-          orderNumber: String(order.order_number || ''), refundedAmount: refundTotal, refundId,
+          orderNumber: String(order.order_number || ''), refundedAmount: appliedRefundTotal, refundId,
           orderStatus: refundStoreStatus };
       });
     } catch (error: unknown) {
@@ -2102,6 +2381,30 @@ export class OrderRepository implements OnModuleInit {
     const items = this.inMemoryItems.filter(item => item.orderId === orderId);
     const history = this.inMemoryHistory.filter(entry => entry.orderId === orderId);
     return { order, items, history, storeOrder: null };
+  }
+
+  async getOrderByReference(reference: string): Promise<{ order: OrderEntity; items: OrderItemEntity[]; history: OrderStatusHistoryEntity[]; storeOrder: StoreOrderEntity | null } | null> {
+    const key = String(reference || '').trim();
+    if (!key) return null;
+    if (this.isUuid(key)) return this.getOrderById(key);
+
+    if (this.isDbConnected && this.storeOrderRepo) {
+      const orderNumbers = key.startsWith('#') ? [key, key.slice(1)] : [key, `#${key}`];
+      const storeOrder = await this.storeOrderRepo.findOne({
+        where: [
+          { clientOrderId: key },
+          ...orderNumbers.map(orderNumber => ({ orderNumber })),
+        ],
+        order: { createdAt: 'DESC' },
+      });
+      return storeOrder ? this.getOrderById(storeOrder.orderId) : null;
+    }
+
+    const normalizedNumber = key.replace(/^#/, '');
+    const order = this.inMemoryOrders.find(entry =>
+      entry.clientOrderId === key || String(entry.orderNumber || '').replace(/^#/, '') === normalizedNumber,
+    );
+    return order ? this.getOrderById(order.id) : null;
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {

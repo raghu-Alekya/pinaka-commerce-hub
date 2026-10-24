@@ -13,6 +13,15 @@ import type { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto
 import { cancelFromDto, couponFromDto, discountFromDto, itemsFromDto } from '../order-update.normalize';
 import { OrderUpdatePresenter } from '../order-update.presenter';
 import { OrderStatus } from '../../../entities/order.entity';
+import {
+  calculateDiscountTotal,
+  listOrderTotal,
+  sumCouponDiscounts,
+  type PosCouponLine,
+  type PosFeeLine,
+  type PosLineItem,
+  type PosTaxLine,
+} from '../../../calculations/store-order.calculations';
 import type { OrderGraph, OrderMutationDraft } from '../order-update.types';
 import { OrderCancellationService } from './order-cancellation.service';
 import { OrderCouponCatalog } from './order-coupon.catalog';
@@ -43,8 +52,18 @@ export class OrderUpdateService {
     let graph = await this.load(orderId);
     if (hasCoupons) {
       const requested = dto.coupon_lines || [];
-      const coupons = await this.couponsForOrder(graph, requested);
-      graph = await this.persist(graph, this.coupons.sync(graph, coupons));
+      const existing = Array.isArray(graph.storeOrder?.couponLines)
+        ? graph.storeOrder.couponLines
+        : [];
+      // Some POS clients send their default empty coupon array again with the
+      // final status transition. That is not an explicit coupon-removal action
+      // and must not erase a coupon already persisted for the order. A
+      // coupon-only update with [] still performs the intentional removal.
+      const staleEmptyCouponsOnStatus = hasStatus && requested.length === 0 && existing.length > 0;
+      if (!staleEmptyCouponsOnStatus) {
+        const coupons = await this.couponsForOrder(graph, requested);
+        graph = await this.persist(graph, this.coupons.sync(graph, coupons));
+      }
     }
     if (hasStatus) {
       graph = await this.persist(graph, this.statusChange(graph, String(dto.status)));
@@ -57,6 +76,9 @@ export class OrderUpdateService {
     if (status === 'cancelled' || status === 'canceled') {
       return this.cancellation.cancel(graph, cancelFromDto({}));
     }
+    // Cancellation is terminal. A delayed coupon/navigation request may still
+    // carry the order's former `processing` status and must not reopen it.
+    this.cancellation.assertStatusChangeAllowed(graph);
     const allowed = new Set(['pending', 'processing', 'on-hold', 'completed', 'refunded', 'failed']);
     if (!allowed.has(status)) {
       throw new BadRequestException('status must be pending, processing, on-hold, completed, cancelled, refunded, or failed');
@@ -222,7 +244,7 @@ export class OrderUpdateService {
   }
 
   private async load(orderId: string): Promise<OrderGraph> {
-    const graph = await this.orders.getOrderById(orderId);
+    const graph = await this.orders.getOrderByReference(orderId);
     if (!graph) throw new NotFoundException(`Order '${orderId}' not found`);
     return graph;
   }
@@ -249,12 +271,42 @@ export class OrderUpdateService {
       if (draft.taxLines) storeOrder.taxLines = draft.taxLines;
       if (draft.totals) {
         storeOrder.subtotal = moneyAmount(draft.totals.subtotal);
-        storeOrder.discountTotal = moneyAmount(draft.totals.discountTotal);
         storeOrder.feeTotal = moneyAmount(draft.totals.feeTotal);
         storeOrder.taxTotal = moneyAmount(draft.totals.taxTotal);
         storeOrder.total = moneyAmount(draft.totals.total + tipAmount);
       }
+      const lineItems = (Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems : []) as PosLineItem[];
+      const couponLines = (Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines : []) as PosCouponLine[];
+      const feeLines = (Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines : []) as PosFeeLine[];
+      const taxLines = (Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines : []) as PosTaxLine[];
+      storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+      const payloadForTotals = (storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>;
+      storeOrder.grandTotal = listOrderTotal({
+        total: storeOrder.total,
+        tax: storeOrder.taxTotal,
+        taxLines,
+        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+        lineItems,
+        feeLines,
+        shippingTotal: payloadForTotals.shipping_total ?? payloadForTotals.shippingTotal,
+        tip: storeOrder.tipAmount,
+      });
       if (draft.storeStatus) storeOrder.status = draft.storeStatus;
+      const requestPayload = { ...((storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>) };
+      if (draft.lineItems) requestPayload.line_items = storeOrder.lineItems;
+      if (draft.couponLines) requestPayload.coupon_lines = storeOrder.couponLines;
+      if (draft.feeLines) requestPayload.fee_lines = storeOrder.feeLines;
+      if (draft.taxLines) requestPayload.tax_lines = storeOrder.taxLines;
+      if (draft.totals) {
+        requestPayload.subtotal = moneyAmount(storeOrder.subtotal).toFixed(2);
+        requestPayload.discount_total = moneyAmount(storeOrder.discountTotal).toFixed(2);
+        requestPayload.total_tax = moneyAmount(storeOrder.taxTotal).toFixed(2);
+        requestPayload.total = moneyAmount(storeOrder.total).toFixed(2);
+        requestPayload.grand_total = moneyAmount(storeOrder.grandTotal).toFixed(2);
+      }
+      if (draft.storeStatus) requestPayload.status = storeOrder.status;
+      storeOrder.requestPayload = requestPayload;
+      order.requestPayload = requestPayload;
       storeOrder.updatedAt = new Date();
     }
 

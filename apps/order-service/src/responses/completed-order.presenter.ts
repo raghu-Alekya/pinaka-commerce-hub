@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { isMerchandiseLine, listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
 import type { StoreOrderEntity } from '../entities/store-order.entity';
@@ -20,6 +21,7 @@ type CompletedOrderRow = {
   items: OrderItemEntity[];
   products: Map<string, unknown>;
   refunds?: Array<{ amount: unknown; metadata: Record<string, any> | null }>;
+  effectiveStatus?: string;
 };
 
 @Injectable()
@@ -47,7 +49,7 @@ export class CompletedOrderPresenter {
       author: request.author?.trim() || undefined,
       after,
       before,
-      orderBy: 'modified' as const,
+      orderBy: 'created' as const,
     };
   }
 
@@ -60,7 +62,7 @@ export class CompletedOrderPresenter {
     };
   }
 
-  private order({ order, storeOrder, items, products, refunds = [] }: CompletedOrderRow) {
+  private order({ order, storeOrder, items, products, refunds = [], effectiveStatus }: CompletedOrderRow) {
     const request = (order.requestPayload || {}) as Record<string, any>;
     const timezone = storeOrder?.timezone || 'UTC';
     const currency = String(storeOrder?.currency || request.currency || 'USD').toUpperCase();
@@ -69,18 +71,49 @@ export class CompletedOrderPresenter {
       : (Array.isArray(request.payments) ? request.payments : []);
     const id = this.orderId(order);
     const clientOrderId = this.clientOrderId(order, storeOrder) ?? id;
-    const total = this.money(storeOrder?.total ?? order.totalAmount);
-    const itemsTax = this.decimal(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount);
-    const orderDiscount = Number(this.metaValue(order, '_order_discount') || 0);
-    const amount = this.money(Math.max(0, Number(total) - Number(itemsTax) - orderDiscount));
+    const originalItemsTax = this.decimal(listOrderTax({
+      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
+    }));
+    const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const originalGrossTotal = Math.max(0, listOrderTotal({
+      total: storeOrder?.total ?? order.totalAmount,
+      tax: originalItemsTax,
+      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
+      couponDiscount: coupons.length
+        ? coupons.reduce((sum, line: any) => sum + Number(line?.discount || 0), 0)
+        : (storeOrder?.discountTotal ?? order.discountAmount),
+      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
+      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
+      shippingTotal: request.shipping_total ?? request.shippingTotal,
+      tip: storeOrder?.tipAmount ?? order.tipAmount,
+    }));
+    const originalTotalExcludingTax = Math.max(0, originalGrossTotal - Number(originalItemsTax));
     const createdVia = String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api');
     const lineItems = this.lineItems(storeOrder?.lineItems, items, order.storeId, products, refunds);
+    const itemsTax = effectiveStatus === 'partial-refund'
+      ? lineItems.reduce((sum, line) => sum + Number(line.total_tax || 0), 0).toFixed(2)
+      : originalItemsTax;
+    const originalLineTotal = (Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : [])
+      .filter((line: any) => !line?.is_refund_item && isMerchandiseLine(line))
+      .reduce((sum: number, line: any) => sum + Number(line?.total || 0), 0);
+    const remainingLineTotal = lineItems
+      .filter((line) => isMerchandiseLine(line))
+      .reduce((sum, line) => sum + Number(line.total || 0), 0);
+    const remainingTotal = effectiveStatus === 'partial-refund'
+      ? Math.max(0, originalTotalExcludingTax - originalLineTotal + remainingLineTotal + Number(itemsTax))
+      : originalGrossTotal;
+    const total = this.money(remainingTotal);
+    const remainingTax = Number(itemsTax);
+    const amount = this.money(Math.max(0, remainingTotal - remainingTax));
     return {
       id,
       order_id: clientOrderId,
-      status: 'completed',
-      date: this.localDate(order.createdAt, timezone),
-      date_modified: this.localDate(order.updatedAt, timezone),
+      status: effectiveStatus === 'partial-refund' ? 'Partially Refunded' : 'completed',
+      date: this.displayDate(order.createdAt, timezone),
+      date_modified: this.displayDate(order.updatedAt, timezone),
       currency,
       amount,
       items_tax: itemsTax,
@@ -141,6 +174,9 @@ export class CompletedOrderPresenter {
       const originalQuantity = Number(line?.quantity ?? fallback?.quantity ?? 0);
       const remainingQuantity = Math.max(0, originalQuantity - refunded.quantity);
       if (remainingQuantity <= 0) return [];
+      const remainingRatio = originalQuantity > 0 ? remainingQuantity / originalQuantity : 0;
+      const subtotalTax = Number(line?.subtotal_tax ?? 0) * remainingRatio;
+      const totalTax = Number(line?.total_tax ?? 0) * remainingRatio;
       const productKey = String(line?.product_id ?? line?.productId ?? fallback?.productId ?? '');
       const product = (line?.product_data ?? products.get(`${storeId}:${productKey}`) ?? {}) as Record<string, any>;
       const discountType = String(this.lineMeta(line, '_pos_discount_type') || '');
@@ -154,12 +190,12 @@ export class CompletedOrderPresenter {
         quantity: remainingQuantity,
         tax_class: String(line?.tax_class || ''),
         subtotal: String(Math.max(0, originalSubtotal - refunded.amount)),
-        subtotal_tax: String(line?.subtotal_tax ?? '0'),
+        subtotal_tax: subtotalTax.toFixed(2),
         total: String(Math.max(0, originalTotal - refunded.amount)),
         is_items_has_discount: discountType ? 'Yes' : 'No',
         item_discount_type: this.discountLabel(discountType),
-        total_tax: String(line?.total_tax ?? '0'),
-        taxes: line?.taxes ?? { total: {}, subtotal: {} },
+        total_tax: totalTax.toFixed(2),
+        taxes: this.remainingTaxes(line?.taxes, remainingRatio),
         image: line?.image ?? { id: product.image?.id ?? product.image_id ?? null, src: product.image?.src ?? product.image_url ?? '' },
         meta_data: Array.isArray(line?.meta_data) ? line.meta_data : (fallback?.modifiers || []),
       }];
@@ -202,6 +238,15 @@ export class CompletedOrderPresenter {
     return (Array.isArray(line?.meta_data) ? line.meta_data : []).find((entry: any) => entry?.key === key)?.value;
   }
 
+  private remainingTaxes(taxes: unknown, ratio: number): unknown {
+    if (!Array.isArray(taxes)) return taxes ?? { total: {}, subtotal: {} };
+    return taxes.map((tax: any) => ({
+      ...tax,
+      total: (Number(tax?.total || 0) * ratio).toFixed(2),
+      subtotal: (Number(tax?.subtotal || 0) * ratio).toFixed(2),
+    }));
+  }
+
   private discountLabel(type: string): string {
     return ({ auto: 'Auto Discount', multipack: 'Multipack Discount', mixmatch: 'Combo Discount' } as Record<string, string>)[type] || '';
   }
@@ -220,12 +265,12 @@ export class CompletedOrderPresenter {
     return ({ EUR: '€', GBP: '£', INR: '₹', USD: '$' } as Record<string, string>)[currency] || '$';
   }
 
-  private localDate(value: Date, timeZone: string): string {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-    }).formatToParts(new Date(value));
-    const part = (type: string) => parts.find((entry) => entry.type === type)?.value || '00';
-    return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+  private displayDate(value: Date, timeZone: string): string {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    }).format(new Date(value));
   }
 }

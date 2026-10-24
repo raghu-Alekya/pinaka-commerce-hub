@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { nationalPhone } from './countries';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
 
@@ -173,6 +174,8 @@ export class MerchantCrudService {
     if (input.merchantName !== undefined && input.ownerName === undefined) normalized.ownerName=input.merchantName;
     if (input.addressLine1 !== undefined || input.addressLine2 !== undefined) normalized.businessAddress=[input.addressLine1,input.addressLine2].filter(Boolean).join(', ');
     if (input.roleIds !== undefined) normalized.roleIds=[...new Set(input.roleIds)];
+    if (normalized.phone !== undefined) normalized.phone = nationalPhone(normalized.phone, normalized.country);
+    if (normalized.alternatePhone !== undefined) normalized.alternatePhone = nationalPhone(normalized.alternatePhone, normalized.country);
     return normalized;
   }
 
@@ -193,7 +196,7 @@ export class MerchantCrudService {
   private async saveMerchantRecord(manager: EntityManager, root: string, current: Input, changes: Input, version: boolean) {
     if (version) {
       await manager.query(`UPDATE public.merchants SET status='INACTIVE',updated_at=clock_timestamp() WHERE merchant_code=$1`,[current.merchant_code ?? current.merchantCode]);
-      const next = {...current,...changes,status:'ACTIVE',merchant_code:`MRC-${randomUUID()}`};
+      const next: Input = {...current,...changes,status:'ACTIVE',merchant_code:`MRC-${randomUUID()}`};
       delete next.merchantCode;
       const keys=Object.keys(next).filter(key=>!['id','createdAt','updatedAt'].includes(key));
       await manager.query(`INSERT INTO public.merchants (${keys.map(quote).join(',')}) VALUES (${keys.map((_,i)=>`$${i+1}`).join(',')})`,this.values(next,keys));
@@ -324,6 +327,11 @@ export class MerchantCrudService {
       }
       await this.extras(manager,root,input);
       await this.saveMerchantRecord(manager,root,merchant,changes,planChanged);
+      if (changes.status === 'INACTIVE') {
+        await manager.query(`UPDATE public.stores SET status='INACTIVE',updated_at=clock_timestamp()
+          WHERE merchant_id IN (SELECT id FROM public.merchants WHERE merchant_id=$1)
+            AND COALESCE(is_deleted,false)=false`, [root]);
+      }
     });
     return this.getMerchant(code);
   }

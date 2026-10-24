@@ -3,6 +3,21 @@ import { DataSource } from 'typeorm';
 export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {
     await manager.query('SELECT pg_advisory_xact_lock(724621, 55)');
+    // Drop orphaned legacy camelCase columns and the old device_activation_code
+    // that was superseded by device_active_code. The active entity already uses
+    // the snake_case equivalents, so these are safe no-ops on clean databases.
+    await manager.query(`
+      ALTER TABLE public.devices
+        DROP COLUMN IF EXISTS "deviceCode",
+        DROP COLUMN IF EXISTS "deviceName",
+        DROP COLUMN IF EXISTS "deviceType",
+        DROP COLUMN IF EXISTS "merchantId",
+        DROP COLUMN IF EXISTS "merchantName",
+        DROP COLUMN IF EXISTS "serialNumber",
+        DROP COLUMN IF EXISTS "createdAt",
+        DROP COLUMN IF EXISTS "updatedAt",
+        DROP COLUMN IF EXISTS device_activation_code
+    `);
     // Keep the activation field available before any device list query runs.
     await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_active_code varchar(100)');
     await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS authorization_code varchar(100)');
@@ -77,7 +92,7 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
     await manager.query(`
       INSERT INTO public.merchant_devices (device_id, merchant_id, created_by, updated_by)
       SELECT d.id,
-             COALESCE(NULLIF(to_jsonb(d)->>'merchant_id', ''), NULLIF(to_jsonb(d)->>'merchantId', '')),
+             NULLIF(COALESCE(to_jsonb(d)->>'merchant_id', to_jsonb(d)->>'merchantId'), '')::uuid,
              NULLIF(COALESCE(to_jsonb(d)->>'created_by', to_jsonb(d)->>'createdBy'), ''),
              NULLIF(COALESCE(to_jsonb(d)->>'updated_by', to_jsonb(d)->>'updatedBy'), '')
       FROM public.devices d

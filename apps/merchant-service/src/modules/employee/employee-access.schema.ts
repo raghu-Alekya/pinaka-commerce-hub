@@ -102,10 +102,10 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
       BEGIN
         IF to_regclass('public.users') IS NOT NULL THEN
           ALTER TABLE public.users ADD COLUMN IF NOT EXISTS username varchar(100);
-          ALTER TABLE public.users ADD COLUMN IF NOT EXISTS "merchantId" varchar(100);
-          ALTER TABLE public.users ADD COLUMN IF NOT EXISTS "employeeId" uuid;
+          ALTER TABLE public.users ADD COLUMN IF NOT EXISTS merchant_id varchar(100);
+          ALTER TABLE public.users ADD COLUMN IF NOT EXISTS employee_id uuid;
           CREATE UNIQUE INDEX IF NOT EXISTS pch_users_username ON public.users(lower(username)) WHERE username IS NOT NULL;
-          CREATE UNIQUE INDEX IF NOT EXISTS pch_users_employee ON public.users("employeeId") WHERE "employeeId" IS NOT NULL;
+          CREATE UNIQUE INDEX IF NOT EXISTS pch_users_employee ON public.users(employee_id) WHERE employee_id IS NOT NULL;
           IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employees_user_fk') THEN
             ALTER TABLE public.employees ADD CONSTRAINT employees_user_fk FOREIGN KEY(user_id) REFERENCES public.users(id);
           END IF;

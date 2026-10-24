@@ -7,41 +7,76 @@ export class SettingsApiService {
 
   async general(body: Json, scope: SettingsScope) {
     const current = (await this.repository.read(scope)).general ?? {};
-    // Match the WordPress update_option contract: every text/notification
-    // setting is replaced on each save, while images are retained unless a new
-    // uploaded image or non-empty URL is supplied.
-    const general: Json = {
-      business_name: this.sanitizeText(body.business_name),
-      email: this.sanitizeEmail(body.email),
-      language: this.sanitizeText(body.language),
-      nav_bar_location: this.sanitizeText(body.nav_bar_location),
-      pos_theme: this.sanitizeText(body.pos_theme),
-      contact_info: this.sanitizeText(body.contact_info),
-      address: this.sanitizeText(body.address),
-      currency: this.sanitizeText(body.currency),
-      timezone: this.sanitizeText(body.timezone),
-      email_notification: this.phpNotEmpty(body.email_notification) ? 1 : 0,
-      sound_notification: this.phpNotEmpty(body.sound_notification) ? 1 : 0,
-      version: this.sanitizeText(body.version),
-      image_url: current.image_url ?? false,
-      logo_url: current.logo_url ?? false,
-    };
-    if (this.phpNotEmpty(body.image_url)) general.image_url = this.sanitizeUrl(body.image_url);
-    if (this.phpNotEmpty(body.logo_url)) general.logo_url = this.sanitizeUrl(body.logo_url);
+    // Preserve populated settings, but clean empty placeholders left by older saves.
+    const general: Json = Object.fromEntries(Object.entries(current).filter(([, value]) =>
+      value !== null && value !== undefined && value !== false && !(typeof value === 'string' && !value.trim()),
+    ));
+    const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    for (const key of textFields) {
+      if (body[key] === undefined) continue;
+      const value = this.sanitizeText(body[key]);
+      if (value) general[key] = value;
+      else delete general[key];
+    }
+    if (body.company_name !== undefined) {
+      const value = this.sanitizeText(body.company_name);
+      if (value) general.company_name = value;
+      else delete general.company_name;
+    }
+    else if (body.business_name !== undefined && !current.company_name) general.company_name = general.business_name;
+    if (body.email !== undefined) {
+      const email = this.sanitizeEmail(body.email);
+      if (email) general.email = email;
+      else delete general.email;
+    }
+    if (body.email_notification !== undefined) general.email_notification = this.phpNotEmpty(body.email_notification) ? 1 : 0;
+    if (body.sound_notification !== undefined) general.sound_notification = this.phpNotEmpty(body.sound_notification) ? 1 : 0;
+    if (this.phpNotEmpty(body.image_url)) {
+      const imageUrl = this.sanitizeUrl(body.image_url);
+      if (imageUrl) general.image_url = imageUrl;
+    }
+    if (this.phpNotEmpty(body.logo_url)) {
+      const logoUrl = this.sanitizeUrl(body.logo_url);
+      if (logoUrl) general.logo_url = logoUrl;
+    }
     const data = await this.repository.merge(scope, { general });
-    return { success: true, message: 'Settings updated successfully', data: data.general };
+    const responseFields = [
+      'company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
+      'gstin', 'receipt_header', 'receipt_footer', 'device_id',
+    ];
+    const responseData = Object.fromEntries(
+      responseFields.filter((key) => body[key] !== undefined && data.general[key] !== undefined
+        && data.general[key] !== false && !(typeof data.general[key] === 'string' && !data.general[key].trim()))
+        .map((key) => [key, data.general[key]]),
+    );
+    return { success: true, message: 'Settings updated successfully', data: responseData };
   }
 
   async getGeneral(scope: SettingsScope) {
     const value = await this.repository.read(scope);
-    return { success: true, data: value.general ?? {} };
+    const general = value.general ?? {};
+    const fields = ['company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
+      'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const data: Json = {};
+    for (const key of fields) {
+      const raw = key === 'company_name' ? general.company_name ?? general.business_name : general[key];
+      if (raw === null || raw === undefined || raw === false || (typeof raw === 'string' && !raw.trim())) continue;
+      data[key] = raw;
+    }
+    return { success: true, data };
   }
 
   async device(body: Json, scope: SettingsScope) {
-    const keys = ['kot_printer', 'receipt_printer', 'paper_size', 'connection_type', 'kitchen_printer', 'bar_printer'];
-    const settings = Object.fromEntries(keys.map((key) => [key, this.text(body[key])]));
+    const keys = ['device_id', 'kot_printer', 'receipt_printer', 'paper_size', 'connection_type', 'kitchen_printer', 'bar_printer'];
+    const settings: Json = { ...((await this.repository.read(scope)).device ?? {}) };
+    for (const key of keys) if (body[key] !== undefined) settings[key] = this.text(body[key]);
     await this.repository.merge(scope, { device: settings });
     return { success: true, message: 'Device settings updated successfully', data: settings };
+  }
+
+  async getDevice(scope: SettingsScope) {
+    const value = await this.repository.read(scope);
+    return { success: true, data: value.device ?? {} };
   }
 
   async cash(scope: SettingsScope) {

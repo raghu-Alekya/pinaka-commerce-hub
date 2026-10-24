@@ -11,6 +11,18 @@ import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configura
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 import { CashBackSettingsResponse, mapCashbackSettings } from './cashback-settings.model';
 
+export const WOOCOMMERCE_ORDER_STATUSES = [
+  { slug: 'pending', name: 'Pending payment' },
+  { slug: 'processing', name: 'Processing' },
+  { slug: 'on-hold', name: 'On hold' },
+  { slug: 'completed', name: 'Completed' },
+  { slug: 'cancelled', name: 'Cancelled' },
+  { slug: 'partial-refund', name: 'Partially refunded' },
+  { slug: 'refunded', name: 'Refunded' },
+  { slug: 'failed', name: 'Failed' },
+  { slug: 'checkout-draft', name: 'Draft' },
+] as const;
+
 @Injectable()
 export class StorePosConfigurationsService {
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
@@ -304,6 +316,7 @@ export class StorePosConfigurationsService {
         { slug: 'uber-eats', name: 'Uber Eats Order' },
         { slug: 'online', name: 'Online Order' },
       ],
+      order_statuses: WOOCOMMERCE_ORDER_STATUSES.map((status) => ({ ...status })),
     };
   }
 
@@ -335,29 +348,17 @@ export class StorePosConfigurationsService {
   }
 
   private async cashDenominations(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
   ): Promise<[Array<{ denom: string | null; image: string | null }>, Array<{ denom: string | null; image: string | null }>]> {
-    const notes = this.denomList(config?.cashDenominations ?? config?.notes);
-    const coins = this.denomList(config?.coinDenominations ?? config?.coins);
-    if (notes.length || coins.length) return [notes, coins];
-
-    const rows = await this.optionalRows(
-      `SELECT i.kind, i.amount AS denom, i."imageData" AS image
-       FROM public.pos_cash_denomination_items i
-       JOIN public.pos_cash_denomination_settings s ON s.id = i."denominationId"
-       WHERE s."storeId" = $1
-       ORDER BY i."sortOrder" ASC, i.amount ASC`,
-      [storeId],
-    );
     return [
-      this.denomList(rows.filter((row) => String(row.kind).toLowerCase() === 'cash')),
-      this.denomList(rows.filter((row) => String(row.kind).toLowerCase() === 'coin')),
+      this.denomList(config?.cashDenominations ?? config?.notes),
+      this.denomList(config?.coinDenominations ?? config?.coins),
     ];
   }
 
   private async safeDrop(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
     currencySymbol: string | null,
   ): Promise<{
@@ -368,71 +369,22 @@ export class StorePosConfigurationsService {
   }> {
     const configDenoms = this.denomList(config?.drops ?? config?.safeDenominations);
     const configTubes = this.tubeList(config?.tubes, currencySymbol);
-    if (config || configDenoms.length || configTubes.length) {
-      return {
-        denominations: configDenoms,
-        tubes: configTubes,
-        maxTubesCount: this.moneyText(config?.tubeSize),
-        safeDropAmount: this.moneyText(config?.threshold),
-      };
-    }
-
-    const settings = await this.optionalRows(
-      `SELECT id, threshold, tube_size AS "tubeSize"
-       FROM public.pos_safe_drop_settings
-       WHERE store_id = $1
-       LIMIT 1`,
-      [storeId],
-    );
-    const setting = settings[0];
-    if (!setting?.id) {
-      return { denominations: [], tubes: [], maxTubesCount: null, safeDropAmount: null };
-    }
-    const [denominations, tubes] = await Promise.all([
-      this.optionalRows(
-        `SELECT amount AS denom, image_data AS image
-         FROM public.pos_safe_drop_denominations
-         WHERE safe_drop_id = $1::uuid
-         ORDER BY sort_order ASC, amount ASC`,
-        [setting.id],
-      ),
-      this.optionalRows(
-        `SELECT amount AS denom, quantity AS tube_limit
-         FROM public.pos_safe_drop_tubes
-         WHERE safe_drop_id = $1::uuid
-         ORDER BY sort_order ASC, amount ASC`,
-        [setting.id],
-      ),
-    ]);
     return {
-      denominations: this.denomList(denominations),
-      tubes: this.tubeList(tubes, currencySymbol),
-      maxTubesCount: this.moneyText(setting.tubeSize),
-      safeDropAmount: this.moneyText(setting.threshold),
+      denominations: configDenoms,
+      tubes: configTubes,
+      maxTubesCount: this.moneyText(config?.tubeSize),
+      safeDropAmount: this.moneyText(config?.threshold),
     };
   }
 
   private async drawerAmount(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
   ): Promise<string | null> {
     const registers = Array.isArray(config?.registers) ? config.registers : [];
     const active = registers.find((row) => String((row as { status?: unknown })?.status || '').toLowerCase() === 'active')
       ?? registers[0];
-    const configured = this.moneyText((active as { maxCash?: unknown } | undefined)?.maxCash);
-    if (configured !== null) return configured;
-
-    const rows = await this.optionalRows(
-      `SELECT r."maxCash" AS amount
-       FROM public.pos_cash_registers r
-       JOIN public.pos_cash_register_settings s ON s.id = r."registerSettingsId"
-       WHERE s."storeId" = $1
-         AND lower(COALESCE(r.status, 'active')) = 'active'
-       ORDER BY r."sortOrder" ASC
-       LIMIT 1`,
-      [storeId],
-    );
-    return this.moneyText(rows[0]?.amount);
+    return this.moneyText((active as { maxCash?: unknown } | undefined)?.maxCash);
   }
 
   private async storeVendors(storeId: string): Promise<Array<{ id: string | null; vendor_name: string | null }>> {
@@ -470,11 +422,9 @@ export class StorePosConfigurationsService {
       : await this.optionalRows(
         `SELECT t.tendor_name AS name
          FROM public.tendors t
-         JOIN public.stores s ON s.id = $1::uuid
-         WHERE (t.store_type_id = s.store_type_id OR t.store_type_id IS NULL)
-           AND upper(COALESCE(t.status::text, 'ACTIVE')) = 'ACTIVE'
+         WHERE upper(COALESCE(t.status::text, 'ACTIVE')) = 'ACTIVE'
          ORDER BY t.tendor_name ASC`,
-        [storeId],
+        [],
       );
     return source
       .map((row) => this.textOrNull(row.name))

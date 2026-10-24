@@ -1,76 +1,118 @@
 import { DataSource } from 'typeorm';
 
-/** Align public.devices with DeviceEntity / device APIs (legacy rows used storeId + details jsonb). */
-export async function ensureDeviceSchema(db: DataSource): Promise<void> {
+export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {
-    await manager.query('SELECT pg_advisory_xact_lock(724621, 44)');
+    await manager.query('SELECT pg_advisory_xact_lock(724621, 55)');
+    // Keep the activation field available before any device list query runs.
+    await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_active_code varchar(100)');
+    await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS authorization_code varchar(100)');
+    await manager.query('ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_id text');
     await manager.query(`
-      CREATE TABLE IF NOT EXISTS public.devices (
+      UPDATE public.devices 
+      SET authorization_code = device_active_code 
+      WHERE authorization_code IS NULL AND device_active_code IS NOT NULL
+    `);
+    await manager.query(`
+      UPDATE public.devices 
+      SET device_active_code = authorization_code 
+      WHERE device_active_code IS NULL AND authorization_code IS NOT NULL
+    `);
+    await manager.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS devices_device_active_code_uidx
+      ON public.devices (device_active_code)
+      WHERE device_active_code IS NOT NULL AND device_active_code <> ''
+    `);
+    await manager.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS devices_authorization_code_uidx
+      ON public.devices (authorization_code)
+      WHERE authorization_code IS NOT NULL AND authorization_code <> ''
+    `);
+    await manager.query(`
+      CREATE TABLE IF NOT EXISTS public.merchant_devices (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        "merchantId" varchar(100) NOT NULL,
-        "merchantName" varchar(255) NOT NULL DEFAULT '',
-        "device_code" varchar(100) NOT NULL,
-        "serialNumber" varchar(100) NOT NULL,
-        "deviceType" varchar(100) NOT NULL DEFAULT 'Other',
-        status varchar(20) NOT NULL DEFAULT 'Active',
-        "createdAt" timestamp NOT NULL DEFAULT now()
+        device_id uuid NOT NULL,
+        merchant_id uuid NOT NULL,
+        created_by varchar(100),
+        updated_by varchar(100),
+        is_deleted boolean NOT NULL DEFAULT false,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-
-    await manager.query(`ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_code varchar(100)`);
-    await manager.query(`ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS status varchar(20) DEFAULT 'Active'`);
-    await manager.query(`ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS "storeId" varchar(100)`);
-    await manager.query(`ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS details jsonb DEFAULT '{}'::jsonb`);
-
+    // Merchant IDs are UUID primary keys in public.merchants and public.devices.
+    // Older deployments created this mapping column as varchar; convert it only
+    // after verifying every stored value is a valid UUID.
     await manager.query(`
-      DO $body$
+      DO $migration$
       BEGIN
         IF EXISTS (
           SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='devices' AND column_name='storeId' AND is_nullable='NO'
+          WHERE table_schema = 'public'
+            AND table_name = 'merchant_devices'
+            AND column_name = 'merchant_id'
+            AND data_type <> 'uuid'
         ) THEN
-          ALTER TABLE public.devices ALTER COLUMN "storeId" DROP NOT NULL;
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='devices' AND column_name='details' AND is_nullable='NO'
-        ) THEN
-          ALTER TABLE public.devices ALTER COLUMN details DROP NOT NULL;
-          ALTER TABLE public.devices ALTER COLUMN details SET DEFAULT '{}'::jsonb;
+          IF EXISTS (
+            SELECT 1 FROM public.merchant_devices
+            WHERE merchant_id IS NULL
+               OR merchant_id::text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          ) THEN
+            RAISE EXCEPTION 'merchant_devices.merchant_id contains non-UUID values; refusing automatic type conversion';
+          END IF;
+          ALTER TABLE public.merchant_devices
+            ALTER COLUMN merchant_id TYPE uuid USING merchant_id::text::uuid;
         END IF;
       END
-      $body$
+      $migration$
     `);
-
-    await manager.query(`UPDATE public.devices SET details = COALESCE(details, '{}'::jsonb) WHERE details IS NULL`);
     await manager.query(`
-      UPDATE public.devices SET
-        "deviceName" = COALESCE(NULLIF(BTRIM("deviceName"), ''), NULLIF(details->>'deviceName', ''), NULLIF(details->>'name', ''), 'Unnamed device'),
-        device_code = COALESCE(NULLIF(BTRIM(device_code), ''), NULLIF(details->>'deviceCode', ''), NULLIF(details->>'code', ''), 'DEV-' || REPLACE(id::text, '-', '')),
-        "deviceType" = COALESCE(NULLIF(BTRIM("deviceType"), ''), NULLIF(details->>'deviceType', ''), NULLIF(details->>'type', ''), 'Other'),
-        "merchantName" = COALESCE(NULLIF(BTRIM("merchantName"), ''), NULLIF(details->>'merchantName', ''), "merchantId"),
-        status = COALESCE(NULLIF(BTRIM(status), ''), NULLIF(details->>'status', ''), 'Active')
-      WHERE "deviceName" IS NULL OR device_code IS NULL OR "deviceType" IS NULL OR "merchantName" IS NULL OR status IS NULL
-         OR BTRIM(COALESCE("deviceName", '')) = '' OR BTRIM(COALESCE(device_code, '')) = ''
+      DO $migration$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='devices') THEN
+          BEGIN
+            ALTER TABLE public.devices ADD CONSTRAINT pk_devices_id PRIMARY KEY (id);
+          EXCEPTION WHEN OTHERS THEN
+            NULL;
+          END;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.merchant_devices'::regclass
+            AND confrelid = 'public.devices'::regclass
+            AND contype = 'f'
+        ) THEN
+          BEGIN
+            ALTER TABLE public.merchant_devices
+              ADD CONSTRAINT fk_merchant_devices_device_id
+              FOREIGN KEY (device_id) REFERENCES public.devices(id);
+          EXCEPTION WHEN OTHERS THEN
+            NULL;
+          END;
+        END IF;
+      END
+      $migration$
     `);
-
-    await manager.query(`UPDATE public.devices SET "deviceName" = COALESCE(NULLIF(BTRIM("deviceName"), ''), 'Unnamed device') WHERE "deviceName" IS NULL OR BTRIM("deviceName") = ''`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "deviceName" SET NOT NULL`);
-    await manager.query(`UPDATE public.devices SET device_code = COALESCE(NULLIF(BTRIM(device_code), ''), 'DEV-' || REPLACE(id::text, '-', '')) WHERE device_code IS NULL OR BTRIM(device_code) = ''`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN device_code SET NOT NULL`);
-    await manager.query(`UPDATE public.devices SET "deviceType" = COALESCE(NULLIF(BTRIM("deviceType"), ''), 'Other') WHERE "deviceType" IS NULL OR BTRIM("deviceType") = ''`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "deviceType" SET NOT NULL`);
-    await manager.query(`UPDATE public.devices SET "merchantName" = COALESCE(NULLIF(BTRIM("merchantName"), ''), "merchantId") WHERE "merchantName" IS NULL OR BTRIM("merchantName") = ''`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "merchantName" SET NOT NULL`);
-    await manager.query(`UPDATE public.devices SET status = COALESCE(NULLIF(BTRIM(status), ''), 'Active') WHERE status IS NULL OR BTRIM(status) = ''`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN status SET NOT NULL`);
-    await manager.query(`UPDATE public.devices SET "createdAt" = COALESCE("createdAt", now()) WHERE "createdAt" IS NULL`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "createdAt" SET NOT NULL`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "merchantId" SET NOT NULL`);
-    await manager.query(`ALTER TABLE public.devices ALTER COLUMN "serialNumber" SET NOT NULL`);
-
-    await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS devices_device_code_uq ON public.devices (device_code)`);
-    await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS devices_serial_number_uq ON public.devices ("serialNumber")`);
-    await manager.query(`CREATE INDEX IF NOT EXISTS devices_merchant_id_idx ON public.devices ("merchantId")`);
+    await manager.query(`
+      CREATE INDEX IF NOT EXISTS idx_merchant_devices_merchant_id
+      ON public.merchant_devices (merchant_id) WHERE is_deleted = false
+    `);
+    await manager.query(`
+      CREATE INDEX IF NOT EXISTS idx_merchant_devices_device_id
+      ON public.merchant_devices (device_id) WHERE is_deleted = false
+    `);
+    await manager.query(`
+      INSERT INTO public.merchant_devices (device_id, merchant_id, created_by, updated_by)
+      SELECT d.id,
+             COALESCE(NULLIF(to_jsonb(d)->>'merchant_id', ''), NULLIF(to_jsonb(d)->>'merchantId', '')),
+             NULLIF(COALESCE(to_jsonb(d)->>'created_by', to_jsonb(d)->>'createdBy'), ''),
+             NULLIF(COALESCE(to_jsonb(d)->>'updated_by', to_jsonb(d)->>'updatedBy'), '')
+      FROM public.devices d
+      WHERE COALESCE(NULLIF(to_jsonb(d)->>'merchant_id', ''), NULLIF(to_jsonb(d)->>'merchantId', '')) IS NOT NULL
+        AND COALESCE((to_jsonb(d)->>'is_deleted')::boolean, false) = false
+        AND NOT EXISTS (
+          SELECT 1 FROM public.merchant_devices md
+          WHERE md.device_id = d.id
+        )
+    `);
   });
 }

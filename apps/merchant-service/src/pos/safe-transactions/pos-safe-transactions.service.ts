@@ -30,7 +30,16 @@ export class PosSafeTransactionsService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const db = this.merchants.requireDataSource();
+    let db;
+    try {
+      db = this.merchants.requireDataSource();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[POS safe transactions] Database unavailable during startup (${message}); safe transaction endpoints will require PostgreSQL.`,
+      );
+      return;
+    }
     await db.query(`
       CREATE TABLE IF NOT EXISTS public.pos_safe_transactions (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), store_id uuid NOT NULL,
@@ -256,10 +265,6 @@ export class PosSafeTransactionsService implements OnModuleInit {
             actorId,
           ],
         );
-        await manager.query(
-          `UPDATE public.pos_shifts SET total_safe_drops = COALESCE(total_safe_drops, 0) + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-          [body.total_cash, shift.id],
-        );
         const [relation] = await manager.query(
           `SELECT to_regclass('public.pos_shift_transactions') AS name`,
         );
@@ -399,7 +404,7 @@ export class PosSafeTransactionsService implements OnModuleInit {
               SELECT 1
                 FROM public.users u
                WHERE u.id::text = $3
-                 AND u."accountId"::text = $2
+                 AND u.account_id::text = $2
                  AND (
                    lower(u.email) = lower(m.email)
                    OR COALESCE(to_jsonb(u)->>'merchantId', to_jsonb(u)->>'merchant_id') = ANY(ARRAY[
