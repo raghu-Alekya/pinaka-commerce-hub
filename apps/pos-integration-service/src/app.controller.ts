@@ -3,8 +3,9 @@ import { PosRepository } from './pos.repository';
 import { PosConfigRepository } from './pos-config.repository';
 import { FastkeyItem } from './pos-config.entity';
 import { MovementType } from './entities/cash-movement.entity';
-import { normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
+import { describeUnmappedShiftKeys, normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
 import { ShiftReportService } from './shift-report.service';
+import { shiftDebug, shiftErrorDetails, summarizeShiftWrite } from './shift-debug.log';
 
 const SHIFT_REQUEST_ALIASES = [
   ['merchant_id', 'merchantId'],
@@ -102,28 +103,34 @@ export class AppController {
 
   @Post(['shifts', 'shifts/open'])
   async openShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftCreate(request);
-    const shift = await this.posRepository.createShift(write);
-    return {
-      success: true,
-      message: 'Shift created and opened successfully',
-      shift_id: shift.id,
-      shiftId: shift.id,
-      shift,
-    };
+    return this.traceShift('POST /shifts', request, async () => {
+      const write = normalizeShiftCreate(request);
+      shiftDebug('normalized', { action: 'POST /shifts', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.createShift(write);
+      return {
+        success: true,
+        message: 'Shift created and opened successfully',
+        shift_id: shift.id,
+        shiftId: shift.id,
+        shift,
+      };
+    });
   }
 
   @Post('shifts/update')
   async updateShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftUpdate(request);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift updated successfully',
-      shift_id: shift.id,
-      shift,
-    };
+    return this.traceShift('POST /shifts/update', request, async () => {
+      const write = normalizeShiftUpdate(request);
+      shiftDebug('normalized', { action: 'POST /shifts/update', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift updated successfully',
+        shift_id: shift.id,
+        shift,
+      };
+    });
   }
 
   @Put('shifts/:shift_id')
@@ -131,15 +138,18 @@ export class AppController {
     @Param('shift_id') shiftId: string,
     @Body() request: Record<string, unknown>,
   ) {
-    const write = normalizeShiftUpdate(request ?? {}, shiftId);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift updated successfully',
-      shift_id: shift.id,
-      shift,
-    };
+    return this.traceShift('PUT /shifts/:shift_id', { shift_id: shiftId, ...(request ?? {}) }, async () => {
+      const write = normalizeShiftUpdate(request ?? {}, shiftId);
+      shiftDebug('normalized', { action: 'PUT /shifts/:shift_id', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift updated successfully',
+        shift_id: shift.id,
+        shift,
+      };
+    });
   }
 
   @Post('shifts/cash-movement')
@@ -155,30 +165,35 @@ export class AppController {
     performed_by?: string;
     reason?: string;
   }) {
-    const body = normalizeShiftRequest(request);
-    if (!body.shiftId || !body.storeId || !body.amount) {
-      throw new BadRequestException('shiftId, storeId, and amount are required');
-    }
-    const movement = await this.posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
-    return {
-      success: true,
-      message: `Cash movement '${movement.movementType}' recorded successfully!`,
-      cashMovement: movement,
-    };
+    return this.traceShift('POST /shifts/cash-movement', request, async () => {
+      const body = normalizeShiftRequest(request);
+      if (!body.shiftId || !body.storeId || !body.amount) {
+        throw new BadRequestException('shiftId, storeId, and amount are required');
+      }
+      const movement = await this.posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
+      return {
+        success: true,
+        message: `Cash movement '${movement.movementType}' recorded successfully!`,
+        cashMovement: movement,
+      };
+    });
   }
 
   @Post('shifts/close')
   async closeShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftClose(request);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift closed successfully! Z-Report generated for thermal printing.',
-      shift_id: shift.id,
-      shift,
-      reportType: 'Z_REPORT',
-    };
+    return this.traceShift('POST /shifts/close', request, async () => {
+      const write = normalizeShiftClose(request);
+      shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift closed successfully! Z-Report generated for thermal printing.',
+        shift_id: shift.id,
+        shift,
+        reportType: 'Z_REPORT',
+      };
+    });
   }
 
   @Get('shifts/get-shift-by-id')
@@ -188,19 +203,22 @@ export class AppController {
     @Query('employeeId') employeeId?: string,
     @Query('employee_id') employee_id?: string,
   ) {
-    return this.shiftReport.getShiftById(shiftId || shift_id, employeeId || employee_id);
+    const query = { shiftId, shift_id, employeeId, employee_id };
+    return this.traceShift('GET /shifts/get-shift-by-id', query, () => this.shiftReport.getShiftById(shiftId || shift_id, employeeId || employee_id));
   }
 
   @Get('shifts/active')
   async getActiveShift(@Query() query: { storeId?: string; store_id?: string }) {
-    const { storeId } = normalizeShiftRequest(query);
-    const shifts = await this.posRepository.getActiveShifts(storeId || 'STR-5001');
-    return {
-      success: true,
-      storeId: storeId || 'STR-5001',
-      count: shifts.length,
-      shifts,
-    };
+    return this.traceShift('GET /shifts/active', query, async () => {
+      const { storeId } = normalizeShiftRequest(query);
+      const shifts = await this.posRepository.getActiveShifts(storeId || 'STR-5001');
+      return {
+        success: true,
+        storeId: storeId || 'STR-5001',
+        count: shifts.length,
+        shifts,
+      };
+    });
   }
 
   @Get('shifts/employee/:employeeId')
@@ -208,21 +226,25 @@ export class AppController {
     @Param('employeeId') employeeId: string,
     @Query() query: { storeId?: string; store_id?: string },
   ) {
-    const id = employeeId.trim();
-    if (!UUID_PATTERN.test(id)) {
-      throw new BadRequestException('employeeId must be a valid UUID');
-    }
-    const { storeId } = normalizeShiftRequest(query);
-    const shifts = await this.posRepository.getShiftsByEmployee(id, storeId?.trim() || undefined);
-    return { success: true, employeeId: id, count: shifts.length, shifts };
+    return this.traceShift('GET /shifts/employee/:employeeId', { employeeId, ...query }, async () => {
+      const id = employeeId.trim();
+      if (!UUID_PATTERN.test(id)) {
+        throw new BadRequestException('employeeId must be a valid UUID');
+      }
+      const { storeId } = normalizeShiftRequest(query);
+      const shifts = await this.posRepository.getShiftsByEmployee(id, storeId?.trim() || undefined);
+      return { success: true, employeeId: id, count: shifts.length, shifts };
+    });
   }
 
   @Get('stores/:store_id/shifts')
   async getShiftsByStore(@Param('store_id') store_id: string) {
-    const storeId = store_id.trim();
-    if (!storeId) throw new BadRequestException('store_id is required');
-    const shifts = await this.posRepository.getShiftsByStore(storeId);
-    return { success: true, store_id: storeId, count: shifts.length, shifts };
+    return this.traceShift('GET /stores/:store_id/shifts', { store_id }, async () => {
+      const storeId = store_id.trim();
+      if (!storeId) throw new BadRequestException('store_id is required');
+      const shifts = await this.posRepository.getShiftsByStore(storeId);
+      return { success: true, store_id: storeId, count: shifts.length, shifts };
+    });
   }
 
   @Get('stores/:store_id/shifts/:shift_id')
@@ -230,8 +252,23 @@ export class AppController {
     @Param('store_id') store_id: string,
     @Param('shift_id') shift_id: string,
   ) {
-    const shift = await this.posRepository.getShiftWithSafeTransactions(shift_id, store_id);
-    if (!shift) throw new NotFoundException('POS shift not found');
-    return { success: true, shift };
+    return this.traceShift('GET /stores/:store_id/shifts/:shift_id', { store_id, shift_id }, async () => {
+      const shift = await this.posRepository.getShiftWithSafeTransactions(shift_id, store_id);
+      if (!shift) throw new NotFoundException('POS shift not found');
+      return { success: true, shift };
+    });
+  }
+
+  private async traceShift<T>(action: string, request: unknown, work: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    shiftDebug('request', { action, ignored_keys: describeUnmappedShiftKeys(request), payload: request });
+    try {
+      const result = await work();
+      shiftDebug('response', { action, ms: Date.now() - started, payload: result });
+      return result;
+    } catch (error) {
+      shiftDebug('error', { action, ms: Date.now() - started, ...shiftErrorDetails(error) });
+      throw error;
+    }
   }
 }

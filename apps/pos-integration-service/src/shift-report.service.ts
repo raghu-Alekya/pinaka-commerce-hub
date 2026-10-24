@@ -11,6 +11,7 @@ import {
   formatTimestamp,
   prepareShiftData,
 } from './shift-report.calculations';
+import { shiftDebug } from './shift-debug.log';
 
 type ShiftRow = {
   id: string;
@@ -96,7 +97,10 @@ export class ShiftReportService {
       vendorPayouts,
       cashbackSettings: settings,
     });
-    if (tillAmount > 0) await this.saveTillAmount(db, shift.id, tillAmount);
+    if (tillAmount > 0) {
+      shiftDebug('db', { action: 'getShiftById', table: 'pos_shift_meta', op: 'upsert', shift_id: shift.id, meta_name: 'shift_post_till_amount_value', till_amount: tillAmount });
+      await this.saveTillAmount(db, shift.id, tillAmount);
+    }
     return report;
   }
 

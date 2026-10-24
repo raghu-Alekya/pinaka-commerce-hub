@@ -9,6 +9,7 @@ import { PosShiftTransactionEntity } from './entities/pos-shift-transaction.enti
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
 import { ensureShiftSplitSchema } from './shift.schema';
 import { ShiftTransactionInput, ShiftView, ShiftWrite, expectedCashInDrawer, roundMoney, toShiftView } from './shift.types';
+import { shiftDebug, shiftErrorDetails } from './shift-debug.log';
 
 async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
   try {
@@ -241,13 +242,16 @@ export class PosRepository implements OnModuleInit {
       await runner.connect();
       await runner.startTransaction();
       try {
+        shiftDebug('db', { action: 'createShift', table: 'pos_shifts', op: 'insert', shift_id: shift.id, status: shift.status, opening_balance: shift.opening_balance });
         await runner.manager.getRepository(PosShiftEntity).save(shift);
         await this.writeMeta(runner.manager, shift.id, write.meta);
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor, 'create');
         await this.attachOrderSales(runner.manager, shift.id, actor);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
         await runner.commitTransaction();
+        shiftDebug('db', { action: 'createShift', op: 'commit', shift_id: shift.id });
       } catch (error) {
+        shiftDebug('db-rollback', { action: 'createShift', shift_id: shift.id, ...shiftErrorDetails(error) });
         await runner.rollbackTransaction();
         this.rethrowWrite(error);
       } finally {
@@ -259,6 +263,7 @@ export class PosRepository implements OnModuleInit {
       return view;
     }
 
+    shiftDebug('db-skip', { action: 'createShift', shift_id: shift.id, reason: 'database is not connected; shift kept in memory only' });
     this.memoryShifts.unshift(shift);
     this.memoryMeta.unshift(...this.metaRows(shift.id, write.meta));
     this.memoryTransactions.unshift(...this.transactionRows(shift.id, write.transactions, actor, 'create'));
@@ -281,17 +286,21 @@ export class PosRepository implements OnModuleInit {
           lock: { mode: 'pessimistic_write' },
         });
         if (!shift) {
+          shiftDebug('db-skip', { action: 'updateShift', shift_id: shiftId, reason: 'pos_shifts row not found' });
           await runner.rollbackTransaction();
           return null;
         }
         this.applyMasterPatch(shift, write);
+        shiftDebug('db', { action: 'updateShift', table: 'pos_shifts', op: 'update', shift_id: shift.id, fields: write.fields, status: shift.status });
         await runner.manager.getRepository(PosShiftEntity).save(shift);
         await this.writeMeta(runner.manager, shift.id, write.meta);
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor ?? shift.updated_by ?? shift.created_by ?? null, 'update');
         await this.attachOrderSales(runner.manager, shift.id, actor ?? shift.created_by ?? null);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
         await runner.commitTransaction();
+        shiftDebug('db', { action: 'updateShift', op: 'commit', shift_id: shift.id });
       } catch (error) {
+        shiftDebug('db-rollback', { action: 'updateShift', shift_id: shiftId, ...shiftErrorDetails(error) });
         await runner.rollbackTransaction();
         this.rethrowWrite(error);
       } finally {
@@ -302,6 +311,7 @@ export class PosRepository implements OnModuleInit {
       return view;
     }
 
+    shiftDebug('db-skip', { action: 'updateShift', shift_id: shiftId, reason: 'database is not connected; shift kept in memory only' });
     const shift = this.memoryShifts.find((row) => row.id === shiftId);
     if (!shift) return null;
     this.applyMasterPatch(shift, write);
@@ -355,6 +365,13 @@ export class PosRepository implements OnModuleInit {
         });
         const view = await this.getShiftView(shiftId);
         if (view) await this.cacheActiveShift(storeId, view);
+      } else {
+        shiftDebug('db-skip', {
+          action: 'recordCashMovement',
+          shift_id: shiftId,
+          movement_id: saved.id,
+          reason: 'cash_movements row saved, but pos_shift_transactions was not written because the shift id was not found',
+        });
       }
       return saved;
     }
@@ -606,6 +623,7 @@ export class PosRepository implements OnModuleInit {
          SET meta_value = EXCLUDED.meta_value, status = EXCLUDED.status`,
         [randomUUID(), shiftId, row.meta_name, JSON.stringify(row.meta_value), row.status],
       );
+      shiftDebug('db', { table: 'pos_shift_meta', op: 'upsert', shift_id: shiftId, meta_name: row.meta_name, status: row.status, meta_value: row.meta_value });
     }
   }
 
@@ -640,6 +658,7 @@ export class PosRepository implements OnModuleInit {
            WHERE NOT EXISTS (SELECT 1 FROM updated)`,
           [shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy, randomUUID(), createdBy],
         );
+        shiftDebug('db', { table: 'pos_shift_transactions', op: 'upsert', shift_id: shiftId, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
         continue;
       }
       if (row.id && mode === 'update') {
@@ -652,14 +671,17 @@ export class PosRepository implements OnModuleInit {
           [row.id, shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy],
         );
         if (!updated.length) throw new BadRequestException(`Transaction '${row.id}' was not found on this shift`);
+        shiftDebug('db', { table: 'pos_shift_transactions', op: 'update', shift_id: shiftId, id: row.id, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
         continue;
       }
+      const insertedId = row.id ?? randomUUID();
       await manager.query(
         `INSERT INTO public.pos_shift_transactions (
            id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by
          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
-        [row.id ?? randomUUID(), shiftId, row.transaction_type, row.total_sum, payload, row.status, createdBy, updatedBy],
+        [insertedId, shiftId, row.transaction_type, row.total_sum, payload, row.status, createdBy, updatedBy],
       );
+      shiftDebug('db', { table: 'pos_shift_transactions', op: 'insert', shift_id: shiftId, id: insertedId, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
     }
   }
 
@@ -673,7 +695,10 @@ export class PosRepository implements OnModuleInit {
     );
     const have = new Set(existing.map((row) => row.transaction_type));
     const sales = (await this.getSalesByShift([shiftId])).get(shiftId);
-    if (!sales) return;
+    if (!sales) {
+      shiftDebug('db-skip', { action: 'attachOrderSales', shift_id: shiftId, reason: 'no completed store_orders for this shift; CASH_SALE and CARD_SALE were not written' });
+      return;
+    }
     const rows: ShiftTransactionInput[] = [];
     if (!have.has('CASH_SALE') && sales.cash > 0) {
       rows.push({
@@ -693,6 +718,13 @@ export class PosRepository implements OnModuleInit {
         upsert_by_type: true,
       });
     }
+    shiftDebug('db', {
+      action: 'attachOrderSales',
+      shift_id: shiftId,
+      cash: sales?.cash ?? null,
+      card: sales?.card ?? null,
+      wrote: rows.map((row) => row.transaction_type),
+    });
     if (rows.length) await this.writeTransactions(manager, shiftId, rows, actor, 'update');
   }
 
