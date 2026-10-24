@@ -42,6 +42,16 @@ const META_FIELDS: Array<{ name: string; aliases: string[]; kind: 'text' | 'mone
   { name: 'total_void_items', aliases: ['total_void_items'], kind: 'integer' },
 ];
 
+const SHIFT_REQUEST_KEYS = new Set<string>([
+  'meta', 'shift_meta', 'transactions', 'shift_transactions', 'shift_id', 'shiftId', 'id',
+]);
+for (const aliases of Object.values(MASTER_ALIASES)) {
+  for (const alias of aliases) SHIFT_REQUEST_KEYS.add(alias);
+}
+for (const field of META_FIELDS) {
+  for (const alias of field.aliases) SHIFT_REQUEST_KEYS.add(alias);
+}
+
 const TOTAL_FIELDS: Array<{ aliases: string[]; transaction_type: string }> = [
   { aliases: ['total_cash_sales', 'totalCashSales'], transaction_type: 'CASH_SALE' },
   { aliases: ['total_card_sales', 'totalCardSales'], transaction_type: 'CARD_SALE' },
@@ -53,6 +63,14 @@ const TOTAL_FIELDS: Array<{ aliases: string[]; transaction_type: string }> = [
   { aliases: ['total_pay_later'], transaction_type: 'PAY_LATER' },
   { aliases: ['total_refunds'], transaction_type: 'REFUND' },
 ];
+for (const field of TOTAL_FIELDS) {
+  for (const alias of field.aliases) SHIFT_REQUEST_KEYS.add(alias);
+}
+
+export function describeUnmappedShiftKeys(body: unknown): string[] {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  return Object.keys(body as Record<string, unknown>).filter((key) => !SHIFT_REQUEST_KEYS.has(key));
+}
 
 function asRecord(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {

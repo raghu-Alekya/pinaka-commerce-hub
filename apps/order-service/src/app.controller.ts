@@ -63,7 +63,34 @@ export class AppController {
     if (!normalized.storeId || !normalized.items.length) {
       throw new BadRequestException('storeId and at least 1 item are required to create an order');
     }
-    const result = await this.orderRepository.createOrder(normalized);
+    if (normalized.shiftId) {
+      console.log(`[shift-debug] request ${JSON.stringify({
+        action: 'POST /orders',
+        shift_id: normalized.shiftId,
+        local_shift_id: normalized.localShiftId || null,
+        payment_method: normalized.paymentMethod,
+        total: normalized.totalAmount ?? null,
+        saved_to: ['store_orders', 'store_pos_payments'],
+        not_saved_to: ['pos_shifts', 'pos_shift_meta', 'pos_shift_transactions'],
+      })}`);
+    }
+    let result: Awaited<ReturnType<OrderRepository['createOrder']>>;
+    try {
+      result = await this.orderRepository.createOrder(normalized);
+    } catch (error) {
+      if (normalized.shiftId) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(`[shift-debug] error ${JSON.stringify({ action: 'POST /orders', shift_id: normalized.shiftId, message })}`);
+      }
+      throw error;
+    }
+    if (normalized.shiftId) {
+      console.log(`[shift-debug] response ${JSON.stringify({
+        action: 'POST /orders',
+        shift_id: normalized.shiftId,
+        order_id: result.order?.id ?? null,
+      })}`);
+    }
     const request = result.order.requestPayload || body;
     return this.responses.present(this.responses.profileFor(request), { result, request });
   }
