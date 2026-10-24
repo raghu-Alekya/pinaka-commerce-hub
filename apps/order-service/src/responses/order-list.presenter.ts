@@ -86,7 +86,7 @@ export class OrderListPresenter {
       tip: storeOrder?.tipAmount ?? order.tipAmount,
     }));
     const totalNumber = Number(total);
-    const refundTotal = row.refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    const refundTotal = this.refundTotal(row.refunds, status);
     const refundedItemIds = new Set(row.refunds.flatMap((refund) => {
       const lines = refund.metadata?.line_items;
       return Array.isArray(lines)
@@ -157,6 +157,29 @@ export class OrderListPresenter {
       refundedItemIds,
       fullyRefunded,
     ));
+  }
+
+  private refundTotal(
+    refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>,
+    status: string,
+  ): number {
+    if (status.toLowerCase() !== 'partially refunded') {
+      return refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    }
+
+    const seen = new Set<string>();
+    return refunds.reduce((sum, refund, index) => {
+      const metadata = refund.metadata || {};
+      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${index}`);
+      if (seen.has(refundId)) return sum;
+      seen.add(refundId);
+
+      const lines = Array.isArray(metadata.line_items) ? metadata.line_items : [];
+      const requestedTotal = lines.reduce((lineSum, line: any) => (
+        lineSum + Number(line?.refundable_amount ?? line?.refund_total ?? 0)
+      ), 0);
+      return sum + (requestedTotal > 0 ? requestedTotal : Number(refund.amount || 0));
+    }, 0);
   }
 
   private lineItem(
