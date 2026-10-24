@@ -170,7 +170,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND (m.id::text = $${params.length} OR m.merchant_id = $${params.length} OR m.merchant_code = $${params.length})`;
+      whereClause += ` AND (m.id::text = $${params.length} OR m.merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -226,7 +226,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -276,7 +276,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -348,7 +348,7 @@ export class AdministrationOverviewService
     }
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);

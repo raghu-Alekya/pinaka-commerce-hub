@@ -425,7 +425,7 @@ export class CompactMerchantController {
   }) {
     await manager.query(`SELECT pg_advisory_xact_lock(842001)`);
     const numbered = await manager.query(
-      `SELECT merchant_id AS code FROM public.merchants WHERE merchant_id ~ '^MER-[0-9]+$'`,
+      `SELECT merchant_code AS code FROM public.merchants WHERE merchant_code ~ '^MCH-[0-9]+$'`,
     );
     let max = 0;
     for (const row of numbered) {
@@ -434,19 +434,19 @@ export class CompactMerchantController {
     }
     const pending = await manager.query(
       `SELECT id::text AS id FROM public.merchants
-       WHERE COALESCE(merchant_id, '') !~ '^MER-[0-9]+$'
+       WHERE merchant_code IS NULL OR merchant_code !~ '^MCH-[0-9]{4,}$'
        ORDER BY COALESCE((to_jsonb(merchants)->>'createdDate')::timestamptz, (to_jsonb(merchants)->>'created_at')::timestamptz, (to_jsonb(merchants)->>'createdAt')::timestamptz, now()), id`,
     );
     for (const row of pending) {
       max += 1;
-      const code = `MER-${String(max).padStart(4, '0')}`;
+      const code = `MCH-${String(max).padStart(4, '0')}`;
       await manager.query(
-        `UPDATE public.merchants SET merchant_id=$1, merchant_code=CASE WHEN merchant_code IS NULL OR merchant_code !~ '^MER-[0-9]+$' THEN $1 ELSE merchant_code END WHERE id::text=$2`,
+        `UPDATE public.merchants SET merchant_code=$1 WHERE id::text=$2`,
         [code, row.id],
       );
     }
     max += 1;
-    return `MER-${String(max).padStart(4, '0')}`;
+    return `MCH-${String(max).padStart(4, '0')}`;
   }
 
   @Post('create-merchant')
@@ -522,13 +522,7 @@ export class CompactMerchantController {
         };
         const rowId = randomUUID();
         savedId = rowId;
-        const merchantKey = `MCH-${rowId.slice(0, 8).toUpperCase()}`;
-        const merchantBusinessId = `MID-${rowId.slice(0, 8).toUpperCase()}`;
         setCol('id', rowId);
-        setCol('merchant_code', merchantKey);
-        setCol('merchantCode', merchantKey);
-        setCol('merchant_id', merchantBusinessId);
-        setCol('merchantId', merchantBusinessId);
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
           .trim()
@@ -831,7 +825,7 @@ export class CompactMerchantController {
   async storeTypes(@Param('id') id: string) {
     const [merchant] = await this.db.query(
       `SELECT m.id::text AS id FROM public.merchants m
-       WHERE m.id::text = $1 OR m.merchant_id = $1 OR m.merchant_code = $1
+       WHERE m.id::text = $1 OR m.merchant_code = $1
        ORDER BY m.created_at ASC NULLS LAST, m.id
        LIMIT 1`,
       [id],
@@ -929,7 +923,7 @@ export class CompactMerchantController {
   async history(@Param('id') id: string) {
     const current = await this.getRecord(id);
     const rows = await this.db.query(
-      `SELECT * FROM public.merchants WHERE id::text=$1 OR merchant_id=$1 OR merchant_code=$1`,
+      `SELECT * FROM public.merchants WHERE id::text=$1 OR merchant_code=$1`,
       [id],
     );
     return {

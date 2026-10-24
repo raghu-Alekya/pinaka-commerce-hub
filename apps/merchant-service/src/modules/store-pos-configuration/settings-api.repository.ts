@@ -73,7 +73,7 @@ export class SettingsApiRepository {
        FROM public.stores s
        JOIN public.merchants m ON m.id = s.merchant_id
        WHERE (s.id::text = $1 OR s.store_code = $1)
-         AND (m.id::text = $2 OR m.merchant_code = $2 OR m.merchant_id::text = $2)
+         AND (m.id::text = $2 OR m.merchant_code = $2)
        LIMIT 1`,
       [storeKey, merchantKey],
     );
