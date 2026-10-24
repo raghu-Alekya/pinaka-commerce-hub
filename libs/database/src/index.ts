@@ -339,11 +339,9 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
       }
       if (sqlType === 'uuid' && target === 'merchant_id' && (await tableExists(dataSource, 'merchants'))) {
         const liveType = await liveColumnType(dataSource, table, target);
-        const merchantKey = (await columnExists(dataSource, 'merchants', 'merchantId'))
-          ? 'm."merchantId"'
-          : (await columnExists(dataSource, 'merchants', 'merchant_id'))
-            ? 'm.merchant_id'
-            : '';
+        const merchantKey = (await columnExists(dataSource, 'merchants', 'merchant_code'))
+          ? 'm.merchant_code'
+          : '';
         const merchantCode = (await columnExists(dataSource, 'merchants', 'merchantCode'))
           ? 'm."merchantCode"'
           : (await columnExists(dataSource, 'merchants', 'merchant_code'))
@@ -447,11 +445,6 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
           `UPDATE ${quotedTable} SET ${quotedTarget} = ${value} WHERE ${quotedTarget} IS NULL`,
         );
       }
-    }
-    if (table === 'merchants' && (await columnExists(dataSource, table, 'merchant_code')) && (await columnExists(dataSource, table, 'merchant_id'))) {
-      await dataSource.query(
-        `UPDATE public.merchants SET merchant_id = merchant_id || '-ID' WHERE merchant_code IS NOT NULL AND merchant_id = merchant_code`,
-      );
     }
   }
 }
@@ -678,11 +671,11 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     ALTER TABLE public.merchants ALTER COLUMN updated_at DROP DEFAULT;
     ALTER TABLE public.merchants ALTER COLUMN updated_by DROP NOT NULL;
     ALTER TABLE public.merchants ALTER COLUMN updated_by DROP DEFAULT;
+    CREATE SEQUENCE IF NOT EXISTS public.merchant_code_seq AS integer START WITH 1 INCREMENT BY 1;
     CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
     BEGIN
-      NEW.merchant_code := COALESCE(NULLIF(NEW.merchant_code, ''), 'MCH-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8));
-      IF NEW.merchant_id IS NULL OR NEW.merchant_id = '' OR NEW.merchant_id = NEW.merchant_code THEN
-        NEW.merchant_id := 'MID-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8);
+      IF NEW.merchant_code IS NULL OR btrim(NEW.merchant_code) = '' OR NEW.merchant_code !~ '^MCH-[0-9]{4,}$' THEN
+        NEW.merchant_code := 'MCH-' || lpad(nextval('public.merchant_code_seq')::text, 4, '0');
       END IF;
       RETURN NEW;
     END;
@@ -692,9 +685,6 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       FOR EACH ROW EXECUTE PROCEDURE public.sync_merchants_legacy_cols();
     DO $drop_merchant_camel$
     BEGIN
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='merchantId') THEN
-        UPDATE public.merchants SET merchant_id = COALESCE(NULLIF(merchant_id, ''), "merchantId") WHERE COALESCE("merchantId", '') <> '';
-      END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='businessDisplayName') THEN
         UPDATE public.merchants SET business_display_name = COALESCE(business_display_name, "businessDisplayName") WHERE business_display_name IS NULL;
       END IF;
@@ -876,7 +866,7 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.subscriptions s SET merchant_id = m.id
           FROM public.merchants m
           WHERE s.merchant_id IS NULL
-            AND (s."merchantId" = m.merchant_id OR s."merchantId" = m.merchant_code OR s."merchantId" = m.id::text);
+            AND (s."merchantId" = m.merchant_code OR s."merchantId" = m.id::text);
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name='startDate') THEN
         UPDATE public.subscriptions SET start_date = COALESCE(start_date, "startDate") WHERE start_date IS NULL;
@@ -1228,6 +1218,66 @@ async function renameOrDropLegacyColumn(
   }
 }
 
+/** Number merchant_code as MCH-0001, MCH-0002, then drop merchants.merchant_id. */
+async function assignSequentialMerchantCodes(dataSource: DataSource): Promise<void> {
+  if (!(await columnExists(dataSource, 'merchants', 'merchant_code'))) {
+    await dataSource.query(`ALTER TABLE public.merchants ADD COLUMN merchant_code varchar(100)`);
+  }
+  await dataSource.query(`CREATE SEQUENCE IF NOT EXISTS public.merchant_code_seq AS integer START WITH 1 INCREMENT BY 1`);
+  const orderBy = (await columnExists(dataSource, 'merchants', 'created_at'))
+    ? 'created_at NULLS LAST, id'
+    : 'id';
+  await dataSource.query(`
+    WITH bad AS (
+      SELECT id, row_number() OVER (ORDER BY ${orderBy}) AS n
+        FROM public.merchants
+       WHERE merchant_code IS NULL
+          OR btrim(merchant_code) = ''
+          OR merchant_code !~ '^MCH-[0-9]{4,}$'
+    ),
+    base AS (
+      SELECT COALESCE(MAX(substring(merchant_code FROM 5)::int), 0) AS max_n
+        FROM public.merchants
+       WHERE merchant_code ~ '^MCH-[0-9]{4,}$'
+    )
+    UPDATE public.merchants AS merchant
+       SET merchant_code = 'MCH-' || lpad((base.max_n + bad.n)::text, 4, '0')
+      FROM bad, base
+     WHERE merchant.id = bad.id
+  `);
+  await dataSource.query(`
+    SELECT setval(
+      'public.merchant_code_seq',
+      GREATEST(COALESCE((
+        SELECT MAX(substring(merchant_code FROM 5)::int)
+          FROM public.merchants
+         WHERE merchant_code ~ '^MCH-[0-9]+$'
+      ), 1), 1),
+      EXISTS (SELECT 1 FROM public.merchants WHERE merchant_code ~ '^MCH-[0-9]+$')
+    )
+  `);
+  await dataSource.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS merchants_merchant_code_uq
+      ON public.merchants (merchant_code)
+  `);
+  await dataSource.query(`ALTER TABLE public.merchants DROP COLUMN IF EXISTS merchant_id`);
+  await dataSource.query(`
+    CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      IF NEW.merchant_code IS NULL OR btrim(NEW.merchant_code) = '' OR NEW.merchant_code !~ '^MCH-[0-9]{4,}$' THEN
+        NEW.merchant_code := 'MCH-' || lpad(nextval('public.merchant_code_seq')::text, 4, '0');
+      END IF;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql
+  `);
+  await dataSource.query(`
+    DROP TRIGGER IF EXISTS merchants_legacy_cols ON public.merchants;
+    CREATE TRIGGER merchants_legacy_cols BEFORE INSERT OR UPDATE ON public.merchants
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_merchants_legacy_cols()
+  `);
+}
+
 /** Rename camelCase columns on the tables this cleanup owns, then drop confirmed duplicates. */
 async function standardizeSnakeCaseColumns(dataSource: DataSource): Promise<void> {
   for (const [table, pairs] of Object.entries(SNAKE_CASE_RENAMES)) {
@@ -1246,14 +1296,7 @@ async function standardizeSnakeCaseColumns(dataSource: DataSource): Promise<void
   }
 
   if (await tableExists(dataSource, 'merchants')) {
-    if (await columnExists(dataSource, 'merchants', 'merchant_code')) {
-      await dataSource.query(`
-        UPDATE public.merchants
-           SET merchant_id = merchant_code
-         WHERE (merchant_id IS NULL OR BTRIM(merchant_id) = '')
-           AND merchant_code IS NOT NULL
-      `);
-    }
+    await assignSequentialMerchantCodes(dataSource);
     await dataSource.query(`
       ALTER TABLE public.merchants
         DROP COLUMN IF EXISTS "merchant-code",

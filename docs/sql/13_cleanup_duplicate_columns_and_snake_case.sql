@@ -8,11 +8,12 @@ ALTER TABLE IF EXISTS public.devices
   DROP COLUMN IF EXISTS "deviceCode",
   DROP COLUMN IF EXISTS device_activation_code;
 
--- Merchants: merchant_id is the business identifier.
--- "merchant-code" and "merchantCode" duplicate it. merchant_code stays for existing lookups.
+-- Merchants: merchant_code is the business identifier (MCH-0001, MCH-0002).
+-- merchants.merchant_id is removed. Other tables keep merchant_id as the merchant UUID.
 ALTER TABLE IF EXISTS public.merchants
   DROP COLUMN IF EXISTS "merchant-code",
-  DROP COLUMN IF EXISTS "merchantCode";
+  DROP COLUMN IF EXISTS "merchantCode",
+  DROP COLUMN IF EXISTS merchant_id;
 
 -- Repair phone numbers whose country code was stored twice (+9191..., +11... for US/CA).
 UPDATE public.merchants

@@ -56,11 +56,11 @@ export class PosAuthService {
     const merchants: any[] = await dataSource.query(
       `SELECT id, 
               merchant_code AS "merchantCode", 
-              merchant_id AS "merchantId", 
+              merchant_code AS "merchantId", 
               "business_display_name" AS "businessDisplayName", 
               "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
        FROM public.merchants 
-       WHERE (lower(email) = lower($1) OR "merchant_code" = $1 OR merchant_code = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
+       WHERE (lower(email) = lower($1) OR merchant_code = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
        LIMIT 1`,
       [rawMerchant],
     );
@@ -82,7 +82,7 @@ export class PosAuthService {
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1))
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1))
            AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(store_name) = lower($2))
          LIMIT 1`,
         [String(merchant.id), rawStore],
@@ -97,7 +97,7 @@ export class PosAuthService {
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1))
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1))
            AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
          ORDER BY created_at ASC
          LIMIT 1`,
@@ -219,11 +219,11 @@ export class PosAuthService {
         const merchants = await dataSource.query(
           `SELECT id, 
                   merchant_code AS "merchantCode", 
-                  merchant_id AS "merchantId", 
+                  merchant_code AS "merchantId", 
                   "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1 OR lower(email) = lower($1))
+           WHERE (id::text = $1 OR merchant_code = $1 OR lower(email) = lower($1))
            LIMIT 1`,
           [String(targetMerchantId).trim()],
         );
@@ -242,7 +242,7 @@ export class PosAuthService {
         let storeParams: any[] = [String(targetStoreId).trim()];
         if (targetMerchantId) {
           storeParams.push(String(targetMerchantId));
-          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR "merchant_id" = $2 OR merchant_id = $2 OR "merchant_code" = $2 OR merchant_code = $2))`;
+          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR merchant_code = $2))`;
         }
         const stores = await dataSource.query(
           `SELECT id, "store_code" AS "storeCode", 
@@ -302,7 +302,7 @@ export class PosAuthService {
       `;
       if (targetMerchantId) {
         queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR merchant_id = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR merchant_code = $${queryParams.length}))`;
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR merchant_code = $${queryParams.length}))`;
       }
       if (rawEmployeeCode) {
         queryParams.push(rawEmployeeCode);
@@ -335,7 +335,7 @@ export class PosAuthService {
         `;
         if (targetMerchantId) {
           merchantParams.push(String(targetMerchantId));
-          merchantEmpQuery += ` AND (e.merchant_id::text = $${merchantParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${merchantParams.length} OR "merchant_id" = $${merchantParams.length} OR merchant_id = $${merchantParams.length} OR "merchant_code" = $${merchantParams.length} OR merchant_code = $${merchantParams.length}))`;
+          merchantEmpQuery += ` AND (e.merchant_id::text = $${merchantParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${merchantParams.length} OR merchant_code = $${merchantParams.length}))`;
         }
         if (rawEmployeeCode) {
           merchantParams.push(rawEmployeeCode);
@@ -388,11 +388,11 @@ export class PosAuthService {
         const merchants = await dataSource.query(
           `SELECT id, 
                   merchant_code AS "merchantCode", 
-                  merchant_id AS "merchantId", 
+                  merchant_code AS "merchantId", 
                   "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1)
+           WHERE (id::text = $1 OR merchant_code = $1)
            LIMIT 1`,
           [String(targetMerchantId)],
         );
@@ -407,7 +407,7 @@ export class PosAuthService {
                   "store_name" AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
-           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1)) 
+           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1)) 
              AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
            ORDER BY created_at ASC
            LIMIT 1`,
@@ -810,10 +810,9 @@ export class PosAuthService {
     }
 
     const merchants = await dataSource.query(
-      `SELECT id::text AS id, merchant_code AS "merchantCode", merchant_id AS "merchantId", status
+      `SELECT id::text AS id, merchant_code AS "merchantCode", merchant_code AS "merchantId", status
        FROM public.merchants
        WHERE id::text = $1
-          OR merchant_id::text = $1
           OR merchant_code = $1
           OR lower(email) = lower($1)
        LIMIT 1`,
@@ -839,7 +838,7 @@ export class PosAuthService {
            merchant_id::text = $2
            OR merchant_id IN (
              SELECT id FROM public.merchants
-             WHERE id::text = $2 OR merchant_id::text = $2 OR merchant_code = $2
+             WHERE id::text = $2 OR merchant_code = $2
            )
          )
        LIMIT 1`,

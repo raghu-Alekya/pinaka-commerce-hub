@@ -18,7 +18,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
       await runner.query(`
         CREATE TABLE IF NOT EXISTS public.merchants (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          merchant_id varchar(100),
           merchant_code varchar(100),
           business_display_name varchar(255),
           created_at timestamptz DEFAULT now()
@@ -26,7 +25,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
 
         ALTER TABLE public.merchants
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
-          ADD COLUMN IF NOT EXISTS merchant_id varchar(100),
           ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
@@ -60,9 +58,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
-        UPDATE public.merchants SET merchant_code = COALESCE(merchant_code, merchant_id, 'MER-' || id::text) WHERE merchant_code IS NULL;
-        UPDATE public.merchants SET merchant_id = COALESCE(merchant_id, merchant_code, 'MER-' || id::text) WHERE merchant_id IS NULL;
-        
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);
 

@@ -1352,7 +1352,7 @@ export class MerchantRepository implements OnModuleInit {
     },
   ): Promise<MerchantEntity> {
     const rowId = crypto.randomUUID();
-    const merchantId = data.merchantId || `MCH-${rowId.slice(0, 8).toUpperCase()}`;
+    const merchantId = data.merchantId && /^MCH-[0-9]{4,}$/.test(data.merchantId) ? data.merchantId : undefined;
     const owner = data.ownerName || data.firstName || 'Owner';
     const [firstName, ...rest] = owner.split(' ');
     const saved = await this.merchantRepo.save(
@@ -1455,7 +1455,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async resolveMerchantId(idOrUuid: string): Promise<string | null> {
     const rows = await this.dataSource.query(
-      'SELECT merchant_id AS "merchantId" FROM public.merchants WHERE merchant_id=$1 OR merchant_code=$1 OR id::text=$1 LIMIT 1',
+      'SELECT merchant_code AS "merchantId" FROM public.merchants WHERE merchant_code=$1 OR id::text=$1 LIMIT 1',
       [idOrUuid],
     );
     return rows[0]?.merchantId || null;
@@ -1463,7 +1463,7 @@ export class MerchantRepository implements OnModuleInit {
 
   async resolveMerchantUuid(idOrUuid: string): Promise<string | null> {
     const rows = await this.dataSource.query(
-      'SELECT m.id FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
+      'SELECT m.id FROM public.merchants m WHERE m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
       [idOrUuid],
     );
     return rows[0]?.id || null;
@@ -1475,9 +1475,9 @@ export class MerchantRepository implements OnModuleInit {
     aliases: string[];
   } | null> {
     const rows = await this.dataSource.query(
-      `SELECT m.merchant_id AS "merchantId", m.merchant_code AS "merchantCode", m.id::text AS uuid
+      `SELECT m.merchant_code AS "merchantId", m.merchant_code AS "merchantCode", m.id::text AS uuid
        FROM public.merchants m
-       WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1
+       WHERE m.merchant_code=$1 OR m.id::text=$1
        ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id
        LIMIT 1`,
       [idOrUuid],
@@ -1500,7 +1500,6 @@ export class MerchantRepository implements OnModuleInit {
         `SELECT to_jsonb(m) AS data
          FROM public.merchants m
          WHERE m.id::text = $1
-            OR m.merchant_id = $1
             OR m.merchant_code = $1
          LIMIT 1`,
         [merchantId],
@@ -5617,7 +5616,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
          ) DESC
          LIMIT 1
        ) s ON true
-       WHERE m.id::text = $1 OR m.merchant_id = $1 OR m.merchant_code = $1
+       WHERE m.id::text = $1 OR m.merchant_code = $1
        LIMIT 1`,
       [merchantId],
     );
@@ -5791,7 +5790,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           const merchantUuid =
             (
               await manager.query(
-                'SELECT m.id FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
+                'SELECT m.id FROM public.merchants m WHERE m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
                 [dto.merchantId],
               )
             )[0]?.id || null;
@@ -5842,8 +5841,8 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     idOrCode: string,
   ): Promise<{ merchantCode: string; merchantUuid: string }> {
     const rows = await this.dataSource.query(
-      `SELECT m.merchant_id AS "merchantCode", m.id AS "merchantUuid"
-       FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1`,
+      `SELECT m.merchant_code AS "merchantCode", m.id AS "merchantUuid"
+       FROM public.merchants m WHERE m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1`,
       [idOrCode],
     );
     if (!rows.length)
@@ -7182,7 +7181,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     defaultLoginPin?: string,
   ): Promise<void> {
     const merchants = await manager.query(
-      'SELECT m.id,m.merchant_id AS "merchantCode" FROM public.merchants m WHERE m.merchant_id=$1 OR m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
+      'SELECT m.id,m.merchant_code AS "merchantCode" FROM public.merchants m WHERE m.merchant_code=$1 OR m.id::text=$1 ORDER BY CASE WHEN m.id::text=$1 THEN 0 ELSE 1 END, m.created_at, m.id LIMIT 1',
       [merchantId],
     );
     if (!merchants[0]) throw new NotFoundException('Merchant not found');

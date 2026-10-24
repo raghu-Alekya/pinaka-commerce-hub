@@ -234,7 +234,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS merchant_uuid_tmp uuid;
           EXECUTE $sql$
             UPDATE public.employees e SET merchant_uuid_tmp=m.id FROM public.merchants m
-            WHERE COALESCE(m.merchant_code, m.merchant_id, m.id::text)=e.merchant_id::text OR m.id::text=e.merchant_id::text
+            WHERE COALESCE(m.merchant_code, m.id::text)=e.merchant_id::text OR m.id::text=e.merchant_id::text
           $sql$;
           IF EXISTS (SELECT 1 FROM public.employees WHERE merchant_uuid_tmp IS NULL) THEN
             RAISE EXCEPTION 'Cannot migrate employees: unresolved merchant_id';
@@ -338,7 +338,7 @@ export async function ensureEmployeeAccessSchema(db: DataSource): Promise<void> 
           UPDATE public.role_permissions rp SET merchant_id_uuid = m.id::uuid
             FROM public.merchants m
             WHERE rp.merchant_id IS NOT NULL
-              AND rp.merchant_id::text IN (m.id::text, COALESCE(m.merchant_code, m.merchant_id, m.id::text));
+              AND rp.merchant_id::text IN (m.id::text, COALESCE(m.merchant_code, m.id::text));
           ALTER TABLE public.role_permissions DROP COLUMN merchant_id;
           ALTER TABLE public.role_permissions RENAME COLUMN merchant_id_uuid TO merchant_id;
         END IF;
