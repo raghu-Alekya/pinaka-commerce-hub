@@ -888,7 +888,7 @@ export class PosAuthService {
       scope,
       `SELECT store_id::text AS store_id, payload
          FROM public.store_products
-        WHERE store_id::text = ANY($2::text[])
+        WHERE store_id::text = ANY($1::text[])
           AND COALESCE(is_deleted, false) = false`,
     );
     return rows.flatMap((row) => {
@@ -919,7 +919,7 @@ export class PosAuthService {
       scope,
       `SELECT store_id::text AS store_id, payload
          FROM public.store_categories
-        WHERE store_id::text = ANY($2::text[])
+        WHERE store_id::text = ANY($1::text[])
           AND COALESCE(is_deleted, false) = false`,
     );
     return rows.flatMap((row) => {
@@ -944,7 +944,7 @@ export class PosAuthService {
 
   private async queryCatalog(scope: CatalogScope, sql: string): Promise<Array<Record<string, any>>> {
     try {
-      return await scope.dataSource.query(sql, [scope.merchantIds, scope.storeIds]);
+      return await scope.dataSource.query(sql, [scope.storeIds]);
     } catch (error) {
       if (this.postgresCode(error) === '42P01') {
         throw new NotFoundException('Store catalog has not been synced');
