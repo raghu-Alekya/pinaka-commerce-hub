@@ -1278,6 +1278,60 @@ async function assignSequentialMerchantCodes(dataSource: DataSource): Promise<vo
   `);
 }
 
+/** Number store_code as STR-00001, STR-00002. The trigger assigns the next code. */
+async function assignSequentialStoreCodes(dataSource: DataSource): Promise<void> {
+  if (!(await columnExists(dataSource, 'stores', 'store_code'))) return;
+  await dataSource.query(`DROP TABLE IF EXISTS public.store_code_counters`);
+  await dataSource.query(`CREATE SEQUENCE IF NOT EXISTS public.store_code_seq AS integer START WITH 1 INCREMENT BY 1`);
+  const orderBy = (await columnExists(dataSource, 'stores', 'created_at'))
+    ? 'created_at NULLS LAST, id'
+    : 'id';
+  await dataSource.query(`
+    WITH bad AS (
+      SELECT id, row_number() OVER (ORDER BY ${orderBy}) AS n
+        FROM public.stores
+       WHERE store_code IS NULL
+          OR btrim(store_code) = ''
+          OR store_code !~ '^STR-[0-9]{5}$'
+    ),
+    base AS (
+      SELECT COALESCE(MAX(substring(store_code FROM 5)::int), 0) AS max_n
+        FROM public.stores
+       WHERE store_code ~ '^STR-[0-9]{5}$'
+    )
+    UPDATE public.stores AS store
+       SET store_code = 'STR-' || lpad((base.max_n + bad.n)::text, 5, '0')
+      FROM bad, base
+     WHERE store.id = bad.id
+  `);
+  await dataSource.query(`
+    SELECT setval(
+      'public.store_code_seq',
+      GREATEST(COALESCE((
+        SELECT MAX(substring(store_code FROM 5)::int)
+          FROM public.stores
+         WHERE store_code ~ '^STR-[0-9]{5}$'
+      ), 1), 1),
+      EXISTS (SELECT 1 FROM public.stores WHERE store_code ~ '^STR-[0-9]{5}$')
+    )
+  `);
+  await dataSource.query(`
+    CREATE OR REPLACE FUNCTION public.assign_store_code() RETURNS trigger AS $fn$
+    BEGIN
+      IF NEW.store_code IS NULL OR btrim(NEW.store_code) = '' OR NEW.store_code !~ '^STR-[0-9]{5}$' THEN
+        NEW.store_code := 'STR-' || lpad(nextval('public.store_code_seq')::text, 5, '0');
+      END IF;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql
+  `);
+  await dataSource.query(`
+    DROP TRIGGER IF EXISTS stores_assign_store_code ON public.stores;
+    CREATE TRIGGER stores_assign_store_code BEFORE INSERT OR UPDATE ON public.stores
+      FOR EACH ROW EXECUTE PROCEDURE public.assign_store_code()
+  `);
+}
+
 /** Rename camelCase columns on the tables this cleanup owns, then drop confirmed duplicates. */
 async function standardizeSnakeCaseColumns(dataSource: DataSource): Promise<void> {
   for (const [table, pairs] of Object.entries(SNAKE_CASE_RENAMES)) {
@@ -1293,6 +1347,10 @@ async function standardizeSnakeCaseColumns(dataSource: DataSource): Promise<void
         DROP COLUMN IF EXISTS "deviceCode",
         DROP COLUMN IF EXISTS device_activation_code
     `);
+  }
+
+  if (await tableExists(dataSource, 'stores')) {
+    await assignSequentialStoreCodes(dataSource);
   }
 
   if (await tableExists(dataSource, 'merchants')) {
