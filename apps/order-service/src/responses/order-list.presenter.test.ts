@@ -38,6 +38,19 @@ function row(status: string) {
   } as any;
 }
 
+test('total-orders preserves the saved item-rounded tax for order 262976097', () => {
+  const sample = row('completed');
+  sample.order.clientOrderId = '262976097';
+  sample.order.taxAmount = 2.95;
+  sample.storeOrder.taxTotal = 2.95;
+  sample.storeOrder.total = 32.31;
+  sample.storeOrder.taxLines = [{ rate_percent: 9.1, tax_total: '2.95' }];
+  sample.storeOrder.lineItems = ['3.39', '2.99', '2.59', '1.99', '4.69', '4.59', '3.39', '3.89', '4.79']
+    .map(total => ({ total, quantity: 1, tax_class: '' }));
+  const result = new OrderListPresenter().present(1, 10, 1, [sample]);
+  assert.equal(result.orders_data[0].total_tax, '2.95');
+});
+
 test('total-orders shows net total plus tax when a merchant discount was left out of the stored total', () => {
   const sample = row('completed');
   sample.order.totalAmount = 183.81;

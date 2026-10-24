@@ -275,11 +275,7 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   }];
 }
 
-/**
- * Corrects legacy one-cent tax snapshots using receipt-style total rounding.
- * Larger differences are preserved because they can represent tax rules that
- * are not available to the read-side presenter.
- */
+/** Preserve the saved tax, including the original per-item rounding. */
 export function listOrderTax(input: {
   tax?: unknown;
   lineItems?: ReadonlyArray<PosLineItem>;
@@ -288,28 +284,7 @@ export function listOrderTax(input: {
   decimalPlaces?: number;
 }): number {
   const places = input.decimalPlaces ?? 2;
-  const storedMinor = Math.max(0, toMinor(input.tax, places));
-  const taxLineRate = input.taxLines?.find((line) => Number(line?.rate_percent) > 0)?.rate_percent;
-  const lineRate = input.lineItems
-    ?.flatMap((line) => Array.isArray(line?.taxes) ? line.taxes : [])
-    .map((tax) => Number(tax?.rate_percent ?? tax?.id))
-    .find((value) => Number.isFinite(value) && value > 0);
-  const rate = Number(taxLineRate || lineRate || 0);
-  if (rate <= 0 || !input.lineItems?.length) return fromMinor(storedMinor, places);
-
-  const calculated = calculateTaxLines({
-    lineItems: [...input.lineItems],
-    // Cashback/payout fees are cash movements or separately presented
-    // charges. Only merchant discount changes the merchandise tax base.
-    feeLines: (input.feeLines || []).filter((fee) => isMerchantDiscountFee(fee)),
-    rate,
-    calculation: 'total',
-    decimalPlaces: places,
-  });
-  const calculatedMinor = Math.max(0, toMinor(calculated[0]?.tax_total ?? 0, places));
-  return Math.abs(calculatedMinor - storedMinor) <= 1
-    ? fromMinor(calculatedMinor, places)
-    : fromMinor(storedMinor, places);
+  return fromMinor(Math.max(0, toMinor(input.tax, places)), places);
 }
 
 /**
