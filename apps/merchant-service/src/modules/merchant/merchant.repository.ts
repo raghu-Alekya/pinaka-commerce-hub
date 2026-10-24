@@ -3528,7 +3528,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     const attributes = await this.fetchWooCollection(
       params.wordpressUrl,
       params.wordpressJwt,
-      '/wp-json/wc/v3/products/attributes',
+      '/wp-json/pinaka-pos/v1/assets/attributes',
       { per_page: '100' },
     );
     await this.saveStoreCategoryColumn(params.storeId, 'attributes', attributes);
