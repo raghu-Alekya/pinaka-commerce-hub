@@ -1283,11 +1283,10 @@ export class MerchantRepository implements OnModuleInit {
           if (!type || type.status !== 'ACTIVE')
             throw new BadRequestException('Select an active store type');
           await stores.save(
-            this.buildStore(merchant.id, {
+            await this.buildStore(merchant.id, {
               id: storeId,
               storeTypeId: type.id,
-              storeCode:
-                item.storeCode || `STR-${storeId.slice(0, 8).toUpperCase()}`,
+              storeCode: item.storeCode && /^STR-[0-9]{5}$/.test(item.storeCode) ? item.storeCode : undefined,
               storeName: item.storeName,
               phone: item.phone,
               storeEmail: item.storeEmail,
@@ -1540,7 +1539,7 @@ export class MerchantRepository implements OnModuleInit {
     );
   }
 
-  private buildStore(
+  private async buildStore(
     merchantUuid: string,
     data: Partial<StoreEntity> & {
       address?: {
@@ -1552,13 +1551,13 @@ export class MerchantRepository implements OnModuleInit {
         country?: string;
       };
     },
-  ): StoreEntity {
+  ): Promise<StoreEntity> {
     const id = this.isUuid(data.id) ? data.id : crypto.randomUUID();
     const address = data.address;
     const storeCode =
-      data.storeCode ||
-      (!this.isUuid(data.id) && data.id) ||
-      `STR-${id.slice(0, 8).toUpperCase()}`;
+      data.storeCode && /^STR-[0-9]{5}$/.test(data.storeCode)
+        ? data.storeCode
+        : '';
     return {
       id,
       merchantId: merchantUuid,
@@ -1630,11 +1629,8 @@ export class MerchantRepository implements OnModuleInit {
     }
     const storeTypeId = await this.resolveStoreTypeId(data);
     const generatedId = this.isUuid(data.id) ? data.id : crypto.randomUUID();
-    const storeCode =
-      data.storeCode ||
-      (!this.isUuid(data.id) && data.id) ||
-      (await this.allocateId('store'));
-    const store = this.buildStore(identity.merchantUuid, {
+    const storeCode = data.storeCode && /^STR-[0-9]{5}$/.test(data.storeCode) ? data.storeCode : undefined;
+    const store = await this.buildStore(identity.merchantUuid, {
       ...data,
       storeTypeId,
       id: generatedId,
@@ -1644,6 +1640,11 @@ export class MerchantRepository implements OnModuleInit {
     const entity = this.storeRepo.create(store);
     try {
       await this.storeRepo.insert(entity);
+      const [saved] = await this.dataSource.query(
+        `SELECT store_code AS "storeCode" FROM public.stores WHERE id = $1::uuid`,
+        [entity.id],
+      );
+      if (saved?.storeCode) entity.storeCode = saved.storeCode;
     } catch (error: any) {
       if (error.code === '23505' || error.driverError?.code === '23505') {
         throw new ConflictException(
@@ -1684,10 +1685,7 @@ export class MerchantRepository implements OnModuleInit {
       data.map(async (item) => {
         const storeTypeId = await this.resolveStoreTypeId(item);
         const id = this.isUuid(item.id) ? item.id : crypto.randomUUID();
-        const storeCode =
-          item.storeCode ||
-          (!this.isUuid(item.id) && item.id) ||
-          (await this.allocateId('store'));
+        const storeCode = item.storeCode && /^STR-[0-9]{5}$/.test(item.storeCode) ? item.storeCode : undefined;
         return this.buildStore(identity.merchantUuid, {
           ...item,
           storeTypeId,
@@ -1696,9 +1694,12 @@ export class MerchantRepository implements OnModuleInit {
         });
       }),
     );
+    const suppliedCodes = stores
+      .map((store) => store.storeCode)
+      .filter((code) => /^STR-[0-9]{5}$/.test(code || ''));
     if (
       new Set(stores.map((s) => s.id)).size !== stores.length ||
-      new Set(stores.map((s) => s.storeCode)).size !== stores.length
+      new Set(suppliedCodes).size !== suppliedCodes.length
     ) {
       throw new ConflictException('Each store must have a unique Store ID.');
     }
@@ -1706,6 +1707,15 @@ export class MerchantRepository implements OnModuleInit {
       await this.storeRepo.manager.transaction(async (manager) => {
         await manager.insert(StoreEntity, stores);
       });
+      const saved: Array<{ id: string; storeCode: string }> = await this.dataSource.query(
+        `SELECT id::text AS id, store_code AS "storeCode" FROM public.stores WHERE id = ANY($1::uuid[])`,
+        [stores.map((store) => store.id)],
+      );
+      const codes = new Map(saved.map((row) => [row.id, row.storeCode]));
+      for (const store of stores) {
+        const assigned = codes.get(store.id);
+        if (assigned) store.storeCode = assigned;
+      }
     } catch (error: any) {
       if (error.code === '23505' || error.driverError?.code === '23505') {
         throw new ConflictException(

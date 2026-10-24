@@ -227,7 +227,7 @@ export class AppController {
 
     const store = await this.merchantRepository.createStore(merchant.id, {
       storeName: body.storeName || `${merchant.businessName} - Main Store`,
-      storeCode: body.storeCode || 'STR-MAIN-01',
+      storeCode: body.storeCode,
       storeType: body.businessType || 'GROCERY',
       address: body.address || { street: '123 Main St', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
       taxRate: body.taxRate || 8.25,
