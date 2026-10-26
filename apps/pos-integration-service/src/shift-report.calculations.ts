@@ -349,6 +349,7 @@ export type ShiftReportInput = {
   closingNotes: string;
   shiftStatus: string;
   overShort: number;
+  openedAt?: Date | string | null;
   orders: ReportOrder[];
   payments: ReportPayment[];
   safeDrops: SafeDropRow[];
@@ -385,21 +386,59 @@ function payoutOnOrder(order: ReportOrder): number {
   ), 0);
 }
 
+function lineLabel(line: Record<string, unknown>): string {
+  return lineName(line).trim().toLowerCase().replace(/[\s-]+/g, ' ');
+}
+
+function isCashbackFeeLine(line: Record<string, unknown>): boolean {
+  const name = lineLabel(line);
+  return name === 'cashback fee' || name.startsWith('cashback fee ');
+}
+
+function isCashbackPrincipalLine(line: Record<string, unknown>): boolean {
+  if (isCashbackFeeLine(line)) return false;
+  const name = lineLabel(line);
+  return name === 'cashback' || name === 'cashback amount';
+}
+
 function cashbackOnOrders(orders: ReportOrder[]): number {
   return orders.reduce((total, order) => total + linesOf(order).reduce((lineTotalAmount, line) => (
-    lineName(line).toLowerCase().includes('cashback') ? lineTotalAmount + Math.abs(lineTotal(line)) : lineTotalAmount
+    isCashbackPrincipalLine(line) ? lineTotalAmount + Math.abs(lineTotal(line)) : lineTotalAmount
   ), 0), 0);
 }
 
 function cashbackFeeOnOrders(orders: ReportOrder[], settings: CashbackSettings | null): number {
   let total = 0;
   for (const order of orders) {
-    for (const line of linesOf(order)) {
-      if (!lineName(line).toLowerCase().includes('cashback')) continue;
+    const lines = linesOf(order);
+    const storedFee = lines.reduce((feeTotal, line) => (
+      isCashbackFeeLine(line) ? feeTotal + Math.abs(lineTotal(line)) : feeTotal
+    ), 0);
+    // A stored "Cashback Fee" line is already part of the cash or card tender.
+    if (storedFee > 0) continue;
+    for (const line of lines) {
+      if (!isCashbackPrincipalLine(line)) continue;
       total += cashbackFeeForAmount(Math.abs(lineTotal(line)), settings);
     }
   }
   return total;
+}
+
+function reportEpoch(value: Date | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.getTime();
+  const text = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text) ? `${text.replace(' ', 'T')}Z` : text;
+  const time = Date.parse(normalized);
+  return Number.isNaN(time) ? null : time;
+}
+
+/** A safe drop recorded with the shift open is not cash removed from an already open drawer. */
+function safeDropReducesTill(drop: SafeDropRow, openedAt: Date | string | null | undefined): boolean {
+  const dropTime = reportEpoch(drop.time);
+  const openTime = reportEpoch(openedAt);
+  if (dropTime == null || openTime == null) return true;
+  return dropTime > openTime + 15_000;
 }
 
 /**
@@ -412,9 +451,10 @@ function cashbackFeeOnOrders(orders: ReportOrder[], settings: CashbackSettings |
  *             + cash captured - cash change
  *             - cash refunds
  *             - cashback principal handed to the customer
- *             - payouts, paid-outs, cash vendor payments, and safe drops
+ *             - payouts, paid-outs, cash vendor payments, and safe drops made after the shift opens
  *             + paid-ins
- * Card tenders are sales, not drawer cash.
+ * A safe drop recorded at shift open is reported, but it is not removed from the till.
+ * A stored "Cashback Fee" line is already inside the cash or card tender, so it is not added again.
  */
 export function prepareShiftData(input: ShiftReportInput): { report: Record<string, unknown>; tillAmount: number } {
   const orders = new Map(input.orders.map((order) => [order.order_id, order]));
@@ -471,6 +511,9 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
   }
 
   const safeDropValue = input.safeDrops.reduce((sum, drop) => sum + Number(drop.total || 0), 0);
+  const safeDropInTill = input.safeDrops.reduce((sum, drop) => (
+    safeDropReducesTill(drop, input.openedAt) ? sum + Number(drop.total || 0) : sum
+  ), 0);
   const vendorCash = getVendorCashPayouts(input.vendorPayouts);
   const cashNet = cashIn - cashRefund;
   const cardNet = cardIn - cardRefund;
@@ -484,7 +527,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
     - paidOut
     - payoutTransactions
     - vendorCash
-    - safeDropValue
+    - safeDropInTill
     + paidIn;
   const saleCount = new Set(included.map((payment) => payment.order_id || payment.id)).size;
   const voidItems = getVoidItems(input.orders, input.shiftId);

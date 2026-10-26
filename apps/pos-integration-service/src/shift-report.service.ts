@@ -92,6 +92,7 @@ export class ShiftReportService {
       closingNotes: this.metaText(meta, 'closing_note') || this.metaText(meta, 'shift_closing_notes'),
       shiftStatus: status === 'closed' ? 'closed' : status,
       overShort: this.metaNumber(meta, 'over_short', this.number(shift.over_short)),
+      openedAt: shift.opened_at,
       orders,
       payments,
       safeDrops,
