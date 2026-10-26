@@ -405,7 +405,7 @@ function cashbackFeeOnOrders(orders: ReportOrder[], settings: CashbackSettings |
 /**
  * Sales and drawer totals for one shift.
  *
- * total_sale_amount = net cash tender + net card tender + cashback fee
+ * total_sale_amount = net cash tender + net card tender + cashback fee - payout
  * net tender        = captured amount - refund on that tender - change (cash only)
  *
  * till_amount = opening balance
@@ -474,7 +474,8 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
   const vendorCash = getVendorCashPayouts(input.vendorPayouts);
   const cashNet = cashIn - cashRefund;
   const cardNet = cardIn - cardRefund;
-  const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount;
+  const payoutAmount = recognizedOrderPayout + paidOut + payoutTransactions;
+  const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount - payoutAmount;
   const tillAmount = Number(input.openingBalance || 0)
     + cashIn
     - cashRefund
@@ -511,7 +512,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       ebt_total: getShiftEbtTotal(input.payments) || 0,
       card_total: getShiftCardTotal(input.payments) || 0,
       refund_total: roundMoney(cashRefund + cardRefund) || 0,
-      payout_total: roundMoney(recognizedOrderPayout + paidOut + payoutTransactions) || 0,
+      payout_total: roundMoney(payoutAmount) || 0,
       void_items_count: voidItems.length,
       void_items: voidItems,
       closing_balance: roundMoney(input.closingBalance) || 0,
