@@ -6,6 +6,7 @@ import { MovementType } from './entities/cash-movement.entity';
 import { describeUnmappedShiftKeys, normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
 import { ShiftReportService } from './shift-report.service';
 import { shiftDebug, shiftErrorDetails, summarizeShiftWrite } from './shift-debug.log';
+import { withStoreShiftFields } from './shift.types';
 
 const SHIFT_REQUEST_ALIASES = [
   ['merchant_id', 'merchantId'],
@@ -242,8 +243,8 @@ export class AppController {
     return this.traceShift('GET /stores/:store_id/shifts', { store_id }, async () => {
       const storeId = store_id.trim();
       if (!storeId) throw new BadRequestException('store_id is required');
-      const shifts = await this.posRepository.getShiftsByStore(storeId);
-      return { success: true, store_id: storeId, count: shifts.length, shifts };
+      const shifts = (await this.posRepository.getShiftsByStore(storeId)).map(withStoreShiftFields);
+      return { success: true, store_id: storeId, merchant_id: shifts[0]?.merchant_id ?? null, count: shifts.length, shifts };
     });
   }
 
@@ -255,7 +256,7 @@ export class AppController {
     return this.traceShift('GET /stores/:store_id/shifts/:shift_id', { store_id, shift_id }, async () => {
       const shift = await this.posRepository.getShiftWithSafeTransactions(shift_id, store_id);
       if (!shift) throw new NotFoundException('POS shift not found');
-      return { success: true, shift };
+      return { success: true, shift: withStoreShiftFields(shift) };
     });
   }
 
