@@ -77,9 +77,10 @@ export class OrderListPresenter {
       total: storeOrder?.total ?? order.totalAmount,
       tax,
       taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
-      couponDiscount: coupons.length
-        ? coupons.reduce((sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0), 0)
-        : (storeOrder?.discountTotal ?? order.discountAmount),
+      couponDiscount: coupons.reduce(
+        (sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0),
+        0,
+      ),
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
       feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
       shippingTotal: request.shipping_total ?? request.shippingTotal,

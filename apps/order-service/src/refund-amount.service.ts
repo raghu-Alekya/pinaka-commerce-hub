@@ -41,6 +41,16 @@ export class RefundAmountService {
         if (!Number.isFinite(amount) || amount < 0) throw this.error('invalid_item', 'Invalid refund item');
         return sum + amount;
       }, 0);
+      const refunded = context.payments
+        .filter((payment: any) => !payment.is_void)
+        .reduce((sum: number, payment: any) => sum + (payment.entry_type === 'payment'
+          ? Number(payment.refund_amount || 0)
+          : payment.entry_type === 'refund' ? Number(payment.amount || 0) : 0), 0);
+      const orderTotal = Number(context.storeOrder?.total ?? context.order.totalAmount ?? 0);
+      const remaining = Math.max(0, orderTotal - refunded);
+      if (total - remaining > 0.005) {
+        throw this.error('exceeds_remaining', `Refund amount exceeds remaining refundable amount of ${this.round(remaining).toFixed(2)}`);
+      }
     } else {
       const paymentRows = context.payments.filter((payment: any) => payment.entry_type === 'payment' && !payment.is_void);
       const orderTotal = Number(context.storeOrder?.total ?? context.order.totalAmount ?? 0);
