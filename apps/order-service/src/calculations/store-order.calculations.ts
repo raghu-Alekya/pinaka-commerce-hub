@@ -538,7 +538,7 @@ export function listOrderTotal(input: {
   const extraDiscount = Math.max(0, toMinor(input.couponDiscount ?? 0, places) - appliedInLines);
   const payableMinor = lineTotalMinor + feeMinorTotal + shippingMinor + tipMinor - extraDiscount;
   if (hasCashMovement || hasCashMovementFee) {
-    return fromMinor(Math.max(0, payableMinor + taxMinor), places);
+    return fromMinor(payableMinor + taxMinor, places);
   }
   const storedMinor = toMinor(input.total, places);
   const close = (amount: number) => Math.abs(storedMinor - amount) <= 2;
