@@ -30,6 +30,9 @@ export interface KycDocument {
 
 @Entity('merchants')
 export class MerchantEntity {
+  @Column({ name: 'password', type: 'varchar', length: 255, nullable: true, select: false })
+  password?: string | null;
+
   // =========================================================
   // IDENTITY
   // =========================================================
