@@ -121,6 +121,8 @@ export class CompletedOrderPresenter {
       transaction_id: payments.map((payment: any) => payment?.transaction_id ?? payment?.payment_id ?? payment?.id)
         .filter((value: unknown) => value !== undefined && value !== null && value !== '').join(','),
       payment_method: String(storeOrder?.paymentMethod || request.payment_method || order.paymentMethod || '').toLowerCase(),
+      change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
+      cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
       discount: Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0) || 0,
       order_type: String(request.order_type || this.metaValue(order, '_order_type') || (createdVia === 'rest-api' ? 'Shop Order' : createdVia)),
       author: String(storeOrder?.placedBy || this.metaValue(order, '_wc_order_created_by') || this.metaValue(order, 'pos_placed_by') || request.author || ''),

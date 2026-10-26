@@ -7,13 +7,17 @@ import { OrderEntity, OrderType, PaymentMethod, PaymentStatus, OrderStatus } fro
 import { OrderItemEntity } from './entities/order-item.entity';
 import { OrderStatusHistoryEntity } from './entities/order-status-history.entity';
 import { StoreOrderEntity } from './entities/store-order.entity';
+import { StoreOrderMetaEntity } from './entities/store-order-meta.entity';
+import { cashChangeReturned, isCashTender } from './calculations/order-change';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
+import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
   applyMerchantDiscountToStoredTax,
   calculateDiscountTotal,
   calculateStoreOrder,
   isTaxableSaleLine,
   listOrderTotal,
+  orderTotalWithTax,
   sumCouponDiscounts,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
@@ -39,7 +43,7 @@ export class OrderRepository implements OnModuleInit {
       await this.migrateLegacyOrderIdsBeforeOrm();
       await this.migrateOrderColumnsToSnakeCase();
       this.dataSource = new DataSource({
-        ...postgresConnectionOptions([StoreOrderEntity, OrderItemEntity, OrderStatusHistoryEntity]),
+        ...postgresConnectionOptions([StoreOrderEntity, StoreOrderMetaEntity, OrderItemEntity, OrderStatusHistoryEntity]),
         synchronize: false,
       });
       await this.dataSource.initialize();
@@ -47,6 +51,7 @@ export class OrderRepository implements OnModuleInit {
       await this.ensurePosOrderColumns();
       await this.ensureStoreOrdersTable();
       await ensureStorePosPaymentsSchema(this.dataSource);
+      await ensureStoreOrdersMetaSchema(this.dataSource);
       this.storeOrderRepo = this.dataSource.getRepository(StoreOrderEntity);
       this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
       this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
@@ -259,6 +264,7 @@ export class OrderRepository implements OnModuleInit {
               paymentRows.flat(),
             );
           }
+          await this.saveStoreOrderMeta(manager, id, storeOrder.metadata, storeOrder.metaData);
           return { persistedStoreOrder };
         });
         savedStoreOrder = saved.persistedStoreOrder;
@@ -437,6 +443,30 @@ export class OrderRepository implements OnModuleInit {
         }];
 
     const rawOrderTotal = Number(order.totalAmount || 0);
+    const metadataEntries = Array.isArray(sourcePayload?.meta_data)
+      ? sourcePayload.meta_data
+      : Array.isArray(orderData?.metadata) ? orderData.metadata : [];
+    const cashPaid = metadataEntries.find((entry: any) => entry?.key === 'pos_cash_paid' || entry?.key === '_pos_cash_paid')?.value;
+    const change = cashChangeReturned({
+      orderTotal: rawOrderTotal,
+      cashPaid,
+      payments: payments.map((payment: any) => ({
+        method: payment?.payment_method ?? payment?.paymentMethod ?? payment?.method ?? sourcePayload?.payment_method ?? order.paymentMethod,
+        amount: payment?.amount ?? payment?.total ?? payment?.value,
+        status: payment?.status ?? (orderData?.paymentStatus === PaymentStatus.PENDING ? 'pending' : 'completed'),
+      })),
+    });
+    this.upsertOrderMeta(storeOrder, [
+      { key: 'pos_change_returned', value: change.change.toFixed(2) },
+      { key: 'pos_cash_received', value: change.cashReceived.toFixed(2) },
+    ]);
+    order.metadata = storeOrder.metadata;
+    let lastCashIndex = -1;
+    payments.forEach((payment: any, index: number) => {
+      const tender = payment?.payment_method ?? payment?.paymentMethod ?? payment?.method
+        ?? sourcePayload?.payment_method ?? order.paymentMethod;
+      if (isCashTender(tender)) lastCashIndex = index;
+    });
     // Payout lines represent cash leaving the register, not a customer payment.
     // The order may therefore have a negative total, while the payment ledger
     // only stores non-negative captured/refundable amounts.
@@ -477,6 +507,7 @@ export class OrderRepository implements OnModuleInit {
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
         source_payload: rawPayload,
+        ...(index === lastCashIndex ? { pos_change_returned: change.change.toFixed(2) } : {}),
         ...((payment?.provider_response ?? payment?.providerResponse) == null
           ? {}
           : { provider_response: payment.provider_response ?? payment.providerResponse }),
@@ -688,7 +719,6 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
-    const clientTax = Number(sourcePayload.total_tax || 0);
     applyMerchantDiscountToStoredTax(
       lines,
       Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
@@ -703,17 +733,13 @@ export class OrderRepository implements OnModuleInit {
     const taxTotal = Number(sourcePayload.total_tax || 0);
     const shippingTotal = Number(sourcePayload.shipping_total || 0);
     if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
-    if (sourcePayload.total === undefined || normalizedCustomItem) {
-      sourcePayload.total = (lineTotal + feeTotal + shippingTotal).toFixed(places);
-    } else {
-      const supplied = Number(sourcePayload.total);
-      if (Number.isFinite(supplied)) {
-        const includedTax = Number.isFinite(clientTax) ? clientTax : 0;
-        const exclusive = Math.round((supplied - includedTax) * factor) / factor;
-        const netBeforeTax = lineTotal + feeTotal + shippingTotal;
-        sourcePayload.total = (netBeforeTax < 0 ? exclusive : Math.max(0, exclusive)).toFixed(places);
-      }
-    }
+    const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+    sourcePayload.total = orderTotalWithTax({
+      netBeforeTax,
+      tax: taxTotal,
+      pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
+      decimalPlaces: places,
+    }).toFixed(places);
 
     orderData.items = lines.map((line: any) => {
       const quantity = Number(line.quantity || 1);
@@ -1314,6 +1340,7 @@ export class OrderRepository implements OnModuleInit {
     const effectiveStatusById = new Map(idRows.map((row) => [row.id, row.effective_status]));
     if (!ids.length) return { total, orders: [] };
     const storeOrders = await this.storeOrderRepo.find({ where: { orderId: In(ids) } });
+    await this.applyStoredOrderMeta(storeOrders);
     const refundRows: Array<{
       order_id: string;
       amount: unknown;
@@ -1635,6 +1662,7 @@ export class OrderRepository implements OnModuleInit {
     }
     const match = matches[0];
     if (!match) return null;
+    await this.applyStoredOrderMeta([match]);
     return {
       order: this.projectOrder(match),
       items: this.itemsFromStore(match),
@@ -1649,6 +1677,7 @@ export class OrderRepository implements OnModuleInit {
   async getOrdersByStore(storeId: string): Promise<OrderEntity[]> {
     if (this.isDbConnected && this.storeOrderRepo) {
       const rows = await this.storeOrderRepo.find({ where: { storeId }, order: { createdAt: 'DESC' } });
+      await this.applyStoredOrderMeta(rows);
       return rows.map((row) => this.projectOrder(row));
     }
     return this.inMemoryOrders.filter(order => order.storeId === storeId);
@@ -2365,6 +2394,7 @@ export class OrderRepository implements OnModuleInit {
     if (this.isDbConnected && this.storeOrderRepo) {
       const storeOrder = await this.storeOrderRepo.findOne({ where: { orderId } });
       if (!storeOrder) return null;
+      await this.applyStoredOrderMeta([storeOrder]);
       const items = this.itemRepo ? await this.itemRepo.find({ where: { orderId } }) : [];
       const history = this.historyRepo
         ? await this.historyRepo.find({ where: { orderId }, order: { createdAt: 'ASC' } })
@@ -2405,6 +2435,83 @@ export class OrderRepository implements OnModuleInit {
       entry.clientOrderId === key || String(entry.orderNumber || '').replace(/^#/, '') === normalizedNumber,
     );
     return order ? this.getOrderById(order.id) : null;
+  }
+
+  private upsertOrderMeta(storeOrder: StoreOrderEntity, entries: Array<{ key: string; value: unknown }>): void {
+    const current = Array.isArray(storeOrder.metadata)
+      ? storeOrder.metadata.map((entry) => ({ ...entry }))
+      : Array.isArray(storeOrder.metaData)
+        ? (storeOrder.metaData as Array<{ key?: string; value?: unknown }>).map((entry) => ({
+          key: String(entry?.key || ''),
+          value: entry?.value,
+        }))
+        : [];
+    entries.forEach((entry) => {
+      const index = current.findIndex((item) => item?.key === entry.key);
+      if (index >= 0) current[index] = { ...current[index], key: entry.key, value: entry.value };
+      else current.push({ key: entry.key, value: entry.value });
+    });
+    storeOrder.metadata = current;
+    storeOrder.metaData = current;
+  }
+
+  private async saveStoreOrderMeta(
+    manager: EntityManager,
+    orderId: string,
+    metadata: unknown,
+    metaData: unknown,
+  ): Promise<void> {
+    const entries = new Map<string, unknown>();
+    const collect = (source: unknown) => {
+      if (!Array.isArray(source)) return;
+      source.forEach((entry) => {
+        const key = String(entry?.key || '').trim().slice(0, 191);
+        if (!key) return;
+        entries.set(key, entry?.value ?? null);
+      });
+    };
+    collect(metaData);
+    collect(metadata);
+    if (!entries.size) return;
+    const rows = [...entries.entries()];
+    await manager.query(
+      `INSERT INTO public.store_orders_meta (order_id, meta_key, meta_value)
+       VALUES ${rows.map((_, index) => `($1, $${index * 2 + 2}, $${index * 2 + 3}::jsonb)`).join(', ')}
+       ON CONFLICT (order_id, meta_key)
+       DO UPDATE SET meta_value = EXCLUDED.meta_value, updated_at = now()`,
+      [orderId, ...rows.flatMap(([key, value]) => [key, JSON.stringify(value)])],
+    );
+  }
+
+  private async applyStoredOrderMeta(storeOrders: StoreOrderEntity[]): Promise<void> {
+    if (!this.dataSource || !storeOrders.length) return;
+    const ids = [...new Set(storeOrders.map((order) => order.orderId).filter(Boolean))];
+    if (!ids.length) return;
+    let rows: Array<{ order_id: string; meta_key: string; meta_value: unknown }> = [];
+    try {
+      rows = await this.dataSource.query(
+        `SELECT order_id::text AS order_id, meta_key, meta_value
+           FROM public.store_orders_meta
+          WHERE order_id = ANY($1::uuid[])`,
+        [ids],
+      );
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code === '42P01') return;
+      throw error;
+    }
+    const byOrder = new Map<string, Array<{ key: string; value: unknown }>>();
+    rows.forEach((row) => {
+      const list = byOrder.get(row.order_id) || [];
+      list.push({ key: row.meta_key, value: row.meta_value });
+      byOrder.set(row.order_id, list);
+    });
+    storeOrders.forEach((storeOrder) => {
+      const stored = byOrder.get(storeOrder.orderId);
+      if (stored?.length) this.upsertOrderMeta(storeOrder, stored);
+    });
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {

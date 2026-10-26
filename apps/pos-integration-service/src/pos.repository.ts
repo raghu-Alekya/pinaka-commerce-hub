@@ -100,7 +100,7 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
           ) AS t(legacy_col, snake_col, cast_text)
         LOOP
           IF EXISTS (
-            SELECT 1 FROM information_schema.columns
+            SELECT 1 FROM information_schema.columns 
             WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.legacy_col
           ) AND EXISTS (
             SELECT 1 FROM information_schema.columns
@@ -109,7 +109,7 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
             IF col.cast_text THEN
               EXECUTE format('UPDATE public.pos_shifts SET %I = %I::text WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
             ELSE
-              EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
             END IF;
             IF col.legacy_col <> col.snake_col THEN
               EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS %I', col.legacy_col);
@@ -320,7 +320,7 @@ export class PosRepository implements OnModuleInit {
       if (existing) {
         existing.meta_value = row.meta_value;
         existing.status = row.status;
-      } else {
+    } else {
         this.memoryMeta.push(row);
       }
     }
@@ -833,7 +833,7 @@ export class PosRepository implements OnModuleInit {
     if (this.isRedisConnected && this.redisClient) {
       try {
         if (shift.status === ShiftStatus.OPEN) {
-          await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
+        await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
         } else {
           await this.redisClient.del(`shift:${storeId}`);
         }
