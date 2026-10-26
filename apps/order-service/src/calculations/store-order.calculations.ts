@@ -426,6 +426,23 @@ export function calculateOrderTotal(input: {
 }
 
 /**
+ * Amount written to store_orders.total. Line totals, fees, and shipping are
+ * tax-exclusive, so tax is added here. A payout net stays negative. Tax is
+ * not added again when the line prices already include it.
+ */
+export function orderTotalWithTax(input: {
+  netBeforeTax: number;
+  tax?: number;
+  pricesIncludeTax?: boolean;
+  decimalPlaces?: number;
+}): number {
+  const places = input.decimalPlaces ?? 2;
+  const netMinor = toMinor(input.netBeforeTax, places);
+  const taxMinor = input.pricesIncludeTax ? 0 : toMinor(input.tax ?? 0, places);
+  return fromMinor(netMinor + taxMinor, places);
+}
+
+/**
  * Older orders stored a tax-inclusive total. Orders saved after tax was removed
  * already match the line, fee, shipping, and tip sum, so tax is not removed twice.
  */

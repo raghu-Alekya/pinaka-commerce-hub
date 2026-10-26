@@ -62,6 +62,8 @@ export class OrderResponsePresenter {
       storeOrderId: result.storeOrder?.id ?? null,
       orderId: result.order.id,
       orderNumber: result.order.orderNumber,
+      change_amount: this.money(this.metaAmount(result.order.metadata, 'pos_change_returned')),
+      cash_received: this.money(this.metaAmount(result.order.metadata, 'pos_cash_received')),
       order: result.order,
       items: result.items,
     };
@@ -118,6 +120,8 @@ export class OrderResponsePresenter {
       cart_hash: request.cart_hash || '',
       number: String(request.number || order.orderNumber || '').replace(/^#/, ''),
       meta_data: this.metaData(order.metadata),
+      change_amount: this.money(this.metaAmount(order.metadata, 'pos_change_returned')),
+      cash_received: this.money(this.metaAmount(order.metadata, 'pos_cash_received')),
       line_items: lineItems,
       tax_lines: this.taxLines(request.tax_lines),
       shipping_lines: Array.isArray(request.shipping_lines) ? request.shipping_lines : [],
@@ -233,6 +237,11 @@ export class OrderResponsePresenter {
         product_data: original.product_data ?? null,
       };
     });
+  }
+
+  private metaAmount(metadata: unknown, key: string): unknown {
+    const entries = Array.isArray(metadata) ? metadata : [];
+    return entries.find((entry) => entry?.key === key)?.value ?? 0;
   }
 
   private metaData(metadata: any[]) {

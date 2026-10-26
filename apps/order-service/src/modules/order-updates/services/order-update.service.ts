@@ -16,6 +16,7 @@ import { OrderStatus } from '../../../entities/order.entity';
 import {
   calculateDiscountTotal,
   listOrderTotal,
+  orderTotalWithTax,
   sumCouponDiscounts,
   type PosCouponLine,
   type PosFeeLine,
@@ -255,11 +256,21 @@ export class OrderUpdateService {
     const tip = Number(order.tipAmount || 0);
     const tipAmount = Number.isFinite(tip) ? tip : 0;
     if (draft.orderStatus) order.orderStatus = draft.orderStatus;
-    if (draft.totals) {
+    const pricesIncludeTax = Boolean(
+      (order.requestPayload as { prices_include_tax?: boolean } | null)?.prices_include_tax,
+    );
+    const inclusiveTotal = draft.totals
+      ? orderTotalWithTax({
+        netBeforeTax: draft.totals.total + tipAmount,
+        tax: draft.totals.taxTotal,
+        pricesIncludeTax,
+      })
+      : undefined;
+    if (draft.totals && inclusiveTotal !== undefined) {
       order.subtotal = moneyAmount(draft.totals.subtotal);
       order.discountAmount = moneyAmount(draft.totals.discountTotal);
       order.taxAmount = moneyAmount(draft.totals.taxTotal);
-      order.totalAmount = moneyAmount(draft.totals.total + tipAmount);
+      order.totalAmount = moneyAmount(inclusiveTotal);
     }
     order.updatedAt = new Date();
 
@@ -273,7 +284,7 @@ export class OrderUpdateService {
         storeOrder.subtotal = moneyAmount(draft.totals.subtotal);
         storeOrder.feeTotal = moneyAmount(draft.totals.feeTotal);
         storeOrder.taxTotal = moneyAmount(draft.totals.taxTotal);
-        storeOrder.total = moneyAmount(draft.totals.total + tipAmount);
+        storeOrder.total = moneyAmount(inclusiveTotal ?? draft.totals.total + tipAmount);
       }
       const lineItems = (Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems : []) as PosLineItem[];
       const couponLines = (Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines : []) as PosCouponLine[];

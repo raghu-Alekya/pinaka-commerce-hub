@@ -6,10 +6,12 @@ import {
   type CouponSpec,
   type OrderLine,
 } from './order-update.calculations';
+import { cashChangeReturned } from './order-change';
 import {
   applyMerchantDiscountToStoredTax,
   calculateOrderTotal,
   calculateTaxLines,
+  orderTotalWithTax,
   listOrderTotal,
   totalExcludingTax,
   totalIncludingTax,
@@ -95,6 +97,41 @@ test('order list total is the net after merchant discount plus tax', () => {
     lineItems: lines,
     feeLines: fees,
   }), 179.83);
+});
+
+test('cash change is the tender above the order total', () => {
+  assert.deepEqual(cashChangeReturned({
+    orderTotal: 174.54,
+    payments: [{ method: 'Cash', amount: 200, status: 'completed' }],
+  }), { change: 25.46, cashReceived: 200 });
+  assert.deepEqual(cashChangeReturned({
+    orderTotal: 174.54,
+    payments: [
+      { method: 'Cash', amount: 100, status: 'completed' },
+      { method: 'Card', amount: 100, status: 'completed' },
+    ],
+  }), { change: 25.46, cashReceived: 100 });
+  assert.deepEqual(cashChangeReturned({
+    orderTotal: 50,
+    payments: [{ method: 'Card', amount: 60, status: 'completed' }],
+  }), { change: 0, cashReceived: 0 });
+  assert.deepEqual(cashChangeReturned({
+    orderTotal: 174.54,
+    cashPaid: '200.00',
+    payments: [{ method: 'cash', amount: 174.54, status: 'completed' }],
+  }), { change: 25.46, cashReceived: 200 });
+  assert.deepEqual(cashChangeReturned({
+    orderTotal: -10,
+    payments: [{ method: 'Cash', amount: 0, status: 'completed' }],
+    cashPaid: '-10.00',
+  }), { change: 0, cashReceived: 0 });
+});
+
+test('stored order total includes tax and keeps a payout negative', () => {
+  assert.equal(orderTotalWithTax({ netBeforeTax: 174.54, tax: 12.22 }), 186.76);
+  assert.equal(orderTotalWithTax({ netBeforeTax: 20, tax: 2 }), 22);
+  assert.equal(orderTotalWithTax({ netBeforeTax: -10, tax: 0 }), -10);
+  assert.equal(orderTotalWithTax({ netBeforeTax: 22, tax: 2, pricesIncludeTax: true }), 22);
 });
 
 test('order list adds tax when the stored total excludes it', () => {
