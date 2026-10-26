@@ -6,6 +6,7 @@ export type ReportOrder = {
   customer_name: string | null;
   payment_method_title: string | null;
   line_items: unknown;
+  fee_lines: unknown;
   created_at: Date | string | null;
   refunded: number;
 };
@@ -45,6 +46,14 @@ export type VendorPayoutRow = {
   vendor_id: string;
 };
 
+export type DrawerTransaction = {
+  id: string;
+  transaction_type: string;
+  total_sum: number;
+  json_payload: Record<string, unknown> | null;
+  status: string;
+};
+
 export type CashbackSettings = {
   enabled?: unknown;
   max_cashback?: unknown;
@@ -54,6 +63,13 @@ export type CashbackSettings = {
 
 const COMPLETED = new Set(['completed']);
 const PARTIAL_OR_REFUNDED = new Set(['partial-refund', 'partially-refunded', 'refunded']);
+const EXCLUDED_ORDER_STATUSES = new Set([
+  'cancelled', 'canceled', 'failed', 'void', 'voided', 'trash', 'pending', 'on-hold', 'checkout-draft',
+]);
+const SUCCESSFUL_PAYMENT_STATUSES = new Set([
+  '', 'completed', 'paid', 'processing', 'refunded', 'partially-refunded', 'partial-refund',
+]);
+const CARD_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
 
 export function roundMoney(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -118,12 +134,33 @@ export function paymentChange(payment: ReportPayment): number {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+export function tenderKey(method: string | null | undefined): string {
+  return String(method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+export function isCashMethod(method: string | null | undefined): boolean {
+  const value = tenderKey(method);
+  return value === 'cash' || value === 'pos-cash';
+}
+
+export function isCardMethod(method: string | null | undefined): boolean {
+  return CARD_METHODS.has(tenderKey(method));
+}
+
+export function isSuccessfulSaleOrder(order: ReportOrder): boolean {
+  const status = orderStatus(order.status);
+  return status !== '' && !EXCLUDED_ORDER_STATUSES.has(status);
+}
+
 export function isSalePayment(payment: ReportPayment): boolean {
   if (payment.is_void) return false;
   if (String(payment.entry_type || 'payment').toLowerCase() !== 'payment') return false;
   if (String(payment.payment_type || 'pos_payment').toLowerCase() === 'vendor_payment') return false;
-  const status = String(payment.status || 'completed').toLowerCase();
-  return status !== 'failed' && status !== 'cancelled';
+  const metadata = asRecord(payment.metadata);
+  const tracking = metadata.daily_refund_tracking;
+  if (tracking === true || tracking === 'true' || tracking === 1 || tracking === '1') return false;
+  const status = String(payment.status || 'completed').trim().toLowerCase();
+  return SUCCESSFUL_PAYMENT_STATUSES.has(status);
 }
 
 export function methodIs(payment: ReportPayment, method: string): boolean {
@@ -247,9 +284,11 @@ export function getShiftCardTotal(payments: ReportPayment[]): number {
 }
 
 export function getVendorCashPayouts(payouts: VendorPayoutRow[]): number {
-  return roundMoney(payouts.reduce((sum, payout) => (
-    payout.payment_method.trim().toLowerCase() === 'cash' ? sum + Number(payout.amount || 0) : sum
-  ), 0));
+  return roundMoney(payouts.reduce((sum, payout) => {
+    const method = tenderKey(payout.payment_method);
+    const cash = !method || isCashMethod(payout.payment_method);
+    return cash ? sum + Number(payout.amount || 0) : sum;
+  }, 0));
 }
 
 function metaValue(line: Record<string, unknown>, key: string): unknown {
@@ -315,21 +354,138 @@ export type ShiftReportInput = {
   safeDrops: SafeDropRow[];
   vendorPayouts: VendorPayoutRow[];
   cashbackSettings: CashbackSettings | null;
+  drawerTransactions?: DrawerTransaction[];
 };
 
-export function prepareShiftData(input: ShiftReportInput): { report: Record<string, unknown>; tillAmount: number } {
-  const sales = getShiftNoOfSales(input.orders);
-  let totalSales = sales.length;
-  let totalSaleAmount = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-  const partials = getPartialOrderAmounts(input.orders, input.payments);
-  totalSaleAmount += partials.total_sale_amount;
-  totalSales += partials.total_sales;
+function activeDrawer(rows: DrawerTransaction[] | undefined, type: string): DrawerTransaction[] {
+  return (rows || []).filter((row) => row.status !== 'INACTIVE' && row.transaction_type === type);
+}
 
-  const cashbackAmount = shiftCashBackAmount(input.orders);
-  const cashbackFeeAmount = shiftCashBackFeeAmount(input.orders, input.cashbackSettings);
+function sumDrawer(rows: DrawerTransaction[]): number {
+  return rows.reduce((total, row) => total + Number(row.total_sum || 0), 0);
+}
+
+function drawerMethod(row: DrawerTransaction): string {
+  const payload = row.json_payload || {};
+  return tenderKey(String(payload.payment_method ?? payload.method ?? payload.tender ?? ''));
+}
+
+function feesOf(order: ReportOrder): Array<Record<string, unknown>> {
+  return Array.isArray(order.fee_lines) ? order.fee_lines.filter((fee) => fee && typeof fee === 'object') as Array<Record<string, unknown>> : [];
+}
+
+function payoutOnOrder(order: ReportOrder): number {
+  const feeTotal = feesOf(order).reduce((total, fee) => {
+    const name = String(fee.name ?? fee.fee_name ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return name === 'payout' || name.startsWith('payout_') ? total + Math.abs(lineTotal(fee)) : total;
+  }, 0);
+  if (feeTotal > 0) return feeTotal;
+  return linesOf(order).reduce((total, line) => (
+    lineName(line).toLowerCase().includes('payout') ? total + Math.abs(lineTotal(line)) : total
+  ), 0);
+}
+
+function cashbackOnOrders(orders: ReportOrder[]): number {
+  return orders.reduce((total, order) => total + linesOf(order).reduce((lineTotalAmount, line) => (
+    lineName(line).toLowerCase().includes('cashback') ? lineTotalAmount + Math.abs(lineTotal(line)) : lineTotalAmount
+  ), 0), 0);
+}
+
+function cashbackFeeOnOrders(orders: ReportOrder[], settings: CashbackSettings | null): number {
+  let total = 0;
+  for (const order of orders) {
+    for (const line of linesOf(order)) {
+      if (!lineName(line).toLowerCase().includes('cashback')) continue;
+      total += cashbackFeeForAmount(Math.abs(lineTotal(line)), settings);
+    }
+  }
+  return total;
+}
+
+/**
+ * Sales and drawer totals for one shift.
+ *
+ * total_sale_amount = net cash tender + net card tender + cashback fee
+ * net tender        = captured amount - refund on that tender - change (cash only)
+ *
+ * till_amount = opening balance
+ *             + cash captured - cash change
+ *             - cash refunds
+ *             - cashback principal handed to the customer
+ *             - payouts, paid-outs, cash vendor payments, and safe drops
+ *             + paid-ins
+ * Card tenders are sales, not drawer cash.
+ */
+export function prepareShiftData(input: ShiftReportInput): { report: Record<string, unknown>; tillAmount: number } {
+  const orders = new Map(input.orders.map((order) => [order.order_id, order]));
+  const included = input.payments.filter((payment) => {
+    if (!isSalePayment(payment)) return false;
+    if (!isCashMethod(payment.payment_method) && !isCardMethod(payment.payment_method)) return false;
+    if (!payment.order_id) return true;
+    const order = orders.get(payment.order_id);
+    return !order || isSuccessfulSaleOrder(order);
+  });
+  const cashPayments = included.filter((payment) => isCashMethod(payment.payment_method));
+  const cardPayments = included.filter((payment) => isCardMethod(payment.payment_method));
+  const paymentCashRefund = cashPayments.reduce((total, payment) => total + Number(payment.refund_amount || 0), 0);
+  const paymentCardRefund = cardPayments.reduce((total, payment) => total + Number(payment.refund_amount || 0), 0);
+
+  let cashIn = cashPayments.reduce((total, payment) => total + Number(payment.amount || 0) - paymentChange(payment), 0);
+  let cardIn = cardPayments.reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  if (!cashPayments.length) cashIn = sumDrawer(activeDrawer(input.drawerTransactions, 'CASH_SALE'));
+  if (!cardPayments.length) cardIn = sumDrawer(activeDrawer(input.drawerTransactions, 'CARD_SALE'));
+
+  let cashRefund = paymentCashRefund;
+  let cardRefund = paymentCardRefund;
+  if (paymentCashRefund + paymentCardRefund === 0) {
+    for (const row of activeDrawer(input.drawerTransactions, 'REFUND')) {
+      const method = drawerMethod(row);
+      const amount = Number(row.total_sum || 0);
+      if (isCardMethod(method)) cardRefund += amount;
+      else if (!method || isCashMethod(method)) cashRefund += amount;
+    }
+  }
+
+  const saleOrderIds = new Set(included.map((payment) => payment.order_id).filter((id): id is string => Boolean(id)));
+  const saleOrders = input.orders.filter((order) => saleOrderIds.has(order.order_id));
+  const cashbackRows = activeDrawer(input.drawerTransactions, 'CASHBACK');
+  const cashbackAmount = cashbackRows.length ? sumDrawer(cashbackRows) : cashbackOnOrders(saleOrders);
+  const cashbackFeeAmount = cashbackFeeOnOrders(saleOrders, input.cashbackSettings);
+
+  const paidOut = sumDrawer(activeDrawer(input.drawerTransactions, 'PAID_OUT'));
+  const payoutTransactions = sumDrawer(activeDrawer(input.drawerTransactions, 'PAYOUT'));
+  const paidIn = sumDrawer(activeDrawer(input.drawerTransactions, 'PAID_IN'));
+  let orderPayoutSubtracted = 0;
+  let recognizedOrderPayout = 0;
+  if (!paidOut && !payoutTransactions) {
+    for (const order of saleOrders) {
+      const payout = payoutOnOrder(order);
+      recognizedOrderPayout += payout;
+      const netCash = cashPayments
+        .filter((payment) => payment.order_id === order.order_id)
+        .reduce((total, payment) => total + Number(payment.amount || 0) - paymentChange(payment) - Number(payment.refund_amount || 0), 0);
+      if (Math.abs(netCash) < 0.005) orderPayoutSubtracted += payout;
+    }
+  } else {
+    recognizedOrderPayout = saleOrders.reduce((total, order) => total + payoutOnOrder(order), 0);
+  }
+
   const safeDropValue = input.safeDrops.reduce((sum, drop) => sum + Number(drop.total || 0), 0);
   const vendorCash = getVendorCashPayouts(input.vendorPayouts);
-  const tillAmount = getShiftSalesTotal(input.payments) - cashbackAmount - vendorCash - partials.total_sale_amount - safeDropValue;
+  const cashNet = cashIn - cashRefund;
+  const cardNet = cardIn - cardRefund;
+  const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount;
+  const tillAmount = Number(input.openingBalance || 0)
+    + cashIn
+    - cashRefund
+    - cashbackAmount
+    - orderPayoutSubtracted
+    - paidOut
+    - payoutTransactions
+    - vendorCash
+    - safeDropValue
+    + paidIn;
+  const saleCount = new Set(included.map((payment) => payment.order_id || payment.id)).size;
   const voidItems = getVoidItems(input.orders, input.shiftId);
 
   return {
@@ -342,7 +498,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       assigned_staff: wordpressNumber(input.assignedStaff),
       start_time: input.startTime,
       end_time: input.endTime,
-      total_sales: totalSales || 0,
+      total_sales: saleCount || 0,
       total_sale_amount: roundMoney(totalSaleAmount) || 0,
       till_amount: roundMoney(tillAmount) || 0,
       cashback_amount: roundMoney(cashbackAmount) || 0,
@@ -354,8 +510,8 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       opening_balance: roundMoney(input.openingBalance) || 0,
       ebt_total: getShiftEbtTotal(input.payments) || 0,
       card_total: getShiftCardTotal(input.payments) || 0,
-      refund_total: roundMoney(partials.total_remaining_after_refund) || 0,
-      payout_total: roundMoney(shiftPayoutAmount(input.orders)) || 0,
+      refund_total: roundMoney(cashRefund + cardRefund) || 0,
+      payout_total: roundMoney(recognizedOrderPayout + paidOut + payoutTransactions) || 0,
       void_items_count: voidItems.length,
       void_items: voidItems,
       closing_balance: roundMoney(input.closingBalance) || 0,
