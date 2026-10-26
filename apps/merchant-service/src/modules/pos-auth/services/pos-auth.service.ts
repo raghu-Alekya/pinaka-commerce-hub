@@ -523,6 +523,22 @@ export class PosAuthService {
     };
   }
 
+  async getStoreCategoriesWithTax(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    try {
+      return await this.merchantRepository.getStoreCategoriesWithTax(scope.store.id);
+    } catch (error) {
+      if (this.postgresCode(error) === '42P01' || this.postgresCode(error) === '42703') {
+        return { status: 'success' as const, categories: [] };
+      }
+      throw error;
+    }
+  }
+
   async getStoreCategoriesAndProducts(
     authorization?: string,
     merchantHeader?: string,

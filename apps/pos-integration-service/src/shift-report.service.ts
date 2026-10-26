@@ -70,6 +70,7 @@ export class ShiftReportService {
     await this.attachRefunds(db, orders);
     const safeDrops = await this.getShiftSafeDrops(db, shift.id);
     const vendorPayouts = await this.getShiftVendorPayoutsTotal(db, shift.id);
+    const drawerTransactions = await this.getShiftDrawerTransactions(db, shift.id);
     const settings = await this.loadCashbackSettings(db, shift.store_id);
     const user = await this.loadEmployee(db, this.metaText(meta, 'user_id') || shift.created_by || '');
     const updated = this.metaText(meta, 'shift_updated') === 'shift_updated';
@@ -96,6 +97,7 @@ export class ShiftReportService {
       safeDrops,
       vendorPayouts,
       cashbackSettings: settings,
+      drawerTransactions,
     });
     if (tillAmount > 0) {
       shiftDebug('db', { action: 'getShiftById', table: 'pos_shift_meta', op: 'upsert', shift_id: shift.id, meta_name: 'shift_post_till_amount_value', till_amount: tillAmount });
@@ -130,12 +132,12 @@ export class ShiftReportService {
   private async getShiftOrders(db: DataSource, shiftId: string): Promise<ReportOrder[]> {
     const rows = await this.rows<ReportOrder>(db, `
       SELECT order_id::text AS order_id, client_order_id, status, total::float8 AS total,
-             customer_name, payment_method_title, line_items, created_at
+             customer_name, payment_method_title, line_items, fee_lines, created_at
         FROM public.store_orders
        WHERE shift_id = $1 OR local_shift_id = $1
        ORDER BY created_at ASC, order_id ASC
     `, [shiftId]);
-    return rows.map((row) => ({ ...row, refunded: 0, total: Number(row.total || 0) }));
+    return rows.map((row) => ({ ...row, refunded: 0, total: Number(row.total || 0), fee_lines: row.fee_lines ?? [] }));
   }
 
   private async getShiftPayments(db: DataSource, shiftId: string): Promise<ReportPayment[]> {
@@ -176,6 +178,16 @@ export class ShiftReportService {
     `, [ids]);
     const refunded = new Map(rows.map((row) => [row.order_id, Number(row.refunded || 0)]));
     for (const order of orders) order.refunded = refunded.get(order.order_id) || 0;
+  }
+
+  private async getShiftDrawerTransactions(db: DataSource, shiftId: string): Promise<Array<{ id: string; transaction_type: string; total_sum: number; json_payload: Record<string, unknown> | null; status: string }>> {
+    const rows = await this.rows<{ id: string; transaction_type: string; total_sum: number; json_payload: Record<string, unknown> | null; status: string }>(db, `
+      SELECT id::text AS id, transaction_type, total_sum::float8 AS total_sum, json_payload, status
+        FROM public.pos_shift_transactions
+       WHERE shift_id = $1 AND status = 'ACTIVE'
+       ORDER BY created_at ASC, id ASC
+    `, [shiftId]);
+    return rows.map((row) => ({ ...row, total_sum: Number(row.total_sum || 0) }));
   }
 
   private async getShiftSafeDrops(db: DataSource, shiftId: string): Promise<SafeDropRow[]> {

@@ -3351,12 +3351,36 @@ export class MerchantRepository implements OnModuleInit {
     storeId: string;
     wordpressUrl: string;
     wordpressJwt: string;
-  }): Promise<{ categoryCount: number; productCount: number; attributeCount: number; tagCount: number }> {
+  }): Promise<{
+    categoryCount: number;
+    productCount: number;
+    attributeCount: number;
+    tagCount: number;
+    categoryTaxCount: number;
+    categoryTaxError: string | null;
+  }> {
     const productCount = await this.syncStoreProductsFromWordPress(params);
     const categoryCount = await this.syncStoreCategoriesFromWordPress(params);
     const attributeCount = await this.syncStoreAttributesFromWordPress(params);
     const tagCount = await this.syncStoreTagsFromWordPress(params);
-    return { categoryCount, productCount, attributeCount, tagCount };
+    let categoryTaxCount = 0;
+    let categoryTaxError: string | null = null;
+    try {
+      categoryTaxCount = await this.syncCategoryWithTax(params);
+    } catch (error: unknown) {
+      categoryTaxError = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `Category tax sync failed for store ${params.storeId}: ${categoryTaxError}`,
+      );
+    }
+    return {
+      categoryCount,
+      productCount,
+      attributeCount,
+      tagCount,
+      categoryTaxCount,
+      categoryTaxError,
+    };
   }
 
 private async productDataSyncContext(deviceId: string | undefined, merchantId: string | undefined, storeId: string | undefined, actor?: DataSyncActor) {
@@ -3550,6 +3574,79 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return tags.length;
   }
 
+  async syncCategoryWithTax(params: {
+    storeId: string;
+    wordpressUrl: string;
+    wordpressJwt: string;
+  }): Promise<number> {
+    const body = await this.fetchWordPressCategoriesWithTax(
+      params.wordpressUrl,
+      params.wordpressJwt,
+    );
+    await this.saveStoreCategoriesWithTax(params.storeId, body);
+    return this.categoryTaxRecordCount(body);
+  }
+
+  private async fetchWordPressCategoriesWithTax(
+    wordpressUrl: string,
+    wordpressJwt: string,
+  ): Promise<unknown> {
+    const baseUrl = wordpressUrl.replace(/\/+$/, '');
+    const url = `${baseUrl}/wp-json/pinaka-pos/v1/categories/get-categories-with-tax`;
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${wordpressJwt}`,
+        },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `WordPress categories-with-tax API request failed: ${message}`,
+      );
+    }
+    if (!response.ok) {
+      throw new BadRequestException(
+        `WordPress categories-with-tax API returned HTTP ${response.status}. Check the site URL and JWT token.`,
+      );
+    }
+    try {
+      return await response.json();
+    } catch {
+      throw new BadRequestException(
+        'WordPress categories-with-tax API returned invalid JSON.',
+      );
+    }
+  }
+
+  private categoryTaxRecordCount(body: unknown): number {
+    if (Array.isArray(body)) return body.length;
+    if (!body || typeof body !== 'object') return 0;
+    const record = body as Record<string, unknown>;
+    for (const key of ['category', 'categories', 'data'] as const) {
+      if (Array.isArray(record[key])) return record[key].length;
+    }
+    return 0;
+  }
+
+  private async saveStoreCategoriesWithTax(
+    storeId: string,
+    value: unknown,
+  ): Promise<void> {
+    await this.ensureStoreCategoriesTable();
+    await this.dataSource.query(
+      `INSERT INTO public.store_categories (store_id, categories_with_tax, updated_at)
+       VALUES ($1::uuid, $2::jsonb, now())
+       ON CONFLICT (store_id)
+       DO UPDATE SET categories_with_tax = EXCLUDED.categories_with_tax,
+                     updated_at = now(),
+                     is_deleted = false`,
+      [storeId, JSON.stringify(value ?? null)],
+    );
+  }
+
   private async fetchWooCollection(
     wordpressUrl: string,
     wordpressJwt: string,
@@ -3645,6 +3742,10 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       ADD COLUMN IF NOT EXISTS tags jsonb
     `);
     await this.dataSource.query(`
+      ALTER TABLE public.store_categories
+      ADD COLUMN IF NOT EXISTS categories_with_tax jsonb
+    `);
+    await this.dataSource.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS store_categories_store_id_uidx
       ON public.store_categories (store_id)
     `);
@@ -3727,10 +3828,82 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return rows[0]?.payload ?? null;
   }
 
+  async getStoreCategoriesWithTax(storeId: string): Promise<{
+    status: 'success';
+    categories: Array<{
+      id: number | null;
+      name: string;
+      slug: string;
+      parent: number;
+      description: string;
+      count: number;
+      image: string | null;
+      pos_tax_class: string;
+      pos_tax_percent: string;
+    }>;
+  }> {
+    await this.ensureStoreCategoriesTable();
+    const rows = await this.dataSource.query(
+      `SELECT categories_with_tax
+       FROM public.store_categories
+       WHERE store_id = $1::uuid
+         AND COALESCE(is_deleted, false) = false
+       LIMIT 1`,
+      [storeId],
+    );
+    return this.presentCategoriesWithTax(rows[0]?.categories_with_tax);
+  }
+
+  private presentCategoriesWithTax(value: unknown) {
+    const source = this.categoryTaxList(value);
+    return {
+      status: 'success' as const,
+      categories: source.map(item => this.presentCategoryWithTax(item)),
+    };
+  }
+
+  private categoryTaxList(value: unknown): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    for (const key of ['categories', 'category', 'data'] as const) {
+      if (Array.isArray(record[key])) return record[key];
+    }
+    return [];
+  }
+
+  private presentCategoryWithTax(value: unknown) {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const image = record.image;
+    const imageSrc = image && typeof image === 'object'
+      ? (image as { src?: unknown }).src
+      : undefined;
+    const imageUrl = typeof image === 'string'
+      ? image.trim()
+      : typeof imageSrc === 'string'
+        ? imageSrc.trim()
+        : '';
+    const id = Number(record.id);
+    const parent = Number(record.parent ?? 0);
+    const count = Number(record.count ?? 0);
+    const taxPercent = record.pos_tax_percent ?? record.posTaxPercent;
+    return {
+      id: Number.isFinite(id) ? id : null,
+      name: String(record.name ?? ''),
+      slug: String(record.slug ?? ''),
+      parent: Number.isFinite(parent) ? parent : 0,
+      description: String(record.description ?? ''),
+      count: Number.isFinite(count) ? count : 0,
+      image: imageUrl || null,
+      pos_tax_class: String(record.pos_tax_class ?? record.posTaxClass ?? ''),
+      pos_tax_percent: taxPercent == null ? '' : String(taxPercent),
+    };
+  }
+
   async getStoreCatalogTaxonomiesByStoreId(storeId: string) {
     await this.ensureStoreCategoriesTable();
     const rows = await this.dataSource.query(
-      `SELECT payload AS categories, tags, attributes, updated_at
+      `SELECT payload AS categories, tags, attributes, categories_with_tax, updated_at
        FROM public.store_categories
        WHERE store_id = $1::uuid
          AND COALESCE(is_deleted, false) = false
@@ -3742,6 +3915,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       categories: Array.isArray(row?.categories) ? row.categories : [],
       tags: Array.isArray(row?.tags) ? row.tags : [],
       attributes: Array.isArray(row?.attributes) ? row.attributes : [],
+      categoriesWithTax: row?.categories_with_tax ?? null,
       updatedAt: row?.updated_at ?? null,
     };
   }
@@ -4368,7 +4542,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
 
   async getStoreCatalog(
     storeId: string,
-  ): Promise<{ categories: unknown[]; products: unknown[] }> {
+  ): Promise<{ categories: unknown[]; products: unknown[]; categoriesWithTax: unknown }> {
     const taxonomy = await this.getStoreCatalogTaxonomiesByStoreId(storeId);
     let catalogRows: Array<{ payload?: unknown }> = [];
     try {
@@ -4405,7 +4579,11 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           };
         })
       : [];
-    return { categories: taxonomy.categories, products };
+    return {
+      categories: taxonomy.categories,
+      products,
+      categoriesWithTax: taxonomy.categoriesWithTax,
+    };
   }
 
   private async fetchWordPressCategoryCatalog(

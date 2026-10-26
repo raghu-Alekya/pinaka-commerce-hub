@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
+import { listOrderTax } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -66,7 +66,6 @@ export class OrderListPresenter {
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
     const tax = listOrderTax({
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
@@ -114,7 +113,6 @@ export class OrderListPresenter {
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
-      grand_total: this.money(storeOrder?.grandTotal ?? total),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(remainingTax),
       change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
