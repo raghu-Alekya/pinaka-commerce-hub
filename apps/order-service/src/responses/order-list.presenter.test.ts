@@ -51,12 +51,13 @@ test('total-orders preserves the saved item-rounded tax for order 262976097', ()
   assert.equal(result.orders_data[0].total_tax, '2.95');
 });
 
-test('total-orders shows net total plus tax when a merchant discount was left out of the stored total', () => {
+test('total-orders returns the stored order total', () => {
   const sample = row('completed');
   sample.order.totalAmount = 183.81;
   sample.order.taxAmount = 15;
   sample.order.discountAmount = 6;
-  sample.storeOrder.total = 183.81;
+  sample.storeOrder.total = 179.83;
+  sample.storeOrder.grandTotal = 196.81;
   sample.storeOrder.taxTotal = 15;
   sample.storeOrder.discountTotal = 6;
   sample.storeOrder.couponLines = [{ code: '2027', discount: '6.00' }];
@@ -65,6 +66,7 @@ test('total-orders shows net total plus tax when a merchant discount was left ou
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
   assert.equal(order.total, '179.83');
+  assert.equal(order.grand_total, undefined);
   assert.equal(order.total_tax, '15');
 });
 
