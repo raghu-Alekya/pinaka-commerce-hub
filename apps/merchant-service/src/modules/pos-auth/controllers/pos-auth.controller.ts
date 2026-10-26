@@ -95,6 +95,20 @@ export class PosAuthController {
    * GET /api/v1/pos/auth/catalog/get-categories-products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get(['catalog/get-categories-with-tax', 'get-categories-with-tax'])
+  @HttpCode(HttpStatus.OK)
+  async getCategoriesWithTax(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCategoriesWithTax(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/get-categories-products', 'get-categories-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProductsAndCategories(

@@ -474,6 +474,7 @@ export class AppController {
       categoryCount: catalog.categories.length,
       productCount: catalog.products.length,
       categories: catalog.categories,
+      categoriesWithTax: catalog.categoriesWithTax,
       products: catalog.products,
     };
   }
@@ -484,6 +485,13 @@ export class AppController {
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const payload = await this.merchantRepository.getStoreCategoriesByStoreId(store.id);
     return payload;
+  }
+
+  @Get('stores/:storeId/catalog/get-categories-with-tax')
+  async getCategoriesWithTax(@Param('storeId') storeId: string) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return this.merchantRepository.getStoreCategoriesWithTax(store.id);
   }
 
   @Get('stores/:storeId/catalog/taxonomies')
