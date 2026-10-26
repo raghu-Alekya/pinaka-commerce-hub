@@ -394,7 +394,7 @@ export class OrderRepository implements OnModuleInit {
         total,
         tax: taxTotal,
         taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
-        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : discountTotal,
+        couponDiscount: sumCouponDiscounts(couponLines),
         lineItems,
         feeLines,
         shippingTotal,
@@ -1185,7 +1185,7 @@ export class OrderRepository implements OnModuleInit {
       total: storeOrder.total,
       tax: storeOrder.taxTotal,
       taxLines,
-      couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+      couponDiscount: sumCouponDiscounts(couponLines),
       lineItems,
       feeLines,
       shippingTotal: payload.shipping_total ?? payload.shippingTotal,
@@ -2065,8 +2065,12 @@ export class OrderRepository implements OnModuleInit {
         if (!order) return { kind: 'missing' as const };
 
         const refundState = await this.loadRefundState(manager, order.id);
-        const remaining = this.remainingPaymentAmount(refundState.payments);
+        const remainingOrderAmount = Math.max(0, Number(order.total_amount || 0) - refundState.refunded);
+        const remaining = Math.min(this.remainingPaymentAmount(refundState.payments), remainingOrderAmount);
         if (remaining <= 0) return { kind: 'already_refunded' as const };
+        if (input.requestedAmount - remaining > 0.005) {
+          return { kind: 'exceeds_remaining' as const, remainingAmount: remaining };
+        }
         // This is the full-refund endpoint: refund the entire outstanding
         // balance. The submitted amount is still validated by the service but
         // must never leave a residual balance while marking the order refunded.

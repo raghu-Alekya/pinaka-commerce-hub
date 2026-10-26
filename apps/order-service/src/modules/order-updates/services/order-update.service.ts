@@ -296,7 +296,7 @@ export class OrderUpdateService {
         total: storeOrder.total,
         tax: storeOrder.taxTotal,
         taxLines,
-        couponDiscount: couponLines.length ? sumCouponDiscounts(couponLines) : storeOrder.discountTotal,
+        couponDiscount: sumCouponDiscounts(couponLines),
         lineItems,
         feeLines,
         shippingTotal: payloadForTotals.shipping_total ?? payloadForTotals.shippingTotal,

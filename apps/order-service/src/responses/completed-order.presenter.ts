@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { isMerchandiseLine, listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
+import { listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
 import type { StoreOrderEntity } from '../entities/store-order.entity';
@@ -49,7 +49,7 @@ export class CompletedOrderPresenter {
       author: request.author?.trim() || undefined,
       after,
       before,
-      orderBy: 'created' as const,
+      orderBy: 'modified' as const,
     };
   }
 
@@ -82,32 +82,22 @@ export class CompletedOrderPresenter {
       total: storeOrder?.total ?? order.totalAmount,
       tax: originalItemsTax,
       taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
-      couponDiscount: coupons.length
-        ? coupons.reduce((sum, line: any) => sum + Number(line?.discount || 0), 0)
-        : (storeOrder?.discountTotal ?? order.discountAmount),
+      couponDiscount: coupons.reduce((sum, line: any) => sum + Number(line?.discount || 0), 0),
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
       feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
     }));
-    const originalTotalExcludingTax = Math.max(0, originalGrossTotal - Number(originalItemsTax));
     const createdVia = String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api');
     const lineItems = this.lineItems(storeOrder?.lineItems, items, order.storeId, products, refunds);
     const itemsTax = effectiveStatus === 'partial-refund'
       ? lineItems.reduce((sum, line) => sum + Number(line.total_tax || 0), 0).toFixed(2)
       : originalItemsTax;
-    const originalLineTotal = (Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : [])
-      .filter((line: any) => !line?.is_refund_item && isMerchandiseLine(line))
-      .reduce((sum: number, line: any) => sum + Number(line?.total || 0), 0);
-    const remainingLineTotal = lineItems
-      .filter((line) => isMerchandiseLine(line))
-      .reduce((sum, line) => sum + Number(line.total || 0), 0);
     const remainingTotal = effectiveStatus === 'partial-refund'
-      ? Math.max(0, originalTotalExcludingTax - originalLineTotal + remainingLineTotal + Number(itemsTax))
+      ? Math.max(0, originalGrossTotal - this.refundedTotal(refunds))
       : originalGrossTotal;
     const total = this.money(remainingTotal);
-    const remainingTax = Number(itemsTax);
-    const amount = this.money(Math.max(0, remainingTotal - remainingTax));
+    const amount = this.money(Math.max(0, remainingTotal - Number(itemsTax)));
     return {
       id,
       order_id: clientOrderId,
@@ -202,6 +192,17 @@ export class CompletedOrderPresenter {
         meta_data: Array.isArray(line?.meta_data) ? line.meta_data : (fallback?.modifiers || []),
       }];
     });
+  }
+
+  private refundedTotal(refunds: Array<{ amount: unknown; metadata: Record<string, any> | null }>): number {
+    const seen = new Set<string>();
+    return refunds.reduce((sum, refund, index) => {
+      const metadata = refund.metadata || {};
+      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${index}`);
+      if (seen.has(refundId)) return sum;
+      seen.add(refundId);
+      return sum + Number(metadata.order_refund_amount ?? refund.amount ?? 0);
+    }, 0);
   }
 
   private positiveInteger(value: string | undefined, fallback: number, name: string): number {
