@@ -3649,78 +3649,6 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return rows[0]?.payload ?? null;
   }
 
-  async getStoreCategoriesWithTax(storeId: string): Promise<{
-    status: 'success';
-    categories: Array<{
-      id: number | null;
-      name: string;
-      slug: string;
-      parent: number;
-      description: string;
-      count: number;
-      image: string | null;
-      pos_tax_class: string;
-      pos_tax_percent: string;
-    }>;
-  }> {
-    await this.ensureStoreCategoriesTable();
-    const rows = await this.dataSource.query(
-      `SELECT categories_with_tax
-       FROM public.store_categories
-       WHERE store_id = $1::uuid
-         AND COALESCE(is_deleted, false) = false
-       LIMIT 1`,
-      [storeId],
-    );
-    return this.presentCategoriesWithTax(rows[0]?.categories_with_tax);
-  }
-
-  private presentCategoriesWithTax(value: unknown) {
-    const source = this.categoryTaxList(value);
-    return {
-      status: 'success' as const,
-      categories: source.map(item => this.presentCategoryWithTax(item)),
-    };
-  }
-
-  private categoryTaxList(value: unknown): unknown[] {
-    if (Array.isArray(value)) return value;
-    if (!value || typeof value !== 'object') return [];
-    const record = value as Record<string, unknown>;
-    for (const key of ['categories', 'category', 'data'] as const) {
-      if (Array.isArray(record[key])) return record[key];
-    }
-    return [];
-  }
-
-  private presentCategoryWithTax(value: unknown) {
-    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-    const image = record.image;
-    const imageSrc = image && typeof image === 'object'
-      ? (image as { src?: unknown }).src
-      : undefined;
-    const imageUrl = typeof image === 'string'
-      ? image.trim()
-      : typeof imageSrc === 'string'
-        ? imageSrc.trim()
-        : '';
-    const id = Number(record.id);
-    const parent = Number(record.parent ?? 0);
-    const count = Number(record.count ?? 0);
-    const taxPercent = record.pos_tax_percent ?? record.posTaxPercent;
-    return {
-      id: Number.isFinite(id) ? id : null,
-      name: String(record.name ?? ''),
-      slug: String(record.slug ?? ''),
-      parent: Number.isFinite(parent) ? parent : 0,
-      description: String(record.description ?? ''),
-      count: Number.isFinite(count) ? count : 0,
-      image: imageUrl || null,
-      pos_tax_class: String(record.pos_tax_class ?? record.posTaxClass ?? ''),
-      pos_tax_percent: taxPercent == null ? '' : String(taxPercent),
-    };
-  }
-
   async getStoreCatalogTaxonomiesByStoreId(storeId: string) {
     await this.ensureStoreCategoriesTable();
     const rows = await this.dataSource.query(
@@ -4379,7 +4307,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
 
   async getStoreCatalog(
     storeId: string,
-  ): Promise<{ categories: unknown[]; products: unknown[]; categoriesWithTax: unknown }> {
+  ): Promise<{ categories: unknown[]; products: unknown[] }> {
     const taxonomy = await this.getStoreCatalogTaxonomiesByStoreId(storeId);
     let catalogRows: Array<{ payload?: unknown }> = [];
     try {
@@ -4416,11 +4344,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           };
         })
       : [];
-    return {
-      categories: taxonomy.categories,
-      products,
-      categoriesWithTax: taxonomy.categoriesWithTax,
-    };
+    return { categories: taxonomy.categories, products };
   }
 
   private async fetchWordPressCategoryCatalog(

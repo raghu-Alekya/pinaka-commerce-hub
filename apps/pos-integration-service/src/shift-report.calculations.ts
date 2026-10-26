@@ -408,12 +408,12 @@ function cashbackFeeOnOrders(orders: ReportOrder[], settings: CashbackSettings |
  * total_sale_amount = net cash tender + net card tender + cashback fee
  * net tender        = captured amount - refund on that tender - change (cash only)
  *
- * till_amount = cash captured - cash change
+ * till_amount = opening balance
+ *             + cash captured - cash change
  *             - cash refunds
  *             - cashback principal handed to the customer
  *             - payouts, paid-outs, cash vendor payments, and safe drops
  *             + paid-ins
- * Opening balance stays in its own field. It is not part of till_amount or total_sale_amount.
  * Card tenders are sales, not drawer cash.
  */
 export function prepareShiftData(input: ShiftReportInput): { report: Record<string, unknown>; tillAmount: number } {
@@ -475,7 +475,8 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
   const cashNet = cashIn - cashRefund;
   const cardNet = cardIn - cardRefund;
   const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount;
-  const tillAmount = cashIn
+  const tillAmount = Number(input.openingBalance || 0)
+    + cashIn
     - cashRefund
     - cashbackAmount
     - orderPayoutSubtracted
