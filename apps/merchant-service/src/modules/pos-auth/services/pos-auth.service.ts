@@ -1,3 +1,6 @@
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+import { jwtSecret, SessionEntity } from '@pinaka-delivery-hub/auth';
 import {
   Injectable,
   UnauthorizedException,
@@ -27,6 +30,56 @@ export class PosAuthService {
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
     @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
   ) {}
+
+  async merchantPasswordLogin(input: { email?: string; password?: string }) {
+    if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
+      throw new BadRequestException('email and password are required (password maximum 128 characters)');
+    }
+    const db = this.merchantRepository.requireDataSource();
+    const rows = await db.query(
+      `SELECT id,merchant_code AS "merchantCode",email,business_display_name AS "businessDisplayName",status,
+              to_jsonb(m)->>'password' AS password
+       FROM public.merchants m WHERE lower(email)=lower($1) AND COALESCE(is_deleted,false)=false LIMIT 2`,
+      [input.email.trim()],
+    );
+    const merchant = rows.length === 1 ? rows[0] : undefined;
+    const [savedSalt, savedDigest] = String(merchant?.password || '').split(':');
+    const salt = savedSalt ? Buffer.from(savedSalt, 'base64url') : randomBytes(16);
+    const expected = savedDigest ? Buffer.from(savedDigest, 'base64url') : Buffer.alloc(64);
+    const actual = await promisify(scrypt)(input.password, salt, 64) as Buffer;
+    if (!merchant || !savedSalt || !savedDigest || expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      throw new UnauthorizedException('Invalid merchant email or password');
+    }
+    if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const users = await db.query(
+      `SELECT id,email,role,account_id AS "accountId" FROM public.users
+       WHERE lower(email)=lower($1) AND status='ACTIVE'
+         AND (merchant_id::text=$2 OR merchant_id::text=$3 OR NULLIF(merchant_id::text,'') IS NULL)
+       LIMIT 2`, [merchant.email, merchant.id, merchant.merchantCode],
+    );
+    if (users.length !== 1) throw new UnauthorizedException('An active linked PCH user account is required for merchant API access');
+    const user = users[0];
+    const stores = await db.query(
+      `SELECT id,store_code AS "storeCode",store_name AS "storeName",status
+       FROM public.stores WHERE merchant_id::text=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
+      [merchant.id],
+    );
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = 30 * 24 * 60 * 60;
+    const sessionId = randomUUID();
+    const payload = { sub: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role, merchantId: merchant.id, type: 'access', jti: sessionId, iat: now, exp: now + expiresIn };
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
+    const accessToken = header + '.' + body + '.' + signature;
+    await db.getRepository(SessionEntity).save({
+      id: sessionId, userId: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role,
+      accessTokenHash: createHash('sha256').update(accessToken).digest('hex'),
+      expiresAt: new Date(payload.exp * 1000),
+    });
+    const { password: _password, ...details } = merchant;
+    return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
+  }
 
   /**
    * API 1: Merchant & Store Login / Information Lookup Service

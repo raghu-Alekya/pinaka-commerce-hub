@@ -1,5 +1,6 @@
 import { EmployeeResponseInterceptor } from '../employee/workforce-validation.pipe';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, scrypt } from 'node:crypto';
+import { promisify } from 'node:util';
 import {
   BadRequestException,
   Body,
@@ -28,6 +29,7 @@ import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
 
 const fields = [
+  'password',
   'merchantName',
   'merchantEmail',
   'merchantPhoneNumber',
@@ -100,6 +102,12 @@ export class CompactMerchantController {
     @Inject(FileStorageService) private readonly files: FileStorageService,
   ) {}
 
+  private async hashMerchantPassword(value: unknown): Promise<string> {
+    const salt = randomBytes(16);
+    const digest = await promisify(scrypt)(value as string, salt, 64) as Buffer;
+    return salt.toString('base64url') + ':' + digest.toString('base64url');
+  }
+
   private get db() {
     return this.repository.requireDataSource();
   }
@@ -148,6 +156,9 @@ export class CompactMerchantController {
     if (input.postalCode !== undefined && input.pinCode === undefined) {
       input.pinCode = input.postalCode;
       delete input.postalCode;
+    }
+    if (input.password !== undefined && (typeof input.password !== 'string' || !input.password.trim() || input.password.length > 128)) {
+      throw new BadRequestException('password must be a non-empty string of at most 128 characters');
     }
     const allowed = new Set<string>(fields);
     const blocked = removed.filter((key) =>
@@ -396,6 +407,7 @@ export class CompactMerchantController {
       createdAt: row.createdAt || row.createdDate || row.created_at || null,
     };
     for (const key of fields) {
+      if (key === 'password') continue;
       let value =
         row[key] ??
         (key === 'firstName' ? row.first_name : undefined) ??
@@ -467,6 +479,7 @@ export class CompactMerchantController {
     delete flat.planDetails;
     const mapped: Input = {
       ...flat,
+      password: flat.password ?? merchant.password,
       merchantName: flat.merchantName ?? merchant.merchantName ?? merchant.name,
       merchantEmail:
         flat.merchantEmail ?? merchant.merchantEmail ?? merchant.email,
@@ -510,6 +523,7 @@ export class CompactMerchantController {
     let savedId = '';
     try {
       await this.db.transaction(async (manager) => {
+        await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS password varchar(255) NULL');
         const merchantColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`,
         );
@@ -523,6 +537,7 @@ export class CompactMerchantController {
         const rowId = randomUUID();
         savedId = rowId;
         setCol('id', rowId);
+        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
           .trim()
@@ -985,6 +1000,7 @@ export class CompactMerchantController {
         );
         if (!existing) throw new NotFoundException('Merchant not found');
 
+        await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS password varchar(255) NULL');
         const merchantColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`,
         );
@@ -999,6 +1015,7 @@ export class CompactMerchantController {
           assignments.push(`"${col}" = $${values.length}`);
         };
 
+        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
         setCol('businessName', input.businessName ?? existing.businessName);
         setCol(
           'businessDisplayName',

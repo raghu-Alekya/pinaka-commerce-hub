@@ -24,6 +24,13 @@ export class PosAuthController {
     @Inject(PosAuthService) private readonly posAuthService: PosAuthService,
   ) {}
 
+  @Public()
+  @Post('merchant-login')
+  @HttpCode(HttpStatus.OK)
+  merchantPasswordLogin(@Body() body: { email?: string; password?: string }) {
+    return this.posAuthService.merchantPasswordLogin(body);
+  }
+
   /**
    * API 1: Merchant & Store Login / Information Lookup
    * POST /api/v1/pos/auth/merchant-store-login
