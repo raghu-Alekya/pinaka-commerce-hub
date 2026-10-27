@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { EntityManager, ILike, Repository } from 'typeorm';
+import { Brackets, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { VendorEntity, VendorStatus, VendorType } from '../../entities/vendor.entity';
 import { CreateVendorDto, UpdateVendorDto } from './vendor.dto';
@@ -39,7 +39,7 @@ export class VendorRepository {
     const normalizedEmail = optionalText(email)?.toLowerCase();
     if (!normalizedEmail) return;
 
-    const query = repository.createQueryBuilder('vendor').where('vendor.isDeleted = false').andWhere('LOWER(BTRIM(vendor.email)) = :email', {
+    const query = repository.createQueryBuilder('vendor').where('vendor.deletedAt IS NULL').andWhere('LOWER(BTRIM(vendor.email)) = :email', {
       email: normalizedEmail,
     });
     if (excludeId) query.andWhere('vendor.id != :excludeId', { excludeId });
@@ -66,34 +66,40 @@ export class VendorRepository {
       vendorType?: string;
       status?: string;
       search?: string;
-      isDeleted?: boolean;
+      includeDeleted?: boolean;
     } = {},
   ): Promise<VendorEntity[]> {
-    const where: Record<string, unknown> = {
-      isDeleted: query.isDeleted ?? false,
-    };
-    if (query.vendorType) where.vendorType = query.vendorType;
-    if (query.status) where.status = query.status;
-    if (query.search?.trim()) {
-      const search = ILike(`%${query.search.trim()}%`);
-      return this.store().find({
-        where: [
-          { ...where, vendorName: search },
-          { ...where, vendorCode: search },
-          { ...where, contactPerson: search },
-          { ...where, productCategory: search },
-        ],
-        order: { vendorName: 'ASC', id: 'ASC' },
-      });
+    const builder = this.store().createQueryBuilder('vendor');
+    if (query.includeDeleted) {
+      builder.andWhere(
+        new Brackets((where) => {
+          where.where('vendor.deletedAt IS NOT NULL').orWhere('vendor.status = :inactiveStatus', {
+            inactiveStatus: VendorStatus.INACTIVE,
+          });
+        }),
+      );
+    } else {
+      builder.andWhere('vendor.deletedAt IS NULL');
     }
-    return this.store().find({
-      where,
-      order: { vendorName: 'ASC', id: 'ASC' },
-    });
+    if (query.vendorType) builder.andWhere('vendor.vendorType = :vendorType', { vendorType: query.vendorType });
+    if (query.status) builder.andWhere('vendor.status = :status', { status: query.status });
+    if (query.search?.trim()) {
+      const search = `%${query.search.trim()}%`;
+      builder.andWhere(
+        new Brackets((where) => {
+          where
+            .where('vendor.vendorName ILIKE :search', { search })
+            .orWhere('vendor.vendorCode ILIKE :search', { search })
+            .orWhere('vendor.contactPerson ILIKE :search', { search })
+            .orWhere('vendor.productCategory ILIKE :search', { search });
+        }),
+      );
+    }
+    return builder.orderBy('vendor.vendorName', 'ASC').addOrderBy('vendor.id', 'ASC').getMany();
   }
 
-  async getById(id: string, isDeleted = false): Promise<VendorEntity> {
-    const vendor = await this.store().findOne({ where: { id, isDeleted } });
+  async getById(id: string, includeDeleted = false): Promise<VendorEntity> {
+    const vendor = await this.store().findOne({ where: { id, deletedAt: includeDeleted ? Not(IsNull()) : IsNull() } });
     if (!vendor) throw new NotFoundException(`Vendor '${id}' not found`);
     return vendor;
   }
@@ -143,10 +149,16 @@ export class VendorRepository {
       return await this.merchants.requireDataSource().transaction(async (manager) => {
         await manager.query('SELECT pg_advisory_xact_lock(724621, 43)');
         const repository = manager.getRepository(VendorEntity);
+        const restoring = dto.status === VendorStatus.ACTIVE;
         const existing = await repository.findOne({
-          where: { id, isDeleted: false },
+          where: restoring ? { id } : { id, deletedAt: IsNull() },
         });
         if (!existing) throw new NotFoundException(`Vendor '${id}' not found`);
+        if (dto.status === VendorStatus.INACTIVE) {
+          existing.deletedAt ??= new Date();
+        } else if (restoring) {
+          existing.deletedAt = null;
+        }
 
         if (dto.email !== undefined) {
           const email = optionalText(dto.email)?.toLowerCase();
@@ -183,8 +195,11 @@ export class VendorRepository {
 
   async remove(id: string, actorId: string): Promise<void> {
     await this.getById(id);
-    const deletedAt = new Date();
-    await this.store().update({ id, isDeleted: false }, { isDeleted: true, deletedAt, updatedAt: deletedAt, updatedBy: actorId });
+    const now = new Date();
+    await this.store().update(
+      { id, deletedAt: IsNull() },
+      { status: VendorStatus.INACTIVE, deletedAt: now, updatedAt: now, updatedBy: actorId },
+    );
   }
 
   private async requireMerchantUuid(merchantId: string): Promise<string> {
@@ -209,7 +224,7 @@ export class VendorRepository {
       JOIN public.vendors v ON v.id = mv.vendor_id
       WHERE mv.merchant_id = $1
         AND mv.status = 'ACTIVE'
-        AND v.is_deleted = false
+        AND v.deleted_at IS NULL
     `;
     if (query.status) {
       params.push(query.status);
@@ -245,7 +260,7 @@ export class VendorRepository {
       FROM public.vendors v
       LEFT JOIN public.merchant_vendors mv
         ON mv.vendor_id = v.id AND mv.merchant_id = $1
-      WHERE v.is_deleted = false
+      WHERE v.deleted_at IS NULL
     `;
     if (query.status) {
       params.push(query.status);
@@ -277,7 +292,7 @@ export class VendorRepository {
     const uniqueIds = [...new Set(vendorIds.map(String))];
     if (!uniqueIds.length) throw new BadRequestException('vendorIds is required');
 
-    const found = await db.query(`SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND is_deleted = false`, [uniqueIds]);
+    const found = await db.query(`SELECT id FROM public.vendors WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`, [uniqueIds]);
     if (found.length !== uniqueIds.length) {
       throw new NotFoundException('One or more vendors were not found');
     }

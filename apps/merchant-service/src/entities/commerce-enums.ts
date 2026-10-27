@@ -14,14 +14,14 @@ const deletedFlag = {
  * Registers audit columns after the entity's own columns.
  * A base-class column decorator is recorded first, which puts these fields at the front of CREATE TABLE.
  */
-export function Audited(): ClassDecorator {
+export function Audited(options: { includeDeletedFlag?: boolean } = {}): ClassDecorator {
   return (target) => {
     const prototype = (target as { prototype: object }).prototype;
     Column({ name: 'created_by', type: 'uuid', nullable: true })(prototype, 'createdBy');
     Column({ name: 'updated_by', type: 'uuid', nullable: true })(prototype, 'updatedBy');
     CreateDateColumn({ name: 'created_at', type: 'timestamptz' })(prototype, 'createdAt');
     UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })(prototype, 'updatedAt');
-    Column(deletedFlag)(prototype, 'isDeleted');
+    if (options.includeDeletedFlag !== false) Column(deletedFlag)(prototype, 'isDeleted');
   };
 }
 
