@@ -28,13 +28,7 @@ export class PosCashDenominationItemDto {
 
   @ValidateIf((item: PosCashDenominationItemDto) => !item.image)
   @IsString()
-  @MaxLength(1_500_000)
-  imageData?: string;
-
-  @ValidateIf((item: PosCashDenominationItemDto) => !item.imageData)
-  @IsString()
-  @MaxLength(2048)
-  image?: string;
+  imageData!: string;
 }
 
 export class SavePosCashDenominationDto {

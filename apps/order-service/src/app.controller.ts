@@ -174,6 +174,10 @@ export class AppController {
         || requestClientOrderId
         || null;
       const orderNumber = storeOrder?.orderNumber || order.orderNumber || '';
+      const status = effectiveStatus.toLowerCase() === 'processing'
+        && String(order.orderStatus).toUpperCase() === 'CREATED'
+        ? 'created'
+        : effectiveStatus;
       return {
         id: order.id,
         order_id: String(orderNumber),
@@ -181,7 +185,7 @@ export class AppController {
         woo_order_id: String(orderNumber),
         client_order_id: clientOrderId === null ? null : String(clientOrderId),
         date: order.createdAt,
-        status: effectiveStatus,
+        status,
         customer: storeOrder?.customerName || order.customerName || request.billing?.first_name || 'Walk-in Customer',
         total: Number(storeOrder?.total ?? order.totalAmount ?? 0),
         currency: storeOrder?.currency || request.currency || 'USD',
