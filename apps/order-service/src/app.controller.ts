@@ -129,6 +129,19 @@ export class AppController {
     return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
   }
 
+  @Get('status-counts')
+  async getOrderStatusCounts(
+    @Query('status') status?: string,
+    @Query('created_via') createdVia?: string,
+    @Query('storeId') storeId?: string,
+    @Query('store_id') storeIdSnake?: string,
+    @Headers('x-store-id') storeHeader?: string,
+  ) {
+    const criteria = this.orderLists.criteria({ status, createdVia, storeId: storeHeader || storeId || storeIdSnake });
+    const result = await this.orderRepository.getOrderStatusCounts(criteria);
+    return { success: true, order_total_count: result.total, status_counts: result.statusCounts };
+  }
+
   // Screen-ready order list and summary cards for the Orders dashboard.
   @Get('all-merchant-orders')
   async getOrdersDashboard(

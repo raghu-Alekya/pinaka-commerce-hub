@@ -560,6 +560,22 @@ export class PosAuthService {
    * Store products for the merchant and store named in the request headers.
    * The POS login access token is checked before any catalog data is read.
    */
+  async getMerchantStoreProducts(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
+    const products = await this.queryStoreProducts(scope);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      productCount: products.length,
+      products,
+    };
+  }
+
   async getStoreProducts(
     authorization?: string,
     merchantHeader?: string,
@@ -832,6 +848,43 @@ export class PosAuthService {
       categories,
       tags,
     };
+  }
+
+  private async authorizeMerchantStoreCatalog(
+    authorization?: string, merchantHeader?: string, storeHeader?: string,
+  ): Promise<CatalogScope> {
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.jti || '') || !payload.merchantId) {
+      throw new UnauthorizedException('A merchant login token is required');
+    }
+    const session = await this.merchantRepository.touchSession(payload.jti, token);
+    if (!session || session.userId !== payload.sub) throw new UnauthorizedException('Session is not active. Please log in again.');
+    const merchantKey = String(merchantHeader || '').trim();
+    const storeKey = String(storeHeader || '').trim();
+    if (!merchantKey || !storeKey) throw new BadRequestException('x-merchant-id and x-store-id headers are required');
+    const dataSource = this.merchantRepository.requireDataSource();
+    const [merchant] = await dataSource.query(
+      `SELECT m.id::text AS id,m.merchant_code AS "merchantCode",m.status
+       FROM public.merchants m JOIN public.users u ON u.id::text=$2
+       WHERE m.id::text=$1 AND (m.id::text=$3 OR m.merchant_code=$3 OR lower(m.email)=lower($3))
+         AND COALESCE(m.is_deleted,false)=false AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
+      [payload.merchantId, payload.sub, merchantKey],
+    );
+    if (!merchant) throw new ForbiddenException('User is not authorized for this merchant');
+    if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const [store] = await dataSource.query(
+      `SELECT id::text AS id,store_code AS "storeCode",store_name AS "storeName",merchant_id::text AS "merchantId",status
+       FROM public.stores WHERE merchant_id::text=$1 AND (id::text=$2 OR store_code=$2 OR lower(store_name)=lower($2))
+         AND COALESCE(is_deleted,false)=false LIMIT 1`, [merchant.id,storeKey],
+    );
+    if (!store) throw new NotFoundException('Store not found for this merchant');
+    if (store.status !== 'ACTIVE') throw new ForbiddenException('Store is currently inactive');
+    const merchantIds = this.identityKeys(merchant.id,merchant.merchantCode);
+    const storeIds = this.identityKeys(store.id,store.storeCode);
+    if (payload.storeId && !this.keyIn(payload.storeId,storeIds)) throw new ForbiddenException('Login token is not valid for this store');
+    return { dataSource, merchant, store, merchantIds, storeIds, employeeId: payload.sub };
   }
 
   private async authorizeStoreCatalog(

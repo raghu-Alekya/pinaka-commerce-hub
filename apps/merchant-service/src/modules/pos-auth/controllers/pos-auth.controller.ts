@@ -83,6 +83,18 @@ export class PosAuthController {
    * GET /api/v1/pos/auth/catalog/products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get('merchant/catalog/products')
+  @HttpCode(HttpStatus.OK)
+  async getMerchantStoreProducts(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getMerchantStoreProducts(
+      headerValue(authorization), headerValue(merchantId), headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/products', 'products', 'store-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProducts(

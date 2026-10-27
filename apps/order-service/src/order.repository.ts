@@ -1219,6 +1219,121 @@ export class OrderRepository implements OnModuleInit {
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
+  async getOrderStatusCounts(criteria: {
+    merchantId?: string;
+    storeId?: string;
+    page: number;
+    perPage: number;
+    statuses: string[];
+    createdVia?: string;
+    author?: string;
+    after?: Date;
+    before?: Date;
+    orderBy?: 'created' | 'modified';
+  }): Promise<{ total: number; statusCounts: Record<string, number> }> {
+    if (!this.isDbConnected || !this.dataSource || !this.storeOrderRepo) {
+      throw new ServiceUnavailableException('Order database is unavailable');
+    }
+    const statuses = criteria.statuses.length ? criteria.statuses : null;
+    const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
+    const author = criteria.author?.trim() || null;
+    const merchantId = criteria.merchantId || null;
+    const storeId = criteria.storeId || null;
+    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
+    const effectiveStatus = `CASE
+      WHEN upper(COALESCE(sale.order_status, '')) = 'REFUNDED'
+        OR lower(COALESCE(sale.status, '')) = 'refunded'
+        OR upper(COALESCE(sale.payment_status, '')) = 'REFUNDED'
+        OR (sale.total > 0 AND payment_state.refunded_amount >= sale.total - 0.005)
+        THEN 'refunded'
+      WHEN upper(COALESCE(sale.order_status, '')) = 'CANCELLED'
+        OR lower(COALESCE(sale.status, '')) = 'cancelled'
+        OR lower(COALESCE(sale.request_payload->>'status', '')) = 'cancelled'
+        THEN 'cancelled'
+      WHEN payment_state.refunded_amount > 0
+        OR upper(COALESCE(sale.order_status, '')) = 'PARTIAL_REFUND'
+        OR lower(COALESCE(sale.status, '')) IN ('partial-refund', 'partially-refunded')
+        THEN 'partial-refund'
+      WHEN upper(COALESCE(sale.order_status, '')) = 'COMPLETED'
+        OR lower(COALESCE(sale.status, '')) = 'completed'
+        OR lower(COALESCE(sale.request_payload->>'status', '')) = 'completed'
+        THEN 'completed'
+      WHEN NULLIF(sale.status, '') IS NOT NULL THEN lower(sale.status)
+      ELSE 'processing'
+    END`;
+    const where = `
+      FROM public.store_orders AS sale
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(payment.refund_amount), 0)::numeric AS refunded_amount
+          FROM public.store_pos_payments AS payment
+         WHERE payment.order_id = sale.order_id
+           AND payment.entry_type = 'payment'
+           AND payment.is_void = false
+           AND payment.deleted_at IS NULL
+           AND lower(COALESCE(payment.status, 'completed')) NOT IN ('failed', 'cancelled')
+      ) AS payment_state ON true
+      WHERE ($1::uuid IS NULL OR sale.merchant_id = $1::uuid)
+        AND ($2::uuid IS NULL OR sale.store_id = $2::uuid)
+        AND (
+          $3::text[] IS NULL
+          OR (${effectiveStatus}) = ANY($3::text[])
+        )
+        AND (
+          $4::text IS NULL
+          OR lower(COALESCE(
+            NULLIF(sale.request_payload->>'created_via', ''),
+            NULLIF((
+              SELECT entry->>'value'
+              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              WHERE entry->>'key' IN ('order_created_via', 'created_via')
+              LIMIT 1
+            ), ''),
+            'rest-api'
+          )) = $4
+        )
+        AND (
+          $5::text IS NULL
+          OR COALESCE(
+            NULLIF(sale.placed_by, ''),
+            NULLIF((
+              SELECT entry->>'value'
+              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              WHERE entry->>'key' IN ('_wc_order_created_by', 'pos_placed_by', 'author')
+              LIMIT 1
+            ), ''),
+            NULLIF(sale.request_payload->>'author', '')
+          ) = $5
+        )
+        AND ($6::timestamptz IS NULL OR sale.updated_at >= $6::timestamptz)
+        AND ($7::timestamptz IS NULL OR sale.updated_at <= $7::timestamptz)
+    `;
+    try {
+        // Match the Orders screen's CREATED -> Pending Payment label without
+        // reclassifying cancelled, completed or refunded orders as pending.
+        const screenStatus = `CASE
+          WHEN (${effectiveStatus}) IN ('completed','cancelled','refunded','partial-refund') THEN (${effectiveStatus})
+          WHEN upper(COALESCE(sale.order_status,''))='CREATED' THEN 'pending'
+          ELSE (${effectiveStatus}) END`;
+        const counts: Array<{ status: string; total: number }> = await this.dataSource.query(
+          `SELECT (${screenStatus}) AS status, COUNT(*)::int AS total ${where} GROUP BY 1`,
+          params.map((value, index) => index === 2 ? null : value),
+        );
+        const statusCounts: Record<string, number> = { completed: 0, pending: 0, cancelled: 0, refunded: 0, partial_refund: 0 };
+        let total = 0;
+        for (const row of counts) {
+          const count = Number(row.total);
+          statusCounts[row.status.replace(/-/g, '_')] = count;
+          if (!statuses || statuses.includes(row.status)) total += count;
+        }
+        return { total, statusCounts };
+    } catch (error: unknown) {
+      if (error instanceof QueryFailedError && (error as { driverError?: { code?: string } }).driverError?.code === '22P02') {
+        throw new BadRequestException('x-merchant-id and x-store-id must be UUIDs');
+      }
+      throw error;
+    }
+  }
+
   async listOrders(criteria: {
     merchantId?: string;
     storeId?: string;
