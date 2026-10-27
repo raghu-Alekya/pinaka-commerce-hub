@@ -87,7 +87,8 @@ export class OrderListPresenter {
       tip: storeOrder?.tipAmount ?? order.tipAmount,
     }));
     const totalNumber = Number(total);
-    const refundTotal = this.refundTotal(row.refunds, status);
+    const calculatedRefundTotal = this.refundTotal(row.refunds, status);
+    const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
     const refundedItemIds = new Set(row.refunds.flatMap((refund) => {
       const lines = refund.metadata?.line_items;
       return Array.isArray(lines)
@@ -131,7 +132,7 @@ export class OrderListPresenter {
       fee_lines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
       tax_lines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [],
       refund_order_total: totalNumber,
-      refund_total: this.round(refundTotal),
+      refund_total: refundTotal,
       net_payment: this.round(Math.max(0, totalNumber - refundTotal)),
     };
   }
@@ -186,6 +187,12 @@ export class OrderListPresenter {
       ), 0);
       return sum + (requestedTotal > 0 ? requestedTotal : Number(refund.amount || 0));
     }, 0);
+  }
+
+  private capRefundTotal(refundTotal: number, orderTotal: number): number {
+    const totalCents = Math.max(0, Math.round((Number.isFinite(orderTotal) ? orderTotal : 0) * 100));
+    const refundCents = Math.max(0, Math.round((Number.isFinite(refundTotal) ? refundTotal : 0) * 100));
+    return Math.min(refundCents, totalCents) / 100;
   }
 
   private refundedItemsTax(
