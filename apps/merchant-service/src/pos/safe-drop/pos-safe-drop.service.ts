@@ -46,11 +46,11 @@ export class PosSafeDropService {
     @Inject(PosConfigurationImageService) private readonly images: PosConfigurationImageService,
   ) {}
 
-  async get(storeId: string): Promise<{ success: true; safe_drop: PosSafeDropRecord }> {
+  async get(storeId: string, origin?: string): Promise<{ success: true; safe_drop: PosSafeDropRecord }> {
     const store = await this.requireStore(storeId);
     const record = await this.findConfiguration(store.id);
     if (!record) throw new NotFoundException('Safe and safe drop settings are not configured for this store');
-    return { success: true, safe_drop: this.present(await this.withoutInlineImages(record), store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(await this.withoutInlineImages(record), store.id, store.merchantId, origin) };
   }
 
   async getStatus(storeId: string, actor: AuthenticatedActor) {
@@ -128,23 +128,23 @@ export class PosSafeDropService {
     };
   }
 
-  async create(storeId: string, body: SavePosSafeDropDto) {
+  async create(storeId: string, body: SavePosSafeDropDto, origin?: string) {
     const store = await this.requireStore(storeId);
     this.assertRules(body);
     if (await this.findConfiguration(store.id)) {
       throw new ConflictException('Safe and safe drop settings already exist for this store');
     }
     const record = await this.saveConfiguration(store.id, body);
-    return { success: true, safe_drop: this.present(record, store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(record, store.id, store.merchantId, origin) };
   }
 
-  async update(storeId: string, body: SavePosSafeDropDto) {
+  async update(storeId: string, body: SavePosSafeDropDto, origin?: string) {
     const store = await this.requireStore(storeId);
     this.assertRules(body);
     const current = await this.findConfiguration(store.id);
     if (!current) throw new NotFoundException('Safe and safe drop settings are not configured for this store');
     const record = await this.saveConfiguration(store.id, body, current);
-    return { success: true, safe_drop: this.present(record, store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(record, store.id, store.merchantId, origin) };
   }
 
   private async requireStore(storeId: string) {
@@ -242,6 +242,7 @@ export class PosSafeDropService {
     record: StorePosConfigurationEntity,
     storeId: string,
     merchantId: string,
+    origin?: string,
   ): PosSafeDropRecord {
     const value = record.configurationValue ?? {};
     const numberOrNull = (item: unknown) => item === null || item === undefined ? null : Number(item);
@@ -268,7 +269,7 @@ export class PosSafeDropService {
         id: String(item.id ?? randomUUID()),
         amount: Number(item.amount),
         image_name: String(item.imageName ?? item.image_name ?? ''),
-        image_data: String(item.image ?? item.imageData ?? item.image_data ?? ''),
+        image_data: this.images.publishImage(String(item.image ?? item.imageData ?? item.image_data ?? ''), origin) || '',
       })) : [],
       created_at: record.createdAt,
       updated_at: record.updatedAt,

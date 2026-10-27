@@ -63,6 +63,7 @@ export class StorePosConfigurationsService {
   async create(
     dto: CreateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const storeId = await this.storeUuid(dto.storeId);
     const existing = await this.repository().findOne({
@@ -87,7 +88,7 @@ export class StorePosConfigurationsService {
       updatedBy: actor,
     });
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -95,6 +96,7 @@ export class StorePosConfigurationsService {
    */
   async findByStoreId(
     storeId: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity[]> {
     const resolvedStoreId = await this.storeUuid(storeId);
     const configurations = await this.repository().find({
@@ -106,7 +108,7 @@ export class StorePosConfigurationsService {
       },
     });
     for (const row of configurations) await this.migrateInlineIcons(row);
-    return configurations;
+    return configurations.map((row) => this.forClient(row, origin));
   }
 
   /**
@@ -141,12 +143,13 @@ export class StorePosConfigurationsService {
   async findPresented(
     storeId: string,
     configurationName: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity | CashBackSettingsResponse> {
     const configuration = await this.findOne(storeId, configurationName);
     if (configurationName === 'cashback_settings') {
       return mapCashbackSettings(configuration.configurationValue);
     }
-    return configuration;
+    return this.forClient(configuration, origin);
   }
 
   /**
@@ -155,13 +158,14 @@ export class StorePosConfigurationsService {
   async getConfigurationValue(
     storeId: string,
     configurationName: string,
+    origin?: string,
   ): Promise<Record<string, unknown>> {
     const configuration = await this.findOne(
       storeId,
       configurationName,
     );
 
-    return configuration.configurationValue;
+    return this.images.publishValue(configurationName, configuration.configurationValue, origin);
   }
 
   /**
@@ -172,6 +176,7 @@ export class StorePosConfigurationsService {
     configurationName: string,
     dto: UpdateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const configuration = await this.findOne(
       storeId,
@@ -210,7 +215,7 @@ export class StorePosConfigurationsService {
     const actor = dto.updatedBy || actorId;
     if (actor) configuration.updatedBy = actor;
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -221,6 +226,7 @@ export class StorePosConfigurationsService {
   async upsert(
     dto: CreateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const storeId = await this.storeUuid(dto.storeId);
     const existing = await this.repository().findOne({
@@ -239,7 +245,7 @@ export class StorePosConfigurationsService {
       );
       if (actor) existing.updatedBy = actor;
 
-      return this.repository().save(existing);
+      return this.forClient(await this.repository().save(existing), origin);
     }
 
     const configuration = this.repository().create({
@@ -250,7 +256,7 @@ export class StorePosConfigurationsService {
       updatedBy: actor,
     });
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -580,6 +586,14 @@ export class StorePosConfigurationsService {
     if (!prepared.changed) return;
     configuration.configurationValue = prepared.value;
     await this.repository().save(configuration);
+  }
+
+  private forClient<T extends StorePosConfigurationEntity>(row: T, origin?: string): T {
+    if (!this.images.handles(row.configurationName)) return row;
+    return {
+      ...row,
+      configurationValue: this.images.publishValue(row.configurationName, row.configurationValue, origin),
+    } as T;
   }
 
   private publishDenoms(
