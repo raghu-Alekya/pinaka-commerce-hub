@@ -45,12 +45,7 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
       ${ORDER_META_ENTRIES}
       WHERE NULLIF(btrim(entry->>'key'), '') IS NOT NULL
         AND entry->'value' IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-            FROM public.store_orders_meta AS existing
-           WHERE existing.order_id = sale.order_id
-             AND existing.meta_key = NULLIF(btrim(entry->>'key'), '')
-        )
+      ON CONFLICT (order_id, meta_key) DO NOTHING
     `);
 
     const payments = await manager.query(`SELECT to_regclass('public.store_pos_payments') AS name`);
@@ -73,12 +68,7 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
           ) AS tendered
          WHERE tendered.cash_amount > 0
            AND tendered.change_amount > 0
-           AND NOT EXISTS (
-             SELECT 1
-               FROM public.store_orders_meta AS existing
-              WHERE existing.order_id = tendered.order_id
-                AND existing.meta_key = 'pos_change_returned'
-           )
+        ON CONFLICT (order_id, meta_key) DO NOTHING
       `);
       await manager.query(`
         INSERT INTO public.store_orders_meta (order_id, meta_key, meta_value)
@@ -93,12 +83,7 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
            AND lower(replace(payment.payment_method, '_', '-')) IN ('cash', 'pos-cash')
          GROUP BY payment.order_id
         HAVING SUM(payment.amount) > 0
-           AND NOT EXISTS (
-             SELECT 1
-               FROM public.store_orders_meta AS existing
-              WHERE existing.order_id = payment.order_id
-                AND existing.meta_key = 'pos_cash_received'
-           )
+        ON CONFLICT (order_id, meta_key) DO NOTHING
       `);
       await manager.query(`
         UPDATE public.store_pos_payments AS payment

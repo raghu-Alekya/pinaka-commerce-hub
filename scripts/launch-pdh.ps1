@@ -4,9 +4,7 @@ param(
     [ValidateSet('gateway','connector-service','order-service','merchant-service','inventory-service','analytics-service','pos-integration-service','notification-service','admin-api','auth-service')]
     [string]$OnlyService,
     [ValidateRange(1, 3600)]
-    [int]$StartupTimeoutSeconds = 120,
-    [ValidateRange(1, 300)]
-    [int]$LaunchLockTimeoutSeconds = 15
+    [int]$StartupTimeoutSeconds = 120
 )
 $ErrorActionPreference = 'Stop'
 $serviceRoot = Split-Path -Parent $PSScriptRoot
@@ -34,29 +32,10 @@ if ($OnlyService) {
     $services = @($services | Where-Object Name -eq $OnlyService)
     $SkipDocker = $true
 }
-# Serialize launches for this checkout without blocking other clones of the repo.
-$mutexKeyBytes = [System.Text.Encoding]::UTF8.GetBytes($serviceRoot.ToLowerInvariant())
-$sha256 = [System.Security.Cryptography.SHA256]::Create()
-try { $mutexKeyHash = $sha256.ComputeHash($mutexKeyBytes) } finally { $sha256.Dispose() }
-$mutexKey = ([System.BitConverter]::ToString($mutexKeyHash) -replace '-', '').Substring(0, 16)
-$launchMutex = New-Object System.Threading.Mutex($false, "Local\PinakaCommerceHubLauncher-$mutexKey")
-$launchMutexAcquired = $false
+# Serialize launches so repeated clicks cannot start competing service copies.
+$launchMutex = New-Object System.Threading.Mutex($false, 'Local\PinakaCommerceHubLauncher')
+if (-not $launchMutex.WaitOne(0)) { throw 'The local service launcher is already running.' }
 try {
-    try {
-        $launchMutexAcquired = $launchMutex.WaitOne(0)
-        if (-not $launchMutexAcquired) {
-            Write-Host "Another launch for this checkout is in progress; waiting up to $LaunchLockTimeoutSeconds seconds."
-            $launchMutexAcquired = $launchMutex.WaitOne([TimeSpan]::FromSeconds($LaunchLockTimeoutSeconds))
-            if (-not $launchMutexAcquired) {
-                throw "Another launch for this checkout did not finish within $LaunchLockTimeoutSeconds seconds. Close its PowerShell window or wait for it to finish, then retry."
-            }
-        }
-    } catch [System.Threading.AbandonedMutexException] {
-        # The previous launcher exited without releasing the mutex. Ownership is
-        # transferred to this process, so startup can safely continue.
-        $launchMutexAcquired = $true
-        Write-Host 'Recovered the launcher lock from a terminated process.'
-    }
     if (-not $SkipDocker) {
         try {
             & docker compose --project-directory $serviceRoot -f (Join-Path $serviceRoot 'docker-compose.yml') up -d 2>$null
@@ -149,6 +128,6 @@ SELECT 'CREATE DATABASE pinaka_commerce_hub' WHERE NOT EXISTS (SELECT FROM pg_da
     Write-Host 'React: http://localhost:5173 (start npm run dev in pinaka-commerce-hub-web).'
     Write-Host 'Re-running this command reuses existing services. Add -Restart to reload backend services.'
 } finally {
-    if ($launchMutexAcquired) { $launchMutex.ReleaseMutex() }
+    $launchMutex.ReleaseMutex()
     $launchMutex.Dispose()
 }
