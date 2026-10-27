@@ -138,7 +138,9 @@ export function expectedCashInDrawer(
   openingBalance: number,
   transactions: ShiftAmountRow[],
   orderCash = 0,
+  omitTypes: readonly string[] = [],
 ): number {
+  const omitted = new Set(omitTypes);
   const active = transactions.filter((row) => row.status !== 'INACTIVE');
   const sum = (type: string) => active
     .filter((row) => row.transaction_type === type)
@@ -147,7 +149,7 @@ export function expectedCashInDrawer(
     ? sum('CASH_SALE')
     : orderCash;
   const cashIn = cashSales + [...DRAWER_IN].filter((type) => type !== 'CASH_SALE').reduce((total, type) => total + sum(type), 0);
-  const cashOut = [...DRAWER_OUT].reduce((total, type) => total + sum(type), 0);
+  const cashOut = [...DRAWER_OUT].filter((type) => !omitted.has(type)).reduce((total, type) => total + sum(type), 0);
   return roundMoney(openingBalance + cashIn - cashOut);
 }
 

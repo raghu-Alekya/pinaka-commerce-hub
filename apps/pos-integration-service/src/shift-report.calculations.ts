@@ -555,7 +555,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       ebt_total: getShiftEbtTotal(input.payments) || 0,
       card_total: getShiftCardTotal(input.payments) || 0,
       refund_total: roundMoney(cashRefund + cardRefund) || 0,
-      payout_total: roundMoney(payoutAmount) || 0,
+      payout_total: payoutAmount ? -roundMoney(payoutAmount) : 0,
       void_items_count: voidItems.length,
       void_items: voidItems,
       closing_balance: roundMoney(input.closingBalance) || 0,
