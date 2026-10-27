@@ -18,16 +18,17 @@ CREATE TABLE IF NOT EXISTS public.vendors (
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "deletedAt" TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
     CONSTRAINT vendors_type_valid CHECK ("vendorType" IN ('ORGANIZER', 'SUPPLIER')),
     CONSTRAINT vendors_status_valid CHECK (status IN ('ACTIVE', 'INACTIVE'))
 );
 
 ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE public.vendors ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE UNIQUE INDEX IF NOT EXISTS vendors_vendor_code_active_uidx
     ON public.vendors ("vendorCode")
-    WHERE "deletedAt" IS NULL AND "vendorCode" IS NOT NULL AND "vendorCode" <> '';
+    WHERE deleted_at IS NULL AND "vendorCode" IS NOT NULL AND "vendorCode" <> '';
 
 CREATE TABLE IF NOT EXISTS public.tendors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

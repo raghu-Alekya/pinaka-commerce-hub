@@ -153,10 +153,20 @@ export class AppController {
       const request = (order.requestPayload || {}) as Record<string, any>;
       const metadata = Array.isArray(order.metadata) ? order.metadata : [];
       const metaValue = (key: string) => metadata.find((entry) => entry?.key === key)?.value;
-      const orderId = metaValue('_pos_client_order_id') ?? order.clientOrderId ?? order.orderNumber ?? order.id;
+      const requestMetadata = Array.isArray(request.meta_data) ? request.meta_data : [];
+      const requestClientOrderId = requestMetadata.find((entry) => entry?.key === '_pos_client_order_id')?.value;
+      const clientOrderId = storeOrder?.clientOrderId
+        || order.clientOrderId
+        || metaValue('_pos_client_order_id')
+        || requestClientOrderId
+        || null;
+      const orderNumber = storeOrder?.orderNumber || order.orderNumber || '';
       return {
-        order_id: String(orderId),
-        client_order_id: order.clientOrderId || null,
+        id: order.id,
+        order_id: String(orderNumber),
+        order_number: String(orderNumber),
+        woo_order_id: String(orderNumber),
+        client_order_id: clientOrderId === null ? null : String(clientOrderId),
         date: order.createdAt,
         status: effectiveStatus,
         customer: storeOrder?.customerName || order.customerName || request.billing?.first_name || 'Walk-in Customer',

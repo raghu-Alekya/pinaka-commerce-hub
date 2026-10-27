@@ -897,19 +897,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('vendors', 'vendor_code', `
-    CREATE OR REPLACE FUNCTION public.sync_vendors_legacy_cols() RETURNS trigger AS $fn$
-    BEGIN
-      IF NEW.is_deleted AND NEW.deleted_at IS NULL THEN
-        NEW.deleted_at := now();
-      ELSIF NOT COALESCE(NEW.is_deleted, false) THEN
-        NEW.deleted_at := NULL;
-      END IF;
-      RETURN NEW;
-    END;
-    $fn$ LANGUAGE plpgsql;
     DROP TRIGGER IF EXISTS vendors_legacy_cols ON public.vendors;
-    CREATE TRIGGER vendors_legacy_cols BEFORE INSERT OR UPDATE ON public.vendors
-      FOR EACH ROW EXECUTE PROCEDURE public.sync_vendors_legacy_cols();
+    DROP FUNCTION IF EXISTS public.sync_vendors_legacy_cols();
     DO $drop_vendor_camel$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='vendorName') THEN

@@ -14,7 +14,6 @@ const legacyColumns: Record<string, { names: string[]; kind: 'text' | 'uuid' | '
   zip_code: { names: ['zipCode'], kind: 'text' },
   created_by: { names: ['createdBy'], kind: 'uuid' },
   created_at: { names: ['createdAt'], kind: 'timestamp' },
-  is_deleted: { names: ['isDeleted'], kind: 'boolean' },
   deleted_at: { names: ['deletedAt'], kind: 'timestamp' },
 };
 
@@ -45,7 +44,6 @@ export async function ensureVendorSchema(dataSource: DataSource): Promise<void> 
         ADD COLUMN IF NOT EXISTS updated_by uuid,
         ADD COLUMN IF NOT EXISTS created_at timestamptz,
         ADD COLUMN IF NOT EXISTS updated_at timestamptz,
-        ADD COLUMN IF NOT EXISTS is_deleted boolean,
         ADD COLUMN IF NOT EXISTS deleted_at timestamptz
     `);
 
@@ -79,18 +77,26 @@ export async function ensureVendorSchema(dataSource: DataSource): Promise<void> 
       );
     }
 
+    await runner.query('DROP INDEX IF EXISTS public.vendors_vendor_code_active_uidx');
+    for (const legacyDeleteColumn of ['is_deleted', 'isDeleted']) {
+      if (!byName.has(legacyDeleteColumn)) continue;
+      const source = quoteIdent(legacyDeleteColumn);
+      await runner.query(
+        `UPDATE public.vendors
+         SET deleted_at = COALESCE(deleted_at, updated_at, created_at, now())
+         WHERE lower(${source}::text) IN ('true', 't', '1', 'yes') AND deleted_at IS NULL`,
+      );
+      await runner.query(`ALTER TABLE public.vendors DROP COLUMN ${source}`);
+    }
+    await runner.query('ALTER TABLE public.vendors DROP COLUMN IF EXISTS "deletedAt"');
+
     await runner.query(`
       UPDATE public.vendors
       SET vendor_code = COALESCE(NULLIF(vendor_code, ''), 'VEN-' || replace(id::text, '-', '')),
           vendor_name = COALESCE(NULLIF(vendor_name, ''), 'Vendor ' || left(id::text, 8)),
           vendor_type = COALESCE(vendor_type, 'SUPPLIER'),
           status = COALESCE(status, 'ACTIVE'),
-          created_at = COALESCE(created_at, now()),
-          is_deleted = COALESCE(is_deleted, false),
-          deleted_at = CASE
-            WHEN is_deleted OR deleted_at IS NOT NULL THEN COALESCE(deleted_at, updated_at, created_at, now())
-            ELSE NULL
-          END
+          created_at = COALESCE(created_at, now())
     `);
     await runner.query(`ALTER TABLE public.vendors DROP COLUMN IF EXISTS "vendorCode"`);
     await runner.query(`
@@ -105,9 +111,12 @@ export async function ensureVendorSchema(dataSource: DataSource): Promise<void> 
         ALTER COLUMN updated_at DROP DEFAULT,
         ALTER COLUMN updated_at DROP NOT NULL,
         ALTER COLUMN updated_by DROP DEFAULT,
-        ALTER COLUMN updated_by DROP NOT NULL,
-        ALTER COLUMN is_deleted SET DEFAULT false,
-        ALTER COLUMN is_deleted SET NOT NULL
+        ALTER COLUMN updated_by DROP NOT NULL
+    `);
+    await runner.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS vendors_vendor_code_active_uidx
+      ON public.vendors (vendor_code)
+      WHERE deleted_at IS NULL AND vendor_code IS NOT NULL AND BTRIM(vendor_code) <> ''
     `);
     await runner.commitTransaction();
   } catch (error) {
