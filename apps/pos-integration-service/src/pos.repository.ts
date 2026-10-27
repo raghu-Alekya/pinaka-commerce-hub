@@ -733,13 +733,10 @@ export class PosRepository implements OnModuleInit {
     if (!shift || shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
     const transactions = await manager.getRepository(PosShiftTransactionEntity).find({ where: { shift_id: shiftId } });
     const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
-    // PAYOUT is already reflected in the counted drawer. Do not adjust over/short for it again.
-    const overShortExpected = expectedCashInDrawer(Number(shift.opening_balance), transactions, 0, ['PAYOUT']);
     let changed = false;
-    if (!provided.has('over_short')) {
-      shift.over_short = roundMoney(Number(shift.closing_balance) - overShortExpected);
-      changed = true;
-    }
+    // Close always recalculates over/short. A client cashDifference can already include PAYOUT.
+    shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
+    changed = true;
     if (!provided.has('discrepancy')) {
       const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
       shift.discrepancy = roundMoney(baseline - expected);
@@ -756,8 +753,7 @@ export class PosRepository implements OnModuleInit {
     if (shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
     const transactions = this.memoryTransactions.filter((row) => row.shift_id === shift.id);
     const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
-    const overShortExpected = expectedCashInDrawer(Number(shift.opening_balance), transactions, 0, ['PAYOUT']);
-    if (!provided.has('over_short')) shift.over_short = roundMoney(Number(shift.closing_balance) - overShortExpected);
+    shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
     if (!provided.has('discrepancy')) {
       const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
       shift.discrepancy = roundMoney(baseline - expected);
