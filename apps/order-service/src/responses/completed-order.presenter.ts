@@ -78,7 +78,7 @@ export class CompletedOrderPresenter {
       taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
     }));
     const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
-    const originalGrossTotal = Math.max(0, listOrderTotal({
+    const originalGrossTotal = listOrderTotal({
       total: storeOrder?.total ?? order.totalAmount,
       tax: originalItemsTax,
       taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
@@ -87,7 +87,10 @@ export class CompletedOrderPresenter {
       feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
-    }));
+    });
+    const itemsTax = this.money(effectiveStatus === 'partial-refund'
+      ? Math.max(0, Number(originalItemsTax) - this.refundedItemsTax(storeOrder?.lineItems, items, refunds))
+      : originalItemsTax);
     const createdVia = String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api');
     const lineItems = this.lineItems(
       storeOrder?.lineItems,
@@ -97,24 +100,20 @@ export class CompletedOrderPresenter {
       refunds,
       Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : (request.fee_lines || []),
       coupons,
+      Number(itemsTax),
     );
-    const itemsTax = lineItems.length
-      ? lineItems.reduce((sum, line) => sum + Number(line.total_tax || 0), 0).toFixed(2)
-      : originalItemsTax;
-    // The stored total contains the stored tax. Replace only that component
-    // with the sum of item-rounded taxes calculated after all discounts.
-    const recalculatedGrossTotal = originalGrossTotal
-      - Number(originalItemsTax)
-      + Number(itemsTax);
-    const remainingTotal = effectiveStatus === 'partial-refund'
-      ? Math.max(0, recalculatedGrossTotal - this.refundedTotal(refunds))
-      : recalculatedGrossTotal;
-    const total = this.money(remainingTotal);
-    const amount = this.money(Math.max(0, remainingTotal - Number(itemsTax)));
+    // Keep the order-level tax aligned with the total-orders API. Item taxes
+    // may be redistributed for presentation, but they must not replace the
+    // authoritative tax stored against the order.
+    // total-orders is authoritative for the order total. Per-item discount and
+    // tax distribution is presentation-only and must not rewrite this value.
+    const totalNumber = originalGrossTotal;
+    const total = this.money(totalNumber);
+    const amount = this.money(Math.max(0, totalNumber - Number(itemsTax)));
     const paymentMethod = String(storeOrder?.paymentMethod || request.payment_method || order.paymentMethod || '').toLowerCase();
     const cashReceived = Number(this.metaValue(order, 'pos_cash_received') || 0);
     const storedChange = Number(this.metaValue(order, 'pos_change_returned') || 0);
-    const calculatedChange = paymentMethod.includes('cash') ? Math.max(0, cashReceived - remainingTotal) : 0;
+    const calculatedChange = paymentMethod.includes('cash') ? Math.max(0, cashReceived - totalNumber) : 0;
     return {
       id,
       order_id: clientOrderId,
@@ -152,6 +151,7 @@ export class CompletedOrderPresenter {
     refunds: Array<{ metadata: Record<string, any> | null }>,
     feeLines: any[],
     couponLines: any[],
+    authoritativeTax: number,
   ) {
     const lines: any[] = Array.isArray(stored) && stored.length ? stored : items.map((item) => ({
       id: item.id,
@@ -178,13 +178,12 @@ export class CompletedOrderPresenter {
         refundedByItem.set(key, current);
       });
     });
-    const presented = lines.filter((line) => !line?.is_refund_item).flatMap((line, index) => {
+    const presented = lines.filter((line) => !line?.is_refund_item).map((line, index) => {
       const fallback = items[index];
       const lineId = String(line?.id ?? fallback?.id ?? '');
       const refunded = refundedByItem.get(lineId) || { quantity: 0, amount: 0 };
       const originalQuantity = Number(line?.quantity ?? fallback?.quantity ?? 0);
       const remainingQuantity = Math.max(0, originalQuantity - refunded.quantity);
-      if (remainingQuantity <= 0) return [];
       const remainingRatio = originalQuantity > 0 ? remainingQuantity / originalQuantity : 0;
       const subtotalTax = Number(line?.subtotal_tax ?? 0) * remainingRatio;
       const totalTax = Number(line?.total_tax ?? 0) * remainingRatio;
@@ -193,25 +192,36 @@ export class CompletedOrderPresenter {
       const discountType = String(this.lineMeta(line, '_pos_discount_type') || '');
       const originalSubtotal = Number(line?.subtotal ?? fallback?.totalPrice ?? 0);
       const originalTotal = Number(line?.total ?? fallback?.totalPrice ?? 0);
-      return [{
+      const merchandise = isMerchandiseLine(line);
+      const remainingSubtotal = remainingQuantity > 0
+        ? (merchandise ? Math.max(0, originalSubtotal - refunded.amount) : originalSubtotal - refunded.amount)
+        : 0;
+      const remainingLineTotal = remainingQuantity > 0
+        ? (merchandise ? Math.max(0, originalTotal - refunded.amount) : originalTotal - refunded.amount)
+        : 0;
+      return {
         id: line?.id ?? fallback?.id ?? null,
         name: String(line?.name ?? line?.productName ?? fallback?.productName ?? ''),
         product_id: this.numericId(line?.product_id ?? line?.productId ?? fallback?.productId),
         variation_id: Number(line?.variation_id || 0),
         quantity: remainingQuantity,
         tax_class: String(line?.tax_class || ''),
-        subtotal: String(Math.max(0, originalSubtotal - refunded.amount)),
+        subtotal: String(remainingSubtotal),
         subtotal_tax: subtotalTax.toFixed(2),
-        total: String(Math.max(0, originalTotal - refunded.amount)),
+        total: String(remainingLineTotal),
         is_items_has_discount: discountType ? 'Yes' : 'No',
         item_discount_type: this.discountLabel(discountType),
         total_tax: totalTax.toFixed(2),
         taxes: this.remainingTaxes(line?.taxes, remainingRatio),
         image: line?.image ?? { id: product.image?.id ?? product.image_id ?? null, src: product.image?.src ?? product.image_url ?? '' },
         meta_data: Array.isArray(line?.meta_data) ? line.meta_data : (fallback?.modifiers || []),
-      }];
+        _discount_weight: Math.max(originalSubtotal, originalTotal),
+        _remaining_ratio: remainingRatio,
+      };
     });
-    return this.allocateOrderDiscounts(presented, feeLines, couponLines);
+    return this.allocateOrderDiscounts(presented, feeLines, couponLines, authoritativeTax)
+      .filter((line) => Number(line.quantity) > 0)
+      .map(({ _discount_weight, _remaining_ratio, _discounted_subtotal, ...line }) => line);
   }
 
   /**
@@ -220,7 +230,12 @@ export class CompletedOrderPresenter {
    * each merchandise line's pre-tax total. Integer cents and largest remainders keep
    * the allocation exact even when the discount does not divide evenly.
    */
-  private allocateOrderDiscounts(lines: any[], feeLines: any[], couponLines: any[]): any[] {
+  private allocateOrderDiscounts(
+    lines: any[],
+    feeLines: any[],
+    couponLines: any[],
+    authoritativeTax: number,
+  ): any[] {
     const merchantFeeCents = (Array.isArray(feeLines) ? feeLines : []).reduce((sum, fee) => {
       const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
       if (name !== 'merchant_discount' && !name.startsWith('merchant_discount_')) return sum;
@@ -234,9 +249,13 @@ export class CompletedOrderPresenter {
       else couponCents += amount;
     });
     const merchantCents = Math.max(merchantFeeCents, merchantCouponCents);
-    const originalAmounts = lines.map((line) => Math.max(
+    const remainingAmounts = lines.map((line) => Math.max(
       this.cents(line?.subtotal),
       this.cents(line?.total),
+    ));
+    const originalAmounts = lines.map((line, index) => Math.max(
+      this.cents(line?._discount_weight),
+      remainingAmounts[index],
     ));
     const weights = lines.map((line, index) => (
       isMerchandiseLine(line) ? Math.max(0, originalAmounts[index]) : 0
@@ -246,26 +265,69 @@ export class CompletedOrderPresenter {
     const remainingAfterCoupon = Math.max(0, grossCents - couponAllocations.reduce((sum, amount) => sum + amount, 0));
     const merchantAllocations = this.allocateCents(weights, Math.min(merchantCents, remainingAfterCoupon));
 
-    return lines.map((line, index) => {
-      const totalDiscount = couponAllocations[index] + merchantAllocations[index];
-      const discountedSubtotal = Math.max(0, originalAmounts[index] - totalDiscount);
+    const distributed = lines.map((line, index) => {
+      const remainingRatio = Math.min(1, Math.max(0, Number(line?._remaining_ratio ?? 1)));
+      const couponDiscount = Math.round(couponAllocations[index] * remainingRatio);
+      const merchantDiscount = Math.round(merchantAllocations[index] * remainingRatio);
+      const totalDiscount = couponDiscount + merchantDiscount;
+      const discountedSubtotal = isMerchandiseLine(line)
+        ? Math.max(0, remainingAmounts[index] - totalDiscount)
+        : remainingAmounts[index];
       const tax = isMerchandiseLine(line)
         ? this.taxAfterDiscount(line, discountedSubtotal)
         : this.cents(line?.total_tax);
       const subtotalTax = isMerchandiseLine(line)
-        ? this.taxBeforeDiscount(line, originalAmounts[index])
+        ? this.taxBeforeDiscount(line, remainingAmounts[index])
         : this.cents(line?.subtotal_tax);
       return {
         ...line,
         subtotal_tax: (subtotalTax / 100).toFixed(2),
         total_tax: (tax / 100).toFixed(2),
-        taxes: this.taxesAfterDiscount(line?.taxes, originalAmounts[index], discountedSubtotal),
-        coupon_discount: (couponAllocations[index] / 100).toFixed(2),
-        merchant_discount: (merchantAllocations[index] / 100).toFixed(2),
+        taxes: this.taxesAfterDiscount(line?.taxes, remainingAmounts[index], discountedSubtotal),
+        coupon_discount: (couponDiscount / 100).toFixed(2),
+        merchant_discount: (merchantDiscount / 100).toFixed(2),
         total_discount: (totalDiscount / 100).toFixed(2),
+        total_with_tax: ((discountedSubtotal + tax) / 100).toFixed(2),
+        _discounted_subtotal: discountedSubtotal,
+      };
+    });
+    return this.reconcileAuthoritativeTax(distributed, authoritativeTax);
+  }
+
+  private reconcileAuthoritativeTax(lines: any[], authoritativeTax: number): any[] {
+    const targetTax = Math.max(0, this.cents(authoritativeTax));
+    const fixedTax = lines.reduce((sum, line) => (
+      isMerchandiseLine(line) ? sum : sum + Math.max(0, this.cents(line?.total_tax))
+    ), 0);
+    const merchandiseTarget = Math.max(0, targetTax - fixedTax);
+    const weights = lines.map((line) => (
+      isMerchandiseLine(line) && Number(line?.quantity) > 0
+        ? Math.max(0, this.cents(line?.total_tax)) || Math.max(0, Number(line?._discounted_subtotal || 0))
+        : 0
+    ));
+    const allocations = this.allocateExactCents(weights, merchandiseTarget);
+
+    return lines.map((line, index) => {
+      if (!isMerchandiseLine(line)) return line;
+      const tax = allocations[index];
+      const discountedSubtotal = Number(line?._discounted_subtotal || 0);
+      return {
+        ...line,
+        total_tax: (tax / 100).toFixed(2),
+        taxes: this.reconcileTaxEntries(line?.taxes, tax),
         total_with_tax: ((discountedSubtotal + tax) / 100).toFixed(2),
       };
     });
+  }
+
+  private reconcileTaxEntries(taxes: unknown, targetTax: number): unknown {
+    if (!Array.isArray(taxes) || !taxes.length) return taxes ?? { total: {}, subtotal: {} };
+    const weights = taxes.map((tax: any) => Math.max(0, this.cents(tax?.total)));
+    const allocations = this.allocateExactCents(weights, targetTax);
+    return taxes.map((tax: any, index) => ({
+      ...tax,
+      total: (allocations[index] / 100).toFixed(2),
+    }));
   }
 
   private taxAfterDiscount(line: any, discountedSubtotal: number): number {
@@ -319,15 +381,66 @@ export class CompletedOrderPresenter {
     return allocations;
   }
 
-  private refundedTotal(refunds: Array<{ amount: unknown; metadata: Record<string, any> | null }>): number {
-    const seen = new Set<string>();
-    return refunds.reduce((sum, refund, index) => {
+  private allocateExactCents(weights: number[], requestedCents: number): number[] {
+    const amount = Math.max(0, requestedCents);
+    const base = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+    const allocations = new Array(weights.length).fill(0);
+    if (!amount || !base) return allocations;
+    const ranked = weights.map((weight, index) => {
+      const exact = amount * Math.max(0, weight);
+      allocations[index] = Math.floor(exact / base);
+      return { index, remainder: exact % base, weight };
+    });
+    let remainder = amount - allocations.reduce((sum, share) => sum + share, 0);
+    ranked.sort((a, b) => b.remainder - a.remainder || b.weight - a.weight || a.index - b.index);
+    for (let index = 0; index < ranked.length && remainder > 0; index += 1, remainder -= 1) {
+      allocations[ranked[index].index] += 1;
+    }
+    return allocations;
+  }
+
+  private refundedItemsTax(
+    storedLines: unknown[] | undefined,
+    fallbackItems: OrderItemEntity[],
+    refunds: Array<{ metadata: Record<string, any> | null }>,
+  ): number {
+    if (!Array.isArray(storedLines) || !storedLines.length) return 0;
+
+    const seenRefunds = new Set<string>();
+    const refundedQuantities = new Map<string, number>();
+    refunds.forEach((refund, refundIndex) => {
       const metadata = refund.metadata || {};
-      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${index}`);
-      if (seen.has(refundId)) return sum;
-      seen.add(refundId);
-      return sum + Number(metadata.order_refund_amount ?? refund.amount ?? 0);
-    }, 0);
+      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${refundIndex}`);
+      if (seenRefunds.has(refundId)) return;
+      seenRefunds.add(refundId);
+
+      const refundedLines = Array.isArray(metadata.line_items) ? metadata.line_items : [];
+      refundedLines.forEach((line: any) => {
+        const itemId = String(line?.order_item_id ?? '').trim();
+        if (!itemId) return;
+        const quantity = Number(line?.quantity);
+        const previous = refundedQuantities.get(itemId) || 0;
+        refundedQuantities.set(
+          itemId,
+          Number.isFinite(quantity) && quantity > 0 ? previous + quantity : Number.POSITIVE_INFINITY,
+        );
+      });
+    });
+
+    return this.round(storedLines.reduce<number>((sum, line: any, index) => {
+      const lineId = String(line?.id ?? fallbackItems[index]?.id ?? '');
+      const refundedQuantity = refundedQuantities.get(lineId);
+      if (refundedQuantity === undefined) return sum;
+      const storedQuantity = Number(line?.quantity);
+      const quantity = Number.isFinite(storedQuantity) && storedQuantity > 0 ? storedQuantity : 1;
+      const storedTax = Number(line?.total_tax);
+      const lineTax = Number.isFinite(storedTax)
+        ? storedTax
+        : (Array.isArray(line?.taxes)
+          ? line.taxes.reduce((taxSum: number, entry: any) => taxSum + Number(entry?.total || 0), 0)
+          : 0);
+      return sum + lineTax * Math.min(1, refundedQuantity / quantity);
+    }, 0));
   }
 
   private positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -386,6 +499,7 @@ export class CompletedOrderPresenter {
   }
 
   private money(value: unknown): string { return Number(value || 0).toFixed(2); }
+  private round(value: number): number { return Math.round((value + Number.EPSILON) * 100) / 100; }
   private cents(value: unknown): number { return Math.round(Number(value || 0) * 100); }
   private decimal(value: unknown): string { return String(value ?? '0'); }
   private isoDate(value: Date): string { return new Date(value).toISOString(); }
