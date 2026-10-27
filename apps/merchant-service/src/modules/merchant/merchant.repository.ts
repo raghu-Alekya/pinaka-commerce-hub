@@ -1518,6 +1518,23 @@ export class MerchantRepository implements OnModuleInit {
     }
   }
 
+  /** Folder labels used by uploads/{merchant}/{store}/images. */
+  async storeFileLocation(storeKey: string): Promise<{
+    storeId: string;
+    merchantId: string;
+    merchantLabel: string;
+    storeName: string;
+  } | null> {
+    const store = await this.getStoreById(storeKey);
+    if (!store?.storeName) return null;
+    return {
+      storeId: store.id,
+      merchantId: store.merchantId,
+      merchantLabel: await this.merchantFolderLabel(store.merchantId),
+      storeName: store.storeName,
+    };
+  }
+
   async storeMatchesMerchant(
     store: { merchantId?: string; merchantUuid?: string },
     idOrUuid: string,

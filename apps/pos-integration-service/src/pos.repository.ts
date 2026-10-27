@@ -9,6 +9,7 @@ import { PosShiftTransactionEntity } from './entities/pos-shift-transaction.enti
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
 import { ensureShiftSplitSchema } from './shift.schema';
 import { ShiftTransactionInput, ShiftView, ShiftWrite, expectedCashInDrawer, roundMoney, toShiftView } from './shift.types';
+import { ReportOrder, ReportPayment, shiftCashPayoutOutsideTender } from './shift-report.calculations';
 import { shiftDebug, shiftErrorDetails } from './shift-debug.log';
 
 async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
@@ -506,6 +507,55 @@ export class PosRepository implements OnModuleInit {
     return sales;
   }
 
+  // Payout lines whose cash tender is zero. They have already left the drawer
+  // and are not part of the cash-sales total, so expected cash removes them once.
+  private async getOrderPayoutsByShift(shiftIds: string[]): Promise<Map<string, number>> {
+    const payouts = new Map<string, number>();
+    if (!this.dataSource || shiftIds.length === 0) return payouts;
+    try {
+      const orders: Array<ReportOrder & { shift_id: string | null; local_shift_id: string | null }> = await this.dataSource.query(
+        `SELECT shift_id, local_shift_id, order_id::text AS order_id, client_order_id, status,
+                total::float8 AS total, customer_name, payment_method_title, line_items, fee_lines, created_at
+           FROM public.store_orders
+          WHERE shift_id = ANY($1) OR local_shift_id = ANY($1)`,
+        [shiftIds],
+      );
+      const payments: Array<ReportPayment & { shift_id: string | null }> = await this.dataSource.query(
+        `SELECT shift_id, id::text AS id, order_id::text AS order_id, client_order_id,
+                payment_type::text AS payment_type, payment_method, payment_method_title,
+                amount::float8 AS amount, refund_amount::float8 AS refund_amount, metadata,
+                payment_at, entry_type, is_void, status
+           FROM public.store_pos_payments
+          WHERE shift_id = ANY($1) AND deleted_at IS NULL`,
+        [shiftIds],
+      );
+      const wanted = new Set(shiftIds);
+      for (const shiftId of shiftIds) {
+        const shiftOrders = orders
+          .filter((order) => order.shift_id === shiftId || order.local_shift_id === shiftId)
+          .map((order) => ({
+            ...order,
+            total: Number(order.total || 0),
+            fee_lines: order.fee_lines ?? [],
+            refunded: 0,
+          }));
+        const shiftPayments = payments
+          .filter((payment) => payment.shift_id === shiftId)
+          .map((payment) => ({
+            ...payment,
+            amount: Number(payment.amount || 0),
+            refund_amount: Number(payment.refund_amount || 0),
+            is_void: payment.is_void === true,
+          }));
+        const amount = shiftCashPayoutOutsideTender(shiftOrders, shiftPayments);
+        if (amount && wanted.has(shiftId)) payouts.set(shiftId, amount);
+      }
+    } catch (error) {
+      console.error('[POS] Could not total shift payouts from store_orders:', error);
+    }
+    return payouts;
+  }
+
   private async viewsFor(shifts: PosShiftEntity[]): Promise<ShiftView[]> {
     if (!shifts.length) return [];
     const ids = shifts.map((shift) => shift.id);
@@ -523,6 +573,7 @@ export class PosRepository implements OnModuleInit {
         .sort((left, right) => left.created_at.getTime() - right.created_at.getTime());
     }
     const sales = this.isDbConnected ? await this.getSalesByShift(ids) : new Map<string, { cash: number; card: number }>();
+    const payouts = this.isDbConnected ? await this.getOrderPayoutsByShift(ids) : new Map<string, number>();
     return shifts.map((shift) => toShiftView(
       shift,
       meta.filter((row) => row.shift_id === shift.id).map((row) => ({
@@ -545,6 +596,7 @@ export class PosRepository implements OnModuleInit {
         updated_at: row.updated_at,
       })),
       sales.get(shift.id),
+      payouts.get(shift.id) ?? 0,
     ));
   }
 
@@ -732,9 +784,10 @@ export class PosRepository implements OnModuleInit {
     const shift = await manager.getRepository(PosShiftEntity).findOne({ where: { id: shiftId } });
     if (!shift || shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
     const transactions = await manager.getRepository(PosShiftTransactionEntity).find({ where: { shift_id: shiftId } });
-    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
+    const orderPayout = (await this.getOrderPayoutsByShift([shiftId])).get(shiftId) ?? 0;
+    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions, 0, orderPayout);
     let changed = false;
-    // Close always recalculates over/short. A client cashDifference can already include PAYOUT.
+    // Expected cash already includes the payout once. Over/short is only counted cash minus that amount.
     shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
     changed = true;
     if (!provided.has('discrepancy')) {
