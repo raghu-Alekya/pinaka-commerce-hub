@@ -79,6 +79,21 @@ test('total-orders marks only partially refunded lines and reports refund totals
   assert.equal(order.net_payment, 47.82);
 });
 
+test('total-orders never reports a refund amount greater than the order total', () => {
+  const sample = row('partial-refund');
+  sample.refunds = [
+    { amount: '50.00', metadata: { refund_id: 'refund-1' } },
+    { amount: '30.00', metadata: { refund_id: 'refund-2' } },
+  ];
+
+  const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
+
+  assert.equal(order.total, '63.80');
+  assert.equal(order.refund_order_total, 63.8);
+  assert.equal(order.refund_total, 63.8);
+  assert.equal(order.net_payment, 0);
+});
+
 test('total-orders uses the repository effective refund status', () => {
   const partial = row('completed');
   partial.effectiveStatus = 'partial-refund';

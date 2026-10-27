@@ -2593,12 +2593,30 @@ export class OrderRepository implements OnModuleInit {
     collect(metadata);
     if (!entries.size) return;
     const rows = [...entries.entries()];
+    const values = rows.map((_, index) => `($${index * 2 + 2}::varchar, $${index * 2 + 3}::jsonb)`).join(', ');
+    const parameters = [orderId, ...rows.flatMap(([key, value]) => [key, JSON.stringify(value)])];
     await manager.query(
-      `INSERT INTO public.store_orders_meta (order_id, meta_key, meta_value)
-       VALUES ${rows.map((_, index) => `($1, $${index * 2 + 2}, $${index * 2 + 3}::jsonb)`).join(', ')}
-       ON CONFLICT (order_id, meta_key)
-       DO UPDATE SET meta_value = EXCLUDED.meta_value, updated_at = now()`,
-      [orderId, ...rows.flatMap(([key, value]) => [key, JSON.stringify(value)])],
+      `WITH incoming(meta_key, meta_value) AS (VALUES ${values})
+       UPDATE public.store_orders_meta AS existing
+          SET meta_value = incoming.meta_value,
+              updated_at = now()
+         FROM incoming
+        WHERE existing.order_id = $1::uuid
+          AND existing.meta_key = incoming.meta_key`,
+      parameters,
+    );
+    await manager.query(
+      `WITH incoming(meta_key, meta_value) AS (VALUES ${values})
+       INSERT INTO public.store_orders_meta (order_id, meta_key, meta_value)
+       SELECT $1::uuid, incoming.meta_key, incoming.meta_value
+         FROM incoming
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM public.store_orders_meta AS existing
+           WHERE existing.order_id = $1::uuid
+             AND existing.meta_key = incoming.meta_key
+        )`,
+      parameters,
     );
   }
 
