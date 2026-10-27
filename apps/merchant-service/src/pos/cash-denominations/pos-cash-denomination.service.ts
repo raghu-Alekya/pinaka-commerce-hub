@@ -34,26 +34,26 @@ export class PosCashDenominationService {
     @Inject(PosConfigurationImageService) private readonly images: PosConfigurationImageService,
   ) {}
 
-  async get(storeId: string): Promise<{ success: true; cashDenominations: PosCashDenominationRecord }> {
+  async get(storeId: string, origin?: string): Promise<{ success: true; cashDenominations: PosCashDenominationRecord }> {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Cash denominations are not configured for this store');
-    return { success: true, cashDenominations: this.present(await this.withoutInlineImages(store.id, record)) };
+    return { success: true, cashDenominations: this.present(await this.withoutInlineImages(store.id, record), origin) };
   }
 
-  async create(storeId: string, body: SavePosCashDenominationDto) {
+  async create(storeId: string, body: SavePosCashDenominationDto, origin?: string) {
     const store = await this.requireStore(storeId);
     if (await this.findByStore(store.id)) {
       throw new ConflictException('Cash denominations already exist for this store');
     }
-    return { success: true, cashDenominations: await this.write(store.id, store.merchantId, body, null) };
+    return { success: true, cashDenominations: await this.write(store.id, store.merchantId, body, null, origin) };
   }
 
-  async update(storeId: string, body: SavePosCashDenominationDto) {
+  async update(storeId: string, body: SavePosCashDenominationDto, origin?: string) {
     const store = await this.requireStore(storeId);
     const current = await this.findByStore(store.id);
     if (!current) throw new NotFoundException('Cash denominations are not configured for this store');
-    return { success: true, cashDenominations: await this.write(store.id, store.merchantId, body, current.id) };
+    return { success: true, cashDenominations: await this.write(store.id, store.merchantId, body, current.id, origin) };
   }
 
   private async requireStore(storeId: string) {
@@ -78,6 +78,7 @@ export class PosCashDenominationService {
     merchantId: string,
     body: SavePosCashDenominationDto,
     _existingId: string | null,
+    origin?: string,
   ): Promise<PosCashDenominationRecord> {
     const prepared = await this.images.materialize(storeId, 'cash_denominations', {
       merchantId,
@@ -90,7 +91,7 @@ export class PosCashDenominationService {
       'cash_denominations',
       prepared.value,
     );
-    return this.present(saved);
+    return this.present(saved, origin);
   }
 
   private itemRows(list: PosCashDenominationItemDto[]) {
@@ -102,12 +103,12 @@ export class PosCashDenominationService {
     }));
   }
 
-  private present(record: Record<string, any>): PosCashDenominationRecord {
+  private present(record: Record<string, any>, origin?: string): PosCashDenominationRecord {
     const mapItem = (item: Record<string, any>): PosCashDenominationItem => ({
       id: String(item.id),
       amount: Number(item.amount),
       imageName: item.imageName,
-      imageData: String(item.image ?? item.imageData ?? ''),
+      imageData: this.images.publishImage(String(item.image ?? item.imageData ?? ''), origin) || '',
     });
     const cash = Array.isArray(record.cashDenominations) ? record.cashDenominations : [];
     const coins = Array.isArray(record.coinDenominations) ? record.coinDenominations : [];

@@ -68,7 +68,7 @@ export class FileStorageService implements OnModuleInit {
   storeImagePublicPath(merchantName: string, storeName: string, filename: string): string {
     const file = this.imageFileName(filename);
     if (!file) throw new BadRequestException('Invalid icon file name');
-    return `/uploads/${encodeURIComponent(this.folderName(merchantName))}/${encodeURIComponent(this.folderName(storeName))}/images/${encodeURIComponent(file)}`;
+    return `/uploads/${encodePathSegment(this.folderName(merchantName))}/${encodePathSegment(this.folderName(storeName))}/images/${encodePathSegment(file)}`;
   }
 
   /**
@@ -119,4 +119,10 @@ export class FileStorageService implements OnModuleInit {
     const file = String(filename ?? '');
     return /^[0-9a-f-]{36}\.(png|jpe?g|webp)$/i.test(file) ? file : null;
   }
+}
+
+/** encodeURIComponent leaves quotes in names such as AA'sCorner, which breaks image URLs. */
+export function encodePathSegment(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }

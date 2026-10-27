@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 
+import { requestOrigin } from './pos-configuration-image.service';
 import { StorePosConfigurationsService } from './store-pos-configuration.service';
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
@@ -24,6 +25,7 @@ import { UploadedPosIcon } from './pos-configuration-image.service';
 type IconRequest = {
   protocol?: string;
   headers?: Record<string, string | string[] | undefined>;
+  user?: { id?: string };
   get(name: string): string | undefined;
 };
 
@@ -60,9 +62,9 @@ export class StorePosConfigurationController {
   @Post()
   create(
     @Body() dto: CreateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
-    return this.service.create(dto, request.user?.id);
+    return this.service.create(dto, request.user?.id, requestOrigin(request));
   }
   /**
    * Store a POS icon in this merchant store's images folder.
@@ -88,9 +90,9 @@ export class StorePosConfigurationController {
   @Put()
   upsert(
     @Body() dto: CreateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
-    return this.service.upsert(dto, request.user?.id);
+    return this.service.upsert(dto, request.user?.id, requestOrigin(request));
   }
 
   /**
@@ -101,8 +103,9 @@ export class StorePosConfigurationController {
   @Get(':storeId')
   findByStore(
     @Param('storeId') storeId: string,
+    @Req() request: IconRequest,
   ) {
-    return this.service.findByStoreId(storeId);
+    return this.service.findByStoreId(storeId, requestOrigin(request));
   }
 
   /**
@@ -124,10 +127,12 @@ export class StorePosConfigurationController {
   findOne(
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
+    @Req() request: IconRequest,
   ) {
     return this.service.findPresented(
       storeId,
       configurationName,
+      requestOrigin(request),
     );
   }
 
@@ -140,10 +145,12 @@ export class StorePosConfigurationController {
   getValue(
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
+    @Req() request: IconRequest,
   ) {
     return this.service.getConfigurationValue(
       storeId,
       configurationName,
+      requestOrigin(request),
     );
   }
 
@@ -157,13 +164,14 @@ export class StorePosConfigurationController {
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
     @Body() dto: UpdateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
     return this.service.update(
       storeId,
       configurationName,
       dto,
       request.user?.id,
+      requestOrigin(request),
     );
   }
 
@@ -187,14 +195,4 @@ export class StorePosConfigurationController {
       message: 'POS configuration deleted successfully',
     };
   } 
-}
-
-function requestOrigin(request: IconRequest): string {
-  const forwardedProtocol = request.headers?.['x-forwarded-proto'];
-  const forwardedHost = request.headers?.['x-forwarded-host'];
-  const protocol = (Array.isArray(forwardedProtocol) ? forwardedProtocol[0] : forwardedProtocol)?.split(',')[0]?.trim()
-    || request.protocol || 'http';
-  const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost)
-    || request.get('host') || 'localhost:3003';
-  return `${protocol}://${host}`;
 }

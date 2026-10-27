@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { FileStorageService } from '../file-storage/file-storage.service';
+import { encodePathSegment, FileStorageService } from '../file-storage/file-storage.service';
 import { MerchantRepository } from '../merchant/merchant.repository';
 
 const INLINE_IMAGE = 'data:image/';
@@ -150,8 +150,45 @@ export class PosConfigurationImageService implements OnModuleInit {
   }
 
   publishImage(image: string | null, origin?: string): string | null {
-    if (!image || !origin || !image.startsWith('/uploads/')) return image;
-    return `${origin}${image}`;
+    if (!image) return image;
+    const pathname = encodedUploadPath(image);
+    if (!pathname) return image;
+    return origin ? `${origin}${pathname}` : pathname;
+  }
+
+  /** Response copy. The database row keeps the /uploads path. */
+  publishValue(
+    configurationName: string,
+    value: Record<string, unknown>,
+    origin?: string,
+  ): Record<string, unknown> {
+    if (!this.handles(configurationName)) return value;
+    if (configurationName === 'printer_settings') {
+      if (typeof value.logo !== 'string' || !value.logo) return value;
+      const logo = this.publishImage(value.logo, origin);
+      return logo === value.logo ? value : { ...value, logo };
+    }
+    const lists = IMAGE_LISTS[configurationName];
+    if (!lists) return value;
+    let changed = false;
+    const next: Record<string, unknown> = { ...value };
+    for (const key of lists) {
+      if (!Array.isArray(next[key])) continue;
+      next[key] = next[key].map((item) => {
+        const row = asRecord(item);
+        if (!row) return item;
+        const raw = firstText(row.image, row.imageData, row.image_data, row.image_url);
+        const image = this.publishImage(raw, origin);
+        if (!image || image === row.image) return item;
+        changed = true;
+        const copy: Record<string, unknown> = { ...row, image };
+        delete copy.imageData;
+        delete copy.image_data;
+        delete copy.image_url;
+        return copy;
+      });
+    }
+    return changed ? next : value;
   }
 
   private async materializeLogo(
@@ -280,6 +317,43 @@ function decodePosImageDataUrl(value: string): { extension: '.png' | '.jpg' | '.
   const kind = match[1].toLowerCase();
   const extension = kind === 'png' ? '.png' : kind === 'webp' ? '.webp' : '.jpg';
   return matchesImage(bytes, extension) ? { extension, bytes } : null;
+}
+
+export function requestOrigin(request: {
+  protocol?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  get?(name: string): string | undefined;
+}): string {
+  const forwardedProtocol = request.headers?.['x-forwarded-proto'];
+  const forwardedHost = request.headers?.['x-forwarded-host'];
+  const protocol = (Array.isArray(forwardedProtocol) ? forwardedProtocol[0] : forwardedProtocol)?.split(',')[0]?.trim()
+    || request.protocol || 'http';
+  const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost)
+    || request.get?.('host') || 'localhost:3003';
+  return `${protocol}://${host}`;
+}
+
+function encodedUploadPath(value: string): string | null {
+  let pathname = value.trim();
+  if (/^https?:\/\//i.test(pathname)) {
+    try {
+      pathname = new URL(pathname).pathname;
+    } catch {
+      return null;
+    }
+  }
+  if (!pathname.startsWith('/uploads/')) return null;
+  const parts = pathname.split('/');
+  if (parts.length !== 6 || parts[1] !== 'uploads' || parts[4] !== 'images') return null;
+  return `/${parts.slice(1).map((part) => encodePathSegment(safeDecode(part))).join('/')}`;
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function matchesImage(bytes: Buffer, extension: '.png' | '.jpg' | '.webp'): boolean {
