@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -10,6 +11,7 @@ import { StorePosConfigurationEntity } from '../../entities/store-pos-configurat
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 import { CashBackSettingsResponse, mapCashbackSettings } from './cashback-settings.model';
+import { PosConfigurationImageService, UploadedPosIcon } from './pos-configuration-image.service';
 
 export const WOOCOMMERCE_ORDER_STATUSES = [
   { slug: 'pending', name: 'Pending payment' },
@@ -25,7 +27,15 @@ export const WOOCOMMERCE_ORDER_STATUSES = [
 
 @Injectable()
 export class StorePosConfigurationsService {
-  constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
+  constructor(
+    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
+    @Inject(PosConfigurationImageService) private readonly images: PosConfigurationImageService,
+  ) {}
+
+  saveStoreIcon(storeId: string, file: UploadedPosIcon | undefined, origin: string) {
+    if (!file?.buffer?.length) throw new BadRequestException('Choose a PNG, JPG, or WEBP icon');
+    return this.images.saveUpload(storeId, file, origin);
+  }
 
   private repository(): Repository<StorePosConfigurationEntity> {
     return this.merchants.requireDataSource().getRepository(StorePosConfigurationEntity);
@@ -72,7 +82,7 @@ export class StorePosConfigurationsService {
     const configuration = this.repository().create({
       storeId,
       configurationName: dto.configurationName,
-      configurationValue: dto.configurationValue,
+      configurationValue: await this.normalizeIcons(storeId, dto.configurationName, dto.configurationValue),
       createdBy: actor,
       updatedBy: actor,
     });
@@ -87,7 +97,7 @@ export class StorePosConfigurationsService {
     storeId: string,
   ): Promise<StorePosConfigurationEntity[]> {
     const resolvedStoreId = await this.storeUuid(storeId);
-    return this.repository().find({
+    const configurations = await this.repository().find({
       where: {
         storeId: resolvedStoreId,
       },
@@ -95,6 +105,8 @@ export class StorePosConfigurationsService {
         configurationName: 'ASC',
       },
     });
+    for (const row of configurations) await this.migrateInlineIcons(row);
+    return configurations;
   }
 
   /**
@@ -118,6 +130,7 @@ export class StorePosConfigurationsService {
       );
     }
 
+    await this.migrateInlineIcons(configuration);
     return configuration;
   }
 
@@ -186,8 +199,11 @@ export class StorePosConfigurationsService {
     }
 
     if (dto.configurationValue !== undefined) {
-      configuration.configurationValue = this.mergeConfigurationValue(
-        configuration.configurationName, configuration.configurationValue, dto.configurationValue,
+      const name = dto.configurationName || configuration.configurationName;
+      configuration.configurationValue = await this.normalizeIcons(
+        configuration.storeId,
+        name,
+        this.mergeConfigurationValue(name, configuration.configurationValue, dto.configurationValue),
       );
     }
 
@@ -216,8 +232,10 @@ export class StorePosConfigurationsService {
     const actor = dto.createdBy || actorId || null;
 
     if (existing) {
-      existing.configurationValue = this.mergeConfigurationValue(
-        existing.configurationName, existing.configurationValue, dto.configurationValue,
+      existing.configurationValue = await this.normalizeIcons(
+        storeId,
+        existing.configurationName,
+        this.mergeConfigurationValue(existing.configurationName, existing.configurationValue, dto.configurationValue),
       );
       if (actor) existing.updatedBy = actor;
 
@@ -227,7 +245,7 @@ export class StorePosConfigurationsService {
     const configuration = this.repository().create({
       storeId,
       configurationName: dto.configurationName,
-      configurationValue: dto.configurationValue,
+      configurationValue: await this.normalizeIcons(storeId, dto.configurationName, dto.configurationValue),
       createdBy: actor,
       updatedBy: actor,
     });
@@ -253,11 +271,12 @@ export class StorePosConfigurationsService {
   
   
   
-  async getStoreInfo(storeId: string): Promise<Record<string, unknown>> {
+  async getStoreInfo(storeId: string, origin?: string): Promise<Record<string, unknown>> {
     const resolvedStoreId = await this.storeUuid(storeId);
     const configurations = await this.repository().find({
       where: { storeId: resolvedStoreId },
     });
+    for (const row of configurations) await this.migrateInlineIcons(row);
     const configByName = new Map(
       configurations.map((row) => [row.configurationName, this.asObject(row.configurationValue)]),
     );
@@ -300,9 +319,9 @@ export class StorePosConfigurationsService {
         zip_code: this.textOrNull(store.postal_code),
         phone_number: this.textOrNull(store.phone),
       },
-      notes_denom: notesDenom,
-      coin_denom: coinDenom,
-      safe_denom: safe.denominations,
+      notes_denom: this.publishDenoms(notesDenom, origin),
+      coin_denom: this.publishDenoms(coinDenom, origin),
+      safe_denom: this.publishDenoms(safe.denominations, origin),
       tubes_denom: safe.tubes,
       max_tubes_count: safe.maxTubesCount,
       safe_drop_amount: safe.safeDropAmount,
@@ -538,6 +557,39 @@ export class StorePosConfigurationsService {
     const text = this.textOrNull(value);
     if (!text) return null;
     return text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || null;
+  }
+
+  private async normalizeIcons(
+    storeId: string,
+    configurationName: string,
+    value: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.images.handles(configurationName)) return value;
+    return (await this.images.materialize(storeId, configurationName, value, true)).value;
+  }
+
+  private async migrateInlineIcons(configuration: StorePosConfigurationEntity): Promise<void> {
+    if (!this.images.handles(configuration.configurationName)) return;
+    if (!this.images.hasInlineImage(configuration.configurationValue)) return;
+    const prepared = await this.images.materialize(
+      configuration.storeId,
+      configuration.configurationName,
+      configuration.configurationValue,
+      false,
+    );
+    if (!prepared.changed) return;
+    configuration.configurationValue = prepared.value;
+    await this.repository().save(configuration);
+  }
+
+  private publishDenoms(
+    rows: Array<{ denom: string | null; image: string | null }>,
+    origin?: string,
+  ): Array<{ denom: string | null; image: string | null }> {
+    return rows.map((row) => ({
+      denom: row.denom,
+      image: this.images.publishImage(row.image, origin),
+    }));
   }
 
 

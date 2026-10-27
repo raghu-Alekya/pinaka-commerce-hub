@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -53,5 +53,70 @@ export class FileStorageService implements OnModuleInit {
     await mkdir(path, { recursive: true });
     this.logger.log(`Store folder ready: ${path}`);
     return path;
+  }
+
+  /**
+   * uploads/{MerchantName}/{StoreName}/images
+   * Served by Nest at /uploads/{MerchantName}/{StoreName}/images/.
+   */
+  async ensureStoreImagesFolder(merchantName: string, storeName: string): Promise<string> {
+    const path = join(await this.ensureStoreFolder(merchantName, storeName), 'images');
+    await mkdir(path, { recursive: true });
+    return path;
+  }
+
+  storeImagePublicPath(merchantName: string, storeName: string, filename: string): string {
+    const file = this.imageFileName(filename);
+    if (!file) throw new BadRequestException('Invalid icon file name');
+    return `/uploads/${encodeURIComponent(this.folderName(merchantName))}/${encodeURIComponent(this.folderName(storeName))}/images/${encodeURIComponent(file)}`;
+  }
+
+  /**
+   * Returns the canonical /uploads path when the value already points at this
+   * store's images folder. Any other location returns null.
+   */
+  ownedStoreImagePath(merchantName: string, storeName: string, value: string): string | null {
+    let pathname = String(value ?? '').trim();
+    if (!pathname) return null;
+    if (/^https?:\/\//i.test(pathname)) {
+      try {
+        pathname = new URL(pathname).pathname;
+      } catch {
+        return null;
+      }
+    }
+    const parts = pathname.split('/');
+    if (parts.length !== 6 || parts[1] !== 'uploads' || parts[4] !== 'images') return null;
+    const decode = (part: string) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    };
+    if (decode(parts[2]) !== this.folderName(merchantName) || decode(parts[3]) !== this.folderName(storeName)) {
+      return null;
+    }
+    const file = this.imageFileName(decode(parts[5]));
+    if (!file) return null;
+    return this.storeImagePublicPath(merchantName, storeName, file);
+  }
+
+  async saveStoreImage(
+    merchantName: string,
+    storeName: string,
+    filename: string,
+    contents: Buffer,
+  ): Promise<string> {
+    const file = this.imageFileName(filename);
+    if (!file) throw new BadRequestException('Invalid icon file name');
+    const directory = await this.ensureStoreImagesFolder(merchantName, storeName);
+    await writeFile(join(directory, file), contents);
+    return this.storeImagePublicPath(merchantName, storeName, file);
+  }
+
+  private imageFileName(filename: string): string | null {
+    const file = String(filename ?? '');
+    return /^[0-9a-f-]{36}\.(png|jpe?g|webp)$/i.test(file) ? file : null;
   }
 }

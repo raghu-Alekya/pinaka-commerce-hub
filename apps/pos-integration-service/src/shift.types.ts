@@ -122,7 +122,7 @@ export interface ShiftAmountRow {
 }
 
 const DRAWER_IN = new Set(['CASH_SALE', 'PAID_IN']);
-const DRAWER_OUT = new Set(['SAFE_DROP', 'PAID_OUT', 'VENDOR_PAYMENT', 'CASHBACK']);
+const DRAWER_OUT = new Set(['SAFE_DROP', 'PAID_OUT', 'VENDOR_PAYMENT', 'PAYOUT', 'CASHBACK']);
 
 export function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -138,6 +138,7 @@ export function expectedCashInDrawer(
   openingBalance: number,
   transactions: ShiftAmountRow[],
   orderCash = 0,
+  orderPayout = 0,
 ): number {
   const active = transactions.filter((row) => row.status !== 'INACTIVE');
   const sum = (type: string) => active
@@ -147,7 +148,11 @@ export function expectedCashInDrawer(
     ? sum('CASH_SALE')
     : orderCash;
   const cashIn = cashSales + [...DRAWER_IN].filter((type) => type !== 'CASH_SALE').reduce((total, type) => total + sum(type), 0);
-  const cashOut = [...DRAWER_OUT].reduce((total, type) => total + sum(type), 0);
+  // PAYOUT and PAID_OUT rows already leave the drawer. Order payouts are added
+  // only when neither row exists, so the same payout is not removed twice.
+  const recordedPayout = sum('PAYOUT') + sum('PAID_OUT');
+  const payoutOut = Math.abs(recordedPayout) >= 0.005 ? 0 : orderPayout;
+  const cashOut = [...DRAWER_OUT].reduce((total, type) => total + sum(type), 0) + payoutOut;
   return roundMoney(openingBalance + cashIn - cashOut);
 }
 
@@ -156,6 +161,7 @@ export function toShiftView(
   meta: ShiftMetaView[],
   transactions: ShiftTransactionView[],
   orderSales: { cash: number; card: number } = { cash: 0, card: 0 },
+  orderPayout = 0,
 ): ShiftView {
   const opening = asMoney(shift.opening_balance) ?? 0;
   return {
@@ -174,7 +180,7 @@ export function toShiftView(
     over_short: asMoney(shift.over_short),
     declared_cash: asMoney(shift.declared_cash),
     discrepancy: asMoney(shift.discrepancy),
-    expected_cash_in_drawer: expectedCashInDrawer(opening, transactions, orderSales.cash),
+    expected_cash_in_drawer: expectedCashInDrawer(opening, transactions, orderSales.cash, orderPayout),
     opened_at: shift.opened_at,
     closed_at: shift.closed_at ?? null,
     created_at: shift.created_at,
