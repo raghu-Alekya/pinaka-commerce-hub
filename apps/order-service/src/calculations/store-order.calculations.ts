@@ -395,6 +395,72 @@ export function applyMerchantDiscountToStoredTax(
 }
 
 /**
+ * Woo coupon lines do not always arrive with their reduction reflected in the
+ * line totals. Apply only the unrepresented coupon balance to merchandise and
+ * scale stored taxes before the merchant-discount fee is processed.
+ */
+export function applyCouponDiscountToStoredLinesAndTax(
+  lines: Array<PosLineItem & { total_tax?: unknown; subtotal_tax?: unknown; taxes?: unknown }>,
+  couponLines: PosCouponLine[] | undefined,
+  orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
+  places = 2,
+): void {
+  const merchandise = lines.filter(isMerchandiseLine);
+  const couponMinor = (couponLines || []).reduce((sum, coupon) => {
+    if (/^pos-discount(?:-\d+)?$/i.test(String(coupon?.code || '').trim())) return sum;
+    return sum + Math.max(0, toMinor(coupon?.discount ?? 0, places));
+  }, 0);
+  const representedMinor = Math.max(
+    0,
+    merchandise.reduce((sum, line) => (
+      sum + Math.max(
+        0,
+        toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+      )
+    ), 0),
+  );
+  const currentAmounts = merchandise.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
+  const base = currentAmounts.reduce((sum, amount) => sum + amount, 0);
+  const discount = Math.min(Math.max(0, couponMinor - representedMinor), base);
+  if (!discount || !base) return;
+
+  const reducedAmounts = amountsAfterDiscount(currentAmounts, discount);
+  let previousTax = 0;
+  let nextTaxTotal = 0;
+  merchandise.forEach((line, index) => {
+    const previousAmount = currentAmounts[index];
+    const nextAmount = reducedAmounts[index];
+    line.total = fromMinor(nextAmount, places).toFixed(places);
+    if (!isTaxableSaleLine(line)) return;
+
+    const oldTax = Math.max(0, toMinor(line.total_tax ?? 0, places));
+    const nextTax = previousAmount > 0 ? Math.round((oldTax * nextAmount) / previousAmount) : 0;
+    previousTax += oldTax;
+    nextTaxTotal += nextTax;
+    line.total_tax = fromMinor(nextTax, places).toFixed(places);
+    if (Array.isArray(line.taxes)) {
+      line.taxes.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+        (entry as { total?: unknown }).total = line.total_tax;
+      });
+    }
+  });
+
+  const previousOrderTax = Math.max(0, toMinor(orderTax.total_tax ?? 0, places));
+  const basisOld = previousTax > 0 ? previousTax : previousOrderTax;
+  const basisNew = previousTax > 0
+    ? nextTaxTotal
+    : Math.round((previousOrderTax * (base - discount)) / base);
+  if (basisOld <= 0 || basisNew === basisOld) return;
+  orderTax.total_tax = fromMinor(basisNew, places).toFixed(places);
+  if (orderTax.cart_tax !== undefined) orderTax.cart_tax = orderTax.total_tax;
+  (orderTax.tax_lines || []).forEach((taxLine) => {
+    const current = toMinor(taxLine.tax_total ?? 0, places);
+    taxLine.tax_total = fromMinor(Math.round((current * basisNew) / basisOld), places).toFixed(places);
+  });
+}
+
+/**
  * Order total: line totals + fees + shipping.
  * Tax is reported separately and is not added into the total.
  * Discount is already inside line totals, so it is not subtracted again.

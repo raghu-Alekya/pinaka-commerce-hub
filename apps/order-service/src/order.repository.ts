@@ -12,6 +12,7 @@ import { cashChangeReturned, isCashTender } from './calculations/order-change';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
+  applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   calculateDiscountTotal,
   calculateStoreOrder,
@@ -719,6 +720,12 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
+    applyCouponDiscountToStoredLinesAndTax(
+      lines,
+      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      sourcePayload,
+      places,
+    );
     applyMerchantDiscountToStoredTax(
       lines,
       Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
