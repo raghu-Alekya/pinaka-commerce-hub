@@ -26,7 +26,6 @@ export class PosCashDenominationItemDto {
   imageName!: string;
 
   @IsString()
-  @MaxLength(1_500_000)
   imageData!: string;
 }
 
