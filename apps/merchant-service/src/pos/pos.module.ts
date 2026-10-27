@@ -28,11 +28,12 @@ import {
 import { FastkeyService } from './fastkeys/fastkey.service';
 import { PosEmployeeAttendanceModule } from './pos_employee_attendance/pos_employee_attendance.module';
 import { MerchantModule } from '../modules/merchant/merchant.module';
+import { StorePosConfigurationModule } from '../modules/store-pos-configuration/store-pos-configuration.module';
 import { PosSafeTransactionsController } from './safe-transactions/pos-safe-transactions.controller';
 import { PosSafeTransactionsService } from './safe-transactions/pos-safe-transactions.service';
 
 @Module({
-  imports: [MerchantModule, PosEmployeeAttendanceModule],
+  imports: [MerchantModule, StorePosConfigurationModule, PosEmployeeAttendanceModule],
   controllers: [
     PosTaxClassController,
     DiscountController,

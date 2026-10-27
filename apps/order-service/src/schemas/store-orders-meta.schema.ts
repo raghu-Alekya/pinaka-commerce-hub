@@ -29,6 +29,12 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
         CONSTRAINT store_orders_meta_order_key_uidx UNIQUE (order_id, meta_key)
       )
     `);
+    // CREATE TABLE IF NOT EXISTS leaves legacy/restored tables unchanged.
+    // Ensure the conflict target exists before the metadata backfills below.
+    await manager.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS store_orders_meta_order_key_uidx
+      ON public.store_orders_meta (order_id, meta_key)
+    `);
     await manager.query(`
       CREATE INDEX IF NOT EXISTS store_orders_meta_order_id_idx
       ON public.store_orders_meta (order_id)

@@ -386,6 +386,34 @@ function payoutOnOrder(order: ReportOrder): number {
   ), 0);
 }
 
+/** Payout cash that left the drawer without a cash tender, so it is not already inside cash sales. */
+export function cashPayoutOutsideTender(orders: ReportOrder[], cashPayments: ReportPayment[]): number {
+  const total = orders.reduce((sum, order) => {
+    const payout = payoutOnOrder(order);
+    if (!payout) return sum;
+    const netCash = cashPayments
+      .filter((payment) => payment.order_id === order.order_id)
+      .reduce((cash, payment) => cash + Number(payment.amount || 0) - paymentChange(payment) - Number(payment.refund_amount || 0), 0);
+    return Math.abs(netCash) < 0.005 ? sum + payout : sum;
+  }, 0);
+  return roundMoney(total);
+}
+
+/** Same payout figure the till removes when the shift has no PAYOUT or PAID_OUT transaction. */
+export function shiftCashPayoutOutsideTender(orders: ReportOrder[], payments: ReportPayment[]): number {
+  const orderById = new Map(orders.map((order) => [order.order_id, order]));
+  const included = payments.filter((payment) => {
+    if (!isSalePayment(payment)) return false;
+    if (!isCashMethod(payment.payment_method) && !isCardMethod(payment.payment_method)) return false;
+    if (!payment.order_id) return true;
+    const order = orderById.get(payment.order_id);
+    return !order || isSuccessfulSaleOrder(order);
+  });
+  const cashPayments = included.filter((payment) => isCashMethod(payment.payment_method));
+  const saleOrderIds = new Set(included.map((payment) => payment.order_id).filter((id): id is string => Boolean(id)));
+  return cashPayoutOutsideTender(orders.filter((order) => saleOrderIds.has(order.order_id)), cashPayments);
+}
+
 function lineLabel(line: Record<string, unknown>): string {
   return lineName(line).trim().toLowerCase().replace(/[\s-]+/g, ' ');
 }
@@ -495,20 +523,8 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
   const paidOut = sumDrawer(activeDrawer(input.drawerTransactions, 'PAID_OUT'));
   const payoutTransactions = sumDrawer(activeDrawer(input.drawerTransactions, 'PAYOUT'));
   const paidIn = sumDrawer(activeDrawer(input.drawerTransactions, 'PAID_IN'));
-  let orderPayoutSubtracted = 0;
-  let recognizedOrderPayout = 0;
-  if (!paidOut && !payoutTransactions) {
-    for (const order of saleOrders) {
-      const payout = payoutOnOrder(order);
-      recognizedOrderPayout += payout;
-      const netCash = cashPayments
-        .filter((payment) => payment.order_id === order.order_id)
-        .reduce((total, payment) => total + Number(payment.amount || 0) - paymentChange(payment) - Number(payment.refund_amount || 0), 0);
-      if (Math.abs(netCash) < 0.005) orderPayoutSubtracted += payout;
-    }
-  } else {
-    recognizedOrderPayout = saleOrders.reduce((total, order) => total + payoutOnOrder(order), 0);
-  }
+  const recognizedOrderPayout = saleOrders.reduce((total, order) => total + payoutOnOrder(order), 0);
+  const orderPayoutSubtracted = paidOut || payoutTransactions ? 0 : cashPayoutOutsideTender(saleOrders, cashPayments);
 
   const safeDropValue = input.safeDrops.reduce((sum, drop) => sum + Number(drop.total || 0), 0);
   const safeDropInTill = input.safeDrops.reduce((sum, drop) => (
@@ -555,7 +571,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       ebt_total: getShiftEbtTotal(input.payments) || 0,
       card_total: getShiftCardTotal(input.payments) || 0,
       refund_total: roundMoney(cashRefund + cardRefund) || 0,
-      payout_total: roundMoney(payoutAmount) || 0,
+      payout_total: payoutAmount ? -roundMoney(payoutAmount) : 0,
       void_items_count: voidItems.length,
       void_items: voidItems,
       closing_balance: roundMoney(input.closingBalance) || 0,
