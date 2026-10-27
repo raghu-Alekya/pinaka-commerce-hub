@@ -390,12 +390,16 @@ export class StorePosConfigurationsService {
   private async storeVendors(storeId: string): Promise<Array<{ id: string | null; vendor_name: string | null }>> {
     const rows = await this.optionalRows(
       `SELECT v.id::text AS id, v.vendor_name
-       FROM public.merchant_vendors mv
-       JOIN public.vendors v ON v.id = mv.vendor_id
-       JOIN public.stores s ON s.merchant_id = mv.merchant_id
+       FROM public.vendor_stores vs
+       JOIN public.stores s ON s.id = vs.store_id AND s.merchant_id = vs.merchant_id
+       JOIN public.merchant_vendors mv ON mv.merchant_id = vs.merchant_id AND mv.vendor_id = vs.vendor_id
+       JOIN public.vendors v ON v.id = vs.vendor_id
        WHERE s.id = $1::uuid
+         AND vs.is_mapped = true
+         AND upper(COALESCE(vs.status::text, 'ACTIVE')) = 'ACTIVE'
          AND upper(COALESCE(mv.status::text, 'ACTIVE')) = 'ACTIVE'
          AND upper(COALESCE(v.status::text, 'ACTIVE')) = 'ACTIVE'
+         AND v.is_deleted = false
        ORDER BY v.vendor_name ASC`,
       [storeId],
     );

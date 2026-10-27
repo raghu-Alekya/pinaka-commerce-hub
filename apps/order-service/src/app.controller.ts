@@ -129,6 +129,64 @@ export class AppController {
     return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
   }
 
+  // Screen-ready order list and summary cards for the Orders dashboard.
+  @Get('all-merchant-orders')
+  async getOrdersDashboard(
+    @Query('page') page?: string,
+    @Query('per_page') perPage?: string,
+    @Query('status') status?: string,
+    @Query('created_via') createdVia?: string,
+    @Query('storeId') storeId?: string,
+    @Query('store_id') storeIdSnake?: string,
+    @Headers('x-store-id') storeHeader?: string,
+    @Headers('x-merchant-id') merchantHeader?: string,
+  ) {
+    const criteria = this.orderLists.criteria({
+      page,
+      perPage,
+      status,
+      createdVia,
+      storeId: storeHeader || storeId || storeIdSnake,
+    });
+    const listed = await this.orderRepository.listOrders({ ...criteria, merchantId: merchantHeader || undefined });
+    const orders = listed.orders.map(({ order, storeOrder, effectiveStatus }) => {
+      const request = (order.requestPayload || {}) as Record<string, any>;
+      const metadata = Array.isArray(order.metadata) ? order.metadata : [];
+      const metaValue = (key: string) => metadata.find((entry) => entry?.key === key)?.value;
+      const orderId = metaValue('_pos_client_order_id') ?? order.clientOrderId ?? order.orderNumber ?? order.id;
+      return {
+        order_id: String(orderId),
+        client_order_id: order.clientOrderId || null,
+        date: order.createdAt,
+        status: effectiveStatus,
+        customer: storeOrder?.customerName || order.customerName || request.billing?.first_name || 'Walk-in Customer',
+        total: Number(storeOrder?.total ?? order.totalAmount ?? 0),
+        currency: storeOrder?.currency || request.currency || 'USD',
+        payment_status: order.paymentStatus,
+        payment_method: order.paymentMethod,
+        store_id: order.storeId,
+        merchant_id: order.merchantId,
+      };
+    });
+    const completed = orders.filter((order) => order.status.toLowerCase() === 'completed').length;
+    const pendingPayment = orders.filter((order) => String(order.paymentStatus).toLowerCase() === 'pending').length;
+    const totalValue = orders.reduce((sum, order) => sum + order.total, 0);
+    return {
+      success: true,
+      cards: {
+        total_orders: listed.total,
+        completed,
+        completed_percent: listed.total ? Number(((completed / listed.total) * 100).toFixed(1)) : 0,
+        pending_payment: pendingPayment,
+        pending_payment_percent: listed.total ? Number(((pendingPayment / listed.total) * 100).toFixed(1)) : 0,
+        total_value: Number(totalValue.toFixed(2)),
+        total_value_scope: 'loaded_orders',
+      },
+      pagination: { page: criteria.page, per_page: criteria.perPage, total: listed.total },
+      orders,
+    };
+  }
+
   // --- 3. Get Single Order Detail with Items & State History ---
   @Get(':id')
   async getOrderById(
