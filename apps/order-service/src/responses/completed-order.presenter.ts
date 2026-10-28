@@ -287,6 +287,7 @@ export class CompletedOrderPresenter {
         coupon_discount: (couponDiscount / 100).toFixed(2),
         merchant_discount: (merchantDiscount / 100).toFixed(2),
         total_discount: (totalDiscount / 100).toFixed(2),
+        total_after_discount: (discountedSubtotal / 100).toFixed(2),
         total_with_tax: ((discountedSubtotal + tax) / 100).toFixed(2),
         _discounted_subtotal: discountedSubtotal,
       };
