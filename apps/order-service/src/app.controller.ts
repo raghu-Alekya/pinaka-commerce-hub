@@ -386,7 +386,9 @@ export class AppController {
         const fallbackDiscount = source.length === 1
           ? Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0)
           : 0;
-        const discount = Number(coupon.discount ?? fallbackDiscount);
+        const discount = Number.isFinite(configuredAmount)
+          ? configuredAmount
+          : Number(coupon.discount ?? fallbackDiscount);
 
         return {
           ...coupon,
