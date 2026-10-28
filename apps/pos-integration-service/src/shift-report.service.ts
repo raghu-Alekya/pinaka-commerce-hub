@@ -10,6 +10,7 @@ import {
   VendorPayoutRow,
   formatTimestamp,
   prepareShiftData,
+  roundMoney,
 } from './shift-report.calculations';
 import { shiftDebug } from './shift-debug.log';
 
@@ -53,6 +54,44 @@ export class ShiftReportService {
   constructor(@Inject(PosRepository) private readonly shifts: PosRepository) {}
 
   async getShiftById(shiftId: string | undefined, employeeId?: string): Promise<Record<string, unknown>> {
+    const { db, shift, report, tillAmount } = await this.assembleShiftReport(shiftId, employeeId);
+    if (tillAmount > 0) {
+      shiftDebug('db', { action: 'getShiftById', table: 'pos_shift_meta', op: 'upsert', shift_id: shift.id, meta_name: 'shift_post_till_amount_value', till_amount: tillAmount });
+      await this.saveTillAmount(db, shift.id, tillAmount);
+    }
+    return report;
+  }
+
+  /**
+   * Read-only close check. Uses the same till as get-shift and does not write.
+   * Over/short = counted cash - that till.
+   */
+  async previewClose(shiftId: string, actualClosingCash: number): Promise<{
+    shiftId: string;
+    actualClosingCash: number;
+    expectedTillAmount: number;
+    overShort: number;
+    payoutTotal: number;
+  }> {
+    const actual = roundMoney(Number(actualClosingCash));
+    if (!Number.isFinite(actual)) throw new BadRequestException('closing_cash_actual must be a number');
+    const { shift, report, tillAmount } = await this.assembleShiftReport(shiftId);
+    const expectedTillAmount = roundMoney(tillAmount);
+    return {
+      shiftId: shift.id,
+      actualClosingCash: actual,
+      expectedTillAmount,
+      overShort: roundMoney(actual - expectedTillAmount),
+      payoutTotal: roundMoney(Number(report.payout_total) || 0),
+    };
+  }
+
+  private async assembleShiftReport(shiftId: string | undefined, employeeId?: string): Promise<{
+    db: DataSource;
+    shift: ShiftRow;
+    report: Record<string, unknown>;
+    tillAmount: number;
+  }> {
     const id = shiftId?.trim() || '';
     if (!id) throw new BadRequestException('Shift ID is required');
     const employee = employeeId?.trim() || '';
@@ -100,11 +139,7 @@ export class ShiftReportService {
       cashbackSettings: settings,
       drawerTransactions,
     });
-    if (tillAmount > 0) {
-      shiftDebug('db', { action: 'getShiftById', table: 'pos_shift_meta', op: 'upsert', shift_id: shift.id, meta_name: 'shift_post_till_amount_value', till_amount: tillAmount });
-      await this.saveTillAmount(db, shift.id, tillAmount);
-    }
-    return report;
+    return { db, shift, report, tillAmount };
   }
 
   private async loadShift(db: DataSource, shiftId: string): Promise<ShiftRow | null> {

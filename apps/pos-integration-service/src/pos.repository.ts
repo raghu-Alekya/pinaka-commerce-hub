@@ -787,9 +787,11 @@ export class PosRepository implements OnModuleInit {
     const orderPayout = (await this.getOrderPayoutsByShift([shiftId])).get(shiftId) ?? 0;
     const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions, 0, orderPayout);
     let changed = false;
-    // Expected cash already includes the payout once. Over/short is only counted cash minus that amount.
-    shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
-    changed = true;
+    // Close passes over_short from the till (actual cash - till amount). Keep that value.
+    if (!provided.has('over_short')) {
+      shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
+      changed = true;
+    }
     if (!provided.has('discrepancy')) {
       const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
       shift.discrepancy = roundMoney(baseline - expected);
@@ -806,7 +808,7 @@ export class PosRepository implements OnModuleInit {
     if (shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
     const transactions = this.memoryTransactions.filter((row) => row.shift_id === shift.id);
     const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
-    shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
+    if (!provided.has('over_short')) shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
     if (!provided.has('discrepancy')) {
       const baseline = shift.declared_cash == null ? Number(shift.closing_balance) : Number(shift.declared_cash);
       shift.discrepancy = roundMoney(baseline - expected);
