@@ -184,13 +184,27 @@ export class AppController {
   async closeShift(@Body() request: Record<string, unknown>) {
     return this.traceShift('POST /shifts/close', request, async () => {
       const write = normalizeShiftClose(request);
-      shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write) });
+      const preview = await this.shiftReport.previewClose(write.shiftId, Number(write.master.closing_balance));
+      const declared = write.master.declared_cash;
+      write.master.over_short = preview.overShort;
+      write.master.discrepancy = declared == null
+        ? preview.overShort
+        : Math.round((Number(declared) - preview.expectedTillAmount) * 100) / 100;
+      for (const field of ['over_short', 'discrepancy']) {
+        if (!write.fields.includes(field)) write.fields.push(field);
+      }
+      shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write), database_updated: true });
       const shift = await this.posRepository.updateShift(write.shiftId, write);
       if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
       return {
         success: true,
+        database_updated: true,
         message: 'Shift closed successfully! Z-Report generated for thermal printing.',
         shift_id: shift.id,
+        actual_closing_cash: preview.actualClosingCash,
+        expected_till_amount: preview.expectedTillAmount,
+        over_short: preview.overShort,
+        payout_total: preview.payoutTotal,
         shift,
         reportType: 'Z_REPORT',
       };
