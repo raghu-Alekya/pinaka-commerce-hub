@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Inject, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, Inject, Param, Patch, Post, Put } from '@nestjs/common';
 import { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto, UpdateOrderDto } from './dto/order-update.dto';
 import { OrderUpdateService } from './services/order-update.service';
 
@@ -10,9 +10,11 @@ export class OrderUpdatesController {
   @HttpCode(200)
   update(
     @Param('id') id: string,
-    @Body() body: UpdateOrderDto,
+    @Body() body: Record<string, unknown>,
+    @Headers('x-store-id') storeId?: string,
+    @Headers('x-merchant-id') merchantId?: string,
   ) {
-    return this.updates.update(id, body);
+    return this.updates.replace(id, body, { storeId, merchantId });
   }
 
   @Patch(':id')
