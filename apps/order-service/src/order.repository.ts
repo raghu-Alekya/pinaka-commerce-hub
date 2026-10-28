@@ -1882,10 +1882,18 @@ export class OrderRepository implements OnModuleInit {
     return products;
   }
 
-  async findStoreCoupon(storeId: string, code: string): Promise<Record<string, unknown> | null> {
+  async findStoreCoupon(
+    storeId: string,
+    code: string,
+    includeDeleted = false,
+  ): Promise<Record<string, unknown> | null> {
     const normalized = String(code || '').trim();
     if (!this.dataSource || !normalized) return null;
     try {
+      const activeCouponFilter = includeDeleted
+        ? ''
+        : `AND deleted_at IS NULL
+           AND sync_status <> 'DELETED'`;
       const rows = await this.dataSource.query(
         `SELECT code, amount, discount_type, date_expires, individual_use,
                 product_ids, excluded_product_ids, usage_limit, usage_count,
@@ -1894,8 +1902,7 @@ export class OrderRepository implements OnModuleInit {
          FROM public.store_coupons
          WHERE store_id = $1::uuid
            AND lower(code) = lower($2)
-           AND deleted_at IS NULL
-           AND sync_status <> 'DELETED'
+           ${activeCouponFilter}
          LIMIT 1`,
         [storeId, normalized],
       );

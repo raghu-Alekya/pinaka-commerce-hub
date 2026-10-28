@@ -139,6 +139,7 @@ export class AppController {
       storeId: storeHeader || storeId || storeIdSnake,
     });
     const listed = await this.orderRepository.listOrders(criteria);
+    await this.hydrateCouponLines(listed.orders);
     return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
   }
 
@@ -204,12 +205,17 @@ export class AppController {
       storeId: storeHeader || storeId || storeIdSnake,
     });
     const listed = await this.orderRepository.listOrders({ ...criteria, merchantId: merchantHeader || undefined });
+    await this.hydrateCouponLines(listed.orders);
     const orders = listed.orders.map(({ order, storeOrder, effectiveStatus }) => {
       const request = (order.requestPayload || {}) as Record<string, any>;
       const metadata = Array.isArray(order.metadata) ? order.metadata : [];
       const metaValue = (key: string) => metadata.find((entry) => entry?.key === key)?.value;
       const requestMetadata = Array.isArray(request.meta_data) ? request.meta_data : [];
       const requestClientOrderId = requestMetadata.find((entry) => entry?.key === '_pos_client_order_id')?.value;
+      const storedCouponLines = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+      const couponLines = storedCouponLines.length
+        ? storedCouponLines
+        : (Array.isArray(request.coupon_lines) ? request.coupon_lines : []);
       const clientOrderId = storeOrder?.clientOrderId
         || order.clientOrderId
         || metaValue('_pos_client_order_id')
@@ -233,6 +239,7 @@ export class AppController {
         currency: storeOrder?.currency || request.currency || 'USD',
         payment_status: order.paymentStatus,
         payment_method: order.paymentMethod,
+        coupon_lines: couponLines,
         store_id: order.storeId,
         merchant_id: order.merchantId,
       };
@@ -365,5 +372,64 @@ export class AppController {
         ? status as OrderStatus
         : OrderStatus.CREATED,
     };
+  }
+
+  private async hydrateCouponLines(rows: Array<{
+    order: { storeId: string; requestPayload?: unknown; discountAmount?: unknown };
+    storeOrder: { couponLines?: unknown[]; discountTotal?: unknown } | null;
+  }>): Promise<void> {
+    const couponCatalog = new Map<string, Promise<Record<string, unknown> | null>>();
+    await Promise.all(rows.map(async ({ order, storeOrder }) => {
+      const request = (order.requestPayload || {}) as Record<string, any>;
+      const stored = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+      const requested = Array.isArray(request.coupon_lines) ? request.coupon_lines : [];
+      const source = stored.length ? stored : requested;
+      if (!source.length) return;
+
+      const hydrated = await Promise.all(source.map(async (entry) => {
+        const coupon = entry && typeof entry === 'object'
+          ? entry as Record<string, any>
+          : { code: entry };
+        const code = String(coupon.code || '').trim();
+        if (!code) return coupon;
+        const catalogKey = `${order.storeId}:${code.toLowerCase()}`;
+        if (!couponCatalog.has(catalogKey)) {
+          couponCatalog.set(catalogKey, this.orderRepository.findStoreCoupon(order.storeId, code, true));
+        }
+        const catalog = await couponCatalog.get(catalogKey)!;
+        if (!catalog) return coupon;
+
+        const metadata = Array.isArray(coupon.meta_data) ? [...coupon.meta_data] : [];
+        const setMetadata = (key: string, value: unknown) => {
+          if (!metadata.some((item) => item?.key === key)) metadata.push({ key, value });
+        };
+        const configuredAmount = Number(catalog.amount);
+        setMetadata('discount_type', catalog.discount_type || 'fixed_cart');
+        setMetadata(
+          'amount',
+          Number.isFinite(configuredAmount) ? String(configuredAmount) : String(catalog.amount ?? '0'),
+        );
+        setMetadata('product_ids', Array.isArray(catalog.product_ids) ? catalog.product_ids : []);
+        setMetadata(
+          'excluded_product_ids',
+          Array.isArray(catalog.excluded_product_ids) ? catalog.excluded_product_ids : [],
+        );
+        const fallbackDiscount = source.length === 1
+          ? Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0)
+          : 0;
+        const discount = Number(coupon.discount ?? fallbackDiscount);
+
+        return {
+          ...coupon,
+          code,
+          discount: (Number.isFinite(discount) ? discount : 0).toFixed(2),
+          discount_tax: Number(coupon.discount_tax || 0).toFixed(2),
+          meta_data: metadata,
+        };
+      }));
+      if (storeOrder) storeOrder.couponLines = hydrated;
+      request.coupon_lines = hydrated;
+      order.requestPayload = request;
+    }));
   }
 }
