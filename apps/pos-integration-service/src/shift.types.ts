@@ -79,6 +79,7 @@ export interface ShiftView {
   closed_by: string | null;
   status: ShiftStatus;
   opening_balance: number;
+  opening_safe_cash: number;
   closing_balance: number | null;
   over_short: number | null;
   declared_cash: number | null;
@@ -164,6 +165,7 @@ export function toShiftView(
   orderPayout = 0,
 ): ShiftView {
   const opening = asMoney(shift.opening_balance) ?? 0;
+  const openingSafeShift = metaNumber({ meta } as ShiftView, 'opening_safe_cash') ?? 0;  
   return {
     id: shift.id,
     merchant_id: shift.merchant_id,
@@ -176,6 +178,7 @@ export function toShiftView(
     closed_by: shift.closed_by ?? null,
     status: shift.status,
     opening_balance: opening,
+    opening_safe_cash: openingSafeShift,
     closing_balance: asMoney(shift.closing_balance),
     over_short: asMoney(shift.over_short),
     declared_cash: asMoney(shift.declared_cash),
@@ -243,6 +246,7 @@ export function withStoreShiftFields<T extends ShiftView>(view: T): T & Record<s
     terminalId: view.device_id,
     registerId: metaText(view, 'register_id'),
     openingCash: view.opening_balance,
+    openingSafeCash: view.opening_safe_cash,
     closingCashActual: view.closing_balance,
     expectedCashInDrawer: view.expected_cash_in_drawer,
     cashDifference: view.over_short ?? view.discrepancy,

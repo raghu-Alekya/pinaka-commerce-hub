@@ -126,6 +126,7 @@ export class ShiftReportService {
       startTime: this.metaText(meta, 'start_time') || formatTimestamp(shift.opened_at),
       endTime: this.metaText(meta, 'end_time') || formatTimestamp(shift.closed_at),
       openingBalance: opening,
+      openingSafeCash: this.metaNumber(meta, 'opening_safe_cash'),
       closingBalance: this.metaNumber(meta, 'closing_balance', this.number(shift.closing_balance)),
       notes: this.metaText(meta, 'opening_note') || this.metaText(meta, 'notes') || this.metaText(meta, 'start_notes'),
       closingNotes: this.metaText(meta, 'closing_note') || this.metaText(meta, 'shift_closing_notes'),

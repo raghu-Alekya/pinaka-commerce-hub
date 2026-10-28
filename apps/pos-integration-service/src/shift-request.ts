@@ -40,6 +40,7 @@ const META_FIELDS: Array<{ name: string; aliases: string[]; kind: 'text' | 'mone
   { name: 'total_order_sale_amount', aliases: ['total_order_sale_amount'], kind: 'money' },
   { name: 'total_cancelled_orders', aliases: ['total_cancelled_orders'], kind: 'integer' },
   { name: 'total_void_items', aliases: ['total_void_items'], kind: 'integer' },
+  { name: 'opening_safe_cash', aliases: ['opening_safe_cash', 'openig_safe_cash'], kind: 'integer' },
 ];
 
 const SHIFT_REQUEST_KEYS = new Set<string>([
