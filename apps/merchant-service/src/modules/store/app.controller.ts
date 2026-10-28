@@ -444,6 +444,75 @@ export class AppController {
     };
   }
 
+  @Post('stores/:storeId/catalog/:taxonomy')
+  @RequireAuth()
+  createCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('POST', storeId, taxonomy, undefined, body, request.user);
+  }
+
+  @Put('stores/:storeId/catalog/:taxonomy/:termId')
+  @RequireAuth()
+  updateCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Param('termId') termId: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('PUT', storeId, taxonomy, termId, body, request.user);
+  }
+
+  @Delete('stores/:storeId/catalog/:taxonomy/:termId')
+  @RequireAuth()
+  deleteCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Param('termId') termId: string, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('DELETE', storeId, taxonomy, termId, {}, request.user);
+  }
+
+  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+    if (!['categories', 'tags'].includes(taxonomy)) throw new NotFoundException('Catalog taxonomy must be categories or tags');
+    if (method !== 'POST' && (!termId || !/^[1-9]\d*$/.test(termId))) throw new BadRequestException('termId must be a positive WooCommerce ID');
+    if (!actor?.id) throw new ForbiddenException('Authentication is required');
+    const [store] = await this.merchantRepository.requireDataSource().query(
+      `SELECT s.id::text AS id,m.id::text AS merchant_id FROM public.stores s
+       JOIN public.merchants m ON m.id::text=s.merchant_id::text
+       WHERE (s.id::text=$1 OR s.store_code=$1) AND COALESCE(s.is_deleted,false)=false
+         AND COALESCE(m.is_deleted,false)=false AND m.status='ACTIVE'`, [storeId],
+    );
+    if (!store) throw new NotFoundException('Store not found');
+    if (actor.merchantId && actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    if (actor.role !== 'OWNER') {
+      const [owner] = await this.merchantRepository.requireDataSource().query(
+        `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
+         WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+           AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`, [actor.id, store.merchant_id],
+      );
+      if (!owner || actor.merchantId !== store.merchant_id || (actor.storeId && actor.storeId !== store.id)) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    }
+    const allowed = taxonomy === 'categories' ? ['name','slug','description','parent','display','image','menu_order'] : ['name','slug','description'];
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a JSON object');
+    if (Object.keys(input).some(key => !allowed.includes(key))) throw new BadRequestException('Unsupported category or tag field');
+    if (method === 'POST' && (typeof input.name !== 'string' || !input.name.trim())) throw new BadRequestException('name is required');
+    for (const key of ['name','slug','description','display']) {
+      if (input[key] !== undefined && (typeof input[key] !== 'string' || (key === 'name' && !String(input[key]).trim()))) throw new BadRequestException(key + ' must be a string');
+    }
+    for (const key of ['parent','menu_order']) {
+      if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || Number(input[key]) < 0)) throw new BadRequestException(key + ' must be a non-negative integer');
+    }
+    if (method === 'PUT' && !Object.keys(input).length) throw new BadRequestException('Supply at least one field to update');
+    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
+    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) throw new BadRequestException('Connect and validate the WordPress site first');
+    const params = { storeId: store.id, wordpressUrl: connector.wordpressUrl, wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt) };
+    const suffix = termId ? '/' + termId : '';
+    const response = await fetch(params.wordpressUrl.replace(/\/+$/, '') + '/wp-json/wc/v3/products/' + taxonomy + suffix + (method === 'DELETE' ? '?force=true' : ''), {
+      method, headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json' },
+      ...(method !== 'DELETE' ? { body: JSON.stringify(input) } : {}), signal: AbortSignal.timeout(30000),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new BadRequestException({ message: data?.message || 'WordPress category/tag operation failed', upstreamStatus: response.status });
+    let synced = true;
+    try {
+      if (taxonomy === 'categories') await this.merchantRepository.syncStoreCategoriesFromWordPress({ ...params, includeAll: true });
+      else await this.merchantRepository.syncStoreTagsFromWordPress(params);
+    } catch {
+      synced = false;
+    }
+    return { success: true, storeId: store.id, taxonomy, data, synced, ...(synced ? {} : { message: 'WordPress change succeeded; refresh the PCH catalog using its sync API. Do not repeat the create operation.' }) };
+  }
+
   @Get('stores/:storeId/catalog/products/sku/:sku')
   async getStoreProductBySku(
     @Param('storeId') storeId: string,

@@ -3548,6 +3548,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
 
   async syncStoreCategoriesFromWordPress(params: {
     storeId: string;
+    includeAll?: boolean;
     wordpressUrl: string;
     wordpressJwt: string;
   }): Promise<number> {
@@ -3555,7 +3556,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       params.wordpressUrl,
       params.wordpressJwt,
       '/wp-json/wc/v3/products/categories',
-      { per_page: '100', hide_empty: 'true', parent: '0' },
+      params.includeAll ? { per_page: '100', hide_empty: 'false' } : { per_page: '100', hide_empty: 'true', parent: '0' },
     );
     await this.saveStoreCategoryColumn(params.storeId, 'payload', categories);
     return categories.length;
