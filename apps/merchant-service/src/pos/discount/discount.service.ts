@@ -83,6 +83,30 @@ export class DiscountService implements OnModuleInit {
 
   async list(storeId: string, role?: string, query: Record<string, string> = {}) {
     const connection = await this.requireWordPressConnection(storeId, role);
+    return this.listFromConnection(storeId, connection, query);
+  }
+
+  async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
+    if (!actor?.id || !actor.merchantId) throw new ForbiddenException('A merchant login token is required');
+    const [store] = await this.merchants.requireDataSource().query(
+      `SELECT s.id::text AS id FROM public.stores s
+       JOIN public.merchants m ON m.id::text=s.merchant_id::text
+       JOIN public.users u ON u.id::text=$3
+       WHERE (s.id::text=$1 OR s.store_code=$1) AND m.id::text=$2
+         AND s.status='ACTIVE' AND COALESCE(s.is_deleted,false)=false
+         AND m.status='ACTIVE' AND COALESCE(m.is_deleted,false)=false
+         AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
+      [storeId, actor.merchantId, actor.id],
+    );
+    if (!store || (actor.storeId && actor.storeId !== store.id && actor.storeId !== storeId)) {
+      throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    }
+    const connection = await this.resolveWordPressConnection(store.id);
+    return this.listFromConnection(store.id, connection, query);
+  }
+
+  private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
     const { type, ...wordpressQuery } = query;
     const response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
       page: '1',
@@ -739,6 +763,10 @@ export class DiscountService implements OnModuleInit {
 
   private async requireWordPressConnection(storeId: string, role?: string) {
     this.requireDiscountRole(role);
+    return this.resolveWordPressConnection(storeId);
+  }
+
+  private async resolveWordPressConnection(storeId: string) {
     const store = await this.merchants.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const connector = await this.merchants.getWebsiteConnection(store.id)
