@@ -44,6 +44,15 @@ export class OrderUpdateService {
     @Inject(OrderUpdatePresenter) private readonly presenter: OrderUpdatePresenter,
   ) {}
 
+  async replace(
+    orderId: string,
+    payload: Record<string, unknown>,
+    scope: { storeId?: string; merchantId?: string } = {},
+  ) {
+    const graph = await this.orders.replaceOrderSnapshot(orderId, payload, scope);
+    return this.presenter.present(graph);
+  }
+
   async update(orderId: string, dto: UpdateOrderDto) {
     const hasCoupons = dto.coupon_lines !== undefined;
     const hasStatus = dto.status !== undefined && dto.status.trim() !== '';

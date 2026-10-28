@@ -65,6 +65,7 @@ export class OrderListPresenter {
     const status = this.displayStatus(row.effectiveStatus || storeOrder?.status || this.statusFromOrder(order));
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
+    const orderPlacedAt = this.orderPlacedAt(order, storeOrder, request);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
     const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
     const tax = listOrderTax({
@@ -123,10 +124,11 @@ export class OrderListPresenter {
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,
       currency_symbol: this.currencySymbol(currency),
-      date_completed: request.date_completed
-        ? String(request.date_completed)
-        : (status === 'Completed' ? paidAt : null),
-      date_paid: request.date_paid ? String(request.date_paid) : paidAt,
+      date_completed: orderPlacedAt
+        || (request.date_completed ? String(request.date_completed) : null)
+        || (status === 'Completed' ? paidAt : null),
+      date_paid: orderPlacedAt
+        || (request.date_paid ? String(request.date_paid) : paidAt),
       coupon_lines: Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [],
       line_items: lineItems,
       fee_lines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
@@ -339,6 +341,23 @@ export class OrderListPresenter {
     const metadata = Array.isArray(order.metadata) ? order.metadata : [];
     const value = metadata.find((entry) => entry?.key === key)?.value;
     return value === undefined || value === null ? '' : String(value);
+  }
+
+  private orderPlacedAt(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): string | null {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    const value = metadata.find((entry) => entry?.key === 'order_placed_at')?.value;
+    if (value === undefined || value === null) return null;
+    const timestamp = String(value).trim();
+    return timestamp || null;
   }
 
   private paidStamp(request: Record<string, unknown>, createdAt: Date, timeZone: string, paid: boolean): string | null {

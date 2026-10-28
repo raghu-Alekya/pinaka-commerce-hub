@@ -1226,6 +1226,184 @@ export class OrderRepository implements OnModuleInit {
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
+  async replaceOrderSnapshot(
+    orderReference: string,
+    source: Record<string, unknown>,
+    scope: { storeId?: string; merchantId?: string } = {},
+  ) {
+    if (!this.isDbConnected || !this.dataSource || !this.storeOrderRepo) {
+      throw new ServiceUnavailableException('Order database is unavailable; the order was not updated');
+    }
+    const current = await this.getOrderByReference(orderReference);
+    if (!current?.storeOrder) throw new BadRequestException(`Order '${orderReference}' was not found`);
+    if (scope.storeId && current.order.storeId !== scope.storeId) {
+      throw new BadRequestException(`Order '${orderReference}' does not belong to store '${scope.storeId}'`);
+    }
+    if (scope.merchantId && current.order.merchantId !== scope.merchantId) {
+      throw new BadRequestException(`Order '${orderReference}' does not belong to merchant '${scope.merchantId}'`);
+    }
+
+    const payload: any = JSON.parse(JSON.stringify(source || {}));
+    const sourceItems = Array.isArray(payload.line_items) ? payload.line_items : payload.items;
+    if (!Array.isArray(sourceItems) || !sourceItems.length) {
+      throw new BadRequestException('line_items with at least 1 item are required to replace an order');
+    }
+    const metadata = Array.isArray(payload.meta_data) ? payload.meta_data : [];
+    const metaValue = (key: string) => metadata.find((entry: any) => entry?.key === key)?.value;
+    let items: OrderItemEntity[] = sourceItems.map((item: any, index: number) => {
+      const quantity = Number(item?.quantity || 1);
+      const lineTotal = Number(item?.total ?? item?.subtotal ?? item?.totalPrice ?? 0);
+      return {
+        id: String(item?.id || `ITEM-${current.order.id}-${index + 1}`),
+        orderId: current.order.id,
+        productId: String(item?.product_id ?? item?.productId ?? ''),
+        productName: String(item?.name || item?.productName || 'Sales Item'),
+        quantity,
+        unitPrice: item?.unitPrice !== undefined ? Number(item.unitPrice) : (quantity ? lineTotal / quantity : 0),
+        totalPrice: lineTotal,
+        modifiers: Array.isArray(item?.meta_data) ? item.meta_data : item?.modifiers || [],
+      };
+    });
+    const requestedStatus = String(payload.status || current.storeOrder.status || 'processing')
+      .trim().toLowerCase().replace(/_/g, '-');
+    const orderStatus = requestedStatus === 'completed'
+      ? OrderStatus.COMPLETED
+      : requestedStatus === 'refunded'
+        ? OrderStatus.REFUNDED
+        : requestedStatus === 'cancelled' || requestedStatus === 'canceled'
+          ? OrderStatus.CANCELLED
+          : OrderStatus.CREATED;
+    const paymentMethodText = String(payload.payment_method || current.storeOrder.paymentMethod || 'cash').toUpperCase();
+    const orderData: any = {
+      storeId: current.order.storeId,
+      merchantId: current.order.merchantId,
+      deviceId: String(metaValue('pos_device_id') ?? metaValue('_pos_device_id') ?? current.storeOrder.deviceId ?? '').trim() || undefined,
+      shiftId: String(metaValue('shift_id') ?? current.storeOrder.shiftId ?? '').trim() || undefined,
+      localShiftId: current.storeOrder.localShiftId,
+      clientOrderId: String(metaValue('_pos_client_order_id') ?? current.storeOrder.clientOrderId ?? '').trim() || undefined,
+      offline: Boolean(payload.offline ?? current.storeOrder.offline),
+      metadata,
+      requestPayload: payload,
+      items: items.map((item) => ({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        totalPrice: item.totalPrice,
+        modifiers: item.modifiers,
+      })),
+      customerName: payload.customerName ?? current.order.customerName,
+      customerPhone: payload.customerPhone ?? current.order.customerPhone,
+      orderType: payload.orderType ?? current.order.orderType,
+      paymentMethod: paymentMethodText.includes('CARD') ? PaymentMethod.CARD
+        : paymentMethodText.includes('UPI') ? PaymentMethod.UPI
+          : paymentMethodText.includes('CREDIT') ? PaymentMethod.STORE_CREDIT
+            : PaymentMethod.CASH,
+      paymentStatus: payload.set_paid === false ? PaymentStatus.PENDING : PaymentStatus.PAID,
+      orderStatus,
+      tipAmount: Number(payload.tipAmount ?? payload.tip_amount ?? current.order.tipAmount ?? 0),
+      currency: current.storeOrder.currency,
+      timezone: current.storeOrder.timezone,
+      payments: Array.isArray(payload.payments) ? payload.payments : [],
+    };
+    await this.enrichWooCommerceCreateOrder(orderData, payload);
+    items = (orderData.items || []).map((item: any, index: number) => ({
+      id: String(sourceItems[index]?.id || `ITEM-${current.order.id}-${index + 1}`),
+      orderId: current.order.id,
+      productId: String(item.productId ?? ''),
+      productName: String(item.productName || 'Sales Item'),
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || 0),
+      totalPrice: Number(item.totalPrice || 0),
+      modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+    }));
+    const replacement = this.buildStoreOrder(current.order.id, orderData, payload);
+    replacement.id = current.storeOrder.id;
+    replacement.orderNumber = current.storeOrder.orderNumber;
+    replacement.createdAt = current.storeOrder.createdAt;
+    replacement.statusHistory = Array.isArray(current.storeOrder.statusHistory)
+      ? [...current.storeOrder.statusHistory]
+      : [];
+
+    const previousStatus = String(current.order.orderStatus);
+    if (previousStatus !== String(orderStatus)) {
+      replacement.statusHistory.push({
+        id: `HST-${randomUUID()}`,
+        orderId: current.order.id,
+        fromStatus: previousStatus,
+        toStatus: String(orderStatus),
+        changedBy: 'POS System',
+        reason: 'Full order snapshot updated',
+        createdAt: new Date(),
+      });
+    }
+    const replacementOrder: OrderEntity = {
+      ...current.order,
+      shiftId: replacement.shiftId,
+      localShiftId: replacement.localShiftId,
+      clientOrderId: replacement.clientOrderId,
+      offline: replacement.offline,
+      metadata,
+      requestPayload: payload,
+      customerName: replacement.customerName,
+      customerPhone: replacement.customerPhone,
+      orderType: orderData.orderType,
+      paymentMethod: orderData.paymentMethod,
+      paymentStatus: orderData.paymentStatus,
+      subtotal: replacement.subtotal,
+      taxAmount: replacement.taxTotal,
+      discountAmount: replacement.discountTotal,
+      tipAmount: replacement.tipAmount,
+      totalAmount: replacement.total,
+      orderStatus,
+      updatedAt: new Date(),
+    };
+    const paymentRows = this.buildStorePosPaymentRows(
+      current.order.id,
+      replacementOrder,
+      orderData,
+      payload,
+      replacement,
+    );
+
+    const saved = await this.dataSource.transaction(async manager => {
+      const repository = manager.getRepository(StoreOrderEntity);
+      const persisted = await repository.save(repository.create(replacement));
+      await this.saveLineItems(manager, current.order.id, items, true);
+      await manager.query(
+        `DELETE FROM public.store_pos_payments
+          WHERE order_id = $1::uuid AND entry_type = 'payment'`,
+        [current.order.id],
+      );
+      if (paymentRows.length) {
+        await manager.query(
+          `INSERT INTO public.store_pos_payments (
+             order_id, merchant_id, store_id, local_id, client_order_id, device_id,
+             shift_id, user_id, payment_type, payment_method, payment_method_title,
+             amount, order_total, remaining, refund_amount, currency, status, entry_type,
+             provider, provider_transaction_id, payment_at, metadata
+           ) VALUES ${paymentRows.map((_, index) => {
+             const offset = index * 22;
+             return `(${Array.from({ length: 22 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
+           }).join(', ')}`,
+          paymentRows.flat(),
+        );
+      }
+      await manager.query('DELETE FROM public.store_orders_meta WHERE order_id = $1::uuid', [current.order.id]);
+      await this.saveStoreOrderMeta(manager, current.order.id, replacement.metadata, replacement.metaData);
+      if (previousStatus !== String(orderStatus)) {
+        await this.saveStatusHistory(
+          manager,
+          replacement.statusHistory[replacement.statusHistory.length - 1] as OrderStatusHistoryEntity,
+        );
+      }
+      return persisted;
+    });
+    const order = this.projectOrder(saved);
+    await this.cacheOrder(order);
+    return { order, items: this.itemsFromStore(saved), storeOrder: saved };
+  }
+
   async getOrderStatusCounts(criteria: {
     merchantId?: string;
     storeId?: string;
