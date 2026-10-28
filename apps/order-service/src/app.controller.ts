@@ -1,10 +1,11 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { OrderRepository } from './order.repository';
 import { OrderStatus, OrderType, PaymentMethod, PaymentStatus } from './entities/order.entity';
 import type { StoreOrderCalculationInput } from './calculations/store-order.calculations';
 import { OrderUpdatePresenter } from './modules/order-updates/order-update.presenter';
 import { OrderListPresenter } from './responses/order-list.presenter';
 import { OrderResponsePresenter } from './responses/order-response.presenter';
+import { OrderWebsiteSyncService } from './website-sync/order-website-sync.service';
 
 @Controller(['api/v1/orders', 'connector/api/v1/orders'])
 export class AppController {
@@ -17,6 +18,8 @@ export class AppController {
     private readonly orderLists: OrderListPresenter,
     @Inject(OrderUpdatePresenter)
     private readonly orderDetails: OrderUpdatePresenter,
+    @Inject(OrderWebsiteSyncService)
+    private readonly websiteSync: OrderWebsiteSyncService,
   ) {}
 
   @Get('health')
@@ -92,6 +95,16 @@ export class AppController {
       })}`);
     }
     const request = result.order.requestPayload || body;
+    if (!result.duplicate) {
+      await this.websiteSync.syncCreatedOrder({
+        orderId: result.order.id,
+        storeId: result.order.storeId,
+        clientOrderId: result.order.clientOrderId,
+        customerName: result.order.customerName,
+        customerPhone: result.order.customerPhone,
+        request,
+      });
+    }
     return this.responses.present(this.responses.profileFor(request), { result, request });
   }
 
@@ -127,6 +140,35 @@ export class AppController {
     });
     const listed = await this.orderRepository.listOrders(criteria);
     return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
+  }
+
+  @Get('website-sync')
+  async readWebsiteSync(
+    @Headers('x-store-id') storeHeader?: string,
+    @Query('storeId') storeId?: string,
+    @Query('store_id') storeIdSnake?: string,
+  ) {
+    const id = this.storeId(storeHeader || storeId || storeIdSnake);
+    return { storeId: id, enabled: await this.websiteSync.readEnabled(id) };
+  }
+
+  @Put('website-sync')
+  async updateWebsiteSync(
+    @Body() body: { enabled?: boolean },
+    @Headers('x-store-id') storeHeader?: string,
+    @Query('storeId') storeId?: string,
+    @Query('store_id') storeIdSnake?: string,
+  ) {
+    if (typeof body?.enabled !== 'boolean') throw new BadRequestException('enabled must be true or false');
+    return this.websiteSync.updateEnabled(this.storeId(storeHeader || storeId || storeIdSnake), body.enabled);
+  }
+
+  private storeId(value?: string): string {
+    const storeId = String(value || '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId)) {
+      throw new BadRequestException('x-store-id must be a store UUID');
+    }
+    return storeId;
   }
 
   @Get('status-counts')

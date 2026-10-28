@@ -107,6 +107,10 @@ export class OrderRepository implements OnModuleInit {
     return { ...result, cashbackFee };
   }
 
+  database() {
+    return this.isDbConnected ? this.dataSource : undefined;
+  }
+
   async createOrder(orderData: any): Promise<{ order: OrderEntity; items: OrderItemEntity[]; storeOrder: StoreOrderEntity | null; duplicate: boolean }> {
     if (!this.isDbConnected || !this.dataSource || !this.storeOrderRepo) {
       throw new ServiceUnavailableException('Order database is unavailable; the order was not saved');
