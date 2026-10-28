@@ -20,6 +20,16 @@ export class DiscountController {
     return this.discounts.sync(storeId, request.user?.role);
   }
 
+  @Get(':storeId/merchant/discounts')
+  @HttpCode(200)
+  listForMerchant(
+    @Param('storeId') storeId: string,
+    @Query() query: Record<string, string>,
+    @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string } },
+  ) {
+    return this.discounts.listForMerchant(storeId, request.user, query);
+  }
+
   @Get(':storeId/discounts')
   @HttpCode(200)
   list(@Param('storeId') storeId: string, @Query() query: Record<string, string>, @Req() request: { user?: { role?: string; storeId?: string } }) {
