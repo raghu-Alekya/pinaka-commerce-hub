@@ -67,7 +67,11 @@ export class OrderListPresenter {
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
     const orderPlacedAt = this.orderPlacedAt(order, storeOrder, request);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const coupons = this.couponLines(
+      storeOrder,
+      request,
+      storeOrder?.discountTotal ?? order.discountAmount,
+    );
     const tax = listOrderTax({
       tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
       lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
@@ -129,7 +133,7 @@ export class OrderListPresenter {
         || (status === 'Completed' ? paidAt : null),
       date_paid: orderPlacedAt
         || (request.date_paid ? String(request.date_paid) : paidAt),
-      coupon_lines: Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [],
+      coupon_lines: coupons,
       line_items: lineItems,
       fee_lines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
       tax_lines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [],
@@ -281,6 +285,60 @@ export class OrderListPresenter {
     return statuses.some((status) => status === 'all' || status === 'any')
       ? []
       : [...new Set(statuses)];
+  }
+
+  private couponLines(
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+    orderDiscount: unknown,
+  ): unknown[] {
+    const stored = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const requested = Array.isArray(request.coupon_lines) ? request.coupon_lines : [];
+    const source = stored.length ? stored : requested;
+
+    return source.map((entry, index) => {
+      const coupon = entry && typeof entry === 'object'
+        ? entry as Record<string, unknown>
+        : { code: entry };
+      const requestedMatch = requested.find((candidate) => {
+        if (!candidate || typeof candidate !== 'object') return false;
+        return String((candidate as Record<string, unknown>).code || '').toLowerCase()
+          === String(coupon.code || '').toLowerCase();
+      });
+      const original = requestedMatch && typeof requestedMatch === 'object'
+        ? requestedMatch as Record<string, unknown>
+        : {};
+      const merged: Record<string, any> = { ...original, ...coupon };
+      const existingMetadata: any[] = Array.isArray(merged.meta_data) ? merged.meta_data : [];
+      const metadataValue = (key: string) => {
+        const match = existingMetadata.find((item) => (
+          item && typeof item === 'object' && (item as Record<string, unknown>).key === key
+        ));
+        return match && typeof match === 'object'
+          ? (match as Record<string, unknown>).value
+          : undefined;
+      };
+      const fallbackDiscount = source.length === 1 ? Number(orderDiscount || 0) : 0;
+      const discount = Number(merged.discount ?? merged.discount_amount ?? fallbackDiscount);
+      const safeDiscount = Number.isFinite(discount) ? discount : 0;
+      const amount = merged.amount ?? metadataValue('amount') ?? 0;
+      const discountType = merged.discount_type ?? metadataValue('discount_type') ?? 'fixed_cart';
+      const productIds = merged.product_ids ?? metadataValue('product_ids') ?? [];
+      const excludedProductIds = merged.excluded_product_ids ?? metadataValue('excluded_product_ids') ?? [];
+
+      return {
+        ...merged,
+        code: String(merged.code || `coupon-${index + 1}`),
+        discount: safeDiscount.toFixed(2),
+        discount_tax: Number(merged.discount_tax || 0).toFixed(2),
+        meta_data: existingMetadata.length ? existingMetadata : [
+          { key: 'discount_type', value: discountType },
+          { key: 'amount', value: String(amount) },
+          { key: 'product_ids', value: productIds },
+          { key: 'excluded_product_ids', value: excludedProductIds },
+        ],
+      };
+    });
   }
 
   private pageNumber(value: string | undefined, fallback: number, name: string): number {
