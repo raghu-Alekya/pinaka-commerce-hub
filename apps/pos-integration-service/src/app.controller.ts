@@ -111,8 +111,7 @@ export class AppController {
       return {
         success: true,
         message: 'Shift created and opened successfully',
-        shift_id: shift.id,
-        shiftId: shift.id,
+
         shift,
       };
     });
@@ -198,13 +197,8 @@ export class AppController {
       if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
       return {
         success: true,
-        database_updated: true,
         message: 'Shift closed successfully! Z-Report generated for thermal printing.',
         shift_id: shift.id,
-        actual_closing_cash: preview.actualClosingCash,
-        expected_till_amount: preview.expectedTillAmount,
-        over_short: preview.overShort,
-        payout_total: preview.payoutTotal,
         shift,
         reportType: 'Z_REPORT',
       };

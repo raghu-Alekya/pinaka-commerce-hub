@@ -344,6 +344,7 @@ export type ShiftReportInput = {
   startTime: string;
   endTime: string;
   openingBalance: number;
+  openingSafeCash?: number;
   closingBalance: number;
   notes: string;
   closingNotes: string;
@@ -547,7 +548,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
     + paidIn;
   const saleCount = new Set(included.map((payment) => payment.order_id || payment.id)).size;
   const voidItems = getVoidItems(input.orders, input.shiftId);
-
+  const opening_balance = Number(input.openingBalance || 0) + Number(input.openingSafeCash || 0)
   return {
     tillAmount,
     report: {
@@ -566,8 +567,9 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
       safe_drop_total: Number(safeDropValue) || 0,
       safe_drops: input.safeDrops,
       vendor_payouts: input.vendorPayouts,
+      opening_safe_cash: roundMoney(Number(input.openingSafeCash) || 0),
       total_vendor_payments: roundMoney(input.vendorPayouts.reduce((sum, row) => sum + Number(row.amount || 0), 0)) || 0,
-      opening_balance: roundMoney(input.openingBalance) || 0,
+      opening_balance: opening_balance || 0,
       ebt_total: getShiftEbtTotal(input.payments) || 0,
       card_total: getShiftCardTotal(input.payments) || 0,
       refund_total: roundMoney(cashRefund + cardRefund) || 0,
