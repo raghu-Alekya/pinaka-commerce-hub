@@ -702,3 +702,53 @@ export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
     }),
   };
 }
+
+/** WooCommerce admin-app summary over store-scoped, date-filtered source rows. */
+export function adminOrderCounts(input: { businessName: string; orders: Record<string, any>[]; payments: Record<string, any>[]; refunds: Record<string, any>[]; categories: Record<string, any>[]; products: Record<string, any>[] }) {
+  const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  const status = (value: unknown) => String(value || '').toLowerCase().replace(/^wc-/, '');
+  const products = new Map(input.products.map(product => [String(product.id), product]));
+  const categorySales = new Map<string, number>();
+  let totalAmount = 0, cancelled = 0, payouts = 0, voidItems = 0;
+  for (const order of input.orders) {
+    totalAmount += Number(order.total || 0);
+    const cancelledOrder = ['cancelled', 'canceled'].includes(status(order.status));
+    if (cancelledOrder) cancelled++;
+    for (const line of Array.isArray(order.line_items) ? order.line_items : []) {
+      const meta = Array.isArray(line.meta_data) ? line.meta_data : [];
+      const voidFlag = meta.find((item: any) => item.key === 'void')?.value;
+      const isVoid = line.void === true || line.is_void === true || line.voided === true || String(line.status || '').toLowerCase() === 'void' || [true, 1, '1', 'true'].includes(voidFlag);
+      if (isVoid) { voidItems++; continue; }
+      const amount = Number(line.total ?? line.total_price ?? 0) || 0;
+      if (String(line.type || '').toLowerCase() === 'payout' || /^payout(?:$|[_\s-])/i.test(String(line.name || ''))) payouts += amount;
+      if (cancelledOrder) continue;
+      const product = products.get(String(line.product_id ?? line.productId ?? ''));
+      const categories = product?.categories ?? line.categories ?? (line.category_id != null ? [{ id: line.category_id }] : []);
+      for (const id of new Set((Array.isArray(categories) ? categories : []).map((category: any) => String(category.id ?? category)))) {
+        categorySales.set(String(id), (categorySales.get(String(id)) || 0) + amount);
+      }
+    }
+  }
+  let cash = 0, card = 0, ebt = 0;
+  for (const payment of input.payments) {
+    if (payment.is_void || String(payment.entry_type || 'payment').toLowerCase() !== 'payment' || payment.payment_type === 'vendor_payment') continue;
+    const tracking = payment.metadata?.daily_refund_tracking;
+    if ([true, 1, 'true', '1'].includes(tracking)) continue;
+    const method = String(payment.payment_method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+    const amount = Number(payment.amount || 0);
+    if (['cash', 'pos-cash'].includes(method)) cash += amount;
+    else if (['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'].includes(method)) card += amount;
+    else if (['ebt', 'pos-ebt', 'ebt-card'].includes(method)) ebt += amount;
+  }
+  const categories = input.categories.map(category => {
+    const totalSales = money(categorySales.get(String(category.id)) || 0);
+    return { id: category.id, name: category.name, slug: category.slug, total_sales: totalSales, sales_percentage: totalAmount > 0 ? money(totalSales / totalAmount * 100) : 0 };
+  });
+  return { success: true, message: 'Order counts fetched successfully.', data: {
+    business_name: input.businessName, total_orders: input.orders.length, total_orders_amount: money(totalAmount), cancelled_orders: cancelled,
+    refunded_orders_amount: money(input.refunds.reduce((sum, row) => sum + Math.abs(Number(row.amount || 0)), 0)),
+    payouts: money(payouts), void_items: voidItems, cash: money(cash), card: money(card), ebt: money(ebt), categories,
+    category_subtotal: money(categories.reduce((sum, category) => sum + category.total_sales, 0)),
+    category_percentage_total: money(categories.reduce((sum, category) => sum + category.sales_percentage, 0)),
+  } };
+}

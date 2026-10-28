@@ -121,6 +121,17 @@ export class AppController {
     };
   }
 
+  @Get('total-orders-count')
+  getAdminOrderCounts(
+    @Query('start_date') startDate?: string,
+    @Query('end_date') endDate?: string,
+    @Query('store_id') storeId?: string,
+    @Headers('x-store-id') storeHeader?: string,
+  ) {
+    if (storeId && storeHeader && storeId.trim() !== storeHeader.trim()) throw new BadRequestException('Conflicting store IDs');
+    return this.orderRepository.getAdminOrderCounts(storeHeader || storeId, startDate, endDate);
+  }
+
   @Get('total-orders')
   async listTotalOrders(
     @Query('page') page?: string,

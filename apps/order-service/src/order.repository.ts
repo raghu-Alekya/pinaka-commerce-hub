@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -15,6 +15,7 @@ import {
   allocateRoundedTax,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
+  adminOrderCounts,
   calculateDiscountTotal,
   calculateStoreOrder,
   isTaxableSaleLine,
@@ -1555,6 +1556,52 @@ export class OrderRepository implements OnModuleInit {
       }
       throw error;
     }
+  }
+
+  async getAdminOrderCounts(storeId: string | undefined, startDate?: string, endDate?: string) {
+    if (!storeId?.trim()) throw new BadRequestException('store_id or x-store-id is required');
+    for (const value of [startDate,endDate]) {
+      if (value !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0,10) !== value)) throw new BadRequestException('Dates must be valid YYYY-MM-DD values');
+    }
+    if (endDate && !startDate) throw new BadRequestException('start_date is required with end_date');
+    if (startDate && endDate && endDate < startDate) throw new BadRequestException('end_date must not be before start_date');
+    if (!this.isDbConnected || !this.dataSource) throw new ServiceUnavailableException('Order database is unavailable');
+    return this.dataSource.transaction('REPEATABLE READ', async manager => {
+      const [store] = await manager.query('SELECT store_name FROM public.stores WHERE id::text=$1 AND COALESCE(is_deleted,false)=false', [storeId.trim()]);
+      if (!store) throw new NotFoundException('Store not found');
+      const params = [storeId.trim(),startDate || null,endDate || startDate || null];
+      const orders = await manager.query(
+        `SELECT order_id,status,total,line_items FROM public.store_orders WHERE store_id::text=$1
+         AND ($2::date IS NULL OR (created_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
+      );
+      const payments = await manager.query(
+        `SELECT payment_method,amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
+         AND ($2::date IS NULL OR (COALESCE(payment_at,created_at) AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
+      );
+      const refunds = await manager.query(
+        `WITH refund_rows AS (
+          SELECT (event->>'amount')::numeric AS amount,COALESCE((event->>'created_at')::timestamptz,p.created_at) AS refunded_at
+          FROM public.store_pos_payments p CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.metadata->'refund_history','[]'::jsonb)) event
+          WHERE p.store_id::text=$1 AND p.entry_type='payment' AND p.deleted_at IS NULL AND p.is_void=false
+          UNION ALL
+          SELECT amount,created_at FROM public.store_pos_payments WHERE store_id::text=$1 AND entry_type='refund' AND deleted_at IS NULL AND is_void=false
+            AND COALESCE(metadata->>'daily_refund_tracking','false') NOT IN ('true','1')
+          UNION ALL
+          SELECT p.refund_amount,COALESCE(p.updated_at,p.created_at) FROM public.store_pos_payments p WHERE p.store_id::text=$1 AND p.entry_type='payment'
+            AND p.deleted_at IS NULL AND p.is_void=false AND p.refund_amount>0 AND jsonb_array_length(COALESCE(p.metadata->'refund_history','[]'::jsonb))=0
+            AND NOT EXISTS (SELECT 1 FROM public.store_pos_payments r WHERE r.order_id=p.order_id AND r.store_id=p.store_id
+              AND r.entry_type='refund' AND r.deleted_at IS NULL AND r.is_void=false)
+        ) SELECT amount FROM refund_rows WHERE ($2::date IS NULL OR (refunded_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`,params,
+      );
+      const tables = await manager.query("SELECT to_regclass('public.store_categories') AS categories,to_regclass('public.store_products') AS products");
+      const categories = tables[0]?.categories ? await manager.query('SELECT payload FROM public.store_categories WHERE store_id::text=$1',[storeId.trim()]) : [];
+      const products = tables[0]?.products ? await manager.query(
+        `SELECT jsonb_agg(jsonb_build_object('id',product->'id','categories',product->'categories')) AS payload
+         FROM public.store_products s CROSS JOIN LATERAL jsonb_array_elements(s.payload) product
+         WHERE s.store_id::text=$1 AND COALESCE(s.is_deleted,false)=false`, [storeId.trim()],
+      ) : [];
+      return adminOrderCounts({ businessName: store.store_name, orders, payments, refunds, categories: categories.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []), products: products.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []) });
+    });
   }
 
   async listOrders(criteria: {
