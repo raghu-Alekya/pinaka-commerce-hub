@@ -12,6 +12,7 @@ import { cashChangeReturned, isCashTender } from './calculations/order-change';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
+  allocateRoundedTax,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   calculateDiscountTotal,
@@ -23,6 +24,7 @@ import {
   type StoreOrderCalculationInput,
   sumLineSubtotals,
   sumLineTotals,
+  taxUnitsForMinor,
 } from './calculations/store-order.calculations';
 
 @Injectable()
@@ -621,6 +623,7 @@ export class OrderRepository implements OnModuleInit {
     const defaultRate = taxSetting?.taxEnabled === false ? 0 : Number(taxSetting?.defaultTaxRate || 0);
     const explicitTax = sourcePayload.total_tax !== undefined || (Array.isArray(sourcePayload.tax_lines) && sourcePayload.tax_lines.length > 0);
     const taxGroups = new Map<number, number>();
+    const pendingTax: Array<{ line: any; rate: number; units: number; subtotalUnits?: number }> = [];
     let normalizedCustomItem = false;
 
     lines.forEach((line: any) => {
@@ -649,12 +652,18 @@ export class OrderRepository implements OnModuleInit {
         }
         const subtotalMinor = Math.round(Number(line.subtotal || 0) * factor);
         const totalMinor = Math.round(Number(line.total || 0) * factor);
-        const subtotalTaxMinor = rate > 0 ? Math.round(subtotalMinor * rate / 100) : 0;
-        const totalTaxMinor = rate > 0 ? Math.round(totalMinor * rate / 100) : 0;
-        line.subtotal_tax = (subtotalTaxMinor / factor).toFixed(places);
-        line.total_tax = (totalTaxMinor / factor).toFixed(places);
-        line.taxes = totalTaxMinor ? [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
-        if (totalTaxMinor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + totalTaxMinor);
+        if (!(rate > 0)) {
+          line.subtotal_tax = (0).toFixed(places);
+          line.total_tax = (0).toFixed(places);
+          line.taxes = [];
+          return;
+        }
+        pendingTax.push({
+          line,
+          rate,
+          units: taxUnitsForMinor(totalMinor, rate),
+          subtotalUnits: subtotalMinor === totalMinor ? undefined : taxUnitsForMinor(subtotalMinor, rate),
+        });
         return;
       }
       const quantity = Number(line.quantity || 1);
@@ -675,11 +684,36 @@ export class OrderRepository implements OnModuleInit {
       const taxClass = taxClassKey(product.tax_class);
       const rate = taxable ? (taxClass ? (classRates.get(taxClass) ?? defaultRate) : defaultRate) : 0;
       const taxableMinor = Math.round(Number(line.total || 0) * factor);
-      const taxMinor = rate > 0 ? Math.round(taxableMinor * rate / 100) : 0;
-      line.subtotal_tax = (taxMinor / factor).toFixed(places);
-      line.total_tax = (taxMinor / factor).toFixed(places);
-      line.taxes = taxMinor ? [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
-      if (taxMinor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + taxMinor);
+      if (!(rate > 0) || !taxableMinor) {
+        line.subtotal_tax = (0).toFixed(places);
+        line.total_tax = (0).toFixed(places);
+        line.taxes = [];
+        return;
+      }
+      pendingTax.push({ line, rate, units: taxUnitsForMinor(taxableMinor, rate) });
+    });
+
+    const pendingByRate = new Map<number, typeof pendingTax>();
+    pendingTax.forEach((entry) => {
+      const group = pendingByRate.get(entry.rate) || [];
+      group.push(entry);
+      pendingByRate.set(entry.rate, group);
+    });
+    pendingByRate.forEach((group, rate) => {
+      const allocated = allocateRoundedTax(group.map((entry) => entry.units));
+      const minor = allocated.reduce((sum, value) => sum + value, 0);
+      group.forEach((entry, index) => {
+        const lineMinor = allocated[index];
+        const subtotalMinor = entry.subtotalUnits === undefined
+          ? lineMinor
+          : allocateRoundedTax([entry.subtotalUnits])[0];
+        entry.line.total_tax = (lineMinor / factor).toFixed(places);
+        entry.line.subtotal_tax = (subtotalMinor / factor).toFixed(places);
+        entry.line.taxes = lineMinor
+          ? [{ id: rate, total: entry.line.total_tax, subtotal: entry.line.subtotal_tax }]
+          : [];
+      });
+      if (minor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + minor);
     });
 
     if (!explicitTax) {

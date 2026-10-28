@@ -290,6 +290,53 @@ function taxOn(amountMinor: number, ratePercent: number, pricesIncludeTax: boole
   return sign * tax;
 }
 
+const TAX_RATE_HUNDREDTHS = 100;
+const TAX_UNIT_SCALE = 100 * TAX_RATE_HUNDREDTHS;
+
+/**
+ * Unrounded tax for one line, in hundredths of a minor unit.
+ * A 9.10% rate stays an integer (910) so the lines can be added before rounding.
+ */
+export function taxUnitsForMinor(amountMinor: number, ratePercent: number): number {
+  if (!amountMinor || !Number.isFinite(ratePercent) || ratePercent <= 0) return 0;
+  const rateHundredths = Math.round(ratePercent * TAX_RATE_HUNDREDTHS);
+  if (rateHundredths <= 0) return 0;
+  const sign = amountMinor < 0 ? -1 : 1;
+  return sign * Math.abs(Math.trunc(amountMinor)) * rateHundredths;
+}
+
+/**
+ * Round a rate group once, then spread that result across the lines.
+ * Rounding each line first and then adding those cents is what turns 2.6445 into 2.65.
+ */
+export function allocateRoundedTax(units: number[]): number[] {
+  if (!units.length) return [];
+  const totalUnits = units.reduce((sum, value) => sum + value, 0);
+  const direction = totalUnits < 0 ? -1 : 1;
+  const target = direction * Math.round(Math.abs(totalUnits) / TAX_UNIT_SCALE);
+  const shares = units.map((value) => {
+    const sign = value < 0 ? -1 : 1;
+    const absolute = Math.abs(value);
+    return {
+      sign,
+      minor: sign * Math.trunc(absolute / TAX_UNIT_SCALE),
+      remainder: absolute % TAX_UNIT_SCALE,
+    };
+  });
+  let leftover = target - shares.reduce((sum, share) => sum + share.minor, 0);
+  const ranked = shares
+    .map((share, index) => ({ index, remainder: share.remainder }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index);
+  const step = leftover > 0 ? 1 : -1;
+  let guard = 0;
+  while (leftover !== 0 && ranked.length && guard < units.length * 4) {
+    shares[ranked[guard % ranked.length].index].minor += step;
+    leftover -= step;
+    guard += 1;
+  }
+  return shares.map((share) => share.minor);
+}
+
 /** Returns [] when no rate is supplied or the computed tax is zero. */
 export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   const places = input.decimalPlaces ?? 2;

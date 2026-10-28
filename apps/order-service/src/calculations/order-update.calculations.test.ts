@@ -8,11 +8,13 @@ import {
 } from './order-update.calculations';
 import { cashChangeReturned } from './order-change';
 import {
+  allocateRoundedTax,
   applyMerchantDiscountToStoredTax,
   calculateOrderTotal,
   calculateTaxLines,
   orderTotalWithTax,
   listOrderTotal,
+  taxUnitsForMinor,
   totalExcludingTax,
   totalIncludingTax,
 } from './store-order.calculations';
@@ -241,6 +243,21 @@ test('stored tax is scaled to the total after merchant_discount', () => {
   assert.equal(order.total_tax, '0.87');
   assert.equal(order.cart_tax, '0.87');
   assert.equal(order.tax_lines[0].tax_total, '0.87');
+});
+
+test('discounted lines at 9.10 percent round tax once to 2.64', () => {
+  const taxableMinor = [1699, 299, 689, 219];
+  const allocated = allocateRoundedTax(taxableMinor.map((amount) => taxUnitsForMinor(amount, 9.1)));
+  const taxMinor = allocated.reduce((sum, amount) => sum + amount, 0);
+  assert.equal(taxableMinor.reduce((sum, amount) => sum + amount, 0), 2906);
+  assert.equal(taxMinor, 264);
+  assert.equal(orderTotalWithTax({ netBeforeTax: 29.06, tax: 2.64 }), 31.7);
+  assert.deepEqual(allocateRoundedTax([taxUnitsForMinor(1699, 9.1)]), [155]);
+  const tenPercent = allocateRoundedTax([
+    taxUnitsForMinor(1000, 10),
+    taxUnitsForMinor(1000, 10),
+  ]);
+  assert.equal(tenPercent.reduce((sum, amount) => sum + amount, 0), 200);
 });
 
 test('the smallest eligible coupon is selected for the remaining balance', () => {
