@@ -96,18 +96,18 @@ export class AppController {
     }
     const request = result.order.requestPayload || body;
     if (result.duplicate) {
-      console.log(`[order-website-sync] ${JSON.stringify({
+      console.log(`[ORDER_WEBSITE_SYNC] ${JSON.stringify({
+        event: 'skipped',
         orderId: result.order.id,
         clientOrderId: result.order.clientOrderId || null,
-        called: false,
         reason: 'local order already existed',
       })}`);
     } else {
-      console.log(`[order-website-sync] ${JSON.stringify({
+      console.log(`[ORDER_WEBSITE_SYNC] ${JSON.stringify({
+        event: 'called',
         orderId: result.order.id,
         clientOrderId: result.order.clientOrderId || null,
         storeId: result.order.storeId,
-        called: true,
       })}`);
       await this.websiteSync.syncCreatedOrder({
         orderId: result.order.id,

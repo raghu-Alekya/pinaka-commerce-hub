@@ -6,6 +6,12 @@ import { buildWooOrderPayload, findSyncedWebsiteOrder } from './order-website-sy
 const CONFIGURATION_NAME = 'order_website_sync';
 const WEBSITE_ORDER_META_KEY = 'woocommerce_order_id';
 
+function syncLog(event: string, details: Record<string, unknown>): void {
+  const line = `[ORDER_WEBSITE_SYNC] ${JSON.stringify({ event, ...details })}`;
+  console.log(line);
+  if (event === 'failed') console.error(line);
+}
+
 @Injectable()
 export class OrderWebsiteSyncService {
   constructor(
@@ -23,68 +29,70 @@ export class OrderWebsiteSyncService {
   }): Promise<void> {
     const database = this.orders.database();
     if (!database) {
-      console.error(`[order-website-sync] ${JSON.stringify({
+      syncLog('failed', {
         orderId: input.orderId,
         clientOrderId: input.clientOrderId || null,
-        called: true,
         reason: 'order database is unavailable',
-      })}`);
+      });
       return;
     }
     try {
       const setting = await this.syncSetting(input.storeId);
       const enabled = this.settingEnabled(setting);
-      console.log(`[order-website-sync] ${JSON.stringify({
+      syncLog('flag', {
         orderId: input.orderId,
         clientOrderId: input.clientOrderId || null,
         storeId: input.storeId,
         enabled,
         flag: setting ?? null,
-      })}`);
-      if (!enabled) return;
+      });
+      if (!enabled) {
+        syncLog('skipped', { orderId: input.orderId, reason: 'order synchronization is disabled' });
+        return;
+      }
       const existing = await this.savedWebsiteOrderId(input.orderId);
       if (existing) {
-        console.log(`[order-website-sync] ${JSON.stringify({
+        syncLog('skipped', {
           orderId: input.orderId,
           websiteOrderId: existing,
           reason: 'website order already recorded',
-        })}`);
+        });
         return;
       }
       const connection = await this.connection(input.storeId);
       if (!connection) {
-        console.error(`[order-website-sync] ${JSON.stringify({
+        syncLog('failed', {
           orderId: input.orderId,
           storeId: input.storeId,
           reason: 'sync is enabled but no connected WordPress site was found',
-        })}`);
+        });
         return;
       }
       const found = await this.findWebsiteOrder(connection, input.orderId, input.clientOrderId);
       if (found) {
         await this.rememberWebsiteOrder(input.orderId, found);
-        console.log(`[order-website-sync] ${JSON.stringify({
+        syncLog('skipped', {
           orderId: input.orderId,
           websiteOrderId: found,
           reason: 'matching website order already exists',
-        })}`);
+        });
         return;
       }
       const created = await this.createWebsiteOrder(connection, buildWooOrderPayload(input));
       if (created) await this.rememberWebsiteOrder(input.orderId, created);
-      console.log(`[order-website-sync] ${JSON.stringify({
-        orderId: input.orderId,
-        websiteOrderId: created ?? null,
-        result: created ? 'created' : 'website response had no order id',
-      })}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[order-website-sync] ${JSON.stringify({
+      syncLog(created ? 'created' : 'failed', {
         orderId: input.orderId,
         clientOrderId: input.clientOrderId || null,
-        result: 'failed',
+        websiteOrderId: created ?? null,
+        reason: created ? 'woocommerce order created' : 'website response had no order id',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      syncLog('failed', {
+        orderId: input.orderId,
+        clientOrderId: input.clientOrderId || null,
         error: message,
-      })}`);
+      });
     }
   }
 
@@ -193,7 +201,8 @@ export class OrderWebsiteSyncService {
     body?: Record<string, unknown>,
   ): Promise<unknown> {
     const endpoint = path.split('?')[0];
-    console.log(`[order-website-sync] ${JSON.stringify({ method, endpoint, request: 'started' })}`);
+    const host = websiteHost(connection.url);
+    syncLog('request', { method, endpoint, host });
     const response = await fetch(`${connection.url}/wp-json/wc/v3/${path}`, {
       method,
       headers: {
@@ -208,13 +217,14 @@ export class OrderWebsiteSyncService {
     let data: unknown = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     const message = record(data).message || record(data).code || '';
-    console.log(`[order-website-sync] ${JSON.stringify({
+    syncLog('response', {
       method,
       endpoint,
+      host,
       status: response.status,
       ok: response.ok,
       message: String(message).slice(0, 300),
-    })}`);
+    });
     if (!response.ok) {
       const message = record(data).message || `WooCommerce returned HTTP ${response.status}`;
       throw new Error(String(message));
@@ -242,6 +252,10 @@ export class OrderWebsiteSyncService {
   private isUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   }
+}
+
+function websiteHost(url: string): string {
+  try { return new URL(url).host; } catch { return 'invalid-wordpress-url'; }
 }
 
 function record(value: unknown): Record<string, unknown> {
