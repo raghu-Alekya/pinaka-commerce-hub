@@ -76,6 +76,40 @@ export function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/** Daily report totals, including non-void recorded payment modes. */
+export function dailyShiftSummary(rows: Array<{ date: string; report: Record<string, unknown>; orders: ReportOrder[]; payments: ReportPayment[] }>) {
+  const days = new Map<string, Record<string, number | string>>();
+  for (const { date, report, orders, payments } of rows) {
+    const day = days.get(date) || { date, total_shifts: 0, total_sales: 0, cash: 0, card: 0, ebt: 0, payouts: 0, void_items: 0, opening_balance: 0, closing_balance: 0, safe_drop: 0, total_orders: 0, cancelled_orders: 0, refund: 0 };
+    const add = (key: string, amount: unknown) => { day[key] = Number(day[key] || 0) + (Number(amount) || 0); };
+    add('total_shifts', 1);
+    for (const payment of payments) {
+      const tracking = payment.metadata?.daily_refund_tracking;
+      if (payment.is_void || String(payment.entry_type || 'payment').toLowerCase() !== 'payment' || payment.payment_type === 'vendor_payment' || tracking === true || tracking === 'true' || tracking === 1 || tracking === '1') continue;
+      const method = tenderKey(payment.payment_method);
+      const net = Math.max(0, Number(payment.amount || 0) - paymentChange(payment)) - Math.max(0, Number(payment.refund_amount || 0));
+      add('total_sales', net);
+      if (isCashMethod(method)) add('cash', net);
+      else if (isCardMethod(method)) add('card', net);
+      else if (['ebt', 'pos-ebt', 'ebt-card'].includes(method)) add('ebt', net);
+    }
+    for (const [key, source] of Object.entries({ payouts: 'payout_total', void_items: 'void_items_count', opening_balance: 'opening_balance', closing_balance: 'closing_balance', safe_drop: 'safe_drop_total', refund: 'refund_total' })) add(key, report[source]);
+    const counted = new Set<string>();
+    for (const order of orders) {
+      if (counted.has(order.order_id)) continue;
+      counted.add(order.order_id);
+      const status = orderStatus(order.status);
+      if (['completed', 'refunded', 'partial-refund', 'partially-refunded', 'cancelled', 'canceled'].includes(status)) add('total_orders', 1);
+      if (['cancelled', 'canceled'].includes(status)) add('cancelled_orders', 1);
+    }
+    days.set(date, day);
+  }
+  return [...days.values()].sort((a, b) => String(b.date).localeCompare(String(a.date))).map(day => {
+    for (const key of ['total_sales', 'cash', 'card', 'ebt', 'payouts', 'opening_balance', 'closing_balance', 'safe_drop', 'refund']) day[key] = roundMoney(Number(day[key]));
+    return day;
+  });
+}
+
 export function orderStatus(status: string | null | undefined): string {
   return String(status || '').trim().toLowerCase().replace(/^wc-/, '');
 }

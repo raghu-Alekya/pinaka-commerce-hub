@@ -11,6 +11,7 @@ import {
   formatTimestamp,
   prepareShiftData,
   roundMoney,
+  dailyShiftSummary,
 } from './shift-report.calculations';
 import { shiftDebug } from './shift-debug.log';
 
@@ -86,11 +87,75 @@ export class ShiftReportService {
     };
   }
 
+  async getDailyShiftSummary(storeId: string | undefined) {
+    const id = storeId?.trim();
+    if (!id) throw new BadRequestException('store_id or x-store-id is required');
+    const db = this.shifts.requireDataSource();
+    const [store] = await db.query('SELECT timezone FROM public.stores WHERE id::text=$1', [id]);
+    if (!store) throw new NotFoundException('Store not found');
+    let formatter: Intl.DateTimeFormat;
+    try { formatter = new Intl.DateTimeFormat('en-CA', { timeZone: store.timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }); }
+    catch { throw new BadRequestException('Store timezone is invalid'); }
+    const shifts = await this.shifts.getShiftsByStore(id);
+    const records: Array<{ date: string; report: Record<string, unknown>; orders: ReportOrder[]; payments: ReportPayment[] }> = [];
+    for (let index = 0; index < shifts.length; index += 3) {
+      records.push(...await Promise.all(shifts.slice(index, index + 3).map(async view => {
+        const result = await this.assembleShiftReport(view.id);
+        if (result.shift.store_id !== id) throw new ForbiddenException('Shift does not belong to this store');
+        const parts = formatter.formatToParts(new Date(view.created_at));
+        const part = (type: string) => parts.find(p => p.type === type)?.value;
+        return { date: `${part('year')}-${part('month')}-${part('day')}`, report: result.report, orders: result.orders, payments: result.payments };
+      })));
+    }
+    return { success: true, data: dailyShiftSummary(records) };
+  }
+
+  async getShiftsByDate(storeId: string | undefined, date: string | undefined) {
+    const id = storeId?.trim();
+    if (!id) throw new BadRequestException('store_id or x-store-id is required');
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) {
+      throw new BadRequestException('date must be a valid YYYY-MM-DD date');
+    }
+    const db = this.shifts.requireDataSource();
+    const [store] = await db.query('SELECT timezone FROM public.stores WHERE id::text=$1', [id]);
+    if (!store) throw new NotFoundException('Store not found');
+    const timeZone = store.timezone || 'UTC';
+    try { new Intl.DateTimeFormat('en', { timeZone }).format(); }
+    catch { throw new BadRequestException('Store timezone is invalid'); }
+    const shifts: Array<{ id: string }> = await db.query(
+      `SELECT id FROM public.pos_shifts WHERE store_id::text=$1
+       AND (created_at AT TIME ZONE $3)::date=$2::date ORDER BY created_at DESC,id DESC`, [id,date,timeZone],
+    );
+    const data: Record<string, unknown>[] = [];
+    for (let index = 0; index < shifts.length; index += 3) {
+      data.push(...await Promise.all(shifts.slice(index, index + 3).map(async shift => {
+        const result = await this.assembleShiftReport(shift.id);
+        if (result.shift.store_id !== id) throw new ForbiddenException('Shift does not belong to this store');
+        const report = result.report;
+        const summary = dailyShiftSummary([{ date, report, orders: result.orders, payments: result.payments }])[0];
+        const cash = Number(summary.cash), card = Number(summary.card), ebt = Number(summary.ebt);
+        return {
+          shift_id: shift.id, user_name: report.user_name,
+          start_time: report.start_time, end_time: report.end_time,
+          orders_count: summary.total_orders, cancelled_orders: summary.cancelled_orders,
+          total_sale_amount: roundMoney(cash + card + ebt),
+          opening_balance: summary.opening_balance, closing_balance: summary.closing_balance,
+          cash_total: cash, ebt_total: ebt, card_total: card,
+          refund_total: summary.refund, payout_total: summary.payouts,
+          void_items_count: summary.void_items, shift_status: report.shift_status,
+        };
+      })));
+    }
+    return { success: true, count: data.length, data };
+  }
+
   private async assembleShiftReport(shiftId: string | undefined, employeeId?: string): Promise<{
     db: DataSource;
     shift: ShiftRow;
     report: Record<string, unknown>;
     tillAmount: number;
+    orders: ReportOrder[];
+    payments: ReportPayment[];
   }> {
     const id = shiftId?.trim() || '';
     if (!id) throw new BadRequestException('Shift ID is required');
@@ -139,7 +204,7 @@ export class ShiftReportService {
       cashbackSettings: settings,
       drawerTransactions,
     });
-    return { db, shift, report, tillAmount };
+    return { db, shift, report, tillAmount, orders, payments };
   }
 
   private async loadShift(db: DataSource, shiftId: string): Promise<ShiftRow | null> {
