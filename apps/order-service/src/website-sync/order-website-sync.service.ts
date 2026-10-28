@@ -22,31 +22,74 @@ export class OrderWebsiteSyncService {
     request: Record<string, unknown>;
   }): Promise<void> {
     const database = this.orders.database();
-    if (!database) return;
+    if (!database) {
+      console.error(`[order-website-sync] ${JSON.stringify({
+        orderId: input.orderId,
+        clientOrderId: input.clientOrderId || null,
+        called: true,
+        reason: 'order database is unavailable',
+      })}`);
+      return;
+    }
     try {
-      if (!await this.isEnabled(input.storeId)) return;
+      const setting = await this.syncSetting(input.storeId);
+      const enabled = this.settingEnabled(setting);
+      console.log(`[order-website-sync] ${JSON.stringify({
+        orderId: input.orderId,
+        clientOrderId: input.clientOrderId || null,
+        storeId: input.storeId,
+        enabled,
+        flag: setting ?? null,
+      })}`);
+      if (!enabled) return;
       const existing = await this.savedWebsiteOrderId(input.orderId);
-      if (existing) return;
+      if (existing) {
+        console.log(`[order-website-sync] ${JSON.stringify({
+          orderId: input.orderId,
+          websiteOrderId: existing,
+          reason: 'website order already recorded',
+        })}`);
+        return;
+      }
       const connection = await this.connection(input.storeId);
       if (!connection) {
-        console.error(`[order-website-sync] store ${input.storeId} has sync enabled but no connected WordPress site`);
+        console.error(`[order-website-sync] ${JSON.stringify({
+          orderId: input.orderId,
+          storeId: input.storeId,
+          reason: 'sync is enabled but no connected WordPress site was found',
+        })}`);
         return;
       }
       const found = await this.findWebsiteOrder(connection, input.orderId, input.clientOrderId);
       if (found) {
         await this.rememberWebsiteOrder(input.orderId, found);
+        console.log(`[order-website-sync] ${JSON.stringify({
+          orderId: input.orderId,
+          websiteOrderId: found,
+          reason: 'matching website order already exists',
+        })}`);
         return;
       }
       const created = await this.createWebsiteOrder(connection, buildWooOrderPayload(input));
       if (created) await this.rememberWebsiteOrder(input.orderId, created);
+      console.log(`[order-website-sync] ${JSON.stringify({
+        orderId: input.orderId,
+        websiteOrderId: created ?? null,
+        result: created ? 'created' : 'website response had no order id',
+      })}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[order-website-sync] order ${input.orderId} was saved locally and was not sent: ${message}`);
+      console.error(`[order-website-sync] ${JSON.stringify({
+        orderId: input.orderId,
+        clientOrderId: input.clientOrderId || null,
+        result: 'failed',
+        error: message,
+      })}`);
     }
   }
 
   async readEnabled(storeId: string): Promise<boolean> {
-    return this.isEnabled(storeId);
+    return this.settingEnabled(await this.syncSetting(storeId));
   }
 
   async updateEnabled(storeId: string, enabled: boolean): Promise<{ storeId: string; enabled: boolean }> {
@@ -62,10 +105,10 @@ export class OrderWebsiteSyncService {
     return { storeId, enabled };
   }
 
-  private async isEnabled(storeId: string): Promise<boolean> {
+  private async syncSetting(storeId: string): Promise<unknown> {
     const database = this.orders.database();
-    if (!database || !this.isUuid(storeId)) return false;
-    const rows: Array<{ configuration_value?: { enabled?: unknown } }> = await database.query(
+    if (!database || !this.isUuid(storeId)) return undefined;
+    const rows: Array<{ configuration_value?: unknown }> = await database.query(
       `SELECT configuration_value
          FROM public.store_pos_configurations
         WHERE store_id = $1::uuid
@@ -73,7 +116,13 @@ export class OrderWebsiteSyncService {
         LIMIT 1`,
       [storeId, CONFIGURATION_NAME],
     );
-    return rows[0]?.configuration_value?.enabled === true;
+    return rows[0]?.configuration_value;
+  }
+
+  private settingEnabled(value: unknown): boolean {
+    if (value === true) return true;
+    const recordValue = record(value);
+    return recordValue.enabled === true || recordValue.enabled === 'true';
   }
 
   private async savedWebsiteOrderId(orderId: string): Promise<number | undefined> {
@@ -143,6 +192,8 @@ export class OrderWebsiteSyncService {
     method: 'GET' | 'POST',
     body?: Record<string, unknown>,
   ): Promise<unknown> {
+    const endpoint = path.split('?')[0];
+    console.log(`[order-website-sync] ${JSON.stringify({ method, endpoint, request: 'started' })}`);
     const response = await fetch(`${connection.url}/wp-json/wc/v3/${path}`, {
       method,
       headers: {
@@ -156,6 +207,14 @@ export class OrderWebsiteSyncService {
     const text = await response.text();
     let data: unknown = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    const message = record(data).message || record(data).code || '';
+    console.log(`[order-website-sync] ${JSON.stringify({
+      method,
+      endpoint,
+      status: response.status,
+      ok: response.ok,
+      message: String(message).slice(0, 300),
+    })}`);
     if (!response.ok) {
       const message = record(data).message || `WooCommerce returned HTTP ${response.status}`;
       throw new Error(String(message));
