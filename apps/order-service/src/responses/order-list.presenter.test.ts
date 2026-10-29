@@ -70,6 +70,27 @@ test('total-orders returns the stored order total', () => {
   assert.equal(order.total_tax, '15');
 });
 
+test('total-orders keeps the stored order tax after a partial refund', () => {
+  const partial = row('partial-refund');
+  partial.order.taxAmount = 1.63;
+  partial.storeOrder.taxTotal = 1.63;
+  partial.storeOrder.lineItems = [
+    { id: 'ITEM-8c0ca90d-4af1-4489-b962-7c73d225e1aa-1', name: 'Coors Light', quantity: 1, total: '15.98', total_tax: '1.46' },
+    { id: 'ITEM-8c0ca90d-4af1-4489-b962-7c73d225e1aa-2', name: 'Bigsip 4', quantity: 1, total: '3.99', total_tax: '0.17' },
+  ];
+  const completed = row('completed');
+  completed.order.taxAmount = 1.63;
+  completed.storeOrder.taxTotal = 1.63;
+  completed.refunds = [];
+  const refunded = row('refunded');
+  refunded.order.taxAmount = 1.63;
+  refunded.storeOrder.taxTotal = 1.63;
+  const result = new OrderListPresenter().present(1, 10, 3, [partial, completed, refunded]);
+  assert.equal(result.orders_data[0].total_tax, '1.63');
+  assert.equal(result.orders_data[1].total_tax, '1.63');
+  assert.equal(result.orders_data[2].total_tax, '1.63');
+});
+
 test('total-orders marks only partially refunded lines and reports refund totals', () => {
   const result = new OrderListPresenter().present(1, 10, 1, [row('partial-refund')]);
   const order = result.orders_data[0];

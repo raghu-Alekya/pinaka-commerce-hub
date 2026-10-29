@@ -105,9 +105,6 @@ export class OrderListPresenter {
       refundedItemIds,
       fullyRefunded,
     );
-    const remainingTax = status.toLowerCase() === 'partially refunded'
-      ? Math.max(0, tax - this.refundedItemsTax(lineItems, row.refunds))
-      : tax;
     return {
       id: this.clientOrderId(order, storeOrder),
       woo_order_id: Number.isSafeInteger(orderNumber) && orderNumber > 0 ? orderNumber : null,
@@ -117,7 +114,7 @@ export class OrderListPresenter {
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
-      total_tax: this.taxText(remainingTax),
+      total_tax: this.taxText(tax),
       change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
       cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
@@ -195,49 +192,6 @@ export class OrderListPresenter {
     const totalCents = Math.max(0, Math.round((Number.isFinite(orderTotal) ? orderTotal : 0) * 100));
     const refundCents = Math.max(0, Math.round((Number.isFinite(refundTotal) ? refundTotal : 0) * 100));
     return Math.min(refundCents, totalCents) / 100;
-  }
-
-  private refundedItemsTax(
-    storedLines: unknown[] | undefined,
-    refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>,
-  ): number {
-    if (!Array.isArray(storedLines) || !storedLines.length) return 0;
-
-    const seenRefunds = new Set<string>();
-    const refundedQuantities = new Map<string, number>();
-    refunds.forEach((refund, refundIndex) => {
-      const metadata = refund.metadata || {};
-      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${refundIndex}`);
-      if (seenRefunds.has(refundId)) return;
-      seenRefunds.add(refundId);
-
-      const refundedLines = Array.isArray(metadata.line_items) ? metadata.line_items : [];
-      refundedLines.forEach((line: any) => {
-        const itemId = String(line?.order_item_id ?? '').trim();
-        if (!itemId) return;
-        const quantity = Number(line?.quantity);
-        const previous = refundedQuantities.get(itemId) || 0;
-        refundedQuantities.set(
-          itemId,
-          Number.isFinite(quantity) && quantity > 0 ? previous + quantity : Number.POSITIVE_INFINITY,
-        );
-      });
-    });
-
-    const refundedTax = storedLines.reduce((sum, line: any) => {
-      const refundedQuantity = refundedQuantities.get(String(line?.id ?? ''));
-      if (refundedQuantity === undefined) return sum;
-      const lineQuantity = Number(line?.quantity);
-      const quantity = Number.isFinite(lineQuantity) && lineQuantity > 0 ? lineQuantity : 1;
-      const storedTax = Number(line?.total_tax);
-      const lineTax = Number.isFinite(storedTax)
-        ? storedTax
-        : (Array.isArray(line?.taxes)
-          ? line.taxes.reduce((taxSum: number, entry: any) => taxSum + Number(entry?.total || 0), 0)
-          : 0);
-      return sum + lineTax * Math.min(1, refundedQuantity / quantity);
-    }, 0);
-    return this.round(refundedTax);
   }
 
   private lineItem(

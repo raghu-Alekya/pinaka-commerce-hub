@@ -18,8 +18,6 @@ export function buildWooOrderPayload(input: {
     metadata.push({ key: '_pos_client_order_id', value: clientOrderId });
   }
 
-  const billing = record(request.billing);
-  const customerName = String(input.customerName || '').trim();
   const payload: Record<string, unknown> = {
     status: text(request.status) || 'processing',
     set_paid: request.set_paid !== false,
@@ -28,23 +26,16 @@ export function buildWooOrderPayload(input: {
     currency: text(request.currency) || undefined,
     customer_note: text(request.customer_note) || undefined,
     transaction_id: clientOrderId || identity,
-    billing: {
-      first_name: text(billing.first_name) || customerName || 'Walk-in Customer',
-      last_name: text(billing.last_name) || '',
-      email: text(billing.email) || '',
-      phone: text(billing.phone) || String(input.customerPhone || ''),
-      address_1: text(billing.address_1) || '',
-      city: text(billing.city) || '',
-      state: text(billing.state) || '',
-      postcode: text(billing.postcode) || '',
-      country: text(billing.country) || '',
-    },
+    billing: billingAddress(request.billing, input.customerName, input.customerPhone),
     line_items: lineItems(request.line_items),
     meta_data: metadata,
   };
   if (typeof request.prices_include_tax === 'boolean') payload.prices_include_tax = request.prices_include_tax;
   copyLines(payload, 'tax_lines', request.tax_lines, taxLine);
-  const shipping = record(request.shipping);
+  const shipping = billingAddress(request.shipping, '', '');
+  delete shipping.first_name;
+  const shippingName = text(record(request.shipping).first_name);
+  if (shippingName) shipping.first_name = shippingName;
   if (Object.keys(shipping).length) payload.shipping = shipping;
   copyLines(payload, 'fee_lines', request.fee_lines, feeLine);
   copyLines(payload, 'shipping_lines', request.shipping_lines, shippingLine);
@@ -63,6 +54,22 @@ export function findSyncedWebsiteOrder(orders: unknown, orderId: string): number
     if (matched) return id;
   }
   return undefined;
+}
+
+function billingAddress(value: unknown, customerName?: string, customerPhone?: string): Record<string, string> {
+  const billing = record(value);
+  const address: Record<string, string> = {
+    first_name: text(billing.first_name) || String(customerName || '').trim() || 'Walk-in Customer',
+  };
+  const email = text(billing.email);
+  if (email.includes('@') && email.includes('.') && !email.includes(' ')) address.email = email;
+  const phone = text(billing.phone) || String(customerPhone || '').trim();
+  if (phone) address.phone = phone;
+  for (const key of ['last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode', 'country']) {
+    const field = text(billing[key]);
+    if (field) address[key] = field;
+  }
+  return address;
 }
 
 function lineItems(value: unknown): Array<Record<string, unknown>> {
