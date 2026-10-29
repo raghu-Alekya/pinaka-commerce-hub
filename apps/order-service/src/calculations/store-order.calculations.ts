@@ -164,6 +164,51 @@ export function sumCouponDiscounts(couponLines: PosCouponLine[] = [], places = 2
 }
 
 /**
+ * Legacy POS payloads can carry a coupon both as coupon_lines and as a fee.
+ * coupon_lines is authoritative whenever it supplies an amount. The fee is a
+ * fallback only for legacy coupon lines that omit their discount value.
+ */
+export function authoritativeCouponDiscount(
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+  _lineItems: PosLineItem[] = [],
+): number {
+  const couponLineMinor = toMinor(sumCouponDiscounts(couponLines, places), places);
+  const couponFeeMinor = feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum + Math.abs(toMinor(fee?.total ?? 0, places)) : sum
+  ), 0);
+  const chosen = couponLineMinor > 0 ? couponLineMinor : couponFeeMinor;
+  return fromMinor(chosen, places);
+}
+
+export function isMerchantDiscountRepresented(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): boolean {
+  const merchantMinor = merchantDiscountMinor(feeLines, places);
+  if (!merchantMinor) return false;
+  const representedMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+    sum + Math.max(
+      0,
+      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+    )
+  ), 0);
+  return representedMinor >= merchantMinor;
+}
+
+export function feeLinesForCalculation(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): PosFeeLine[] {
+  return isMerchantDiscountRepresented(lineItems, feeLines, places)
+    ? feeLines.filter((fee) => !isMerchantDiscountFee(fee))
+    : feeLines;
+}
+
+/**
  * Spreads a fixed amount across merchandise lines by subtotal.
  * The last merchandise line takes the remainder. Cashback and Payout lines are unchanged.
  */
@@ -232,6 +277,11 @@ export function isMerchantDiscountFee(fee: { name?: string; fee_name?: string } 
   return name === 'merchant_discount' || name.startsWith('merchant_discount_');
 }
 
+export function isCouponDiscountFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
+  const name = feeKey(fee);
+  return name === 'coupon_discount' || name.startsWith('coupon_discount_');
+}
+
 /** A payout is a cash disbursement, not a supply, so it is outside the tax base. */
 export function isPayoutFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
   const name = feeKey(fee);
@@ -263,6 +313,37 @@ export function merchantDiscountMinor(
     if (!isMerchantDiscountFee(fee)) return sum;
     return sum + Math.abs(toMinor(fee?.total ?? 0, places));
   }, 0);
+}
+
+/** Coupon fees mirror coupon_lines for Woo compatibility; line totals already carry the reduction. */
+export function effectiveFeeTotal(
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  return fromMinor(feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum : sum + toMinor(fee?.total ?? 0, places)
+  ), 0), places);
+}
+
+function exactTaxForAmounts(
+  lines: Array<PosLineItem & { taxes?: unknown }>,
+  amounts: number[],
+): number[] | null {
+  const rates = lines.map((line) => {
+    const taxes = Array.isArray(line.taxes) ? line.taxes : [];
+    const rate = Number((taxes[0] as { rate_percent?: unknown; id?: unknown } | undefined)?.rate_percent
+      ?? (taxes[0] as { id?: unknown } | undefined)?.id);
+    return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
+  });
+  if (rates.some((rate) => !rate)) return null;
+  const result = new Array(lines.length).fill(0);
+  const groups = new Map<number, number[]>();
+  rates.forEach((rate, index) => groups.set(rate, [...(groups.get(rate) || []), index]));
+  groups.forEach((indexes, rate) => {
+    const allocated = allocateRoundedTax(indexes.map((index) => taxUnitsForMinor(amounts[index], rate)));
+    indexes.forEach((index, position) => { result[index] = allocated[position]; });
+  });
+  return result;
 }
 
 function amountsAfterDiscount(amounts: number[], discountMinor: number): number[] {
@@ -355,14 +436,13 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
       && String(fee?.tax_status || 'taxable').toLowerCase() !== 'none')
     .map((fee) => toMinor(fee?.total ?? 0, places));
 
-  const mode = input.calculation || 'item-price';
-  const taxMinor = mode === 'item-price'
-    ? [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + taxOn(amount, rate, pricesIncludeTax), 0)
-    : taxOn(
-      Math.max(0, [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + amount, 0)),
-      rate,
-      pricesIncludeTax,
-    );
+  // POS and Flutter both calculate on the final combined taxable balance and
+  // round once. Never sum independently rounded item taxes.
+  const taxMinor = taxOn(
+    Math.max(0, [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + amount, 0)),
+    rate,
+    pricesIncludeTax,
+  );
 
   if (!taxMinor) return [];
   return [{
@@ -404,9 +484,11 @@ export function applyMerchantDiscountToStoredTax(
 
   const reduced = amountsAfterDiscount(amounts, discount);
   let oldLineTax = 0;
+  const exactTax = exactTaxForAmounts(taxable, reduced);
   const nextTax = taxable.map((line, index) => {
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    const nextMinor = amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0;
+    const nextMinor = exactTax?.[index]
+      ?? (amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0);
     oldLineTax += oldMinor;
     return nextMinor;
   });
@@ -451,13 +533,14 @@ export function applyCouponDiscountToStoredLinesAndTax(
   couponLines: PosCouponLine[] | undefined,
   orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
   places = 2,
+  representedLineDiscountIsCoupon = true,
 ): void {
   const merchandise = lines.filter(isMerchandiseLine);
   const couponMinor = (couponLines || []).reduce((sum, coupon) => {
     if (/^pos-discount(?:-\d+)?$/i.test(String(coupon?.code || '').trim())) return sum;
     return sum + Math.max(0, toMinor(coupon?.discount ?? 0, places));
   }, 0);
-  const representedMinor = Math.max(
+  const representedMinor = representedLineDiscountIsCoupon ? Math.max(
     0,
     merchandise.reduce((sum, line) => (
       sum + Math.max(
@@ -465,7 +548,7 @@ export function applyCouponDiscountToStoredLinesAndTax(
         toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
       )
     ), 0),
-  );
+  ) : 0;
   const currentAmounts = merchandise.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
   const base = currentAmounts.reduce((sum, amount) => sum + amount, 0);
   const discount = Math.min(Math.max(0, couponMinor - representedMinor), base);
@@ -474,6 +557,14 @@ export function applyCouponDiscountToStoredLinesAndTax(
   const reducedAmounts = amountsAfterDiscount(currentAmounts, discount);
   let previousTax = 0;
   let nextTaxTotal = 0;
+  const taxableIndexes = merchandise
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => isTaxableSaleLine(line));
+  const exactTax = exactTaxForAmounts(
+    taxableIndexes.map(({ line }) => line),
+    taxableIndexes.map(({ index }) => reducedAmounts[index]),
+  );
+  const exactByIndex = new Map(taxableIndexes.map(({ index }, position) => [index, exactTax?.[position]]));
   merchandise.forEach((line, index) => {
     const previousAmount = currentAmounts[index];
     const nextAmount = reducedAmounts[index];
@@ -481,7 +572,8 @@ export function applyCouponDiscountToStoredLinesAndTax(
     if (!isTaxableSaleLine(line)) return;
 
     const oldTax = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    const nextTax = previousAmount > 0 ? Math.round((oldTax * nextAmount) / previousAmount) : 0;
+    const nextTax = exactByIndex.get(index)
+      ?? (previousAmount > 0 ? Math.round((oldTax * nextAmount) / previousAmount) : 0);
     previousTax += oldTax;
     nextTaxTotal += nextTax;
     line.total_tax = fromMinor(nextTax, places).toFixed(places);
@@ -523,7 +615,7 @@ export function calculateOrderTotal(input: {
   const places = input.decimalPlaces ?? 2;
   const subtotal = sumLineSubtotals(input.lineItems, places);
   const lineTotal = sumLineTotals(input.lineItems, places);
-  const feeTotal = calculateFeeTotal(input.feeLines, places);
+  const feeTotal = effectiveFeeTotal(input.feeLines, places);
   const taxMinor = (input.taxLines || []).reduce(
     (sum, tax) => sum + toMinor(tax?.tax_total ?? 0, places) + toMinor(tax?.shipping_tax_total ?? 0, places),
     0,
@@ -637,7 +729,7 @@ export function listOrderTotal(input: {
   const lineSubtotalMinor = toMinor(sumLineSubtotals(sourceLines, places), places);
   const sourceFees = (input.feeLines || []) as PosFeeLine[];
   const hasCashMovementFee = sourceFees.some((fee) => isPayoutFee(fee) || isCashbackFee(fee));
-  const feeMinorTotal = toMinor(calculateFeeTotal(sourceFees, places), places);
+  const feeMinorTotal = toMinor(effectiveFeeTotal(sourceFees, places), places);
   const shippingMinor = toMinor(input.shippingTotal ?? 0, places);
   const tipMinor = toMinor(input.tip ?? 0, places);
   const taxMinor = Math.max(0, toMinor(listOrderTax({

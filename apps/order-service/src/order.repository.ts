@@ -13,12 +13,16 @@ import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schem
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
   allocateRoundedTax,
+  authoritativeCouponDiscount,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   adminOrderCounts,
   calculateDiscountTotal,
   calculateStoreOrder,
+  effectiveFeeTotal,
+  feeLinesForCalculation,
   isTaxableSaleLine,
+  isMerchantDiscountRepresented,
   listOrderTotal,
   orderTotalWithTax,
   sumCouponDiscounts,
@@ -361,6 +365,7 @@ export class OrderRepository implements OnModuleInit {
     const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
     const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
     const tipAmount = Number(orderData.tipAmount || 0);
+    const calculationFees = feeLinesForCalculation(lineItems, feeLines);
     const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
@@ -395,7 +400,7 @@ export class OrderRepository implements OnModuleInit {
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
       discountTotal,
-      feeTotal: feeLines.reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
+      feeTotal: effectiveFeeTotal(calculationFees),
       taxTotal,
       total,
       grandTotal: listOrderTotal({
@@ -404,7 +409,7 @@ export class OrderRepository implements OnModuleInit {
         taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
         couponDiscount: sumCouponDiscounts(couponLines),
         lineItems,
-        feeLines,
+        feeLines: calculationFees,
         shippingTotal,
         tip: tipAmount,
       }),
@@ -759,23 +764,47 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
+    const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+    const merchantDiscountRepresented = isMerchantDiscountRepresented(lines, sourceFees, places);
+    const calculationFees = feeLinesForCalculation(lines, sourceFees, places);
+    const authoritativeCoupon = authoritativeCouponDiscount(
+      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      sourceFees,
+      places,
+      lines,
+    );
     applyCouponDiscountToStoredLinesAndTax(
       lines,
-      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      authoritativeCoupon > 0
+        ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
+        : [],
       sourcePayload,
       places,
+      !merchantDiscountRepresented,
     );
     applyMerchantDiscountToStoredTax(
       lines,
-      Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
+      calculationFees,
       sourcePayload,
       places,
     );
 
+    const couponDiscount = authoritativeCoupon;
+    if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
+      sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
+        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+        return name === 'coupon_discount'
+          ? { ...fee, total: (-couponDiscount).toFixed(places) }
+          : fee;
+      });
+    }
+
     const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
     const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
-    const feeTotal = (Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [])
-      .reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0);
+    const feeTotal = effectiveFeeTotal(
+      calculationFees,
+      places,
+    );
     const taxTotal = Number(sourcePayload.total_tax || 0);
     const shippingTotal = Number(sourcePayload.shipping_total || 0);
     if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
