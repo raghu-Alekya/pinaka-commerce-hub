@@ -28,6 +28,18 @@ export class SettingsApiRepository {
     return rows[0]?.configuration_value ?? {};
   }
 
+  async readConfigurationFlags(scope: SettingsScope): Promise<SettingsJson> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT DISTINCT ON (configuration_name) configuration_name, configuration_value
+       FROM public.store_pos_configurations
+       WHERE store_id = $1::uuid AND configuration_name = ANY($2::text[])
+       ORDER BY configuration_name, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC`,
+      [storeId, ['safe_and_safe_drop', 'currency_taxes', 'cashback_settings']],
+    );
+    return Object.fromEntries(rows.map((row: any) => [row.configuration_name, row.configuration_value ?? {}]));
+  }
+
   async merge(scope: SettingsScope, patch: SettingsJson): Promise<SettingsJson> {
     const { db, storeId, actorId } = await this.resolveScope(scope);
     return db.transaction(async (manager) => {
