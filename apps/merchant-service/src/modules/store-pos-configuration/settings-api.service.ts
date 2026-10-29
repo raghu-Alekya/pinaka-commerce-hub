@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { SettingsApiRepository, SettingsJson as Json, SettingsScope } from './settings-api.repository';
 
 @Injectable()
@@ -149,13 +150,61 @@ export class SettingsApiService {
     return { success: true, message: `${labels[key]} ${enabled ? 'enabled' : 'disabled'}`, data: { [responseKey]: enabled } };
   }
 
+  async getPromotionalImages(scope: SettingsScope) {
+    const data = await this.repository.readPromotionalImages(scope);
+    return { success: true, data: this.presentPromotionalImages(data) };
+  }
+
+  async savePromotionalImages(body: Json, scope: SettingsScope) {
+    if (typeof body.enabled !== 'boolean') throw new BadRequestException('enabled must be true or false');
+    if (!Array.isArray(body.images)) throw new BadRequestException('images must be an array');
+    if (body.images.length > 20) throw new BadRequestException('A maximum of 20 promotional images is allowed');
+    const removeIds = body.removeIds === undefined ? [] : body.removeIds;
+    if (!Array.isArray(removeIds) || removeIds.some((id: unknown) => typeof id !== 'string')) {
+      throw new BadRequestException('removeIds must be an array of image IDs');
+    }
+    const images = body.images.map((image: unknown, index: number) => {
+      if (!image || typeof image !== 'object' || Array.isArray(image)) {
+        throw new BadRequestException(`images[${index}] must be an object`);
+      }
+      const item = image as Json;
+      const url = this.sanitizeImageUrl(item.url);
+      if (!url) throw new BadRequestException(`images[${index}].url must be an http(s) URL or /uploads path`);
+      return {
+        id: this.text(item.id) || randomUUID(),
+        url,
+      };
+    });
+    const data = await this.repository.savePromotionalImages(scope, { enabled: body.enabled, images, removeIds });
+    return { success: true, message: 'Promotional images saved successfully', data: this.presentPromotionalImages(data) };
+  }
+
+  private presentPromotionalImages(value: Json | null) {
+    const images = Array.isArray(value?.images) ? value.images : [];
+    return {
+      enabled: value?.enabled === true,
+      images: images.map((item: unknown) => {
+        const image = item && typeof item === 'object' && !Array.isArray(item) ? item as Json : {};
+        return { id: this.text(image.id) || randomUUID(), url: this.sanitizeImageUrl(image.url) || '' };
+      }),
+    };
+  }
+
+  private sanitizeImageUrl(value: unknown): string {
+    const raw = this.text(value);
+    if (raw.startsWith('/uploads/')) return raw;
+    try {
+      const url = new URL(raw);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : '';
+    } catch { return ''; }
+  }
+
   private binary(value: unknown): number {
     if (value === 0 || value === '0' || value === false) return 0;
     if (value === 1 || value === '1' || value === true) return 1;
     throw new BadRequestException('Invalid value; expected 0 or 1');
   }
   private boolean(value: unknown, name: string) { try { return Boolean(this.binary(value)); } catch { throw new BadRequestException(`${name} must be 0 or 1`); } }
-  private flag(value: unknown) { return this.binary(value); }
   private text(value: unknown) { return String(value ?? '').trim(); }
   private sanitizeText(value: unknown): string {
     return this.text(value).replace(/<[^>]*>/g, '').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
