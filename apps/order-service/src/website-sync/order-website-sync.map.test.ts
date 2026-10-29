@@ -19,6 +19,7 @@ test('website order payload keeps the POS line, payment, and identity', () => {
     },
   });
 
+  assert.deepEqual(payload.billing, { first_name: 'Walk-in Customer' });
   assert.equal(payload.status, 'completed');
   assert.equal(payload.payment_method, 'cash');
   assert.equal(payload.transaction_id, '262995440');
