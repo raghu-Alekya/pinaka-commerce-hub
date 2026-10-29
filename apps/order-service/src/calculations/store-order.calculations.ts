@@ -208,6 +208,21 @@ export function feeLinesForCalculation(
     : feeLines;
 }
 
+export function representedCouponDiscount(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const lineReductionMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+    sum + Math.max(
+      0,
+      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+    )
+  ), 0);
+  const representedMerchantMinor = Math.min(lineReductionMinor, merchantDiscountMinor(feeLines, places));
+  return fromMinor(Math.max(0, lineReductionMinor - representedMerchantMinor), places);
+}
+
 /**
  * Spreads a fixed amount across merchandise lines by subtotal.
  * The last merchandise line takes the remainder. Cashback and Payout lines are unchanged.
@@ -480,11 +495,12 @@ export function applyMerchantDiscountToStoredTax(
   const amounts = taxable.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
   const base = amounts.reduce((sum, amount) => sum + amount, 0);
   const discount = Math.min(merchantDiscountMinor(feeLines, places), base);
-  if (!discount || !base) return;
+  if (!base) return;
 
   const reduced = amountsAfterDiscount(amounts, discount);
   let oldLineTax = 0;
   const exactTax = exactTaxForAmounts(taxable, reduced);
+  if (!discount && !exactTax) return;
   const nextTax = taxable.map((line, index) => {
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
     const nextMinor = exactTax?.[index]
@@ -494,7 +510,7 @@ export function applyMerchantDiscountToStoredTax(
   });
   taxable.forEach((line, index) => {
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    if (!oldMinor) return;
+    if (!oldMinor && !exactTax) return;
     const next = fromMinor(nextTax[index], places).toFixed(places);
     const subtotalMatched = toMinor(line.subtotal_tax ?? 0, places) === oldMinor;
     line.total_tax = next;
@@ -511,7 +527,9 @@ export function applyMerchantDiscountToStoredTax(
 
   const previousOrderTax = Math.max(0, toMinor(orderTax.total_tax ?? 0, places));
   const basisOld = oldLineTax > 0 ? oldLineTax : previousOrderTax;
-  const basisNew = oldLineTax > 0
+  const basisNew = exactTax
+    ? nextTax.reduce((sum, amount) => sum + amount, 0)
+    : oldLineTax > 0
     ? nextTax.reduce((sum, amount) => sum + amount, 0)
     : Math.round((previousOrderTax * (base - discount)) / base);
   if (basisOld <= 0 || basisNew === basisOld) return;
@@ -533,22 +551,24 @@ export function applyCouponDiscountToStoredLinesAndTax(
   couponLines: PosCouponLine[] | undefined,
   orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
   places = 2,
-  representedLineDiscountIsCoupon = true,
+  representedCouponAmount?: number,
 ): void {
   const merchandise = lines.filter(isMerchandiseLine);
   const couponMinor = (couponLines || []).reduce((sum, coupon) => {
     if (/^pos-discount(?:-\d+)?$/i.test(String(coupon?.code || '').trim())) return sum;
     return sum + Math.max(0, toMinor(coupon?.discount ?? 0, places));
   }, 0);
-  const representedMinor = representedLineDiscountIsCoupon ? Math.max(
-    0,
-    merchandise.reduce((sum, line) => (
-      sum + Math.max(
-        0,
-        toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
-      )
-    ), 0),
-  ) : 0;
+  const representedMinor = representedCouponAmount === undefined
+    ? Math.max(
+      0,
+      merchandise.reduce((sum, line) => (
+        sum + Math.max(
+          0,
+          toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+        )
+      ), 0),
+    )
+    : Math.max(0, toMinor(representedCouponAmount, places));
   const currentAmounts = merchandise.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
   const base = currentAmounts.reduce((sum, amount) => sum + amount, 0);
   const discount = Math.min(Math.max(0, couponMinor - representedMinor), base);

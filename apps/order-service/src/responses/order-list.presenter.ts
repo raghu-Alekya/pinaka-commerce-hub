@@ -5,9 +5,9 @@ import {
   authoritativeCouponDiscount,
   effectiveFeeTotal,
   feeLinesForCalculation,
-  isMerchantDiscountRepresented,
   listOrderTax,
   listOrderTotal,
+  representedCouponDiscount,
   sumLineTotals,
 } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
@@ -179,10 +179,7 @@ export class OrderListPresenter {
     const feeLines = storedFees.map((fee: any) => ({ ...fee }));
     const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
     const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
-    const merchantDiscountRepresented = isMerchantDiscountRepresented(
-      lineItems as any[],
-      feeLines as any[],
-    );
+    const representedCoupon = representedCouponDiscount(lineItems as any[], feeLines as any[]);
     const couponDiscount = authoritativeCouponDiscount(
       couponLines as any[],
       feeLines as any[],
@@ -210,7 +207,7 @@ export class OrderListPresenter {
           effectiveCoupons,
           orderTax,
           2,
-          !merchantDiscountRepresented,
+          representedCoupon,
         );
       }
       applyMerchantDiscountToStoredTax(lineItems, calculationFees as any[], orderTax);
