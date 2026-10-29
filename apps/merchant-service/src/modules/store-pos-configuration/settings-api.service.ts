@@ -79,6 +79,18 @@ export class SettingsApiService {
     return { success: true, data: value.device ?? {} };
   }
 
+  async configurationFlags(scope: SettingsScope) {
+    const value = await this.repository.readConfigurationFlags(scope);
+    const enabled = (flag: unknown) => flag === true || flag === 1
+      || (typeof flag === 'string' && ['true', '1', 'yes', 'on'].includes(flag.trim().toLowerCase()));
+    return { success: true, data: {
+      enable_safes: enabled(value.safe_and_safe_drop?.enabled),
+      enable_safes_drop: enabled(value.safe_and_safe_drop?.dropEnabled ?? value.safe_and_safe_drop?.dropenabled),
+      tax_enabled: enabled(value.currency_taxes?.taxEnabled),
+      cashback_enabled: enabled(value.cashback_settings?.enabled),
+    } };
+  }
+
   async cash(scope: SettingsScope) {
     const value = await this.repository.read(scope);
     const cash = value.cash ?? {};
