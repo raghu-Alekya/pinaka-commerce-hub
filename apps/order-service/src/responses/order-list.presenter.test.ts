@@ -187,6 +187,33 @@ test('total-orders uses the actual coupon amount for order 263028812', () => {
   assert.equal(order.fee_lines[1].total, '-5.00');
 });
 
+test('total-orders does not apply an already represented coupon twice for order 263029799', () => {
+  const sample = row('completed');
+  sample.order.orderNumber = '3183';
+  sample.order.clientOrderId = '263029799';
+  sample.order.totalAmount = 22.78;
+  sample.order.discountAmount = 7.88;
+  sample.order.taxAmount = 1.90;
+  sample.storeOrder.total = 22.78;
+  sample.storeOrder.discountTotal = 7.88;
+  sample.storeOrder.taxTotal = 1.90;
+  sample.storeOrder.couponLines = [{ code: '2025', discount: '5.00' }];
+  sample.storeOrder.feeLines = [
+    { name: 'merchant_discount', total: '-2.88', tax_status: 'none' },
+    { name: 'coupon_discount', total: '-5.00', tax_status: 'none' },
+  ];
+  sample.storeOrder.taxLines = [{ rate_percent: 9.1, tax_total: '1.90' }];
+  sample.storeOrder.lineItems = [
+    { name: 'Item 1', quantity: 2, subtotal: '14.38', total: '10.44', subtotal_tax: '1.31', total_tax: '0.95', taxes: [{ id: 9.1, subtotal: '1.31', total: '0.95' }] },
+    { name: 'Item 2', quantity: 2, subtotal: '14.38', total: '10.44', subtotal_tax: '1.31', total_tax: '0.95', taxes: [{ id: 9.1, subtotal: '1.31', total: '0.95' }] },
+  ];
+  sample.refunds = [];
+  const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
+  assert.equal(order.total_tax, '1.9');
+  assert.equal(order.total, '22.78');
+  assert.equal(order.net_payment, 22.78);
+});
+
 test('total-orders does not deduct a represented merchant discount twice for Woo order 4134', () => {
   const sample = row('completed');
   sample.order.orderNumber = '4134';

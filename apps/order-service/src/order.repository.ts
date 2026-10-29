@@ -22,9 +22,9 @@ import {
   effectiveFeeTotal,
   feeLinesForCalculation,
   isTaxableSaleLine,
-  isMerchantDiscountRepresented,
   listOrderTotal,
   orderTotalWithTax,
+  representedCouponDiscount,
   sumCouponDiscounts,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
@@ -765,7 +765,7 @@ export class OrderRepository implements OnModuleInit {
     }
 
     const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
-    const merchantDiscountRepresented = isMerchantDiscountRepresented(lines, sourceFees, places);
+    const representedCoupon = representedCouponDiscount(lines, sourceFees, places);
     const calculationFees = feeLinesForCalculation(lines, sourceFees, places);
     const authoritativeCoupon = authoritativeCouponDiscount(
       Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
@@ -780,7 +780,7 @@ export class OrderRepository implements OnModuleInit {
         : [],
       sourcePayload,
       places,
-      !merchantDiscountRepresented,
+      representedCoupon,
     );
     applyMerchantDiscountToStoredTax(
       lines,
