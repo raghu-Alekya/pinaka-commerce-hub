@@ -144,14 +144,22 @@ export class SettingsApiService {
       return { success: true, message: input === 'yes' ? 'Loyalty points enabled' : 'Loyalty points disabled', data: { [key]: input } };
     }
     const enabled = this.binary(input);
+    const targets: Record<string, [string, string]> = {
+      enable_safes: ['safe_and_safe_drop', 'enabled'],
+      enable_safes_drop: ['safe_and_safe_drop', 'dropEnabled'],
+      enable_taxes: ['currency_taxes', 'taxEnabled'],
+      enable_cashback: ['cashback_settings', 'enabled'],
+    };
+    const target = targets[key];
+    const configurations = target ? { [target[0]]: { [target[1]]: Boolean(enabled) } } : {};
     if (key === 'enable_cashback' || key === 'enable_service_charge') {
       const configKey = key === 'enable_cashback' ? 'cashback' : 'service_charge';
       const current = (await this.repository.read(scope))[configKey] ?? {};
-      await this.repository.merge(scope, { [configKey]: { ...current, enabled } });
+      await this.repository.merge(scope, { [configKey]: { ...current, enabled } }, configurations);
     } else if (key === 'enable_safes' || key === 'enable_safes_drop') {
       const value = await this.repository.read(scope);
-      await this.repository.merge(scope, { cash: { ...(value.cash ?? {}), [key]: Boolean(enabled) } });
-    } else await this.repository.merge(scope, { [key]: Boolean(enabled) });
+      await this.repository.merge(scope, { cash: { ...(value.cash ?? {}), [key]: Boolean(enabled) } }, configurations);
+    } else await this.repository.merge(scope, { [key]: Boolean(enabled) }, configurations);
     const labels: Json = {
       enable_taxes: 'Taxes', enable_coupons: 'Coupons', coupon_sequential: 'Sequential coupons',
       enable_safes: 'Safes', enable_safes_drop: 'Safes drop', enable_cashback: 'Cashback',
