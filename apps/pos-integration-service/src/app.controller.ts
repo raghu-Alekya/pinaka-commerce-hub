@@ -1,4 +1,4 @@
-import { Inject, Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Inject, Controller, Get, Post, Put, Body, Param, Query, Headers, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
 import { PosConfigRepository } from './pos-config.repository';
 import { FastkeyItem } from './pos-config.entity';
@@ -254,6 +254,20 @@ export class AppController {
       const shifts = (await this.posRepository.getShiftsByStore(storeId)).map(withStoreShiftFields);
       return { success: true, store_id: storeId, merchant_id: shifts[0]?.merchant_id ?? null, count: shifts.length, shifts };
     });
+  }
+
+  @Get(['stores/:store_id/shifts/by-date', 'shifts/shifts-by-date'])
+  getShiftsByDate(@Query('date') date?: string, @Param('store_id') storeId?: string, @Query('store_id') queryStoreId?: string, @Headers('x-store-id') headerStoreId?: string) {
+    const ids = [storeId, queryStoreId, headerStoreId].filter((id): id is string => Boolean(id?.trim())).map(id => id.trim());
+    if (new Set(ids).size > 1) throw new BadRequestException('Conflicting store IDs');
+    return this.shiftReport.getShiftsByDate(ids[0], date);
+  }
+
+  @Get(['stores/:store_id/shifts/daily-summary', 'shifts/get-daily-shift-summary'])
+  getDailyShiftSummary(@Param('store_id') storeId?: string, @Query('store_id') queryStoreId?: string, @Headers('x-store-id') headerStoreId?: string) {
+    const ids = [storeId, queryStoreId, headerStoreId].filter((id): id is string => Boolean(id?.trim())).map(id => id.trim());
+    if (new Set(ids).size > 1) throw new BadRequestException('Conflicting store IDs');
+    return this.shiftReport.getDailyShiftSummary(ids[0]);
   }
 
   @Get('stores/:store_id/shifts/:shift_id')

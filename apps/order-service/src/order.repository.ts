@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -13,13 +13,18 @@ import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schem
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
   allocateRoundedTax,
+  authoritativeCouponDiscount,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
+  adminOrderCounts,
   calculateDiscountTotal,
   calculateStoreOrder,
+  effectiveFeeTotal,
+  feeLinesForCalculation,
   isTaxableSaleLine,
   listOrderTotal,
   orderTotalWithTax,
+  representedCouponDiscount,
   sumCouponDiscounts,
   type StoreOrderCalculationInput,
   sumLineSubtotals,
@@ -360,6 +365,7 @@ export class OrderRepository implements OnModuleInit {
     const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
     const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
     const tipAmount = Number(orderData.tipAmount || 0);
+    const calculationFees = feeLinesForCalculation(lineItems, feeLines);
     const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
@@ -394,7 +400,7 @@ export class OrderRepository implements OnModuleInit {
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
       discountTotal,
-      feeTotal: feeLines.reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0),
+      feeTotal: effectiveFeeTotal(calculationFees),
       taxTotal,
       total,
       grandTotal: listOrderTotal({
@@ -403,7 +409,7 @@ export class OrderRepository implements OnModuleInit {
         taxLines: Array.isArray(sourcePayload?.tax_lines) ? sourcePayload.tax_lines : [],
         couponDiscount: sumCouponDiscounts(couponLines),
         lineItems,
-        feeLines,
+        feeLines: calculationFees,
         shippingTotal,
         tip: tipAmount,
       }),
@@ -758,23 +764,47 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
+    const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+    const representedCoupon = representedCouponDiscount(lines, sourceFees, places);
+    const calculationFees = feeLinesForCalculation(lines, sourceFees, places);
+    const authoritativeCoupon = authoritativeCouponDiscount(
+      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      sourceFees,
+      places,
+      lines,
+    );
     applyCouponDiscountToStoredLinesAndTax(
       lines,
-      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      authoritativeCoupon > 0
+        ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
+        : [],
       sourcePayload,
       places,
+      representedCoupon,
     );
     applyMerchantDiscountToStoredTax(
       lines,
-      Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [],
+      calculationFees,
       sourcePayload,
       places,
     );
 
+    const couponDiscount = authoritativeCoupon;
+    if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
+      sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
+        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+        return name === 'coupon_discount'
+          ? { ...fee, total: (-couponDiscount).toFixed(places) }
+          : fee;
+      });
+    }
+
     const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
     const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
-    const feeTotal = (Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [])
-      .reduce((sum: number, fee: any) => sum + Number(fee?.total || 0), 0);
+    const feeTotal = effectiveFeeTotal(
+      calculationFees,
+      places,
+    );
     const taxTotal = Number(sourcePayload.total_tax || 0);
     const shippingTotal = Number(sourcePayload.shipping_total || 0);
     if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
@@ -1557,6 +1587,52 @@ export class OrderRepository implements OnModuleInit {
     }
   }
 
+  async getAdminOrderCounts(storeId: string | undefined, startDate?: string, endDate?: string) {
+    if (!storeId?.trim()) throw new BadRequestException('store_id or x-store-id is required');
+    for (const value of [startDate,endDate]) {
+      if (value !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0,10) !== value)) throw new BadRequestException('Dates must be valid YYYY-MM-DD values');
+    }
+    if (endDate && !startDate) throw new BadRequestException('start_date is required with end_date');
+    if (startDate && endDate && endDate < startDate) throw new BadRequestException('end_date must not be before start_date');
+    if (!this.isDbConnected || !this.dataSource) throw new ServiceUnavailableException('Order database is unavailable');
+    return this.dataSource.transaction('REPEATABLE READ', async manager => {
+      const [store] = await manager.query('SELECT store_name FROM public.stores WHERE id::text=$1 AND COALESCE(is_deleted,false)=false', [storeId.trim()]);
+      if (!store) throw new NotFoundException('Store not found');
+      const params = [storeId.trim(),startDate || null,endDate || startDate || null];
+      const orders = await manager.query(
+        `SELECT order_id,status,total,line_items FROM public.store_orders WHERE store_id::text=$1
+         AND ($2::date IS NULL OR (created_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
+      );
+      const payments = await manager.query(
+        `SELECT payment_method,amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
+         AND ($2::date IS NULL OR (COALESCE(payment_at,created_at) AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
+      );
+      const refunds = await manager.query(
+        `WITH refund_rows AS (
+          SELECT (event->>'amount')::numeric AS amount,COALESCE((event->>'created_at')::timestamptz,p.created_at) AS refunded_at
+          FROM public.store_pos_payments p CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.metadata->'refund_history','[]'::jsonb)) event
+          WHERE p.store_id::text=$1 AND p.entry_type='payment' AND p.deleted_at IS NULL AND p.is_void=false
+          UNION ALL
+          SELECT amount,created_at FROM public.store_pos_payments WHERE store_id::text=$1 AND entry_type='refund' AND deleted_at IS NULL AND is_void=false
+            AND COALESCE(metadata->>'daily_refund_tracking','false') NOT IN ('true','1')
+          UNION ALL
+          SELECT p.refund_amount,COALESCE(p.updated_at,p.created_at) FROM public.store_pos_payments p WHERE p.store_id::text=$1 AND p.entry_type='payment'
+            AND p.deleted_at IS NULL AND p.is_void=false AND p.refund_amount>0 AND jsonb_array_length(COALESCE(p.metadata->'refund_history','[]'::jsonb))=0
+            AND NOT EXISTS (SELECT 1 FROM public.store_pos_payments r WHERE r.order_id=p.order_id AND r.store_id=p.store_id
+              AND r.entry_type='refund' AND r.deleted_at IS NULL AND r.is_void=false)
+        ) SELECT amount FROM refund_rows WHERE ($2::date IS NULL OR (refunded_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`,params,
+      );
+      const tables = await manager.query("SELECT to_regclass('public.store_categories') AS categories,to_regclass('public.store_products') AS products");
+      const categories = tables[0]?.categories ? await manager.query('SELECT payload FROM public.store_categories WHERE store_id::text=$1',[storeId.trim()]) : [];
+      const products = tables[0]?.products ? await manager.query(
+        `SELECT jsonb_agg(jsonb_build_object('id',product->'id','categories',product->'categories')) AS payload
+         FROM public.store_products s CROSS JOIN LATERAL jsonb_array_elements(s.payload) product
+         WHERE s.store_id::text=$1 AND COALESCE(s.is_deleted,false)=false`, [storeId.trim()],
+      ) : [];
+      return adminOrderCounts({ businessName: store.store_name, orders, payments, refunds, categories: categories.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []), products: products.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []) });
+    });
+  }
+
   async listOrders(criteria: {
     merchantId?: string;
     storeId?: string;
@@ -1916,10 +1992,18 @@ export class OrderRepository implements OnModuleInit {
     return products;
   }
 
-  async findStoreCoupon(storeId: string, code: string): Promise<Record<string, unknown> | null> {
+  async findStoreCoupon(
+    storeId: string,
+    code: string,
+    includeDeleted = false,
+  ): Promise<Record<string, unknown> | null> {
     const normalized = String(code || '').trim();
     if (!this.dataSource || !normalized) return null;
     try {
+      const activeCouponFilter = includeDeleted
+        ? ''
+        : `AND deleted_at IS NULL
+           AND sync_status <> 'DELETED'`;
       const rows = await this.dataSource.query(
         `SELECT code, amount, discount_type, date_expires, individual_use,
                 product_ids, excluded_product_ids, usage_limit, usage_count,
@@ -1928,8 +2012,7 @@ export class OrderRepository implements OnModuleInit {
          FROM public.store_coupons
          WHERE store_id = $1::uuid
            AND lower(code) = lower($2)
-           AND deleted_at IS NULL
-           AND sync_status <> 'DELETED'
+           ${activeCouponFilter}
          LIMIT 1`,
         [storeId, normalized],
       );

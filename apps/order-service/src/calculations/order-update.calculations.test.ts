@@ -9,9 +9,12 @@ import {
 import { cashChangeReturned } from './order-change';
 import {
   allocateRoundedTax,
+  authoritativeCouponDiscount,
   applyMerchantDiscountToStoredTax,
   calculateOrderTotal,
   calculateTaxLines,
+  effectiveFeeTotal,
+  applyCouponDiscountToStoredLinesAndTax,
   orderTotalWithTax,
   listOrderTotal,
   taxUnitsForMinor,
@@ -251,6 +254,10 @@ test('discounted lines at 9.10 percent round tax once to 2.64', () => {
   const taxMinor = allocated.reduce((sum, amount) => sum + amount, 0);
   assert.equal(taxableMinor.reduce((sum, amount) => sum + amount, 0), 2906);
   assert.equal(taxMinor, 264);
+  assert.equal(calculateTaxLines({
+    lineItems: taxableMinor.map((amount) => ({ total: (amount / 100).toFixed(2) })),
+    rate: 9.1,
+  })[0].tax_total, '2.64');
   assert.equal(orderTotalWithTax({ netBeforeTax: 29.06, tax: 2.64 }), 31.7);
   assert.deepEqual(allocateRoundedTax([taxUnitsForMinor(1699, 9.1)]), [155]);
   const tenPercent = allocateRoundedTax([
@@ -258,6 +265,68 @@ test('discounted lines at 9.10 percent round tax once to 2.64', () => {
     taxUnitsForMinor(1000, 10),
   ]);
   assert.equal(tenPercent.reduce((sum, amount) => sum + amount, 0), 200);
+});
+
+test('coupon fee is display-only after coupon has reduced line totals', () => {
+  assert.equal(effectiveFeeTotal([{ name: 'coupon_discount', total: '-5.00' }]), 0);
+  assert.equal(effectiveFeeTotal([
+    { name: 'merchant_discount', total: '-3.70' },
+    { name: 'coupon_discount', total: '-5.00' },
+  ]), -3.7);
+  assert.equal(listOrderTotal({
+    total: 49.04,
+    tax: 4.09,
+    couponDiscount: 5,
+    lineItems: [{ name: 'Item', subtotal: '49.95', total: '44.95' }],
+    feeLines: [{ name: 'coupon_discount', total: '-5.00' }],
+  }), 49.04);
+});
+
+test('coupon_lines is authoritative even when merchant and coupon fees match', () => {
+  assert.equal(authoritativeCouponDiscount(
+    [{ code: '2025', discount: '5.00' }],
+    [
+      { name: 'merchant_discount', total: '-13.19' },
+      { name: 'coupon_discount', total: '-13.19' },
+    ],
+  ), 5);
+  assert.equal(authoritativeCouponDiscount(
+    [{ code: '2025', discount: '5.00' }],
+    [
+      { name: 'merchant_discount', total: '-3.70' },
+      { name: 'coupon_discount', total: '-13.70' },
+    ],
+  ), 5);
+  assert.equal(authoritativeCouponDiscount(
+    [{ code: '2025' }],
+    [{ name: 'coupon_discount', total: '-3.00' }],
+  ), 3);
+});
+
+test('coupon tax uses the supplied rate instead of scaling stale stored tax', () => {
+  const lines = [{
+    name: 'Item', subtotal: '49.95', total: '49.95', total_tax: '4.55', subtotal_tax: '4.55',
+    taxes: [{ id: 9.1, total: '4.55', subtotal: '4.55' }],
+  }];
+  const order = { total_tax: '4.55', cart_tax: '4.55', tax_lines: [{ tax_total: '4.55' }] };
+  applyCouponDiscountToStoredLinesAndTax(lines, [{ code: '2025', discount: '5.00' }], order);
+  assert.equal(lines[0].total, '44.95');
+  assert.equal(lines[0].total_tax, '4.09');
+  assert.equal(order.total_tax, '4.09');
+});
+
+test('coupon and merchant discount calculate tax on the final taxable base', () => {
+  const lines = [{
+    name: 'Items', subtotal: '37.04', total: '37.04', total_tax: '3.03', subtotal_tax: '3.03',
+    taxes: [{ id: 9.1, total: '3.03', subtotal: '3.03' }],
+  }];
+  const order = { total_tax: '3.03', cart_tax: '3.03', tax_lines: [{ tax_total: '3.03' }] };
+  applyCouponDiscountToStoredLinesAndTax(lines, [{ code: '2025', discount: '5.00' }], order);
+  applyMerchantDiscountToStoredTax(lines, [{ name: 'merchant_discount', total: '-3.70' }], order);
+  assert.equal(lines[0].total, '32.04');
+  assert.equal(lines[0].total_tax, '2.58');
+  assert.equal(order.total_tax, '2.58');
+  assert.equal(orderTotalWithTax({ netBeforeTax: 32.04 - 3.70, tax: 2.58 }), 30.92);
 });
 
 test('the smallest eligible coupon is selected for the remaining balance', () => {

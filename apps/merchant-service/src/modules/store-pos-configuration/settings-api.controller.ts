@@ -78,6 +78,12 @@ export class SettingsApiController {
     return this.settings.getDevice(this.scope(request, merchantId, storeId));
   }
 
+  @Get('configuration-flags')
+  configurationFlags(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.configurationFlags(this.scope(request, merchantId, storeId));
+  }
+
   @Get('cash-settings')
   cash(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string) {

@@ -28,13 +28,41 @@ export class SettingsApiRepository {
     return rows[0]?.configuration_value ?? {};
   }
 
-  async merge(scope: SettingsScope, patch: SettingsJson): Promise<SettingsJson> {
+  async readConfigurationFlags(scope: SettingsScope): Promise<SettingsJson> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT DISTINCT ON (configuration_name) configuration_name, configuration_value
+       FROM public.store_pos_configurations
+       WHERE store_id = $1::uuid AND configuration_name = ANY($2::text[])
+       ORDER BY configuration_name, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC`,
+      [storeId, ['safe_and_safe_drop', 'currency_taxes', 'cashback_settings']],
+    );
+    return Object.fromEntries(rows.map((row: any) => [row.configuration_name, row.configuration_value ?? {}]));
+  }
+
+  async merge(scope: SettingsScope, patch: SettingsJson, configurations: Record<string, SettingsJson> = {}): Promise<SettingsJson> {
     const { db, storeId, actorId } = await this.resolveScope(scope);
     return db.transaction(async (manager) => {
       await manager.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         [`${storeId}:${this.configurationName}`],
       );
+      for (const [name, value] of Object.entries(configurations)) {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${storeId}:${name}`]);
+        const parameters = [storeId, name, JSON.stringify(value), actorId];
+        const result = await manager.query(
+          `UPDATE public.store_pos_configurations
+           SET configuration_value = COALESCE(configuration_value, '{}'::jsonb) || $3::jsonb,
+               updated_by = $4::uuid, updated_at = now()
+           WHERE store_id = $1::uuid AND configuration_name = $2 RETURNING id`, parameters,
+        );
+        const rows = Array.isArray(result[0]) ? result[0] : result;
+        if (!rows[0]) await manager.query(
+          `INSERT INTO public.store_pos_configurations
+             (store_id, configuration_name, configuration_value, created_by, updated_by)
+           VALUES ($1::uuid, $2, $3::jsonb, $4::uuid, $4::uuid)`, parameters,
+        );
+      }
       const params = [storeId, this.configurationName, JSON.stringify(patch), actorId];
       const updateResult = await manager.query(
         `UPDATE public.store_pos_configurations

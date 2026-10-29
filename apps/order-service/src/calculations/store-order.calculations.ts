@@ -164,6 +164,66 @@ export function sumCouponDiscounts(couponLines: PosCouponLine[] = [], places = 2
 }
 
 /**
+ * Legacy POS payloads can carry a coupon both as coupon_lines and as a fee.
+ * coupon_lines is authoritative whenever it supplies an amount. The fee is a
+ * fallback only for legacy coupon lines that omit their discount value.
+ */
+export function authoritativeCouponDiscount(
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+  _lineItems: PosLineItem[] = [],
+): number {
+  const couponLineMinor = toMinor(sumCouponDiscounts(couponLines, places), places);
+  const couponFeeMinor = feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum + Math.abs(toMinor(fee?.total ?? 0, places)) : sum
+  ), 0);
+  const chosen = couponLineMinor > 0 ? couponLineMinor : couponFeeMinor;
+  return fromMinor(chosen, places);
+}
+
+export function isMerchantDiscountRepresented(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): boolean {
+  const merchantMinor = merchantDiscountMinor(feeLines, places);
+  if (!merchantMinor) return false;
+  const representedMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+    sum + Math.max(
+      0,
+      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+    )
+  ), 0);
+  return representedMinor >= merchantMinor;
+}
+
+export function feeLinesForCalculation(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): PosFeeLine[] {
+  return isMerchantDiscountRepresented(lineItems, feeLines, places)
+    ? feeLines.filter((fee) => !isMerchantDiscountFee(fee))
+    : feeLines;
+}
+
+export function representedCouponDiscount(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const lineReductionMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+    sum + Math.max(
+      0,
+      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+    )
+  ), 0);
+  const representedMerchantMinor = Math.min(lineReductionMinor, merchantDiscountMinor(feeLines, places));
+  return fromMinor(Math.max(0, lineReductionMinor - representedMerchantMinor), places);
+}
+
+/**
  * Spreads a fixed amount across merchandise lines by subtotal.
  * The last merchandise line takes the remainder. Cashback and Payout lines are unchanged.
  */
@@ -232,6 +292,11 @@ export function isMerchantDiscountFee(fee: { name?: string; fee_name?: string } 
   return name === 'merchant_discount' || name.startsWith('merchant_discount_');
 }
 
+export function isCouponDiscountFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
+  const name = feeKey(fee);
+  return name === 'coupon_discount' || name.startsWith('coupon_discount_');
+}
+
 /** A payout is a cash disbursement, not a supply, so it is outside the tax base. */
 export function isPayoutFee(fee: { name?: string; fee_name?: string } | null | undefined): boolean {
   const name = feeKey(fee);
@@ -263,6 +328,37 @@ export function merchantDiscountMinor(
     if (!isMerchantDiscountFee(fee)) return sum;
     return sum + Math.abs(toMinor(fee?.total ?? 0, places));
   }, 0);
+}
+
+/** Coupon fees mirror coupon_lines for Woo compatibility; line totals already carry the reduction. */
+export function effectiveFeeTotal(
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  return fromMinor(feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum : sum + toMinor(fee?.total ?? 0, places)
+  ), 0), places);
+}
+
+function exactTaxForAmounts(
+  lines: Array<PosLineItem & { taxes?: unknown }>,
+  amounts: number[],
+): number[] | null {
+  const rates = lines.map((line) => {
+    const taxes = Array.isArray(line.taxes) ? line.taxes : [];
+    const rate = Number((taxes[0] as { rate_percent?: unknown; id?: unknown } | undefined)?.rate_percent
+      ?? (taxes[0] as { id?: unknown } | undefined)?.id);
+    return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
+  });
+  if (rates.some((rate) => !rate)) return null;
+  const result = new Array(lines.length).fill(0);
+  const groups = new Map<number, number[]>();
+  rates.forEach((rate, index) => groups.set(rate, [...(groups.get(rate) || []), index]));
+  groups.forEach((indexes, rate) => {
+    const allocated = allocateRoundedTax(indexes.map((index) => taxUnitsForMinor(amounts[index], rate)));
+    indexes.forEach((index, position) => { result[index] = allocated[position]; });
+  });
+  return result;
 }
 
 function amountsAfterDiscount(amounts: number[], discountMinor: number): number[] {
@@ -355,14 +451,13 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
       && String(fee?.tax_status || 'taxable').toLowerCase() !== 'none')
     .map((fee) => toMinor(fee?.total ?? 0, places));
 
-  const mode = input.calculation || 'item-price';
-  const taxMinor = mode === 'item-price'
-    ? [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + taxOn(amount, rate, pricesIncludeTax), 0)
-    : taxOn(
-      Math.max(0, [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + amount, 0)),
-      rate,
-      pricesIncludeTax,
-    );
+  // POS and Flutter both calculate on the final combined taxable balance and
+  // round once. Never sum independently rounded item taxes.
+  const taxMinor = taxOn(
+    Math.max(0, [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + amount, 0)),
+    rate,
+    pricesIncludeTax,
+  );
 
   if (!taxMinor) return [];
   return [{
@@ -400,19 +495,22 @@ export function applyMerchantDiscountToStoredTax(
   const amounts = taxable.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
   const base = amounts.reduce((sum, amount) => sum + amount, 0);
   const discount = Math.min(merchantDiscountMinor(feeLines, places), base);
-  if (!discount || !base) return;
+  if (!base) return;
 
   const reduced = amountsAfterDiscount(amounts, discount);
   let oldLineTax = 0;
+  const exactTax = exactTaxForAmounts(taxable, reduced);
+  if (!discount && !exactTax) return;
   const nextTax = taxable.map((line, index) => {
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    const nextMinor = amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0;
+    const nextMinor = exactTax?.[index]
+      ?? (amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0);
     oldLineTax += oldMinor;
     return nextMinor;
   });
   taxable.forEach((line, index) => {
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    if (!oldMinor) return;
+    if (!oldMinor && !exactTax) return;
     const next = fromMinor(nextTax[index], places).toFixed(places);
     const subtotalMatched = toMinor(line.subtotal_tax ?? 0, places) === oldMinor;
     line.total_tax = next;
@@ -429,7 +527,9 @@ export function applyMerchantDiscountToStoredTax(
 
   const previousOrderTax = Math.max(0, toMinor(orderTax.total_tax ?? 0, places));
   const basisOld = oldLineTax > 0 ? oldLineTax : previousOrderTax;
-  const basisNew = oldLineTax > 0
+  const basisNew = exactTax
+    ? nextTax.reduce((sum, amount) => sum + amount, 0)
+    : oldLineTax > 0
     ? nextTax.reduce((sum, amount) => sum + amount, 0)
     : Math.round((previousOrderTax * (base - discount)) / base);
   if (basisOld <= 0 || basisNew === basisOld) return;
@@ -451,21 +551,24 @@ export function applyCouponDiscountToStoredLinesAndTax(
   couponLines: PosCouponLine[] | undefined,
   orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
   places = 2,
+  representedCouponAmount?: number,
 ): void {
   const merchandise = lines.filter(isMerchandiseLine);
   const couponMinor = (couponLines || []).reduce((sum, coupon) => {
     if (/^pos-discount(?:-\d+)?$/i.test(String(coupon?.code || '').trim())) return sum;
     return sum + Math.max(0, toMinor(coupon?.discount ?? 0, places));
   }, 0);
-  const representedMinor = Math.max(
-    0,
-    merchandise.reduce((sum, line) => (
-      sum + Math.max(
-        0,
-        toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
-      )
-    ), 0),
-  );
+  const representedMinor = representedCouponAmount === undefined
+    ? Math.max(
+      0,
+      merchandise.reduce((sum, line) => (
+        sum + Math.max(
+          0,
+          toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
+        )
+      ), 0),
+    )
+    : Math.max(0, toMinor(representedCouponAmount, places));
   const currentAmounts = merchandise.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
   const base = currentAmounts.reduce((sum, amount) => sum + amount, 0);
   const discount = Math.min(Math.max(0, couponMinor - representedMinor), base);
@@ -474,6 +577,14 @@ export function applyCouponDiscountToStoredLinesAndTax(
   const reducedAmounts = amountsAfterDiscount(currentAmounts, discount);
   let previousTax = 0;
   let nextTaxTotal = 0;
+  const taxableIndexes = merchandise
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => isTaxableSaleLine(line));
+  const exactTax = exactTaxForAmounts(
+    taxableIndexes.map(({ line }) => line),
+    taxableIndexes.map(({ index }) => reducedAmounts[index]),
+  );
+  const exactByIndex = new Map(taxableIndexes.map(({ index }, position) => [index, exactTax?.[position]]));
   merchandise.forEach((line, index) => {
     const previousAmount = currentAmounts[index];
     const nextAmount = reducedAmounts[index];
@@ -481,7 +592,8 @@ export function applyCouponDiscountToStoredLinesAndTax(
     if (!isTaxableSaleLine(line)) return;
 
     const oldTax = Math.max(0, toMinor(line.total_tax ?? 0, places));
-    const nextTax = previousAmount > 0 ? Math.round((oldTax * nextAmount) / previousAmount) : 0;
+    const nextTax = exactByIndex.get(index)
+      ?? (previousAmount > 0 ? Math.round((oldTax * nextAmount) / previousAmount) : 0);
     previousTax += oldTax;
     nextTaxTotal += nextTax;
     line.total_tax = fromMinor(nextTax, places).toFixed(places);
@@ -523,7 +635,7 @@ export function calculateOrderTotal(input: {
   const places = input.decimalPlaces ?? 2;
   const subtotal = sumLineSubtotals(input.lineItems, places);
   const lineTotal = sumLineTotals(input.lineItems, places);
-  const feeTotal = calculateFeeTotal(input.feeLines, places);
+  const feeTotal = effectiveFeeTotal(input.feeLines, places);
   const taxMinor = (input.taxLines || []).reduce(
     (sum, tax) => sum + toMinor(tax?.tax_total ?? 0, places) + toMinor(tax?.shipping_tax_total ?? 0, places),
     0,
@@ -637,7 +749,7 @@ export function listOrderTotal(input: {
   const lineSubtotalMinor = toMinor(sumLineSubtotals(sourceLines, places), places);
   const sourceFees = (input.feeLines || []) as PosFeeLine[];
   const hasCashMovementFee = sourceFees.some((fee) => isPayoutFee(fee) || isCashbackFee(fee));
-  const feeMinorTotal = toMinor(calculateFeeTotal(sourceFees, places), places);
+  const feeMinorTotal = toMinor(effectiveFeeTotal(sourceFees, places), places);
   const shippingMinor = toMinor(input.shippingTotal ?? 0, places);
   const tipMinor = toMinor(input.tip ?? 0, places);
   const taxMinor = Math.max(0, toMinor(listOrderTax({
@@ -701,4 +813,54 @@ export function calculateStoreOrder(input: StoreOrderCalculationInput = {}) {
       decimalPlaces: places,
     }),
   };
+}
+
+/** WooCommerce admin-app summary over store-scoped, date-filtered source rows. */
+export function adminOrderCounts(input: { businessName: string; orders: Record<string, any>[]; payments: Record<string, any>[]; refunds: Record<string, any>[]; categories: Record<string, any>[]; products: Record<string, any>[] }) {
+  const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  const status = (value: unknown) => String(value || '').toLowerCase().replace(/^wc-/, '');
+  const products = new Map(input.products.map(product => [String(product.id), product]));
+  const categorySales = new Map<string, number>();
+  let totalAmount = 0, cancelled = 0, payouts = 0, voidItems = 0;
+  for (const order of input.orders) {
+    totalAmount += Number(order.total || 0);
+    const cancelledOrder = ['cancelled', 'canceled'].includes(status(order.status));
+    if (cancelledOrder) cancelled++;
+    for (const line of Array.isArray(order.line_items) ? order.line_items : []) {
+      const meta = Array.isArray(line.meta_data) ? line.meta_data : [];
+      const voidFlag = meta.find((item: any) => item.key === 'void')?.value;
+      const isVoid = line.void === true || line.is_void === true || line.voided === true || String(line.status || '').toLowerCase() === 'void' || [true, 1, '1', 'true'].includes(voidFlag);
+      if (isVoid) { voidItems++; continue; }
+      const amount = Number(line.total ?? line.total_price ?? 0) || 0;
+      if (String(line.type || '').toLowerCase() === 'payout' || /^payout(?:$|[_\s-])/i.test(String(line.name || ''))) payouts += amount;
+      if (cancelledOrder) continue;
+      const product = products.get(String(line.product_id ?? line.productId ?? ''));
+      const categories = product?.categories ?? line.categories ?? (line.category_id != null ? [{ id: line.category_id }] : []);
+      for (const id of new Set((Array.isArray(categories) ? categories : []).map((category: any) => String(category.id ?? category)))) {
+        categorySales.set(String(id), (categorySales.get(String(id)) || 0) + amount);
+      }
+    }
+  }
+  let cash = 0, card = 0, ebt = 0;
+  for (const payment of input.payments) {
+    if (payment.is_void || String(payment.entry_type || 'payment').toLowerCase() !== 'payment' || payment.payment_type === 'vendor_payment') continue;
+    const tracking = payment.metadata?.daily_refund_tracking;
+    if ([true, 1, 'true', '1'].includes(tracking)) continue;
+    const method = String(payment.payment_method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+    const amount = Number(payment.amount || 0);
+    if (['cash', 'pos-cash'].includes(method)) cash += amount;
+    else if (['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'].includes(method)) card += amount;
+    else if (['ebt', 'pos-ebt', 'ebt-card'].includes(method)) ebt += amount;
+  }
+  const categories = input.categories.map(category => {
+    const totalSales = money(categorySales.get(String(category.id)) || 0);
+    return { id: category.id, name: category.name, slug: category.slug, total_sales: totalSales, sales_percentage: totalAmount > 0 ? money(totalSales / totalAmount * 100) : 0 };
+  });
+  return { success: true, message: 'Order counts fetched successfully.', data: {
+    business_name: input.businessName, total_orders: input.orders.length, total_orders_amount: money(totalAmount), cancelled_orders: cancelled,
+    refunded_orders_amount: money(input.refunds.reduce((sum, row) => sum + Math.abs(Number(row.amount || 0)), 0)),
+    payouts: money(payouts), void_items: voidItems, cash: money(cash), card: money(card), ebt: money(ebt), categories,
+    category_subtotal: money(categories.reduce((sum, category) => sum + category.total_sales, 0)),
+    category_percentage_total: money(categories.reduce((sum, category) => sum + category.sales_percentage, 0)),
+  } };
 }
