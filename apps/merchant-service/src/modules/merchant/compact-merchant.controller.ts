@@ -1000,7 +1000,6 @@ export class CompactMerchantController {
         );
         if (!existing) throw new NotFoundException('Merchant not found');
 
-        await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS password varchar(255) NULL');
         const merchantColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`,
         );
@@ -1111,13 +1110,35 @@ export class CompactMerchantController {
         if (input.planId !== undefined) {
           const currentPlanId =
             existing.planId ||
-            (await this.repository.merchantActivePlanId(
-              String(existing.merchantId || existing.id || id),
-            ));
-          await this.repository.assertSameStoreTypePlan(
-            currentPlanId,
-            String(input.planId),
-          );
+            (await manager.query(
+              `SELECT COALESCE(
+                 NULLIF(to_jsonb(s)->>'plan_id', ''),
+                 NULLIF(to_jsonb(s)->>'planId', ''),
+                 NULLIF(to_jsonb(m)->>'planId', ''),
+                 NULLIF(to_jsonb(m)->>'plan_id', '')
+               ) AS "planId"
+               FROM public.merchants m
+               LEFT JOIN LATERAL (
+                 SELECT sub.*
+                 FROM public.subscriptions sub
+                 WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
+                       IN (
+                         COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text),
+                         m.id::text
+                       )
+                   AND upper(btrim(COALESCE(to_jsonb(sub)->>'status', 'ACTIVE'))) = 'ACTIVE'
+                 ORDER BY COALESCE(
+                   (to_jsonb(sub)->>'created_at')::timestamptz,
+                   (to_jsonb(sub)->>'createdAt')::timestamptz,
+                   now()
+                 ) DESC
+                 LIMIT 1
+               ) s ON true
+               WHERE m.id::text = $1
+               LIMIT 1`,
+              [String(existing.id)],
+            ))[0]?.planId;
+          await assertSameStoreTypePlan(manager, currentPlanId, String(input.planId));
         }
         setCol('planId', input.planId ?? existing.planId);
         if (requestedStoreTypeId) setCol('storeTypeId', requestedStoreTypeId);
@@ -1643,4 +1664,22 @@ async function storeTypeNameForPlan(
     [ref],
   );
   return storeType?.name || (/^[0-9a-f-]{36}$/i.test(ref) ? null : ref);
+}
+
+async function assertSameStoreTypePlan(
+  manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> },
+  currentPlanId: unknown,
+  nextPlanId: string,
+): Promise<void> {
+  const currentId = String(currentPlanId || '').trim();
+  if (!currentId || currentId === nextPlanId) return;
+
+  const currentType = await storeTypeNameForPlan(manager, currentId);
+  const nextType = await storeTypeNameForPlan(manager, nextPlanId);
+  const current = String(currentType || '').trim().toUpperCase();
+  const next = String(nextType || '').trim().toUpperCase();
+  if (!current || !next || current === 'BOTH' || next === 'BOTH' || current === next) return;
+  throw new BadRequestException(
+    `Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`,
+  );
 }
