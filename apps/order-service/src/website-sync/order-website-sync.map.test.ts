@@ -12,6 +12,7 @@ test('website order payload keeps the POS line, payment, and identity', () => {
       payment_method: 'cash',
       payment_method_title: 'POS-CASH',
       set_paid: true,
+      billing: { first_name: '', email: '', phone: '' },
       line_items: [{ product_id: 2587, name: 'Cheetos', quantity: 2, subtotal: '9.98', total: '9.98' }],
       fee_lines: [{ name: 'merchant_discount', total: '-1.00', tax_status: 'none' }],
       coupon_lines: [{ code: 'SAVE1' }],
@@ -22,6 +23,7 @@ test('website order payload keeps the POS line, payment, and identity', () => {
   assert.deepEqual(payload.billing, { first_name: 'Walk-in Customer' });
   assert.equal(payload.status, 'completed');
   assert.equal(payload.payment_method, 'cash');
+  assert.equal(payload.set_paid, true);
   assert.equal(payload.transaction_id, '262995440');
   assert.deepEqual(payload.line_items, [{
     product_id: 2587,

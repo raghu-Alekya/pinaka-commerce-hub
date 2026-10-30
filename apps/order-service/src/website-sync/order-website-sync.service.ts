@@ -189,7 +189,7 @@ export class OrderWebsiteSyncService {
     connection: { url: string; token: string },
     payload: Record<string, unknown>,
   ): Promise<number | undefined> {
-    const created = await this.woo(connection, 'orders', 'POST', payload);
+    const created = await this.woo(connection, 'orders/', 'POST', payload, 'pinaka-pos/v1');
     const id = Number(record(created).id);
     return Number.isSafeInteger(id) && id > 0 ? id : undefined;
   }
@@ -199,11 +199,12 @@ export class OrderWebsiteSyncService {
     path: string,
     method: 'GET' | 'POST',
     body?: Record<string, unknown>,
+    api: 'wc/v3' | 'pinaka-pos/v1' = 'wc/v3',
   ): Promise<unknown> {
-    const endpoint = path.split('?')[0];
+    const endpoint = `${api}/${path.split('?')[0]}`;
     const host = websiteHost(connection.url);
     syncLog('request', { method, endpoint, host });
-    const response = await fetch(`${connection.url}/wp-json/wc/v3/${path}`, {
+    const response = await fetch(`${connection.url}/wp-json/${api}/${path}`, {
       method,
       headers: {
         Accept: 'application/json',
