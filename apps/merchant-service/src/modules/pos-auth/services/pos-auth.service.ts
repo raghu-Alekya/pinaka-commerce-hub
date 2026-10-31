@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { jwtSecret, SessionEntity } from '@pinaka-delivery-hub/auth';
 import {
@@ -78,11 +78,17 @@ export class PosAuthService {
   }
 
   private async passwordMatches(stored: unknown, password: string): Promise<boolean> {
-    const [savedSalt, savedDigest] = String(stored || '').split(':');
-    const salt = savedSalt ? Buffer.from(savedSalt, 'base64url') : randomBytes(16);
-    const expected = savedDigest ? Buffer.from(savedDigest, 'base64url') : Buffer.alloc(64);
-    const actual = await promisify(scrypt)(password, salt, 64) as Buffer;
-    return Boolean(savedSalt && savedDigest && expected.length === actual.length && timingSafeEqual(expected, actual));
+    const saved = String(stored || '');
+    const [savedSalt, savedDigest] = saved.split(':');
+    if (savedSalt && savedDigest) {
+      const salt = Buffer.from(savedSalt, 'base64url');
+      const expected = Buffer.from(savedDigest, 'base64url');
+      const actual = await promisify(scrypt)(password, salt, 64) as Buffer;
+      return expected.length === actual.length && timingSafeEqual(expected, actual);
+    }
+    const expected = Buffer.from(saved);
+    const actual = Buffer.from(password);
+    return expected.length > 0 && expected.length === actual.length && timingSafeEqual(expected, actual);
   }
 
   /**
@@ -90,13 +96,7 @@ export class PosAuthService {
    * Public auth route - No Bearer token required in request
    */
   async merchantStoreLogin(dto: MerchantStoreLoginDto) {
-    const rawMerchant = (
-      dto?.merchantIdentifier ||
-      dto?.merchantId ||
-      dto?.merchantCode ||
-      dto?.email ||
-      ''
-    ).trim();
+    const rawMerchant = String(dto?.merchantIdentifier || dto?.email || '').trim();
     const rawStore = String(dto?.storeId || '').trim();
     const password = typeof dto?.password === 'string' ? dto.password : '';
 
@@ -120,7 +120,7 @@ export class PosAuthService {
               to_jsonb(m)->>'password' AS password
        FROM public.merchants m
        WHERE COALESCE(is_deleted, false) = false
-         AND (lower(email) = lower($1) OR merchant_code = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
+         AND lower(email) = lower($1)
        LIMIT 1`,
       [rawMerchant],
     );
@@ -135,13 +135,20 @@ export class PosAuthService {
     }
 
     const stores: any[] = await dataSource.query(
-      `SELECT id, "store_code" AS "storeCode", 
-              "store_name" AS "storeName", 
-              "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
+      `SELECT id,
+              COALESCE(to_jsonb(s)->>'store_id', id::text) AS "storeId",
+              "store_code" AS "storeCode",
+              "store_name" AS "storeName",
+              "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1",
               city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
-       FROM public.stores 
-       WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1))
-         AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(store_name) = lower($2))
+       FROM public.stores s
+       WHERE s.merchant_id::text = $1
+         AND (
+           s.id::text = $2
+           OR s.store_code = $2
+           OR COALESCE(to_jsonb(s)->>'store_id', '') = $2
+           OR COALESCE(to_jsonb(s)->>'storeId', '') = $2
+         )
        LIMIT 1`,
       [String(merchant.id), rawStore],
     );

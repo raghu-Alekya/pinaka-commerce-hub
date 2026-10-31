@@ -87,5 +87,10 @@ test('merchant store login requires merchant, password, and the requested store'
   assert.equal(result.success, true);
   assert.equal(result.data.store.storeCode, 'STR-00001');
   assert.equal('password' in result.data.merchant, false);
+  assert.match(queries.find((sql) => sql.includes('FROM public.merchants')) || '', /lower\(email\) = lower\(\$1\)/);
+  const storeSql = queries.find((sql) => sql.includes('FROM public.stores')) || '';
+  assert.match(storeSql, /s\.merchant_id::text = \$1/);
+  assert.match(storeSql, /s\.id::text = \$2/);
+  assert.equal(storeSql.includes('lower(store_name)'), false);
   assert.equal(queries.filter((sql) => sql.includes('ORDER BY created_at')).length, 0);
 });
