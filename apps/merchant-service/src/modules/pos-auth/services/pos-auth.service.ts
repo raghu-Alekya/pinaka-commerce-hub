@@ -80,17 +80,37 @@ export class PosAuthService {
   }
 
   private async passwordMatches(stored: unknown, password: string): Promise<boolean> {
-    const saved = String(stored || '');
-    const [savedSalt, savedDigest] = saved.split(':');
-    if (savedSalt && savedDigest) {
-      const salt = Buffer.from(savedSalt, 'base64url');
-      const expected = Buffer.from(savedDigest, 'base64url');
-      const actual = await promisify(scrypt)(password, salt, 64) as Buffer;
-      return expected.length === actual.length && timingSafeEqual(expected, actual);
+    const saved = String(stored || '').trim();
+    if (!saved) return false;
+    const separator = saved.indexOf(':');
+    if (separator > 0 && separator < saved.length - 1) {
+      const saltPart = saved.slice(0, separator);
+      const digestPart = saved.slice(separator + 1);
+      if (/^[0-9a-f]+$/i.test(saltPart) && /^[0-9a-f]+$/i.test(digestPart) && digestPart.length % 2 === 0) {
+        const digest = Buffer.from(digestPart, 'hex');
+        if (await this.scryptMatches(password, Buffer.from(saltPart, 'hex'), digest)) return true;
+        if (await this.scryptMatches(password, Buffer.from(saltPart), digest)) return true;
+      }
+      for (const encoding of ['base64url', 'base64'] as const) {
+        const expected = Buffer.from(digestPart, encoding);
+        const decodedSalt = Buffer.from(saltPart, encoding);
+        if (expected.length > 0 && decodedSalt.length > 0 && await this.scryptMatches(password, decodedSalt, expected)) return true;
+        if (expected.length > 0 && await this.scryptMatches(password, Buffer.from(saltPart), expected)) return true;
+      }
+      return false;
     }
     const expected = Buffer.from(saved);
     const actual = Buffer.from(password);
-    return expected.length > 0 && expected.length === actual.length && timingSafeEqual(expected, actual);
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
+  private async scryptMatches(password: string, salt: Buffer, expected: Buffer): Promise<boolean> {
+    try {
+      const actual = await promisify(scrypt)(password, salt, expected.length) as Buffer;
+      return expected.length === actual.length && timingSafeEqual(expected, actual);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -119,16 +139,33 @@ export class PosAuthService {
               merchant_code AS "merchantId", 
               "business_display_name" AS "businessDisplayName", 
               "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status,
-              to_jsonb(m)->>'password' AS password
+              COALESCE(
+                NULLIF(to_jsonb(m)->>'password', ''),
+                NULLIF(to_jsonb(m)->>'password_hash', ''),
+                NULLIF(to_jsonb(m)->>'passwordHash', '')
+              ) AS password,
+              (SELECT u.password_hash
+                 FROM public.users u
+                WHERE lower(u.email) = lower($1)
+                ORDER BY CASE WHEN u.status = 'ACTIVE' THEN 0 ELSE 1 END
+                LIMIT 1) AS "userPassword"
        FROM public.merchants m
        WHERE COALESCE(is_deleted, false) = false
-         AND lower(email) = lower($1)
+         AND (
+           lower(trim(email::text)) = lower($1)
+           OR lower(trim(COALESCE(to_jsonb(m)->>'merchantEmail', ''))) = lower($1)
+           OR lower(trim(COALESCE(to_jsonb(m)->>'merchant_email', ''))) = lower($1)
+         )
        LIMIT 1`,
       [rawMerchant],
     );
 
     const merchant = merchants[0];
-    if (!merchant || !(await this.passwordMatches(merchant.password, password))) {
+    const merchantPasswordMatches = merchant ? await this.passwordMatches(merchant.password, password) : false;
+    const userPasswordMatches = merchant && !String(merchant.password || '').trim()
+      ? await this.passwordMatches(merchant.userPassword, password)
+      : false;
+    if (!merchant || (!merchantPasswordMatches && !userPasswordMatches)) {
       throw new UnauthorizedException('Invalid merchant credentials');
     }
 
