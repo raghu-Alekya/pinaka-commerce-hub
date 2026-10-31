@@ -232,12 +232,6 @@ export class DeviceActivationController {
              WHERE id = $3`,
             [targetDeviceId, targetSerialNumber, found.id],
           );
-          try {
-            await manager.query(
-              `UPDATE public.devices SET "serialNumber" = $1 WHERE id = $2`,
-              [targetSerialNumber, found.id],
-            );
-          } catch {}
           found.deviceId = targetDeviceId;
           found.serialNumber = targetSerialNumber;
           found.status = 'ACTIVE';
