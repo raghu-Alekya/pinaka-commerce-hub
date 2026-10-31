@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -7,8 +7,10 @@ import { PosShiftEntity, ShiftStatus } from './entities/pos-shift.entity';
 import { PosShiftMetaEntity } from './entities/pos-shift-meta.entity';
 import { PosShiftTransactionEntity } from './entities/pos-shift-transaction.entity';
 import { CashMovementEntity, MovementType } from './entities/cash-movement.entity';
-import { ensureShiftSplitSchema, syncLegacyShiftColumns } from './shift.schema';
+import { ensureShiftSplitSchema } from './shift.schema';
 import { ShiftTransactionInput, ShiftView, ShiftWrite, expectedCashInDrawer, roundMoney, toShiftView } from './shift.types';
+import { ReportOrder, ReportPayment, shiftCashPayoutOutsideTender } from './shift-report.calculations';
+import { shiftDebug, shiftErrorDetails } from './shift-debug.log';
 
 async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<void> {
   try {
@@ -18,41 +20,18 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
         id VARCHAR(100) PRIMARY KEY,
         merchant_id VARCHAR(100) NOT NULL,
         store_id VARCHAR(100) NOT NULL,
-        register_id UUID,
         device_id VARCHAR(100) NOT NULL,
-        opening_device_id UUID,
-        opened_by_employee_id UUID,
-        closed_by_employee_id UUID,
-        closed_by_device_id VARCHAR(100),
-        shift_number VARCHAR(100),
-        cashier_name VARCHAR(150) NOT NULL,
-        opening_cash DECIMAL(10,2) DEFAULT 200.00,
-        total_cash_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_card_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_safe_drops DECIMAL(10,2) DEFAULT 0.00,
-        total_paid_outs DECIMAL(10,2) DEFAULT 0.00,
-        total_orders INTEGER DEFAULT 0,
-        total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00,
-        total_cashback DECIMAL(10,2) DEFAULT 0.00,
-        total_payouts DECIMAL(10,2) DEFAULT 0.00,
-        total_ebt_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_pay_later DECIMAL(10,2) DEFAULT 0.00,
-        total_refunds DECIMAL(10,2) DEFAULT 0.00,
-        total_cancelled_orders INTEGER DEFAULT 0,
-        total_void_items INTEGER DEFAULT 0,
-        drawer_denominations JSONB,
-        drawer_total_amount DECIMAL(12,2),
-        tube_denominations JSONB,
-        tube_total_amount DECIMAL(12,2),
-        total_amount DECIMAL(12,2),
-        closing_cash_actual DECIMAL(10,2),
-        expected_cash_in_drawer DECIMAL(10,2),
-        declared_cash DECIMAL(10,2),
-        cash_difference DECIMAL(10,2),
-        discrepancy DECIMAL(10,2),
-        opening_note TEXT,
-        closing_note TEXT,
+        opening_device_id VARCHAR(100),
+        closing_device_id VARCHAR(100),
+        created_by VARCHAR(100),
+        updated_by VARCHAR(100),
+        closed_by VARCHAR(100),
         status VARCHAR(50) DEFAULT 'OPEN',
+        opening_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+        closing_balance DECIMAL(12,2),
+        over_short DECIMAL(12,2),
+        declared_cash DECIMAL(12,2),
+        discrepancy DECIMAL(12,2),
         opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         closed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -60,91 +39,79 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
       );
     `);
 
-    // 2. Add any missing snake_case columns to existing pos_shifts table
+    // 2. Add the master columns. Legacy totals, notes, and denominations are not added back.
     await dataSource.query(`
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS register_id UUID;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS shift_number VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cashier_name VARCHAR(150);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_cash DECIMAL(10,2) DEFAULT 200.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cash_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_card_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_safe_drops DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_paid_outs DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cashback DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_payouts DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_ebt_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_pay_later DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_refunds DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cancelled_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_void_items INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_cash_actual DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS expected_cash_in_drawer DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cash_difference DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_note TEXT;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_note TEXT;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'OPEN';
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_balance DECIMAL(12,2) DEFAULT 0;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_balance DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS over_short DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(12,2);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
     `);
 
-    // 3. Migrate legacy camelCase column values to snake_case column values and drop legacy columns
+    await dataSource.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'pos_shifts'
+            AND column_name = 'opening_device_id' AND udt_name = 'uuid'
+        ) THEN
+          ALTER TABLE public.pos_shifts
+            ALTER COLUMN opening_device_id TYPE VARCHAR(100) USING opening_device_id::text;
+        END IF;
+      END $$;
+    `);
+
+    // 3. Migrate legacy camelCase column values onto the master columns and drop those camelCase columns
     await dataSource.query(`
       DO $$
       DECLARE
         col RECORD;
       BEGIN
         FOR col IN
-          SELECT legacy_col, snake_col FROM (VALUES
-            ('merchantId', 'merchant_id'),
-            ('storeId', 'store_id'),
-            ('registerId', 'register_id'),
-            ('terminalId', 'device_id'),
-            ('terminal_id', 'device_id'),
-            ('openingDeviceId', 'opening_device_id'),
-            ('openedByEmployeeId', 'opened_by_employee_id'),
-            ('closedByEmployeeId', 'closed_by_employee_id'),
-            ('shiftNumber', 'shift_number'),
-            ('cashierName', 'cashier_name'),
-            ('openingCash', 'opening_cash'),
-            ('totalCashSales', 'total_cash_sales'),
-            ('totalCardSales', 'total_card_sales'),
-            ('totalSafeDrops', 'total_safe_drops'),
-            ('totalPaidOuts', 'total_paid_outs'),
-            ('closingCashActual', 'closing_cash_actual'),
-            ('expectedCashInDrawer', 'expected_cash_in_drawer'),
-            ('declaredCash', 'declared_cash'),
-            ('cashDifference', 'cash_difference'),
-            ('openingNote', 'opening_note'),
-            ('closingNote', 'closing_note'),
-            ('openedAt', 'opened_at'),
-            ('closedAt', 'closed_at'),
-            ('createdAt', 'created_at'),
-            ('updatedAt', 'updated_at')
-          ) AS t(legacy_col, snake_col)
+          SELECT legacy_col, snake_col, cast_text FROM (VALUES
+            ('merchantId', 'merchant_id', false),
+            ('storeId', 'store_id', false),
+            ('terminalId', 'device_id', false),
+            ('terminal_id', 'device_id', false),
+            ('openingDeviceId', 'opening_device_id', true),
+            ('openedByEmployeeId', 'created_by', true),
+            ('closedByEmployeeId', 'closed_by', true),
+            ('openingCash', 'opening_balance', false),
+            ('closingCashActual', 'closing_balance', false),
+            ('declaredCash', 'declared_cash', false),
+            ('cashDifference', 'over_short', false),
+            ('openedAt', 'opened_at', false),
+            ('closedAt', 'closed_at', false),
+            ('createdAt', 'created_at', false),
+            ('updatedAt', 'updated_at', false)
+          ) AS t(legacy_col, snake_col, cast_text)
         LOOP
           IF EXISTS (
             SELECT 1 FROM information_schema.columns 
             WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.legacy_col
+          ) AND EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = col.snake_col
           ) THEN
+            IF col.cast_text THEN
+              EXECUTE format('UPDATE public.pos_shifts SET %I = %I::text WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            ELSE
             EXECUTE format('UPDATE public.pos_shifts SET %I = %I WHERE %I IS NULL AND %I IS NOT NULL', col.snake_col, col.legacy_col, col.snake_col, col.legacy_col);
+            END IF;
             IF col.legacy_col <> col.snake_col THEN
               EXECUTE format('ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS %I', col.legacy_col);
             END IF;
@@ -276,14 +243,16 @@ export class PosRepository implements OnModuleInit {
       await runner.connect();
       await runner.startTransaction();
       try {
+        shiftDebug('db', { action: 'createShift', table: 'pos_shifts', op: 'insert', shift_id: shift.id, status: shift.status, opening_balance: shift.opening_balance });
         await runner.manager.getRepository(PosShiftEntity).save(shift);
         await this.writeMeta(runner.manager, shift.id, write.meta);
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor, 'create');
         await this.attachOrderSales(runner.manager, shift.id, actor);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
-        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
         await runner.commitTransaction();
+        shiftDebug('db', { action: 'createShift', op: 'commit', shift_id: shift.id });
       } catch (error) {
+        shiftDebug('db-rollback', { action: 'createShift', shift_id: shift.id, ...shiftErrorDetails(error) });
         await runner.rollbackTransaction();
         this.rethrowWrite(error);
       } finally {
@@ -295,6 +264,7 @@ export class PosRepository implements OnModuleInit {
       return view;
     }
 
+    shiftDebug('db-skip', { action: 'createShift', shift_id: shift.id, reason: 'database is not connected; shift kept in memory only' });
     this.memoryShifts.unshift(shift);
     this.memoryMeta.unshift(...this.metaRows(shift.id, write.meta));
     this.memoryTransactions.unshift(...this.transactionRows(shift.id, write.transactions, actor, 'create'));
@@ -317,18 +287,21 @@ export class PosRepository implements OnModuleInit {
           lock: { mode: 'pessimistic_write' },
         });
         if (!shift) {
+          shiftDebug('db-skip', { action: 'updateShift', shift_id: shiftId, reason: 'pos_shifts row not found' });
           await runner.rollbackTransaction();
           return null;
         }
         this.applyMasterPatch(shift, write);
+        shiftDebug('db', { action: 'updateShift', table: 'pos_shifts', op: 'update', shift_id: shift.id, fields: write.fields, status: shift.status });
         await runner.manager.getRepository(PosShiftEntity).save(shift);
         await this.writeMeta(runner.manager, shift.id, write.meta);
         await this.writeTransactions(runner.manager, shift.id, write.transactions, actor ?? shift.updated_by ?? shift.created_by ?? null, 'update');
         await this.attachOrderSales(runner.manager, shift.id, actor ?? shift.created_by ?? null);
         await this.applyVariance(runner.manager, shift.id, new Set(write.fields));
-        await syncLegacyShiftColumns((sql, params) => runner.manager.query(sql, params), shift.id);
         await runner.commitTransaction();
+        shiftDebug('db', { action: 'updateShift', op: 'commit', shift_id: shift.id });
       } catch (error) {
+        shiftDebug('db-rollback', { action: 'updateShift', shift_id: shiftId, ...shiftErrorDetails(error) });
         await runner.rollbackTransaction();
         this.rethrowWrite(error);
       } finally {
@@ -339,6 +312,7 @@ export class PosRepository implements OnModuleInit {
       return view;
     }
 
+    shiftDebug('db-skip', { action: 'updateShift', shift_id: shiftId, reason: 'database is not connected; shift kept in memory only' });
     const shift = this.memoryShifts.find((row) => row.id === shiftId);
     if (!shift) return null;
     this.applyMasterPatch(shift, write);
@@ -347,7 +321,7 @@ export class PosRepository implements OnModuleInit {
       if (existing) {
         existing.meta_value = row.meta_value;
         existing.status = row.status;
-      } else {
+    } else {
         this.memoryMeta.push(row);
       }
     }
@@ -389,10 +363,16 @@ export class PosRepository implements OnModuleInit {
       if (shift) {
         await this.dataSource.transaction(async (manager) => {
           await this.writeTransactions(manager, shiftId, [transaction], movement.performedBy, 'create');
-          await syncLegacyShiftColumns((sql, params) => manager.query(sql, params), shiftId);
         });
         const view = await this.getShiftView(shiftId);
         if (view) await this.cacheActiveShift(storeId, view);
+      } else {
+        shiftDebug('db-skip', {
+          action: 'recordCashMovement',
+          shift_id: shiftId,
+          movement_id: saved.id,
+          reason: 'cash_movements row saved, but pos_shift_transactions was not written because the shift id was not found',
+        });
       }
       return saved;
     }
@@ -459,6 +439,13 @@ export class PosRepository implements OnModuleInit {
     return view ?? null;
   }
 
+  requireDataSource(): DataSource {
+    if (!this.isDbConnected || !this.dataSource) {
+      throw new ServiceUnavailableException('POS database is unavailable');
+    }
+    return this.dataSource;
+  }
+
   async getShiftWithSafeTransactions(shiftId: string, storeId: string) {
     const shift = await this.getShiftView(shiftId, storeId);
     if (!shift || !this.dataSource) return shift;
@@ -520,6 +507,55 @@ export class PosRepository implements OnModuleInit {
     return sales;
   }
 
+  // Payout lines whose cash tender is zero. They have already left the drawer
+  // and are not part of the cash-sales total, so expected cash removes them once.
+  private async getOrderPayoutsByShift(shiftIds: string[]): Promise<Map<string, number>> {
+    const payouts = new Map<string, number>();
+    if (!this.dataSource || shiftIds.length === 0) return payouts;
+    try {
+      const orders: Array<ReportOrder & { shift_id: string | null; local_shift_id: string | null }> = await this.dataSource.query(
+        `SELECT shift_id, local_shift_id, order_id::text AS order_id, client_order_id, status,
+                total::float8 AS total, customer_name, payment_method_title, line_items, fee_lines, created_at
+           FROM public.store_orders
+          WHERE shift_id = ANY($1) OR local_shift_id = ANY($1)`,
+        [shiftIds],
+      );
+      const payments: Array<ReportPayment & { shift_id: string | null }> = await this.dataSource.query(
+        `SELECT shift_id, id::text AS id, order_id::text AS order_id, client_order_id,
+                payment_type::text AS payment_type, payment_method, payment_method_title,
+                amount::float8 AS amount, refund_amount::float8 AS refund_amount, metadata,
+                payment_at, entry_type, is_void, status
+           FROM public.store_pos_payments
+          WHERE shift_id = ANY($1) AND deleted_at IS NULL`,
+        [shiftIds],
+      );
+      const wanted = new Set(shiftIds);
+      for (const shiftId of shiftIds) {
+        const shiftOrders = orders
+          .filter((order) => order.shift_id === shiftId || order.local_shift_id === shiftId)
+          .map((order) => ({
+            ...order,
+            total: Number(order.total || 0),
+            fee_lines: order.fee_lines ?? [],
+            refunded: 0,
+          }));
+        const shiftPayments = payments
+          .filter((payment) => payment.shift_id === shiftId)
+          .map((payment) => ({
+            ...payment,
+            amount: Number(payment.amount || 0),
+            refund_amount: Number(payment.refund_amount || 0),
+            is_void: payment.is_void === true,
+          }));
+        const amount = shiftCashPayoutOutsideTender(shiftOrders, shiftPayments);
+        if (amount && wanted.has(shiftId)) payouts.set(shiftId, amount);
+      }
+    } catch (error) {
+      console.error('[POS] Could not total shift payouts from store_orders:', error);
+    }
+    return payouts;
+  }
+
   private async viewsFor(shifts: PosShiftEntity[]): Promise<ShiftView[]> {
     if (!shifts.length) return [];
     const ids = shifts.map((shift) => shift.id);
@@ -537,6 +573,7 @@ export class PosRepository implements OnModuleInit {
         .sort((left, right) => left.created_at.getTime() - right.created_at.getTime());
     }
     const sales = this.isDbConnected ? await this.getSalesByShift(ids) : new Map<string, { cash: number; card: number }>();
+    const payouts = this.isDbConnected ? await this.getOrderPayoutsByShift(ids) : new Map<string, number>();
     return shifts.map((shift) => toShiftView(
       shift,
       meta.filter((row) => row.shift_id === shift.id).map((row) => ({
@@ -559,6 +596,7 @@ export class PosRepository implements OnModuleInit {
         updated_at: row.updated_at,
       })),
       sales.get(shift.id),
+      payouts.get(shift.id) ?? 0,
     ));
   }
 
@@ -637,6 +675,7 @@ export class PosRepository implements OnModuleInit {
          SET meta_value = EXCLUDED.meta_value, status = EXCLUDED.status`,
         [randomUUID(), shiftId, row.meta_name, JSON.stringify(row.meta_value), row.status],
       );
+      shiftDebug('db', { table: 'pos_shift_meta', op: 'upsert', shift_id: shiftId, meta_name: row.meta_name, status: row.status, meta_value: row.meta_value });
     }
   }
 
@@ -671,6 +710,7 @@ export class PosRepository implements OnModuleInit {
            WHERE NOT EXISTS (SELECT 1 FROM updated)`,
           [shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy, randomUUID(), createdBy],
         );
+        shiftDebug('db', { table: 'pos_shift_transactions', op: 'upsert', shift_id: shiftId, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
         continue;
       }
       if (row.id && mode === 'update') {
@@ -683,14 +723,17 @@ export class PosRepository implements OnModuleInit {
           [row.id, shiftId, row.transaction_type, row.total_sum, payload, row.status, updatedBy],
         );
         if (!updated.length) throw new BadRequestException(`Transaction '${row.id}' was not found on this shift`);
+        shiftDebug('db', { table: 'pos_shift_transactions', op: 'update', shift_id: shiftId, id: row.id, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
         continue;
       }
+      const insertedId = row.id ?? randomUUID();
       await manager.query(
         `INSERT INTO public.pos_shift_transactions (
            id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by
          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
-        [row.id ?? randomUUID(), shiftId, row.transaction_type, row.total_sum, payload, row.status, createdBy, updatedBy],
+        [insertedId, shiftId, row.transaction_type, row.total_sum, payload, row.status, createdBy, updatedBy],
       );
+      shiftDebug('db', { table: 'pos_shift_transactions', op: 'insert', shift_id: shiftId, id: insertedId, transaction_type: row.transaction_type, total_sum: row.total_sum, json_payload: row.json_payload });
     }
   }
 
@@ -704,7 +747,10 @@ export class PosRepository implements OnModuleInit {
     );
     const have = new Set(existing.map((row) => row.transaction_type));
     const sales = (await this.getSalesByShift([shiftId])).get(shiftId);
-    if (!sales) return;
+    if (!sales) {
+      shiftDebug('db-skip', { action: 'attachOrderSales', shift_id: shiftId, reason: 'no completed store_orders for this shift; CASH_SALE and CARD_SALE were not written' });
+      return;
+    }
     const rows: ShiftTransactionInput[] = [];
     if (!have.has('CASH_SALE') && sales.cash > 0) {
       rows.push({
@@ -724,6 +770,13 @@ export class PosRepository implements OnModuleInit {
         upsert_by_type: true,
       });
     }
+    shiftDebug('db', {
+      action: 'attachOrderSales',
+      shift_id: shiftId,
+      cash: sales?.cash ?? null,
+      card: sales?.card ?? null,
+      wrote: rows.map((row) => row.transaction_type),
+    });
     if (rows.length) await this.writeTransactions(manager, shiftId, rows, actor, 'update');
   }
 
@@ -731,8 +784,10 @@ export class PosRepository implements OnModuleInit {
     const shift = await manager.getRepository(PosShiftEntity).findOne({ where: { id: shiftId } });
     if (!shift || shift.status !== ShiftStatus.CLOSED || shift.closing_balance == null) return;
     const transactions = await manager.getRepository(PosShiftTransactionEntity).find({ where: { shift_id: shiftId } });
-    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions);
+    const orderPayout = (await this.getOrderPayoutsByShift([shiftId])).get(shiftId) ?? 0;
+    const expected = expectedCashInDrawer(Number(shift.opening_balance), transactions, 0, orderPayout);
     let changed = false;
+    // Close passes over_short from the till (actual cash - till amount). Keep that value.
     if (!provided.has('over_short')) {
       shift.over_short = roundMoney(Number(shift.closing_balance) - expected);
       changed = true;
@@ -832,7 +887,7 @@ export class PosRepository implements OnModuleInit {
     if (this.isRedisConnected && this.redisClient) {
       try {
         if (shift.status === ShiftStatus.OPEN) {
-          await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
+        await this.redisClient.set(`shift:${storeId}`, JSON.stringify(shift), 'EX', 86400);
         } else {
           await this.redisClient.del(`shift:${storeId}`);
         }

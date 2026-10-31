@@ -7,7 +7,15 @@ export interface OrderResponseContext {
   result: {
     order: any;
     items: any[];
-    storeOrder?: { id?: string; currency?: string; timezone?: string } | null;
+    storeOrder?: {
+      id?: string;
+      currency?: string;
+      timezone?: string;
+      discountTotal?: number;
+      grandTotal?: number;
+      taxTotal?: number;
+      total?: number;
+    } | null;
     duplicate: boolean;
   };
   request: any;
@@ -54,6 +62,8 @@ export class OrderResponsePresenter {
       storeOrderId: result.storeOrder?.id ?? null,
       orderId: result.order.id,
       orderNumber: result.order.orderNumber,
+      change_amount: this.money(this.metaAmount(result.order.metadata, 'pos_change_returned')),
+      cash_received: this.money(this.metaAmount(result.order.metadata, 'pos_cash_received')),
       order: result.order,
       items: result.items,
     };
@@ -86,13 +96,14 @@ export class OrderResponsePresenter {
       prices_include_tax: Boolean(request.prices_include_tax),
       date_created: localCreated,
       date_modified: localModified,
-      discount_total: this.money(request.discount_total ?? order.discountAmount),
+      discount_total: this.money(result.storeOrder?.discountTotal ?? request.discount_total ?? order.discountAmount),
       discount_tax: this.money(request.discount_tax),
       shipping_total: this.money(request.shipping_total),
       shipping_tax: this.money(request.shipping_tax),
       cart_tax: this.money(request.cart_tax),
-      total: this.money(request.total ?? order.totalAmount),
-      total_tax: this.money(request.total_tax ?? order.taxAmount),
+      total: this.money(result.storeOrder?.total ?? request.total ?? order.totalAmount),
+      grand_total: this.money(result.storeOrder?.grandTotal ?? request.grand_total),
+      total_tax: this.money(result.storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount),
       customer_id: request.customer_id || 0,
       order_key: request.order_key || `wc_order_${order.id}`,
       billing: this.billing(request.billing),
@@ -109,6 +120,8 @@ export class OrderResponsePresenter {
       cart_hash: request.cart_hash || '',
       number: String(request.number || order.orderNumber || '').replace(/^#/, ''),
       meta_data: this.metaData(order.metadata),
+      change_amount: this.money(this.metaAmount(order.metadata, 'pos_change_returned')),
+      cash_received: this.money(this.metaAmount(order.metadata, 'pos_cash_received')),
       line_items: lineItems,
       tax_lines: this.taxLines(request.tax_lines),
       shipping_lines: Array.isArray(request.shipping_lines) ? request.shipping_lines : [],
@@ -224,6 +237,11 @@ export class OrderResponsePresenter {
         product_data: original.product_data ?? null,
       };
     });
+  }
+
+  private metaAmount(metadata: unknown, key: string): unknown {
+    const entries = Array.isArray(metadata) ? metadata : [];
+    return entries.find((entry) => entry?.key === key)?.value ?? 0;
   }
 
   private metaData(metadata: any[]) {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -10,10 +11,31 @@ import { StorePosConfigurationEntity } from '../../entities/store-pos-configurat
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
 import { CashBackSettingsResponse, mapCashbackSettings } from './cashback-settings.model';
+import { PosConfigurationImageService, UploadedPosIcon } from './pos-configuration-image.service';
+
+export const WOOCOMMERCE_ORDER_STATUSES = [
+  { slug: 'pending', name: 'Pending payment' },
+  { slug: 'processing', name: 'Processing' },
+  { slug: 'on-hold', name: 'On hold' },
+  { slug: 'completed', name: 'Completed' },
+  { slug: 'cancelled', name: 'Cancelled' },
+  { slug: 'partial-refund', name: 'Partially refunded' },
+  { slug: 'refunded', name: 'Refunded' },
+  { slug: 'failed', name: 'Failed' },
+  { slug: 'checkout-draft', name: 'Draft' },
+] as const;
 
 @Injectable()
 export class StorePosConfigurationsService {
-  constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
+  constructor(
+    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
+    @Inject(PosConfigurationImageService) private readonly images: PosConfigurationImageService,
+  ) {}
+
+  saveStoreIcon(storeId: string, file: UploadedPosIcon | undefined, origin: string) {
+    if (!file?.buffer?.length) throw new BadRequestException('Choose a PNG, JPG, or WEBP icon');
+    return this.images.saveUpload(storeId, file, origin);
+  }
 
   private repository(): Repository<StorePosConfigurationEntity> {
     return this.merchants.requireDataSource().getRepository(StorePosConfigurationEntity);
@@ -41,6 +63,7 @@ export class StorePosConfigurationsService {
   async create(
     dto: CreateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const storeId = await this.storeUuid(dto.storeId);
     const existing = await this.repository().findOne({
@@ -60,12 +83,12 @@ export class StorePosConfigurationsService {
     const configuration = this.repository().create({
       storeId,
       configurationName: dto.configurationName,
-      configurationValue: dto.configurationValue,
+      configurationValue: await this.normalizeIcons(storeId, dto.configurationName, dto.configurationValue),
       createdBy: actor,
       updatedBy: actor,
     });
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -73,9 +96,10 @@ export class StorePosConfigurationsService {
    */
   async findByStoreId(
     storeId: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity[]> {
     const resolvedStoreId = await this.storeUuid(storeId);
-    return this.repository().find({
+    const configurations = await this.repository().find({
       where: {
         storeId: resolvedStoreId,
       },
@@ -83,6 +107,8 @@ export class StorePosConfigurationsService {
         configurationName: 'ASC',
       },
     });
+    for (const row of configurations) await this.migrateInlineIcons(row);
+    return configurations.map((row) => this.forClient(row, origin));
   }
 
   /**
@@ -106,6 +132,7 @@ export class StorePosConfigurationsService {
       );
     }
 
+    await this.migrateInlineIcons(configuration);
     return configuration;
   }
 
@@ -116,12 +143,13 @@ export class StorePosConfigurationsService {
   async findPresented(
     storeId: string,
     configurationName: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity | CashBackSettingsResponse> {
     const configuration = await this.findOne(storeId, configurationName);
     if (configurationName === 'cashback_settings') {
       return mapCashbackSettings(configuration.configurationValue);
     }
-    return configuration;
+    return this.forClient(configuration, origin);
   }
 
   /**
@@ -130,13 +158,14 @@ export class StorePosConfigurationsService {
   async getConfigurationValue(
     storeId: string,
     configurationName: string,
+    origin?: string,
   ): Promise<Record<string, unknown>> {
     const configuration = await this.findOne(
       storeId,
       configurationName,
     );
 
-    return configuration.configurationValue;
+    return this.images.publishValue(configurationName, configuration.configurationValue, origin);
   }
 
   /**
@@ -147,6 +176,7 @@ export class StorePosConfigurationsService {
     configurationName: string,
     dto: UpdateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const configuration = await this.findOne(
       storeId,
@@ -174,15 +204,18 @@ export class StorePosConfigurationsService {
     }
 
     if (dto.configurationValue !== undefined) {
-      configuration.configurationValue = this.mergeConfigurationValue(
-        configuration.configurationName, configuration.configurationValue, dto.configurationValue,
+      const name = dto.configurationName || configuration.configurationName;
+      configuration.configurationValue = await this.normalizeIcons(
+        configuration.storeId,
+        name,
+        this.mergeConfigurationValue(name, configuration.configurationValue, dto.configurationValue),
       );
     }
 
     const actor = dto.updatedBy || actorId;
     if (actor) configuration.updatedBy = actor;
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -193,6 +226,7 @@ export class StorePosConfigurationsService {
   async upsert(
     dto: CreateStorePosConfigurationDto,
     actorId?: string,
+    origin?: string,
   ): Promise<StorePosConfigurationEntity> {
     const storeId = await this.storeUuid(dto.storeId);
     const existing = await this.repository().findOne({
@@ -204,23 +238,25 @@ export class StorePosConfigurationsService {
     const actor = dto.createdBy || actorId || null;
 
     if (existing) {
-      existing.configurationValue = this.mergeConfigurationValue(
-        existing.configurationName, existing.configurationValue, dto.configurationValue,
+      existing.configurationValue = await this.normalizeIcons(
+        storeId,
+        existing.configurationName,
+        this.mergeConfigurationValue(existing.configurationName, existing.configurationValue, dto.configurationValue),
       );
       if (actor) existing.updatedBy = actor;
 
-      return this.repository().save(existing);
+      return this.forClient(await this.repository().save(existing), origin);
     }
 
     const configuration = this.repository().create({
       storeId,
       configurationName: dto.configurationName,
-      configurationValue: dto.configurationValue,
+      configurationValue: await this.normalizeIcons(storeId, dto.configurationName, dto.configurationValue),
       createdBy: actor,
       updatedBy: actor,
     });
 
-    return this.repository().save(configuration);
+    return this.forClient(await this.repository().save(configuration), origin);
   }
 
   /**
@@ -241,11 +277,12 @@ export class StorePosConfigurationsService {
   
   
   
-  async getStoreInfo(storeId: string): Promise<Record<string, unknown>> {
+  async getStoreInfo(storeId: string, origin?: string): Promise<Record<string, unknown>> {
     const resolvedStoreId = await this.storeUuid(storeId);
     const configurations = await this.repository().find({
       where: { storeId: resolvedStoreId },
     });
+    for (const row of configurations) await this.migrateInlineIcons(row);
     const configByName = new Map(
       configurations.map((row) => [row.configurationName, this.asObject(row.configurationValue)]),
     );
@@ -288,9 +325,9 @@ export class StorePosConfigurationsService {
         zip_code: this.textOrNull(store.postal_code),
         phone_number: this.textOrNull(store.phone),
       },
-      notes_denom: notesDenom,
-      coin_denom: coinDenom,
-      safe_denom: safe.denominations,
+      notes_denom: this.publishDenoms(notesDenom, origin),
+      coin_denom: this.publishDenoms(coinDenom, origin),
+      safe_denom: this.publishDenoms(safe.denominations, origin),
       tubes_denom: safe.tubes,
       max_tubes_count: safe.maxTubesCount,
       safe_drop_amount: safe.safeDropAmount,
@@ -304,6 +341,7 @@ export class StorePosConfigurationsService {
         { slug: 'uber-eats', name: 'Uber Eats Order' },
         { slug: 'online', name: 'Online Order' },
       ],
+      order_statuses: WOOCOMMERCE_ORDER_STATUSES.map((status) => ({ ...status })),
     };
   }
 
@@ -335,29 +373,17 @@ export class StorePosConfigurationsService {
   }
 
   private async cashDenominations(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
   ): Promise<[Array<{ denom: string | null; image: string | null }>, Array<{ denom: string | null; image: string | null }>]> {
-    const notes = this.denomList(config?.cashDenominations ?? config?.notes);
-    const coins = this.denomList(config?.coinDenominations ?? config?.coins);
-    if (notes.length || coins.length) return [notes, coins];
-
-    const rows = await this.optionalRows(
-      `SELECT i.kind, i.amount AS denom, i."imageData" AS image
-       FROM public.pos_cash_denomination_items i
-       JOIN public.pos_cash_denomination_settings s ON s.id = i."denominationId"
-       WHERE s."storeId" = $1
-       ORDER BY i."sortOrder" ASC, i.amount ASC`,
-      [storeId],
-    );
     return [
-      this.denomList(rows.filter((row) => String(row.kind).toLowerCase() === 'cash')),
-      this.denomList(rows.filter((row) => String(row.kind).toLowerCase() === 'coin')),
+      this.denomList(config?.cashDenominations ?? config?.notes),
+      this.denomList(config?.coinDenominations ?? config?.coins),
     ];
   }
 
   private async safeDrop(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
     currencySymbol: string | null,
   ): Promise<{
@@ -368,82 +394,37 @@ export class StorePosConfigurationsService {
   }> {
     const configDenoms = this.denomList(config?.drops ?? config?.safeDenominations);
     const configTubes = this.tubeList(config?.tubes, currencySymbol);
-    if (config || configDenoms.length || configTubes.length) {
-      return {
-        denominations: configDenoms,
-        tubes: configTubes,
-        maxTubesCount: this.moneyText(config?.tubeSize),
-        safeDropAmount: this.moneyText(config?.threshold),
-      };
-    }
-
-    const settings = await this.optionalRows(
-      `SELECT id, threshold, tube_size AS "tubeSize"
-       FROM public.pos_safe_drop_settings
-       WHERE store_id = $1
-       LIMIT 1`,
-      [storeId],
-    );
-    const setting = settings[0];
-    if (!setting?.id) {
-      return { denominations: [], tubes: [], maxTubesCount: null, safeDropAmount: null };
-    }
-    const [denominations, tubes] = await Promise.all([
-      this.optionalRows(
-        `SELECT amount AS denom, image_data AS image
-         FROM public.pos_safe_drop_denominations
-         WHERE safe_drop_id = $1::uuid
-         ORDER BY sort_order ASC, amount ASC`,
-        [setting.id],
-      ),
-      this.optionalRows(
-        `SELECT amount AS denom, quantity AS tube_limit
-         FROM public.pos_safe_drop_tubes
-         WHERE safe_drop_id = $1::uuid
-         ORDER BY sort_order ASC, amount ASC`,
-        [setting.id],
-      ),
-    ]);
     return {
-      denominations: this.denomList(denominations),
-      tubes: this.tubeList(tubes, currencySymbol),
-      maxTubesCount: this.moneyText(setting.tubeSize),
-      safeDropAmount: this.moneyText(setting.threshold),
+      denominations: configDenoms,
+      tubes: configTubes,
+      maxTubesCount: this.moneyText(config?.tubeSize),
+      safeDropAmount: this.moneyText(config?.threshold),
     };
   }
 
   private async drawerAmount(
-    storeId: string,
+    _storeId: string,
     config: Record<string, unknown> | null,
   ): Promise<string | null> {
     const registers = Array.isArray(config?.registers) ? config.registers : [];
     const active = registers.find((row) => String((row as { status?: unknown })?.status || '').toLowerCase() === 'active')
       ?? registers[0];
-    const configured = this.moneyText((active as { maxCash?: unknown } | undefined)?.maxCash);
-    if (configured !== null) return configured;
-
-    const rows = await this.optionalRows(
-      `SELECT r."maxCash" AS amount
-       FROM public.pos_cash_registers r
-       JOIN public.pos_cash_register_settings s ON s.id = r."registerSettingsId"
-       WHERE s."storeId" = $1
-         AND lower(COALESCE(r.status, 'active')) = 'active'
-       ORDER BY r."sortOrder" ASC
-       LIMIT 1`,
-      [storeId],
-    );
-    return this.moneyText(rows[0]?.amount);
+    return this.moneyText((active as { maxCash?: unknown } | undefined)?.maxCash);
   }
 
   private async storeVendors(storeId: string): Promise<Array<{ id: string | null; vendor_name: string | null }>> {
     const rows = await this.optionalRows(
       `SELECT v.id::text AS id, v.vendor_name
-       FROM public.merchant_vendors mv
-       JOIN public.vendors v ON v.id = mv.vendor_id
-       JOIN public.stores s ON s.merchant_id = mv.merchant_id
+       FROM public.vendor_stores vs
+       JOIN public.stores s ON s.id = vs.store_id AND s.merchant_id = vs.merchant_id
+       JOIN public.merchant_vendors mv ON mv.merchant_id = vs.merchant_id AND mv.vendor_id = vs.vendor_id
+       JOIN public.vendors v ON v.id = vs.vendor_id
        WHERE s.id = $1::uuid
+         AND vs.is_mapped = true
+         AND upper(COALESCE(vs.status::text, 'ACTIVE')) = 'ACTIVE'
          AND upper(COALESCE(mv.status::text, 'ACTIVE')) = 'ACTIVE'
          AND upper(COALESCE(v.status::text, 'ACTIVE')) = 'ACTIVE'
+         AND v.is_deleted = false
        ORDER BY v.vendor_name ASC`,
       [storeId],
     );
@@ -470,11 +451,9 @@ export class StorePosConfigurationsService {
       : await this.optionalRows(
         `SELECT t.tendor_name AS name
          FROM public.tendors t
-         JOIN public.stores s ON s.id = $1::uuid
-         WHERE (t.store_type_id = s.store_type_id OR t.store_type_id IS NULL)
-           AND upper(COALESCE(t.status::text, 'ACTIVE')) = 'ACTIVE'
+         WHERE upper(COALESCE(t.status::text, 'ACTIVE')) = 'ACTIVE'
          ORDER BY t.tendor_name ASC`,
-        [storeId],
+        [],
       );
     return source
       .map((row) => this.textOrNull(row.name))
@@ -584,6 +563,47 @@ export class StorePosConfigurationsService {
     const text = this.textOrNull(value);
     if (!text) return null;
     return text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || null;
+  }
+
+  private async normalizeIcons(
+    storeId: string,
+    configurationName: string,
+    value: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.images.handles(configurationName)) return value;
+    return (await this.images.materialize(storeId, configurationName, value, true)).value;
+  }
+
+  private async migrateInlineIcons(configuration: StorePosConfigurationEntity): Promise<void> {
+    if (!this.images.handles(configuration.configurationName)) return;
+    if (!this.images.hasInlineImage(configuration.configurationValue)) return;
+    const prepared = await this.images.materialize(
+      configuration.storeId,
+      configuration.configurationName,
+      configuration.configurationValue,
+      false,
+    );
+    if (!prepared.changed) return;
+    configuration.configurationValue = prepared.value;
+    await this.repository().save(configuration);
+  }
+
+  private forClient<T extends StorePosConfigurationEntity>(row: T, origin?: string): T {
+    if (!this.images.handles(row.configurationName)) return row;
+    return {
+      ...row,
+      configurationValue: this.images.publishValue(row.configurationName, row.configurationValue, origin),
+    } as T;
+  }
+
+  private publishDenoms(
+    rows: Array<{ denom: string | null; image: string | null }>,
+    origin?: string,
+  ): Array<{ denom: string | null; image: string | null }> {
+    return rows.map((row) => ({
+      denom: row.denom,
+      image: this.images.publishImage(row.image, origin),
+    }));
   }
 
 

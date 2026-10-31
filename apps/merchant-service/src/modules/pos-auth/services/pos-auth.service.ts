@@ -1,3 +1,6 @@
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+import { jwtSecret, SessionEntity } from '@pinaka-delivery-hub/auth';
 import {
   Injectable,
   UnauthorizedException,
@@ -28,6 +31,56 @@ export class PosAuthService {
     @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
   ) {}
 
+  async merchantPasswordLogin(input: { email?: string; password?: string }) {
+    if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
+      throw new BadRequestException('email and password are required (password maximum 128 characters)');
+    }
+    const db = this.merchantRepository.requireDataSource();
+    const rows = await db.query(
+      `SELECT id,merchant_code AS "merchantCode",email,business_display_name AS "businessDisplayName",status,
+              to_jsonb(m)->>'password' AS password
+       FROM public.merchants m WHERE lower(email)=lower($1) AND COALESCE(is_deleted,false)=false LIMIT 2`,
+      [input.email.trim()],
+    );
+    const merchant = rows.length === 1 ? rows[0] : undefined;
+    const [savedSalt, savedDigest] = String(merchant?.password || '').split(':');
+    const salt = savedSalt ? Buffer.from(savedSalt, 'base64url') : randomBytes(16);
+    const expected = savedDigest ? Buffer.from(savedDigest, 'base64url') : Buffer.alloc(64);
+    const actual = await promisify(scrypt)(input.password, salt, 64) as Buffer;
+    if (!merchant || !savedSalt || !savedDigest || expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      throw new UnauthorizedException('Invalid merchant email or password');
+    }
+    if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const users = await db.query(
+      `SELECT id,email,role,account_id AS "accountId" FROM public.users
+       WHERE lower(email)=lower($1) AND status='ACTIVE'
+         AND (merchant_id::text=$2 OR merchant_id::text=$3 OR NULLIF(merchant_id::text,'') IS NULL)
+       LIMIT 2`, [merchant.email, merchant.id, merchant.merchantCode],
+    );
+    if (users.length !== 1) throw new UnauthorizedException('An active linked PCH user account is required for merchant API access');
+    const user = users[0];
+    const stores = await db.query(
+      `SELECT id,store_code AS "storeCode",store_name AS "storeName",status
+       FROM public.stores WHERE merchant_id::text=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
+      [merchant.id],
+    );
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = 30 * 24 * 60 * 60;
+    const sessionId = randomUUID();
+    const payload = { sub: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role, merchantId: merchant.id, type: 'access', jti: sessionId, iat: now, exp: now + expiresIn };
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
+    const accessToken = header + '.' + body + '.' + signature;
+    await db.getRepository(SessionEntity).save({
+      id: sessionId, userId: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role,
+      accessTokenHash: createHash('sha256').update(accessToken).digest('hex'),
+      expiresAt: new Date(payload.exp * 1000),
+    });
+    const { password: _password, ...details } = merchant;
+    return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
+  }
+
   /**
    * API 1: Merchant & Store Login / Information Lookup Service
    * Public auth route - No Bearer token required in request
@@ -56,11 +109,11 @@ export class PosAuthService {
     const merchants: any[] = await dataSource.query(
       `SELECT id, 
               merchant_code AS "merchantCode", 
-              merchant_id AS "merchantId", 
+              merchant_code AS "merchantId", 
               "business_display_name" AS "businessDisplayName", 
               "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
        FROM public.merchants 
-       WHERE (lower(email) = lower($1) OR "merchant_code" = $1 OR merchant_code = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
+       WHERE (lower(email) = lower($1) OR merchant_code = $1 OR id::text = $1 OR lower("business_display_name") = lower($1)) 
        LIMIT 1`,
       [rawMerchant],
     );
@@ -82,7 +135,7 @@ export class PosAuthService {
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1))
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1))
            AND (id::text = $2 OR lower(store_code) = lower($2) OR lower(store_name) = lower($2))
          LIMIT 1`,
         [String(merchant.id), rawStore],
@@ -97,7 +150,7 @@ export class PosAuthService {
                 "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1", 
                 city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
          FROM public.stores 
-         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1))
+         WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1))
            AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
          ORDER BY created_at ASC
          LIMIT 1`,
@@ -177,7 +230,8 @@ export class PosAuthService {
                        (dto as any)?.['device_serial number'] || 
                        dto?.serialNumber;
 
-    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId || dto?.deviceService || (dto as any)?.device?.id;
+    const bodyDeviceId = dto?.deviceServiceNumber || dto?.deviceCode || dto?.deviceId
+      || dto?.device_id || dto?.['device-id'] || dto?.deviceService || (dto as any)?.device?.id;
     const bodyMerchantId = (dto as any)?.merchantId || (dto as any)?.merchantCode || (dto as any)?.merchant?.id;
     const bodyStoreId = (dto as any)?.storeId || (dto as any)?.storeCode || (dto as any)?.store?.id;
     const bodyRegisterId = (dto as any)?.registerId || (dto as any)?.device?.registerId;
@@ -218,11 +272,11 @@ export class PosAuthService {
         const merchants = await dataSource.query(
           `SELECT id, 
                   merchant_code AS "merchantCode", 
-                  merchant_id AS "merchantId", 
+                  merchant_code AS "merchantId", 
                   "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1 OR lower(email) = lower($1))
+           WHERE (id::text = $1 OR merchant_code = $1 OR lower(email) = lower($1))
            LIMIT 1`,
           [String(targetMerchantId).trim()],
         );
@@ -241,7 +295,7 @@ export class PosAuthService {
         let storeParams: any[] = [String(targetStoreId).trim()];
         if (targetMerchantId) {
           storeParams.push(String(targetMerchantId));
-          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR "merchant_id" = $2 OR merchant_id = $2 OR "merchant_code" = $2 OR merchant_code = $2))`;
+          storeWhere += ` AND (merchant_id::text = $2 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $2 OR merchant_code = $2))`;
         }
         const stores = await dataSource.query(
           `SELECT id, "store_code" AS "storeCode", 
@@ -301,7 +355,7 @@ export class PosAuthService {
       `;
       if (targetMerchantId) {
         queryParams.push(String(targetMerchantId));
-        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR "merchant_id" = $${queryParams.length} OR merchant_id = $${queryParams.length} OR "merchant_code" = $${queryParams.length} OR merchant_code = $${queryParams.length}))`;
+        candidateQuery += ` AND (e.merchant_id::text = $${queryParams.length} OR es.merchant_id::text = $${queryParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${queryParams.length} OR merchant_code = $${queryParams.length}))`;
       }
       if (rawEmployeeCode) {
         queryParams.push(rawEmployeeCode);
@@ -334,7 +388,7 @@ export class PosAuthService {
         `;
         if (targetMerchantId) {
           merchantParams.push(String(targetMerchantId));
-          merchantEmpQuery += ` AND (e.merchant_id::text = $${merchantParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${merchantParams.length} OR "merchant_id" = $${merchantParams.length} OR merchant_id = $${merchantParams.length} OR "merchant_code" = $${merchantParams.length} OR merchant_code = $${merchantParams.length}))`;
+          merchantEmpQuery += ` AND (e.merchant_id::text = $${merchantParams.length} OR e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${merchantParams.length} OR merchant_code = $${merchantParams.length}))`;
         }
         if (rawEmployeeCode) {
           merchantParams.push(rawEmployeeCode);
@@ -345,7 +399,9 @@ export class PosAuthService {
       }
 
       for (const cand of candidates) {
-        const hashes = [cand.storePinHash, cand.empPinHash].filter(Boolean);
+        // A store-specific PIN overrides the employee-level fallback for this store.
+        const effectivePin = cand.storePinHash || cand.empPinHash;
+        const hashes = effectivePin ? [effectivePin] : [];
         let matched = false;
         for (const h of hashes) {
           if (await this.pinService.verify(pin, h)) {
@@ -353,7 +409,7 @@ export class PosAuthService {
             break;
           }
         }
-        if (!matched && (cand.storePinHash === pin || cand.empPinHash === pin)) {
+        if (!matched && effectivePin === pin) {
           matched = true;
         }
         if (!matched) continue;
@@ -387,11 +443,11 @@ export class PosAuthService {
         const merchants = await dataSource.query(
           `SELECT id, 
                   merchant_code AS "merchantCode", 
-                  merchant_id AS "merchantId", 
+                  merchant_code AS "merchantId", 
                   "business_display_name" AS "businessDisplayName", 
                   "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status 
            FROM public.merchants 
-           WHERE (id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1)
+           WHERE (id::text = $1 OR merchant_code = $1)
            LIMIT 1`,
           [String(targetMerchantId)],
         );
@@ -406,7 +462,7 @@ export class PosAuthService {
                   "store_name" AS "storeName", 
                   "store_website_url" AS "storeWebsiteUrl", status, merchant_id AS "merchantId"
            FROM public.stores 
-           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR "merchant_id" = $1 OR merchant_id = $1 OR "merchant_code" = $1 OR merchant_code = $1)) 
+           WHERE (merchant_id::text = $1 OR merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $1 OR merchant_code = $1)) 
              AND (status IS NULL OR UPPER(status::text) <> 'INACTIVE')
            ORDER BY created_at ASC
            LIMIT 1`,
@@ -506,6 +562,22 @@ export class PosAuthService {
    * Store products for the merchant and store named in the request headers.
    * The POS login access token is checked before any catalog data is read.
    */
+  async getMerchantStoreProducts(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
+    const products = await this.queryStoreProducts(scope);
+    return {
+      success: true,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      productCount: products.length,
+      products,
+    };
+  }
+
   async getStoreProducts(
     authorization?: string,
     merchantHeader?: string,
@@ -520,6 +592,22 @@ export class PosAuthService {
       productCount: products.length,
       products,
     };
+  }
+
+  async getStoreCategoriesWithTax(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    try {
+      return await this.merchantRepository.getStoreCategoriesWithTax(scope.store.id);
+    } catch (error) {
+      if (this.postgresCode(error) === '42P01' || this.postgresCode(error) === '42703') {
+        return { status: 'success' as const, categories: [] };
+      }
+      throw error;
+    }
   }
 
   async getStoreCategoriesAndProducts(
@@ -592,10 +680,11 @@ export class PosAuthService {
     let matchedEmployeeId: string | undefined;
     let matchedEmployeeStoreId: string | undefined;
     for (const candidate of candidates) {
-      const plainPins = [candidate.storePin, candidate.employeePin]
-        .map((value) => String(value || '').trim())
-        .filter(Boolean);
-      const hashes = [candidate.storePinHash, candidate.employeePinHash].filter(Boolean);
+      // Do not also accept the old employee-wide PIN when this store has an override.
+      const effectivePin = candidate.storePin || candidate.employeePin;
+      const plainPins = effectivePin ? [String(effectivePin).trim()] : [];
+      const effectiveHash = candidate.storePinHash || candidate.employeePinHash;
+      const hashes = effectiveHash ? [effectiveHash] : [];
       let matched = plainPins.includes(pin);
       for (const hash of hashes) {
         if (!matched && await this.pinService.verify(pin, hash)) matched = true;
@@ -764,6 +853,43 @@ export class PosAuthService {
     };
   }
 
+  private async authorizeMerchantStoreCatalog(
+    authorization?: string, merchantHeader?: string, storeHeader?: string,
+  ): Promise<CatalogScope> {
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.jti || '') || !payload.merchantId) {
+      throw new UnauthorizedException('A merchant login token is required');
+    }
+    const session = await this.merchantRepository.touchSession(payload.jti, token);
+    if (!session || session.userId !== payload.sub) throw new UnauthorizedException('Session is not active. Please log in again.');
+    const merchantKey = String(merchantHeader || '').trim();
+    const storeKey = String(storeHeader || '').trim();
+    if (!merchantKey || !storeKey) throw new BadRequestException('x-merchant-id and x-store-id headers are required');
+    const dataSource = this.merchantRepository.requireDataSource();
+    const [merchant] = await dataSource.query(
+      `SELECT m.id::text AS id,m.merchant_code AS "merchantCode",m.status
+       FROM public.merchants m JOIN public.users u ON u.id::text=$2
+       WHERE m.id::text=$1 AND (m.id::text=$3 OR m.merchant_code=$3 OR lower(m.email)=lower($3))
+         AND COALESCE(m.is_deleted,false)=false AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
+      [payload.merchantId, payload.sub, merchantKey],
+    );
+    if (!merchant) throw new ForbiddenException('User is not authorized for this merchant');
+    if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const [store] = await dataSource.query(
+      `SELECT id::text AS id,store_code AS "storeCode",store_name AS "storeName",merchant_id::text AS "merchantId",status
+       FROM public.stores WHERE merchant_id::text=$1 AND (id::text=$2 OR store_code=$2 OR lower(store_name)=lower($2))
+         AND COALESCE(is_deleted,false)=false LIMIT 1`, [merchant.id,storeKey],
+    );
+    if (!store) throw new NotFoundException('Store not found for this merchant');
+    if (store.status !== 'ACTIVE') throw new ForbiddenException('Store is currently inactive');
+    const merchantIds = this.identityKeys(merchant.id,merchant.merchantCode);
+    const storeIds = this.identityKeys(store.id,store.storeCode);
+    if (payload.storeId && !this.keyIn(payload.storeId,storeIds)) throw new ForbiddenException('Login token is not valid for this store');
+    return { dataSource, merchant, store, merchantIds, storeIds, employeeId: payload.sub };
+  }
+
   private async authorizeStoreCatalog(
     authorization: string | undefined,
     merchantHeader: string | undefined,
@@ -809,10 +935,9 @@ export class PosAuthService {
     }
 
     const merchants = await dataSource.query(
-      `SELECT id::text AS id, merchant_code AS "merchantCode", merchant_id AS "merchantId", status
+      `SELECT id::text AS id, merchant_code AS "merchantCode", merchant_code AS "merchantId", status
        FROM public.merchants
        WHERE id::text = $1
-          OR merchant_id::text = $1
           OR merchant_code = $1
           OR lower(email) = lower($1)
        LIMIT 1`,
@@ -838,7 +963,7 @@ export class PosAuthService {
            merchant_id::text = $2
            OR merchant_id IN (
              SELECT id FROM public.merchants
-             WHERE id::text = $2 OR merchant_id::text = $2 OR merchant_code = $2
+             WHERE id::text = $2 OR merchant_code = $2
            )
          )
        LIMIT 1`,
@@ -887,7 +1012,7 @@ export class PosAuthService {
       scope,
       `SELECT store_id::text AS store_id, payload
          FROM public.store_products
-        WHERE store_id::text = ANY($2::text[])
+        WHERE store_id::text = ANY($1::text[])
           AND COALESCE(is_deleted, false) = false`,
     );
     return rows.flatMap((row) => {
@@ -918,7 +1043,7 @@ export class PosAuthService {
       scope,
       `SELECT store_id::text AS store_id, payload
          FROM public.store_categories
-        WHERE store_id::text = ANY($2::text[])
+        WHERE store_id::text = ANY($1::text[])
           AND COALESCE(is_deleted, false) = false`,
     );
     return rows.flatMap((row) => {
@@ -943,7 +1068,7 @@ export class PosAuthService {
 
   private async queryCatalog(scope: CatalogScope, sql: string): Promise<Array<Record<string, any>>> {
     try {
-      return await scope.dataSource.query(sql, [scope.merchantIds, scope.storeIds]);
+      return await scope.dataSource.query(sql, [scope.storeIds]);
     } catch (error) {
       if (this.postgresCode(error) === '42P01') {
         throw new NotFoundException('Store catalog has not been synced');

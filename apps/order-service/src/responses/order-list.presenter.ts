@@ -1,4 +1,15 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  applyCouponDiscountToStoredLinesAndTax,
+  applyMerchantDiscountToStoredTax,
+  authoritativeCouponDiscount,
+  effectiveFeeTotal,
+  feeLinesForCalculation,
+  listOrderTax,
+  listOrderTotal,
+  representedCouponDiscount,
+  sumLineTotals,
+} from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -64,10 +75,47 @@ export class OrderListPresenter {
     const status = this.displayStatus(row.effectiveStatus || storeOrder?.status || this.statusFromOrder(order));
     const paid = order.paymentStatus === PaymentStatus.PAID || Boolean(storeOrder?.setPaid) || Boolean(request.date_paid);
     const paidAt = this.paidStamp(request, order.createdAt, timeZone, paid);
+    const orderPlacedAt = this.orderPlacedAt(order, storeOrder, request);
     const orderNumber = Number(String(order.orderNumber || '').replace(/\D/g, ''));
-    const total = this.money(storeOrder?.total ?? order.totalAmount);
+    const coupons = this.couponLines(
+      storeOrder,
+      request,
+    );
+    const corrected = this.correctStoredDiscountTax(
+      Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : [],
+      Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
+      Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [],
+      coupons,
+      storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
+      storeOrder?.discountTotal ?? order.discountAmount,
+    );
+    const tax = listOrderTax({
+      tax: corrected.tax,
+      lineItems: corrected.lineItems,
+      feeLines: corrected.feeLines,
+      taxLines: corrected.taxLines,
+    });
+    const correctedStoredTotal = corrected.corrected
+      ? sumLineTotals(corrected.lineItems as any[]) + effectiveFeeTotal(corrected.calculationFees as any[])
+        + Number(request.shipping_total ?? request.shippingTotal ?? 0)
+        + Number(storeOrder?.tipAmount ?? order.tipAmount ?? 0)
+      : storeOrder?.total ?? order.totalAmount;
+    const total = this.money(listOrderTotal({
+      total: correctedStoredTotal,
+      tax,
+      taxLines: corrected.taxLines,
+      couponDiscount: coupons.reduce(
+        (sum, line) => sum + Number((line as { discount?: unknown })?.discount || 0),
+        0,
+      ),
+      lineItems: corrected.lineItems,
+      feeLines: corrected.calculationFees,
+      shippingTotal: request.shipping_total ?? request.shippingTotal,
+      tip: storeOrder?.tipAmount ?? order.tipAmount,
+    }));
     const totalNumber = Number(total);
-    const refundTotal = row.refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    const calculatedRefundTotal = this.refundTotal(row.refunds, status);
+    const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
     const refundedItemIds = new Set(row.refunds.flatMap((refund) => {
       const lines = refund.metadata?.line_items;
       return Array.isArray(lines)
@@ -76,7 +124,7 @@ export class OrderListPresenter {
     }));
     const fullyRefunded = status.toLowerCase() === 'refunded';
     const lineItems = this.lineItems(
-      storeOrder?.lineItems,
+      corrected.lineItems,
       row.items,
       order.storeId,
       row.products,
@@ -92,22 +140,86 @@ export class OrderListPresenter {
       total,
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
-      total_tax: this.taxText(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount),
+      total_tax: this.taxText(tax),
+      change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
+      cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,
       currency_symbol: this.currencySymbol(currency),
-      date_completed: request.date_completed
-        ? String(request.date_completed)
-        : (status === 'Completed' ? paidAt : null),
-      date_paid: request.date_paid ? String(request.date_paid) : paidAt,
-      coupon_lines: Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [],
+      date_completed: orderPlacedAt
+        || (request.date_completed ? String(request.date_completed) : null)
+        || (status === 'Completed' ? paidAt : null),
+      date_paid: orderPlacedAt
+        || (request.date_paid ? String(request.date_paid) : paidAt),
+      coupon_lines: coupons,
       line_items: lineItems,
-      fee_lines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
-      tax_lines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [],
+      fee_lines: corrected.feeLines,
+      tax_lines: corrected.taxLines,
       refund_order_total: totalNumber,
-      refund_total: this.round(refundTotal),
+      refund_total: refundTotal,
       net_payment: this.round(Math.max(0, totalNumber - refundTotal)),
+    };
+  }
+
+  private correctStoredDiscountTax(
+    storedLines: unknown[],
+    storedFees: unknown[],
+    storedTaxLines: unknown[],
+    couponLines: unknown[],
+    storedTax: unknown,
+  ) {
+    const lineItems = storedLines.map((line: any) => ({
+      ...line,
+      taxes: Array.isArray(line?.taxes) ? line.taxes.map((tax: any) => ({ ...tax })) : line?.taxes,
+    }));
+    const feeLines = storedFees.map((fee: any) => ({ ...fee }));
+    const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
+    const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
+    const representedCoupon = representedCouponDiscount(lineItems as any[], feeLines as any[]);
+    const couponDiscount = authoritativeCouponDiscount(
+      couponLines as any[],
+      feeLines as any[],
+      2,
+      lineItems as any[],
+    );
+    const hasMerchantDiscount = calculationFees.some((fee: any) => {
+      const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      return (name === 'merchant_discount' || name.startsWith('merchant_discount_'))
+        && Math.abs(Number(fee?.total || 0)) > 0;
+    });
+    const effectiveCoupons = couponDiscount > 0
+      ? [{ code: 'stored-coupon-discount', discount: couponDiscount.toFixed(2) }]
+      : couponLines as any[];
+    const hasReliableRates = lineItems.some((line: any) => Array.isArray(line?.taxes)
+      && line.taxes.some((tax: any) => {
+        const rate = Number(tax?.rate_percent ?? tax?.id);
+        return Number.isFinite(rate) && rate > 0 && rate <= 100;
+      }));
+    const orderTax = { total_tax: storedTax, tax_lines: taxLines };
+    if (hasReliableRates && (couponDiscount > 0 || hasMerchantDiscount)) {
+      if (couponDiscount > 0) {
+        applyCouponDiscountToStoredLinesAndTax(
+          lineItems,
+          effectiveCoupons,
+          orderTax,
+          2,
+          representedCoupon,
+        );
+      }
+      applyMerchantDiscountToStoredTax(lineItems, calculationFees as any[], orderTax);
+      feeLines.forEach((fee: any) => {
+        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+        if (name === 'coupon_discount') fee.total = (-couponDiscount).toFixed(2);
+      });
+    }
+    return {
+      lineItems,
+      feeLines,
+      calculationFees,
+      taxLines,
+      tax: orderTax.total_tax,
+      corrected: hasReliableRates && (couponDiscount > 0 || hasMerchantDiscount),
     };
   }
 
@@ -138,6 +250,35 @@ export class OrderListPresenter {
       refundedItemIds,
       fullyRefunded,
     ));
+  }
+
+  private refundTotal(
+    refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>,
+    status: string,
+  ): number {
+    if (status.toLowerCase() !== 'partially refunded') {
+      return refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    }
+
+    const seen = new Set<string>();
+    return refunds.reduce((sum, refund, index) => {
+      const metadata = refund.metadata || {};
+      const refundId = String(metadata.refund_id ?? metadata.legacy_refund_id ?? `row-${index}`);
+      if (seen.has(refundId)) return sum;
+      seen.add(refundId);
+
+      const lines = Array.isArray(metadata.line_items) ? metadata.line_items : [];
+      const requestedTotal = lines.reduce((lineSum, line: any) => (
+        lineSum + Number(line?.refundable_amount ?? line?.refund_total ?? 0)
+      ), 0);
+      return sum + (requestedTotal > 0 ? requestedTotal : Number(refund.amount || 0));
+    }, 0);
+  }
+
+  private capRefundTotal(refundTotal: number, orderTotal: number): number {
+    const totalCents = Math.max(0, Math.round((Number.isFinite(orderTotal) ? orderTotal : 0) * 100));
+    const refundCents = Math.max(0, Math.round((Number.isFinite(refundTotal) ? refundTotal : 0) * 100));
+    return Math.min(refundCents, totalCents) / 100;
   }
 
   private lineItem(
@@ -183,6 +324,61 @@ export class OrderListPresenter {
       : [...new Set(statuses)];
   }
 
+  private couponLines(
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+    orderDiscount: unknown,
+  ): unknown[] {
+    const stored = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
+    const requested = Array.isArray(request.coupon_lines) ? request.coupon_lines : [];
+    const source = stored.length ? stored : requested;
+
+    return source.map((entry, index) => {
+      const coupon = entry && typeof entry === 'object'
+        ? entry as Record<string, unknown>
+        : { code: entry };
+      const requestedMatch = requested.find((candidate) => {
+        if (!candidate || typeof candidate !== 'object') return false;
+        return String((candidate as Record<string, unknown>).code || '').toLowerCase()
+          === String(coupon.code || '').toLowerCase();
+      });
+      const original = requestedMatch && typeof requestedMatch === 'object'
+        ? requestedMatch as Record<string, unknown>
+        : {};
+      const merged: Record<string, any> = { ...original, ...coupon };
+      const existingMetadata: any[] = Array.isArray(merged.meta_data) ? merged.meta_data : [];
+      const metadataValue = (key: string) => {
+        const match = existingMetadata.find((item) => (
+          item && typeof item === 'object' && (item as Record<string, unknown>).key === key
+        ));
+        return match && typeof match === 'object'
+          ? (match as Record<string, unknown>).value
+          : undefined;
+      };
+      const fallbackDiscount = source.length === 1 ? Number(orderDiscount || 0) : 0;
+      const configuredAmount = merged.amount ?? metadataValue('amount');
+      const discount = Number(configuredAmount ?? merged.discount ?? merged.discount_amount ?? fallbackDiscount);
+      const safeDiscount = Number.isFinite(discount) ? discount : 0;
+      const amount = configuredAmount ?? 0;
+      const discountType = merged.discount_type ?? metadataValue('discount_type') ?? 'fixed_cart';
+      const productIds = merged.product_ids ?? metadataValue('product_ids') ?? [];
+      const excludedProductIds = merged.excluded_product_ids ?? metadataValue('excluded_product_ids') ?? [];
+
+      return {
+        ...merged,
+        code: String(merged.code || `coupon-${index + 1}`),
+        discount: safeDiscount.toFixed(2),
+        discount_tax: Number(merged.discount_tax || 0).toFixed(2),
+        meta_data: existingMetadata.length ? existingMetadata : [
+          { key: 'discount_type', value: discountType },
+          { key: 'amount', value: String(amount) },
+          { key: 'product_ids', value: productIds },
+          { key: 'excluded_product_ids', value: excludedProductIds },
+        ],
+      };
+    });
+  }
+
   private pageNumber(value: string | undefined, fallback: number, name: string): number {
     if (value === undefined || value === '') return fallback;
     const parsed = Number(value);
@@ -215,6 +411,9 @@ export class OrderListPresenter {
         return 'On-hold';
       case 'cancelled':
         return 'Cancelled';
+      case 'partial-refund':
+      case 'partially-refunded':
+        return 'Partially Refunded';
       default:
         return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Processing';
     }
@@ -238,6 +437,23 @@ export class OrderListPresenter {
     const metadata = Array.isArray(order.metadata) ? order.metadata : [];
     const value = metadata.find((entry) => entry?.key === key)?.value;
     return value === undefined || value === null ? '' : String(value);
+  }
+
+  private orderPlacedAt(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): string | null {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    const value = metadata.find((entry) => entry?.key === 'order_placed_at')?.value;
+    if (value === undefined || value === null) return null;
+    const timestamp = String(value).trim();
+    return timestamp || null;
   }
 
   private paidStamp(request: Record<string, unknown>, createdAt: Date, timeZone: string, paid: boolean): string | null {

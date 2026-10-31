@@ -215,11 +215,11 @@ export class PosEmployeeAttendanceGuard implements CanActivate {
            ON s.merchant_id = m.id AND s.id::text = $3
          LEFT JOIN public.users AS u
            ON u.id::text = $1 OR lower(u.email) = lower($4)
-         WHERE (m.id::text = $2 OR m.merchant_code = $2 OR m.merchant_id = $2)
+         WHERE (m.id::text = $2 OR m.merchant_code = $2)
            AND u.status = 'ACTIVE'
            AND (
              (upper(u.role) IN ('OWNER', 'MANAGER') AND
-               u."merchantId" IN (m.id::text, m.merchant_code, m.merchant_id))
+               u.merchant_id IN (m.id::text, m.merchant_code))
              OR (m.created_by::text = u.id::text AND upper(u.role) IN ('OWNER', 'MANAGER'))
              OR (upper(u.role) = 'OWNER' AND lower(u.email) = lower(m.email))
              OR (upper($5) = 'OWNER' AND lower($4) = lower(m.email))

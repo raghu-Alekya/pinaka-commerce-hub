@@ -19,6 +19,12 @@ export class OrderUpdatePolicy {
     }
   }
 
+  assertStatusChangeAllowed(graph: OrderGraph): void {
+    if (this.isCancelled(graph)) {
+      throw new ConflictException('Cancelled orders cannot change status');
+    }
+  }
+
   requireStoreOrder(graph: OrderGraph): StoreOrderEntity {
     if (!graph.storeOrder) {
       throw new BadRequestException('Store order details are missing for this order');

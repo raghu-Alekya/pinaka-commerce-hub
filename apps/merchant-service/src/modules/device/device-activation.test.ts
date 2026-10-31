@@ -25,7 +25,11 @@ async function main() {
               ? [{ ...deviceRecord }]
               : [];
           }
-          if (sql.includes('FROM public.store_devices')) {
+          if (sql.includes('FROM public.store_devices') || sql.includes('FROM public.merchant_devices')) {
+            return [];
+          }
+          if (sql.includes('INSERT INTO public.store_devices') || sql.includes('UPDATE public.store_devices') ||
+              sql.includes('INSERT INTO public.merchant_devices') || sql.includes('UPDATE public.merchant_devices')) {
             return [];
           }
           if (sql.includes('FROM public.merchants')) {

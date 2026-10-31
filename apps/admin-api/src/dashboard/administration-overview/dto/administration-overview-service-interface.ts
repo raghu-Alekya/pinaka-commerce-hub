@@ -170,7 +170,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND (m.id::text = $${params.length} OR m.merchant_id = $${params.length} OR m.merchant_code = $${params.length})`;
+      whereClause += ` AND (m.id::text = $${params.length} OR m.merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -226,7 +226,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -276,7 +276,7 @@ export class AdministrationOverviewService
     let whereClause = '';
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND e.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -295,6 +295,8 @@ export class AdministrationOverviewService
     const query = `
       SELECT
         COUNT(*)::int AS total_count,
+        COUNT(*) FILTER (WHERE upper(e.status::text) = 'ACTIVE')::int AS active_count,
+        COUNT(*) FILTER (WHERE upper(e.status::text) = 'INACTIVE')::int AS inactive_count,
         COUNT(*) FILTER (
           WHERE NOT EXISTS (
             SELECT 1 FROM public.employee_stores es
@@ -311,6 +313,8 @@ export class AdministrationOverviewService
 
     const [row] = await this.dataSource.query(query, params);
     const total = Number(row?.total_count || 0);
+    const active = Number(row?.active_count || 0);
+    const inactive = Number(row?.inactive_count || 0);
     const withoutRoles = Number(row?.without_roles_count || 0);
     const locked = Number(row?.locked_count || 0);
     const current = Number(row?.current_period_count || 0);
@@ -318,6 +322,8 @@ export class AdministrationOverviewService
 
     return {
       total_count: total,
+      active_count: active,
+      inactive_count: inactive,
       without_roles_count: withoutRoles,
       locked_count: locked,
       growth_percentage: this.calculateGrowth(current, previous),
@@ -342,7 +348,7 @@ export class AdministrationOverviewService
     }
     if (filters.merchant_id) {
       params.push(filters.merchant_id);
-      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_id = $${params.length} OR merchant_code = $${params.length})`;
+      whereClause += ` AND s.merchant_id IN (SELECT id FROM public.merchants WHERE id::text = $${params.length} OR merchant_code = $${params.length})`;
     }
     if (filters.store_id) {
       params.push(filters.store_id);
@@ -351,10 +357,15 @@ export class AdministrationOverviewService
 
     const query = `
       SELECT
+        COUNT(*)::int AS total_count,
         COUNT(*) FILTER (
           WHERE upper(s.status::text) IN ('ACTIVE', 'TRIAL', 'TRIALING')
             AND (s.cancelled_at IS NULL OR s.cancelled_at > CURRENT_TIMESTAMP)
         )::int AS active_count,
+        COUNT(*) FILTER (
+          WHERE upper(s.status::text) IN ('INACTIVE', 'CANCELLED', 'EXPIRED')
+            OR (s.cancelled_at IS NOT NULL AND s.cancelled_at <= CURRENT_TIMESTAMP)
+        )::int AS inactive_count,
         COUNT(*) FILTER (
           WHERE upper(s.status::text) IN ('ACTIVE', 'TRIAL', 'TRIALING')
             AND (s.cancelled_at IS NULL OR s.cancelled_at > CURRENT_TIMESTAMP)
@@ -380,14 +391,18 @@ export class AdministrationOverviewService
     `;
 
     const [row] = await this.dataSource.query(query, params);
+    const total = Number(row?.total_count || 0);
     const active = Number(row?.active_count || 0);
+    const inactive = Number(row?.inactive_count || 0);
     const expiring = Number(row?.expiring_count || 0);
     const paymentPending = Number(row?.payment_pending_count || 0);
     const current = Number(row?.current_period_count || 0);
     const previous = Number(row?.previous_period_count || 0);
 
     return {
+      total_count: total,
       active_count: active,
+      inactive_count: inactive,
       expiring_count: expiring,
       payment_pending_count: paymentPending,
       growth_percentage: this.calculateGrowth(current, previous),

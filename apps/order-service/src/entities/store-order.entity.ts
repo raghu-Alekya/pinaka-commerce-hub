@@ -104,6 +104,9 @@ export class StoreOrderEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   total!: number;
 
+  @Column({ name: 'grand_total', type: 'decimal', precision: 12, scale: 2, default: 0 })
+  grandTotal!: number;
+
   @Column({ name: 'line_items', type: 'jsonb', default: () => "'[]'" })
   lineItems!: unknown[];
 

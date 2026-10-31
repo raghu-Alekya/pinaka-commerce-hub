@@ -5,7 +5,7 @@ import { StoreTypeEntity } from './store-type.entity';
 export { RecordStatus as VendorStatus, VendorType } from './commerce-enums';
 
 @Entity('vendors')
-@Audited()
+@Audited({ includeDeletedFlag: false })
 export class VendorEntity extends AuditColumns {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz', nullable: true, default: () => 'NULL' })
   override updatedAt!: Date;
@@ -21,6 +21,7 @@ export class VendorEntity extends AuditColumns {
 
   @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt?: Date | null;
+
 
   @Column({ name: 'vendor_type', type: 'enum', enum: VendorType, enumName: 'vendor_type' })
   vendorType!: VendorType;
