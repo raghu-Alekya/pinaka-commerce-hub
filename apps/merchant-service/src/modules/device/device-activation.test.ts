@@ -54,8 +54,6 @@ async function main() {
             if (sql.includes('SET device_id')) {
               deviceRecord.deviceId = parameters[0];
               deviceRecord.serialNumber = parameters[1] as string;
-            } else if (sql.includes('SET "serialNumber"')) {
-              deviceRecord.serialNumber = parameters[0] as string;
             }
             return [];
           }
