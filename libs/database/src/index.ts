@@ -339,11 +339,9 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
       }
       if (sqlType === 'uuid' && target === 'merchant_id' && (await tableExists(dataSource, 'merchants'))) {
         const liveType = await liveColumnType(dataSource, table, target);
-        const merchantKey = (await columnExists(dataSource, 'merchants', 'merchantId'))
-          ? 'm."merchantId"'
-          : (await columnExists(dataSource, 'merchants', 'merchant_id'))
-            ? 'm.merchant_id'
-            : '';
+        const merchantKey = (await columnExists(dataSource, 'merchants', 'merchant_code'))
+          ? 'm.merchant_code'
+          : '';
         const merchantCode = (await columnExists(dataSource, 'merchants', 'merchantCode'))
           ? 'm."merchantCode"'
           : (await columnExists(dataSource, 'merchants', 'merchant_code'))
@@ -447,11 +445,6 @@ async function backfillRequiredColumnsBeforeSync(dataSource: DataSource): Promis
           `UPDATE ${quotedTable} SET ${quotedTarget} = ${value} WHERE ${quotedTarget} IS NULL`,
         );
       }
-    }
-    if (table === 'merchants' && (await columnExists(dataSource, table, 'merchant_code')) && (await columnExists(dataSource, table, 'merchant_id'))) {
-      await dataSource.query(
-        `UPDATE public.merchants SET merchant_id = merchant_id || '-ID' WHERE merchant_code IS NOT NULL AND merchant_id = merchant_code`,
-      );
     }
   }
 }
@@ -678,11 +671,11 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     ALTER TABLE public.merchants ALTER COLUMN updated_at DROP DEFAULT;
     ALTER TABLE public.merchants ALTER COLUMN updated_by DROP NOT NULL;
     ALTER TABLE public.merchants ALTER COLUMN updated_by DROP DEFAULT;
+    CREATE SEQUENCE IF NOT EXISTS public.merchant_code_seq AS integer START WITH 1 INCREMENT BY 1;
     CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
     BEGIN
-      NEW.merchant_code := COALESCE(NULLIF(NEW.merchant_code, ''), 'MCH-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8));
-      IF NEW.merchant_id IS NULL OR NEW.merchant_id = '' OR NEW.merchant_id = NEW.merchant_code THEN
-        NEW.merchant_id := 'MID-' || left(COALESCE(NEW.id::text, gen_random_uuid()::text), 8);
+      IF NEW.merchant_code IS NULL OR btrim(NEW.merchant_code) = '' OR NEW.merchant_code !~ '^MCH-[0-9]{4,}$' THEN
+        NEW.merchant_code := 'MCH-' || lpad(nextval('public.merchant_code_seq')::text, 4, '0');
       END IF;
       RETURN NEW;
     END;
@@ -692,9 +685,6 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       FOR EACH ROW EXECUTE PROCEDURE public.sync_merchants_legacy_cols();
     DO $drop_merchant_camel$
     BEGIN
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='merchantId') THEN
-        UPDATE public.merchants SET merchant_id = COALESCE(NULLIF(merchant_id, ''), "merchantId") WHERE COALESCE("merchantId", '') <> '';
-      END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='businessDisplayName') THEN
         UPDATE public.merchants SET business_display_name = COALESCE(business_display_name, "businessDisplayName") WHERE business_display_name IS NULL;
       END IF;
@@ -726,6 +716,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.merchants SET updated_at = COALESCE(NULLIF(updated_at::text, ''), NULLIF("updatedAt"::text, '')) WHERE updated_at IS NULL;
       END IF;
       ALTER TABLE public.merchants
+        DROP COLUMN IF EXISTS "merchant-code",
+        DROP COLUMN IF EXISTS "merchantCode",
         DROP COLUMN IF EXISTS "merchantId",
         DROP COLUMN IF EXISTS "businessName",
         DROP COLUMN IF EXISTS "businessDisplayName",
@@ -852,7 +844,6 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('subscriptions', 'subscription_code', `
-    ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS "subscriptionId" varchar(100);
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS subscription_code varchar(100);
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS start_date date;
     ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS renewal_date date;
@@ -860,22 +851,22 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
     CREATE OR REPLACE FUNCTION public.sync_subscriptions_legacy_cols() RETURNS trigger AS $fn$
     BEGIN
       IF NEW.price IS NULL THEN NEW.price := 0; END IF;
-      NEW.subscription_code := COALESCE(NULLIF(NEW.subscription_code, ''), NULLIF(NEW."subscriptionId", ''), NEW.id::text);
-      NEW."subscriptionId" := COALESCE(NULLIF(NEW."subscriptionId", ''), NEW.subscription_code);
+      IF NEW.subscription_code IS NULL OR BTRIM(NEW.subscription_code) = '' THEN
+        NEW.subscription_code := NEW.id::text;
+      END IF;
       RETURN NEW;
     END;
     $fn$ LANGUAGE plpgsql;
     DROP TRIGGER IF EXISTS subscriptions_legacy_cols ON public.subscriptions;
     CREATE TRIGGER subscriptions_legacy_cols BEFORE INSERT OR UPDATE ON public.subscriptions
       FOR EACH ROW EXECUTE PROCEDURE public.sync_subscriptions_legacy_cols();
-    UPDATE public.subscriptions s SET "subscriptionId" = s.subscription_code WHERE "subscriptionId" IS NULL;
     DO $drop_subscription_camel$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name='merchantId') THEN
         UPDATE public.subscriptions s SET merchant_id = m.id
           FROM public.merchants m
           WHERE s.merchant_id IS NULL
-            AND (s."merchantId" = m.merchant_id OR s."merchantId" = m.merchant_code OR s."merchantId" = m.id::text);
+            AND (s."merchantId" = m.merchant_code OR s."merchantId" = m.id::text);
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions' AND column_name='startDate') THEN
         UPDATE public.subscriptions SET start_date = COALESCE(start_date, "startDate") WHERE start_date IS NULL;
@@ -894,6 +885,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       END IF;
       ALTER TABLE public.subscriptions
         DROP COLUMN IF EXISTS "merchantId",
+        DROP COLUMN IF EXISTS "subscriptionId",
+        DROP COLUMN IF EXISTS "subscriptionCode",
         DROP COLUMN IF EXISTS "startDate",
         DROP COLUMN IF EXISTS "renewalDate",
         DROP COLUMN IF EXISTS "trialEndDate",
@@ -904,19 +897,8 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
   `);
 
   await install('vendors', 'vendor_code', `
-    CREATE OR REPLACE FUNCTION public.sync_vendors_legacy_cols() RETURNS trigger AS $fn$
-    BEGIN
-      IF NEW.is_deleted AND NEW.deleted_at IS NULL THEN
-        NEW.deleted_at := now();
-      ELSIF NOT COALESCE(NEW.is_deleted, false) THEN
-        NEW.deleted_at := NULL;
-      END IF;
-      RETURN NEW;
-    END;
-    $fn$ LANGUAGE plpgsql;
     DROP TRIGGER IF EXISTS vendors_legacy_cols ON public.vendors;
-    CREATE TRIGGER vendors_legacy_cols BEFORE INSERT OR UPDATE ON public.vendors
-      FOR EACH ROW EXECUTE PROCEDURE public.sync_vendors_legacy_cols();
+    DROP FUNCTION IF EXISTS public.sync_vendors_legacy_cols();
     DO $drop_vendor_camel$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='vendorName') THEN
@@ -936,7 +918,12 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='deletedAt') THEN
         UPDATE public.vendors SET deleted_at = COALESCE(deleted_at, NULLIF("deletedAt"::text, '')::timestamptz) WHERE deleted_at IS NULL AND "deletedAt" IS NOT NULL;
       END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='vendorCode') THEN
+        UPDATE public.vendors SET vendor_code = COALESCE(NULLIF(vendor_code, ''), NULLIF("vendorCode", ''))
+          WHERE COALESCE(vendor_code, '') = '' AND COALESCE("vendorCode", '') <> '';
+      END IF;
       ALTER TABLE public.vendors
+        DROP COLUMN IF EXISTS "vendorCode",
         DROP COLUMN IF EXISTS "vendorName",
         DROP COLUMN IF EXISTS "vendorType",
         DROP COLUMN IF EXISTS "contactPerson",
@@ -966,6 +953,12 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.tendors SET tendor_name = COALESCE(NULLIF(tendor_name, ''), "tendorName") WHERE COALESCE("tendorName", '') <> '';
         ALTER TABLE public.tendors DROP COLUMN "tendorName";
       END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tendors' AND column_name='tendorCode') THEN
+        UPDATE public.tendors SET tendor_code = COALESCE(NULLIF(tendor_code, ''), NULLIF("tendorCode", ''))
+          WHERE COALESCE(tendor_code, '') = '' AND COALESCE("tendorCode", '') <> '';
+        ALTER TABLE public.tendors DROP COLUMN "tendorCode";
+      END IF;
+      ALTER TABLE public.tendors DROP COLUMN IF EXISTS store_type_id;
     END;
     $drop_tendor_camel$;
   `);
@@ -1011,13 +1004,19 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='devices' AND column_name='createdAt') THEN
         UPDATE public.devices SET created_at = COALESCE(created_at, NULLIF("createdAt"::text, '')::timestamptz) WHERE created_at IS NULL;
       END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='devices' AND column_name='deviceCode') THEN
+        UPDATE public.devices SET device_code = COALESCE(NULLIF(device_code, ''), NULLIF("deviceCode", ''))
+          WHERE COALESCE(device_code, '') = '' AND COALESCE("deviceCode", '') <> '';
+      END IF;
       ALTER TABLE public.devices
+        DROP COLUMN IF EXISTS "deviceCode",
         DROP COLUMN IF EXISTS "deviceName",
         DROP COLUMN IF EXISTS "deviceType",
         DROP COLUMN IF EXISTS "serialNumber",
         DROP COLUMN IF EXISTS "merchantName",
         DROP COLUMN IF EXISTS "merchantId",
-        DROP COLUMN IF EXISTS "createdAt";
+        DROP COLUMN IF EXISTS "createdAt",
+        DROP COLUMN IF EXISTS device_activation_code;
     END;
     $drop_device_camel$;
   `);
@@ -1132,6 +1131,406 @@ function isRetryablePostgresError(error: unknown): boolean {
   );
 }
 
+const SNAKE_CASE_RENAMES: Record<string, Array<[string, string]>> = {
+  users: [
+    ['merchantId', 'merchant_id'],
+    ['employeeId', 'employee_id'],
+    ['accountId', 'account_id'],
+    ['firstName', 'first_name'],
+    ['lastName', 'last_name'],
+    ['phoneNumber', 'phone_number'],
+    ['notificationEnabled', 'notification_enabled'],
+    ['passwordHash', 'password_hash'],
+    ['actionTokenHash', 'action_token_hash'],
+    ['actionTokenType', 'action_token_type'],
+    ['actionTokenExpiresAt', 'action_token_expires_at'],
+    ['createdAt', 'created_at'],
+    ['updatedAt', 'updated_at'],
+  ],
+  website_connections: [
+    ['storeId', 'store_id'],
+    ['merchantId', 'merchant_id'],
+    ['wordpressUrl', 'wordpress_url'],
+    ['encryptedJwt', 'encrypted_jwt'],
+    ['lastTestedAt', 'last_tested_at'],
+    ['lastTestMessage', 'last_test_message'],
+    ['createdAt', 'created_at'],
+    ['updatedAt', 'updated_at'],
+  ],
+  woocommerce_connections: [
+    ['merchantId', 'merchant_id'],
+    ['storeId', 'store_id'],
+    ['storeUrl', 'store_url'],
+    ['consumerKey', 'consumer_key'],
+    ['consumerSecret', 'consumer_secret'],
+    ['webhookSecret', 'webhook_secret'],
+    ['autoSyncInventory', 'auto_sync_inventory'],
+    ['syncStatus', 'sync_status'],
+    ['lastSyncedAt', 'last_synced_at'],
+    ['createdAt', 'created_at'],
+    ['updatedAt', 'updated_at'],
+  ],
+};
+
+async function renameOrDropLegacyColumn(
+  dataSource: DataSource,
+  table: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  const hasFrom = await columnExists(dataSource, table, from);
+  const hasTo = await columnExists(dataSource, table, to);
+  if (!hasFrom) return;
+  if (!hasTo) {
+    await dataSource.query(
+      `ALTER TABLE public.${quoteIdent(table)} RENAME COLUMN ${quoteIdent(from)} TO ${quoteIdent(to)}`,
+    );
+    return;
+  }
+  await dataSource.query(
+    `UPDATE public.${quoteIdent(table)} SET ${quoteIdent(to)} = COALESCE(${quoteIdent(to)}, ${quoteIdent(from)}) WHERE ${quoteIdent(to)} IS NULL AND ${quoteIdent(from)} IS NOT NULL`,
+  );
+  const primary: unknown[] = await dataSource.query(
+    `SELECT 1
+       FROM pg_index i
+       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+       JOIN pg_class t ON t.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = 'public' AND t.relname = $1 AND a.attname = $2 AND i.indisprimary
+      LIMIT 1`,
+    [table, from],
+  );
+  if (!primary.length) {
+    await dataSource.query(
+      `ALTER TABLE public.${quoteIdent(table)} DROP COLUMN ${quoteIdent(from)}`,
+    );
+  }
+}
+
+/** Number merchant_code as MCH-0001, MCH-0002, then drop merchants.merchant_id. */
+async function assignSequentialMerchantCodes(dataSource: DataSource): Promise<void> {
+  if (!(await columnExists(dataSource, 'merchants', 'merchant_code'))) {
+    await dataSource.query(`ALTER TABLE public.merchants ADD COLUMN merchant_code varchar(100)`);
+  }
+  await dataSource.query(`CREATE SEQUENCE IF NOT EXISTS public.merchant_code_seq AS integer START WITH 1 INCREMENT BY 1`);
+  const orderBy = (await columnExists(dataSource, 'merchants', 'created_at'))
+    ? 'created_at NULLS LAST, id'
+    : 'id';
+  await dataSource.query(`
+    WITH bad AS (
+      SELECT id, row_number() OVER (ORDER BY ${orderBy}) AS n
+        FROM public.merchants
+       WHERE merchant_code IS NULL
+          OR btrim(merchant_code) = ''
+          OR merchant_code !~ '^MCH-[0-9]{4,}$'
+    ),
+    base AS (
+      SELECT COALESCE(MAX(substring(merchant_code FROM 5)::int), 0) AS max_n
+        FROM public.merchants
+       WHERE merchant_code ~ '^MCH-[0-9]{4,}$'
+    )
+    UPDATE public.merchants AS merchant
+       SET merchant_code = 'MCH-' || lpad((base.max_n + bad.n)::text, 4, '0')
+      FROM bad, base
+     WHERE merchant.id = bad.id
+  `);
+  await dataSource.query(`
+    SELECT setval(
+      'public.merchant_code_seq',
+      GREATEST(COALESCE((
+        SELECT MAX(substring(merchant_code FROM 5)::int)
+          FROM public.merchants
+         WHERE merchant_code ~ '^MCH-[0-9]+$'
+      ), 1), 1),
+      EXISTS (SELECT 1 FROM public.merchants WHERE merchant_code ~ '^MCH-[0-9]+$')
+    )
+  `);
+  await dataSource.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS merchants_merchant_code_uq
+      ON public.merchants (merchant_code)
+  `);
+  await dataSource.query(`ALTER TABLE public.merchants DROP COLUMN IF EXISTS merchant_id`);
+  await dataSource.query(`
+    CREATE OR REPLACE FUNCTION public.sync_merchants_legacy_cols() RETURNS trigger AS $fn$
+    BEGIN
+      IF NEW.merchant_code IS NULL OR btrim(NEW.merchant_code) = '' OR NEW.merchant_code !~ '^MCH-[0-9]{4,}$' THEN
+        NEW.merchant_code := 'MCH-' || lpad(nextval('public.merchant_code_seq')::text, 4, '0');
+      END IF;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql
+  `);
+  await dataSource.query(`
+    DROP TRIGGER IF EXISTS merchants_legacy_cols ON public.merchants;
+    CREATE TRIGGER merchants_legacy_cols BEFORE INSERT OR UPDATE ON public.merchants
+      FOR EACH ROW EXECUTE PROCEDURE public.sync_merchants_legacy_cols()
+  `);
+}
+
+/** Number store_code as STR-00001, STR-00002. The trigger assigns the next code. */
+async function assignSequentialStoreCodes(dataSource: DataSource): Promise<void> {
+  if (!(await columnExists(dataSource, 'stores', 'store_code'))) return;
+  await dataSource.query(`DROP TABLE IF EXISTS public.store_code_counters`);
+  await dataSource.query(`CREATE SEQUENCE IF NOT EXISTS public.store_code_seq AS integer START WITH 1 INCREMENT BY 1`);
+  const orderBy = (await columnExists(dataSource, 'stores', 'created_at'))
+    ? 'created_at NULLS LAST, id'
+    : 'id';
+  await dataSource.query(`
+    WITH bad AS (
+      SELECT id, row_number() OVER (ORDER BY ${orderBy}) AS n
+        FROM public.stores
+       WHERE store_code IS NULL
+          OR btrim(store_code) = ''
+          OR store_code !~ '^STR-[0-9]{5}$'
+    ),
+    base AS (
+      SELECT COALESCE(MAX(substring(store_code FROM 5)::int), 0) AS max_n
+        FROM public.stores
+       WHERE store_code ~ '^STR-[0-9]{5}$'
+    )
+    UPDATE public.stores AS store
+       SET store_code = 'STR-' || lpad((base.max_n + bad.n)::text, 5, '0')
+      FROM bad, base
+     WHERE store.id = bad.id
+  `);
+  await dataSource.query(`
+    SELECT setval(
+      'public.store_code_seq',
+      GREATEST(COALESCE((
+        SELECT MAX(substring(store_code FROM 5)::int)
+          FROM public.stores
+         WHERE store_code ~ '^STR-[0-9]{5}$'
+      ), 1), 1),
+      EXISTS (SELECT 1 FROM public.stores WHERE store_code ~ '^STR-[0-9]{5}$')
+    )
+  `);
+  await dataSource.query(`
+    CREATE OR REPLACE FUNCTION public.assign_store_code() RETURNS trigger AS $fn$
+    BEGIN
+      IF NEW.store_code IS NULL OR btrim(NEW.store_code) = '' OR NEW.store_code !~ '^STR-[0-9]{5}$' THEN
+        NEW.store_code := 'STR-' || lpad(nextval('public.store_code_seq')::text, 5, '0');
+      END IF;
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql
+  `);
+  await dataSource.query(`
+    DROP TRIGGER IF EXISTS stores_assign_store_code ON public.stores;
+    CREATE TRIGGER stores_assign_store_code BEFORE INSERT OR UPDATE ON public.stores
+      FOR EACH ROW EXECUTE PROCEDURE public.assign_store_code()
+  `);
+}
+
+/** Rename camelCase columns on the tables this cleanup owns, then drop confirmed duplicates. */
+async function standardizeSnakeCaseColumns(dataSource: DataSource): Promise<void> {
+  for (const [table, pairs] of Object.entries(SNAKE_CASE_RENAMES)) {
+    if (!(await tableExists(dataSource, table))) continue;
+    for (const [from, to] of pairs) {
+      await renameOrDropLegacyColumn(dataSource, table, from, to);
+    }
+  }
+
+  if (await tableExists(dataSource, 'devices')) {
+    await dataSource.query(`
+      ALTER TABLE public.devices
+        DROP COLUMN IF EXISTS "deviceCode",
+        DROP COLUMN IF EXISTS device_activation_code
+    `);
+  }
+
+  if (await tableExists(dataSource, 'stores')) {
+    await assignSequentialStoreCodes(dataSource);
+  }
+
+  if (await tableExists(dataSource, 'merchants')) {
+    await assignSequentialMerchantCodes(dataSource);
+    await dataSource.query(`
+      ALTER TABLE public.merchants
+        DROP COLUMN IF EXISTS "merchant-code",
+        DROP COLUMN IF EXISTS "merchantCode"
+    `);
+    const hasCountry = await columnExists(dataSource, 'merchants', 'country');
+    const nanpCountry = hasCountry
+      ? `AND upper(COALESCE(country, '')) IN ('', 'US', 'USA', 'CA', 'CANADA', 'UNITED STATES', 'UNITED STATES OF AMERICA')`
+      : '';
+    if (await columnExists(dataSource, 'merchants', 'phone')) {
+      await dataSource.query(`
+        UPDATE public.merchants
+           SET phone = substring(regexp_replace(phone, '\\D', '', 'g') from 5)
+         WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') ~ '^9191[6-9][0-9]{9}$'
+      `);
+      await dataSource.query(`
+        UPDATE public.merchants
+           SET phone = substring(regexp_replace(phone, '\\D', '', 'g') from 3)
+         WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') ~ '^11[2-9][0-9]{9}$'
+           ${nanpCountry}
+      `);
+    }
+    if (await columnExists(dataSource, 'merchants', 'alternate_phone')) {
+      await dataSource.query(`
+        UPDATE public.merchants
+           SET alternate_phone = substring(regexp_replace(alternate_phone, '\\D', '', 'g') from 5)
+         WHERE regexp_replace(COALESCE(alternate_phone, ''), '\\D', '', 'g') ~ '^9191[6-9][0-9]{9}$'
+      `);
+      await dataSource.query(`
+        UPDATE public.merchants
+           SET alternate_phone = substring(regexp_replace(alternate_phone, '\\D', '', 'g') from 3)
+         WHERE regexp_replace(COALESCE(alternate_phone, ''), '\\D', '', 'g') ~ '^11[2-9][0-9]{9}$'
+           ${nanpCountry}
+      `);
+    }
+  }
+
+  if (await tableExists(dataSource, 'subscriptions')) {
+    if (!(await columnExists(dataSource, 'subscriptions', 'subscription_code'))) {
+      await dataSource.query(`ALTER TABLE public.subscriptions ADD COLUMN subscription_code varchar(100)`);
+    }
+    await dataSource.query(`
+      CREATE OR REPLACE FUNCTION public.sync_subscriptions_legacy_cols() RETURNS trigger AS $fn$
+      BEGIN
+        IF NEW.price IS NULL THEN NEW.price := 0; END IF;
+        IF NEW.subscription_code IS NULL OR BTRIM(NEW.subscription_code) = '' THEN
+          NEW.subscription_code := NEW.id::text;
+        END IF;
+        RETURN NEW;
+      END;
+      $fn$ LANGUAGE plpgsql;
+    `);
+    if (await columnExists(dataSource, 'subscriptions', 'subscriptionId')) {
+      await dataSource.query(`
+        UPDATE public.subscriptions
+           SET subscription_code = "subscriptionId"
+         WHERE (subscription_code IS NULL OR BTRIM(subscription_code) = '')
+           AND "subscriptionId" IS NOT NULL
+      `);
+    }
+    if (await columnExists(dataSource, 'subscriptions', 'subscriptionCode')) {
+      await dataSource.query(`
+        UPDATE public.subscriptions
+           SET subscription_code = "subscriptionCode"
+         WHERE (subscription_code IS NULL OR BTRIM(subscription_code) = '')
+           AND "subscriptionCode" IS NOT NULL
+      `);
+    }
+    await dataSource.query(`
+      ALTER TABLE public.subscriptions
+        DROP COLUMN IF EXISTS "subscriptionId",
+        DROP COLUMN IF EXISTS "subscriptionCode"
+    `);
+  }
+
+  if (await tableExists(dataSource, 'vendors') && await columnExists(dataSource, 'vendors', 'vendor_code')) {
+    if (await columnExists(dataSource, 'vendors', 'vendorCode')) {
+      await dataSource.query(`
+        UPDATE public.vendors
+           SET vendor_code = COALESCE(NULLIF(vendor_code, ''), NULLIF("vendorCode", ''))
+         WHERE COALESCE(vendor_code, '') = ''
+           AND COALESCE("vendorCode", '') <> ''
+      `);
+      await dataSource.query(`ALTER TABLE public.vendors DROP COLUMN "vendorCode"`);
+    }
+  }
+
+  if (await tableExists(dataSource, 'tendors')) {
+    if (
+      (await columnExists(dataSource, 'tendors', 'tendor_code')) &&
+      (await columnExists(dataSource, 'tendors', 'tendorCode'))
+    ) {
+      await dataSource.query(`
+        UPDATE public.tendors
+           SET tendor_code = COALESCE(NULLIF(tendor_code, ''), NULLIF("tendorCode", ''))
+         WHERE COALESCE(tendor_code, '') = ''
+           AND COALESCE("tendorCode", '') <> ''
+      `);
+      await dataSource.query(`ALTER TABLE public.tendors DROP COLUMN "tendorCode"`);
+    } else if (await columnExists(dataSource, 'tendors', 'tendorCode')) {
+      await dataSource.query(`ALTER TABLE public.tendors RENAME COLUMN "tendorCode" TO tendor_code`);
+    }
+    await dataSource.query(`ALTER TABLE public.tendors DROP COLUMN IF EXISTS store_type_id`);
+  }
+
+  if (await tableExists(dataSource, 'discounts')) {
+    const inbound: unknown[] = await dataSource.query(
+      `SELECT 1
+         FROM pg_constraint
+        WHERE confrelid = 'public.discounts'::regclass
+          AND contype = 'f'
+        LIMIT 1`,
+    );
+    if (!inbound.length) {
+      await dataSource.query(`DROP TABLE public.discounts`);
+    }
+  }
+
+  await dropLegacyStoreConfigurationTables(dataSource);
+}
+
+const LEGACY_STORE_CONFIGURATION_TABLES = [
+  'pos_tax_classes',
+  'pos_cashback_tiers',
+  'pos_service_charge_tiers',
+  'pos_cash_denomination_items',
+  'pos_cash_denomination_item',
+  'pos_cash_registers',
+  'pos_safe_drop_denominations',
+  'pos_safe_drop_tubes',
+  'pos_terminal_mappings',
+  'pos_card_payment_settings',
+  'pos_cash_denomination_settings',
+  'pos_cash_register_settings',
+  'pos_cashback_settings',
+  'pos_currency_tax_settings',
+  'pos_opening_balance_settings',
+  'pos_safe_drop_settings',
+  'pos_service_charge_settings',
+  'pos_terminal_mapping_settings',
+  'pos_configs',
+];
+
+async function dropLegacyStoreConfigurationTables(dataSource: DataSource): Promise<void> {
+  if (await tableExists(dataSource, 'pos_configs')) {
+    await dataSource.query(`
+      CREATE TABLE IF NOT EXISTS public.store_pos_configurations (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id uuid NOT NULL,
+        configuration_name varchar(100) NOT NULL,
+        configuration_value jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_by uuid,
+        updated_by uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await dataSource.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_store_pos_configuration_store_name
+      ON public.store_pos_configurations (store_id, configuration_name)
+    `);
+    const storeColumn = await columnExists(dataSource, 'pos_configs', 'storeId') ? '"storeId"' : 'store_id';
+    await dataSource.query(`
+      INSERT INTO public.store_pos_configurations (store_id, configuration_name, configuration_value)
+      SELECT ${storeColumn}::uuid, 'pos_runtime', to_jsonb(src)
+        FROM public.pos_configs src
+       WHERE ${storeColumn}::text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      ON CONFLICT (store_id, configuration_name) DO NOTHING
+    `);
+  }
+
+  for (const table of LEGACY_STORE_CONFIGURATION_TABLES) {
+    if (!(await tableExists(dataSource, table))) continue;
+    const blockers: Array<{ relname: string }> = await dataSource.query(
+      `SELECT rel.relname
+         FROM pg_constraint con
+         JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE con.confrelid = $1::regclass
+          AND con.contype = 'f'
+          AND rel.relname <> ALL($2::text[])`,
+      [`public.${table}`, LEGACY_STORE_CONFIGURATION_TABLES],
+    );
+    if (blockers.length) continue;
+    await dataSource.query(`DROP TABLE public.${table}`);
+  }
+}
+
 export async function connectPostgres(
   serviceName: string,
   entities: DataSourceOptions['entities'],
@@ -1146,37 +1545,34 @@ export async function connectPostgres(
     const dataSource = new DataSource({ ...options, synchronize: false });
     try {
       await dataSource.initialize();
-      if (options.synchronize || settings.legacyQueryColumns) {
-        // Repositories initialize concurrently, including across service processes.
-        // Keep a dedicated connection so the session lock covers every schema query.
-        const schemaLock = dataSource.createQueryRunner();
-        await schemaLock.connect();
+      // Repositories initialize concurrently, including across service processes.
+      // Keep a dedicated connection so the session lock covers every schema query.
+      const schemaLock = dataSource.createQueryRunner();
+      await schemaLock.connect();
+      try {
+        await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
         try {
-          await schemaLock.query('SELECT pg_advisory_lock(724621, 1)');
-          try {
-            if (options.synchronize) {
-              await dropEntityForeignKeys(dataSource);
-              await alignLegacyCamelCaseColumns(dataSource);
-              await backfillRequiredColumnsBeforeSync(dataSource);
-              await dedupeUniqueColumns(dataSource);
-              await clearOrphanForeignKeys(dataSource);
-              await backfillOptionalUniqueColumns(dataSource);
-              await dropIndexesOutsideEntities(dataSource);
-              await dataSource.synchronize();
-              if (await tableExists(dataSource, 'stores')) {
-                await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
-                await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
-              }
+          await standardizeSnakeCaseColumns(dataSource);
+          if (options.synchronize) {
+            await dropEntityForeignKeys(dataSource);
+            await alignLegacyCamelCaseColumns(dataSource);
+            await backfillRequiredColumnsBeforeSync(dataSource);
+            await dedupeUniqueColumns(dataSource);
+            await clearOrphanForeignKeys(dataSource);
+            await backfillOptionalUniqueColumns(dataSource);
+            await dropIndexesOutsideEntities(dataSource);
+            await dataSource.synchronize();
+            if (await tableExists(dataSource, 'stores')) {
+              await dataSource.query('DROP TRIGGER IF EXISTS pch_store_merchant_uuid_biu ON public.stores');
+              await dataSource.query('DROP FUNCTION IF EXISTS public.pch_set_store_merchant_uuid()');
             }
-            if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
-          } finally {
-            await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
           }
+          if (settings.legacyQueryColumns) await ensureLegacyQueryColumns(dataSource);
         } finally {
-          await schemaLock.release();
+          await schemaLock.query('SELECT pg_advisory_unlock(724621, 1)');
         }
-      } else if (settings.legacyQueryColumns) {
-        await ensureLegacyQueryColumns(dataSource);
+      } finally {
+        await schemaLock.release();
       }
       console.log(`🐘 [${serviceName}] Connected to PostgreSQL ${describeTarget(options)}`);
       return dataSource;

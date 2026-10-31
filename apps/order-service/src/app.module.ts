@@ -14,11 +14,12 @@ import { FullOrderRefundController } from './full-order-refund.controller';
 import { FullOrderRefundService } from './full-order-refund.service';
 import { PartialOrderRefundController } from './partial-order-refund.controller';
 import { PartialOrderRefundService } from './partial-order-refund.service';
+import { OrderWebsiteSyncService } from './website-sync/order-website-sync.service';
 
 @Module({
   imports: [OrderPersistenceModule, OrderUpdatesModule],
   // Register fixed order paths before AppController's dynamic GET /:id route.
   controllers: [CompletedOrdersController, RefundValidUserController, RefundAmountController, FullOrderRefundController, PartialOrderRefundController, AppController, StorePosPaymentsController],
-  providers: [OrderResponsePresenter, OrderListPresenter, CompletedOrderPresenter, RefundAmountService, FullOrderRefundService, PartialOrderRefundService],
+  providers: [OrderResponsePresenter, OrderListPresenter, CompletedOrderPresenter, RefundAmountService, FullOrderRefundService, PartialOrderRefundService, OrderWebsiteSyncService],
 })
 export class AppModule {}

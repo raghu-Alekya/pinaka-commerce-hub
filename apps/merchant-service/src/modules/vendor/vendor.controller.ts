@@ -5,7 +5,7 @@ import { VendorFormValidationPipe } from '../master/tenders/vendor-tendor.form.p
 import { VendorStatus, VendorType } from '../../entities/vendor.entity';
 import { RequireAuth } from '../shared/session-auth.guard';
 
-type AuthenticatedRequest = { user?: { id?: string } };
+type AuthenticatedRequest = { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } };
 
 const createValidation = new VendorFormValidationPipe({
   expectedType: CreateVendorDto,
@@ -20,6 +20,18 @@ const patchValidation = new VendorFormValidationPipe({
   forbidNonWhitelisted: true,
   skipUndefinedProperties: true,
 });
+
+@Controller(['api/v1/store-vendor-payments', 'connector/api/v1/store-vendor-payments'])
+@RequireAuth()
+export class StoreVendorPaymentController {
+  constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
+
+  @Post()
+  async create(@Body() body: Record<string, unknown>, @Req() request: AuthenticatedRequest) {
+    return { success: true, message: 'Vendor payment created',
+      payment: await this.repository.createStoreVendorPayment(body, request.user) };
+  }
+}
 
 @Controller(['api/v1/vendors', 'connector/api/v1/vendors', 'vendors'])
 @RequireAuth()
@@ -42,12 +54,12 @@ export class VendorController {
     if (status && status !== 'ALL' && status !== VendorStatus.ACTIVE && status !== VendorStatus.INACTIVE) {
       throw new BadRequestException('Invalid status');
     }
-    const isDeleted = this.parseIsDeleted(query.isDeleted ?? query.is_deleted);
+    const includeDeleted = this.parseDeletedAt(query.deleted_at);
     const vendors = await this.repository.list({
       vendorType: vendorType === VendorType.ORGANIZER || vendorType === VendorType.SUPPLIER ? vendorType : undefined,
       status: status && status !== 'ALL' ? status : undefined,
       search: query.search,
-      isDeleted,
+      includeDeleted,
     });
     return { success: true, count: vendors.length, vendors };
   }
@@ -56,7 +68,7 @@ export class VendorController {
   async get(@Param('id', new ParseUUIDPipe()) id: string, @Query() query: Record<string, string>) {
     return {
       success: true,
-      vendor: await this.repository.getById(id, this.parseIsDeleted(query.isDeleted ?? query.is_deleted)),
+      vendor: await this.repository.getById(id, this.parseDeletedAt(query.deleted_at)),
     };
   }
 
@@ -81,11 +93,11 @@ export class VendorController {
     return { success: true, message: 'Vendor soft deleted', isDeleted: true };
   }
 
-  private parseIsDeleted(value?: string): boolean {
+  private parseDeletedAt(value?: string): boolean {
     if (value === undefined) return false;
     const normalized = value.trim().toLowerCase();
     if (normalized !== 'true' && normalized !== 'false') {
-      throw new BadRequestException('isDeleted must be true or false');
+      throw new BadRequestException('deleted_at must be true or false');
     }
     return normalized === 'true';
   }

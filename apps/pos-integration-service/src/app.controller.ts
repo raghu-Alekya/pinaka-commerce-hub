@@ -1,9 +1,13 @@
-import { Inject, Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { StoreVendorPaymentEntity } from '../../merchant-service/src/entities/store-vendor-payment.entity';
+import { Inject, Controller, Get, Post, Put, Delete, Body, Param, Query, Headers, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
 import { PosConfigRepository } from './pos-config.repository';
 import { FastkeyItem } from './pos-config.entity';
 import { MovementType } from './entities/cash-movement.entity';
-import { normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
+import { describeUnmappedShiftKeys, normalizeShiftClose, normalizeShiftCreate, normalizeShiftUpdate } from './shift-request';
+import { ShiftReportService } from './shift-report.service';
+import { shiftDebug, shiftErrorDetails, summarizeShiftWrite } from './shift-debug.log';
+import { withStoreShiftFields } from './shift.types';
 
 const SHIFT_REQUEST_ALIASES = [
   ['merchant_id', 'merchantId'],
@@ -17,6 +21,43 @@ const SHIFT_REQUEST_ALIASES = [
 ] as const;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+@Controller('api/v1/store-vendor-payments')
+export class PosVendorPaymentController {
+  constructor(@Inject(PosRepository) private readonly shifts: PosRepository) {}
+
+  @Get()
+  async list(@Query('merchant_id') merchantId?: string, @Query('store_id') storeId?: string, @Query('shift_id') shiftId?: string) {
+    const payments = await StoreVendorPaymentEntity.listPayments(this.shifts.requireDataSource(), merchantId, storeId, shiftId);
+    return { success: true, merchant_id: merchantId, store_id: storeId, shift_id: shiftId?.trim(), count: payments.length, payments };
+  }
+
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return { success: true, message: 'Vendor payment updated',
+      payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, body) };
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return { success: true, message: 'Vendor payment soft-deleted',
+      payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, {}, true) };
+  }
+
+  @Post()
+  async create(@Body() body: Record<string, unknown>) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a payment JSON object');
+    if (typeof body.shift_id !== 'string' || !body.shift_id.trim()) throw new BadRequestException('shift_id is required');
+    const db = this.shifts.requireDataSource();
+    const [shift] = await db.query(
+      'SELECT created_by,merchant_id,store_id FROM public.pos_shifts WHERE id=$1', [body.shift_id.trim()]);
+    if (!shift) throw new NotFoundException('Shift not found');
+    if (!UUID_PATTERN.test(String(shift.created_by ?? ''))) throw new BadRequestException('Shift must have a valid employee UUID in created_by');
+    return { success: true, message: 'Vendor payment created', payment: await StoreVendorPaymentEntity.createPayment(db, body,
+      { id: shift.created_by, merchantId: shift.merchant_id, storeId: shift.store_id }) };
+  }
+
+}
 
 function normalizeShiftRequest<T extends object>(input: T): T {
   const request = { ...input } as T & Record<string, unknown>;
@@ -36,6 +77,7 @@ export class AppController {
   constructor(
     @Inject(PosRepository) private readonly posRepository: PosRepository,
     @Inject(PosConfigRepository) private readonly posConfigRepository: PosConfigRepository,
+    @Inject(ShiftReportService) private readonly shiftReport: ShiftReportService,
   ) {}
 
   @Get('health')
@@ -100,28 +142,33 @@ export class AppController {
 
   @Post(['shifts', 'shifts/open'])
   async openShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftCreate(request);
-    const shift = await this.posRepository.createShift(write);
-    return {
-      success: true,
-      message: 'Shift created and opened successfully',
-      shift_id: shift.id,
-      shiftId: shift.id,
-      shift,
-    };
+    return this.traceShift('POST /shifts', request, async () => {
+      const write = normalizeShiftCreate(request);
+      shiftDebug('normalized', { action: 'POST /shifts', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.createShift(write);
+      return {
+        success: true,
+        message: 'Shift created and opened successfully',
+
+        shift,
+      };
+    });
   }
 
   @Post('shifts/update')
   async updateShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftUpdate(request);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift updated successfully',
-      shift_id: shift.id,
-      shift,
-    };
+    return this.traceShift('POST /shifts/update', request, async () => {
+      const write = normalizeShiftUpdate(request);
+      shiftDebug('normalized', { action: 'POST /shifts/update', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift updated successfully',
+        shift_id: shift.id,
+        shift,
+      };
+    });
   }
 
   @Put('shifts/:shift_id')
@@ -129,15 +176,18 @@ export class AppController {
     @Param('shift_id') shiftId: string,
     @Body() request: Record<string, unknown>,
   ) {
-    const write = normalizeShiftUpdate(request ?? {}, shiftId);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift updated successfully',
-      shift_id: shift.id,
-      shift,
-    };
+    return this.traceShift('PUT /shifts/:shift_id', { shift_id: shiftId, ...(request ?? {}) }, async () => {
+      const write = normalizeShiftUpdate(request ?? {}, shiftId);
+      shiftDebug('normalized', { action: 'PUT /shifts/:shift_id', save: summarizeShiftWrite(write) });
+      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift updated successfully',
+        shift_id: shift.id,
+        shift,
+      };
+    });
   }
 
   @Post('shifts/cash-movement')
@@ -153,42 +203,70 @@ export class AppController {
     performed_by?: string;
     reason?: string;
   }) {
-    const body = normalizeShiftRequest(request);
-    if (!body.shiftId || !body.storeId || !body.amount) {
-      throw new BadRequestException('shiftId, storeId, and amount are required');
-    }
-    const movement = await this.posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
-    return {
-      success: true,
-      message: `Cash movement '${movement.movementType}' recorded successfully!`,
-      cashMovement: movement,
-    };
+    return this.traceShift('POST /shifts/cash-movement', request, async () => {
+      const body = normalizeShiftRequest(request);
+      if (!body.shiftId || !body.storeId || !body.amount) {
+        throw new BadRequestException('shiftId, storeId, and amount are required');
+      }
+      const movement = await this.posRepository.recordCashMovement(body.shiftId, body.storeId, body.movementType || MovementType.SAFE_DROP, body.amount, body.performedBy || 'Manager', body.reason);
+      return {
+        success: true,
+        message: `Cash movement '${movement.movementType}' recorded successfully!`,
+        cashMovement: movement,
+      };
+    });
   }
 
   @Post('shifts/close')
   async closeShift(@Body() request: Record<string, unknown>) {
-    const write = normalizeShiftClose(request);
-    const shift = await this.posRepository.updateShift(write.shiftId, write);
-    if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
-    return {
-      success: true,
-      message: 'Shift closed successfully! Z-Report generated for thermal printing.',
-      shift_id: shift.id,
-      shift,
-      reportType: 'Z_REPORT',
-    };
+    return this.traceShift('POST /shifts/close', request, async () => {
+      const write = normalizeShiftClose(request);
+      const shift = await this.posRepository.updateShift(write.shiftId, write, async () => {
+        const preview = await this.shiftReport.previewClose(write.shiftId, Number(write.master.closing_balance));
+        const declared = write.master.declared_cash;
+        write.master.over_short = preview.overShort;
+        write.master.discrepancy = declared == null
+          ? preview.overShort
+          : Math.round((Number(declared) - preview.expectedTillAmount) * 100) / 100;
+        for (const field of ['over_short', 'discrepancy']) {
+          if (!write.fields.includes(field)) write.fields.push(field);
+        }
+        shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write), database_updated: true });
+      });
+      if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
+      return {
+        success: true,
+        message: 'Shift closed successfully! Z-Report generated for thermal printing.',
+        shift_id: shift.id,
+        shift,
+        reportType: 'Z_REPORT',
+      };
+    });
+  }
+
+  @Get('shifts/get-shift-by-id')
+  async getShiftById(
+    @Query('shiftId') shiftId?: string,
+    @Query('shift_id') shift_id?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('employee_id') employee_id?: string,
+  ) {
+    const query = { shiftId, shift_id, employeeId, employee_id };
+    return this.traceShift('GET /shifts/get-shift-by-id', query, () => this.shiftReport.getShiftById(shiftId || shift_id, employeeId || employee_id));
   }
 
   @Get('shifts/active')
   async getActiveShift(@Query() query: { storeId?: string; store_id?: string }) {
-    const { storeId } = normalizeShiftRequest(query);
-    const shifts = await this.posRepository.getActiveShifts(storeId || 'STR-5001');
-    return {
-      success: true,
-      storeId: storeId || 'STR-5001',
-      count: shifts.length,
-      shifts,
-    };
+    return this.traceShift('GET /shifts/active', query, async () => {
+      const { storeId } = normalizeShiftRequest(query);
+      const shifts = await this.posRepository.getActiveShifts(storeId || 'STR-5001');
+      return {
+        success: true,
+        storeId: storeId || 'STR-5001',
+        count: shifts.length,
+        shifts,
+      };
+    });
   }
 
   @Get('shifts/employee/:employeeId')
@@ -196,21 +274,39 @@ export class AppController {
     @Param('employeeId') employeeId: string,
     @Query() query: { storeId?: string; store_id?: string },
   ) {
-    const id = employeeId.trim();
-    if (!UUID_PATTERN.test(id)) {
-      throw new BadRequestException('employeeId must be a valid UUID');
-    }
-    const { storeId } = normalizeShiftRequest(query);
-    const shifts = await this.posRepository.getShiftsByEmployee(id, storeId?.trim() || undefined);
-    return { success: true, employeeId: id, count: shifts.length, shifts };
+    return this.traceShift('GET /shifts/employee/:employeeId', { employeeId, ...query }, async () => {
+      const id = employeeId.trim();
+      if (!UUID_PATTERN.test(id)) {
+        throw new BadRequestException('employeeId must be a valid UUID');
+      }
+      const { storeId } = normalizeShiftRequest(query);
+      const shifts = await this.posRepository.getShiftsByEmployee(id, storeId?.trim() || undefined);
+      return { success: true, employeeId: id, count: shifts.length, shifts };
+    });
   }
 
   @Get('stores/:store_id/shifts')
   async getShiftsByStore(@Param('store_id') store_id: string) {
-    const storeId = store_id.trim();
-    if (!storeId) throw new BadRequestException('store_id is required');
-    const shifts = await this.posRepository.getShiftsByStore(storeId);
-    return { success: true, store_id: storeId, count: shifts.length, shifts };
+    return this.traceShift('GET /stores/:store_id/shifts', { store_id }, async () => {
+      const storeId = store_id.trim();
+      if (!storeId) throw new BadRequestException('store_id is required');
+      const shifts = (await this.posRepository.getShiftsByStore(storeId)).map(withStoreShiftFields);
+      return { success: true, store_id: storeId, merchant_id: shifts[0]?.merchant_id ?? null, count: shifts.length, shifts };
+    });
+  }
+
+  @Get(['stores/:store_id/shifts/by-date', 'shifts/shifts-by-date'])
+  getShiftsByDate(@Query('date') date?: string, @Param('store_id') storeId?: string, @Query('store_id') queryStoreId?: string, @Headers('x-store-id') headerStoreId?: string) {
+    const ids = [storeId, queryStoreId, headerStoreId].filter((id): id is string => Boolean(id?.trim())).map(id => id.trim());
+    if (new Set(ids).size > 1) throw new BadRequestException('Conflicting store IDs');
+    return this.shiftReport.getShiftsByDate(ids[0], date);
+  }
+
+  @Get(['stores/:store_id/shifts/daily-summary', 'shifts/get-daily-shift-summary'])
+  getDailyShiftSummary(@Param('store_id') storeId?: string, @Query('store_id') queryStoreId?: string, @Headers('x-store-id') headerStoreId?: string) {
+    const ids = [storeId, queryStoreId, headerStoreId].filter((id): id is string => Boolean(id?.trim())).map(id => id.trim());
+    if (new Set(ids).size > 1) throw new BadRequestException('Conflicting store IDs');
+    return this.shiftReport.getDailyShiftSummary(ids[0]);
   }
 
   @Get('stores/:store_id/shifts/:shift_id')
@@ -218,8 +314,23 @@ export class AppController {
     @Param('store_id') store_id: string,
     @Param('shift_id') shift_id: string,
   ) {
-    const shift = await this.posRepository.getShiftWithSafeTransactions(shift_id, store_id);
-    if (!shift) throw new NotFoundException('POS shift not found');
-    return { success: true, shift };
+    return this.traceShift('GET /stores/:store_id/shifts/:shift_id', { store_id, shift_id }, async () => {
+      const shift = await this.posRepository.getShiftWithSafeTransactions(shift_id, store_id);
+      if (!shift) throw new NotFoundException('POS shift not found');
+      return { success: true, shift: withStoreShiftFields(shift) };
+    });
+  }
+
+  private async traceShift<T>(action: string, request: unknown, work: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    shiftDebug('request', { action, ignored_keys: describeUnmappedShiftKeys(request), payload: request });
+    try {
+      const result = await work();
+      shiftDebug('response', { action, ms: Date.now() - started, payload: result });
+      return result;
+    } catch (error) {
+      shiftDebug('error', { action, ms: Date.now() - started, ...shiftErrorDetails(error) });
+      throw error;
+    }
   }
 }

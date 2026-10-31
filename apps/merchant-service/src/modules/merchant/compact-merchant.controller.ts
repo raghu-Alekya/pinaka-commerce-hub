@@ -1,5 +1,6 @@
 import { EmployeeResponseInterceptor } from '../employee/workforce-validation.pipe';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, scrypt } from 'node:crypto';
+import { promisify } from 'node:util';
 import {
   BadRequestException,
   Body,
@@ -28,6 +29,7 @@ import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
 
 const fields = [
+  'password',
   'merchantName',
   'merchantEmail',
   'merchantPhoneNumber',
@@ -100,6 +102,12 @@ export class CompactMerchantController {
     @Inject(FileStorageService) private readonly files: FileStorageService,
   ) {}
 
+  private async hashMerchantPassword(value: unknown): Promise<string> {
+    const salt = randomBytes(16);
+    const digest = await promisify(scrypt)(value as string, salt, 64) as Buffer;
+    return salt.toString('base64url') + ':' + digest.toString('base64url');
+  }
+
   private get db() {
     return this.repository.requireDataSource();
   }
@@ -125,6 +133,33 @@ export class CompactMerchantController {
       delete input.legalBusinessName;
     }
     delete input.storeTypeId;
+    if (input.first_name !== undefined && input.firstName === undefined) {
+      input.firstName = input.first_name;
+      delete input.first_name;
+    }
+    if (input.last_name !== undefined && input.lastName === undefined) {
+      input.lastName = input.last_name;
+      delete input.last_name;
+    }
+    if (input.address_line1 !== undefined && input.addressLine1 === undefined) {
+      input.addressLine1 = input.address_line1;
+      delete input.address_line1;
+    }
+    if (input.address_line2 !== undefined && input.addressLine2 === undefined) {
+      input.addressLine2 = input.address_line2;
+      delete input.address_line2;
+    }
+    if (input.postal_code !== undefined && input.pinCode === undefined) {
+      input.pinCode = input.postal_code;
+      delete input.postal_code;
+    }
+    if (input.postalCode !== undefined && input.pinCode === undefined) {
+      input.pinCode = input.postalCode;
+      delete input.postalCode;
+    }
+    if (input.password !== undefined && (typeof input.password !== 'string' || !input.password.trim() || input.password.length > 128)) {
+      throw new BadRequestException('password must be a non-empty string of at most 128 characters');
+    }
     const allowed = new Set<string>(fields);
     const blocked = removed.filter((key) =>
       Object.prototype.hasOwnProperty.call(input, key),
@@ -284,6 +319,67 @@ export class CompactMerchantController {
       if (code) (merchant as Input).merchant_code = code;
       const values = merchant as Input;
       if (values.ein == null) values.ein = values.taxId ?? values.tax_id ?? null;
+      values.firstName = values.firstName ?? values.first_name ?? null;
+      values.lastName = values.lastName ?? values.last_name ?? null;
+      values.first_name = values.first_name ?? values.firstName ?? null;
+      values.last_name = values.last_name ?? values.lastName ?? null;
+
+      values.addressLine1 =
+        values.addressLine1 ??
+        values.address_line1 ??
+        values.address_line_1 ??
+        (typeof values.businessAddress === 'string'
+          ? values.businessAddress
+          : (typeof values.address === 'string'
+              ? values.address
+              : (values.address as Input)?.addressLine1 ??
+                (values.address as Input)?.address_line1 ??
+                (values.address as Input)?.street ??
+                null)) ??
+        null;
+      values.address_line1 = values.address_line1 ?? values.addressLine1 ?? null;
+
+      values.addressLine2 =
+        values.addressLine2 ??
+        values.address_line2 ??
+        values.address_line_2 ??
+        ((values.address as Input)?.addressLine2 ??
+          (values.address as Input)?.address_line2 ??
+          (values.address as Input)?.unit ??
+          null) ??
+        null;
+      values.address_line2 = values.address_line2 ?? values.addressLine2 ?? null;
+
+      values.postalCode =
+        values.postalCode ??
+        values.postal_code ??
+        values.pinCode ??
+        values.pin_code ??
+        ((values.address as Input)?.postalCode ??
+          (values.address as Input)?.postal_code ??
+          (values.address as Input)?.zipCode ??
+          (values.address as Input)?.zip ??
+          null) ??
+        null;
+      values.pinCode = values.pinCode ?? values.postalCode ?? null;
+      values.postal_code = values.postal_code ?? values.postalCode ?? null;
+
+      values.businessDisplayName =
+        values.businessDisplayName ??
+        values.business_display_name ??
+        values.businessName ??
+        null;
+      values.business_display_name =
+        values.business_display_name ?? values.businessDisplayName ?? null;
+      values.businessName =
+        values.businessName ?? values.businessDisplayName ?? null;
+
+      values.email = values.email ?? values.merchantEmail ?? null;
+      values.merchantEmail = values.merchantEmail ?? values.email ?? null;
+
+      values.phone = values.phone ?? values.merchantPhoneNumber ?? null;
+      values.merchantPhoneNumber =
+        values.merchantPhoneNumber ?? values.phone ?? null;
     }
     const subscription = record?.subscription;
     if (
@@ -311,11 +407,19 @@ export class CompactMerchantController {
       createdAt: row.createdAt || row.createdDate || row.created_at || null,
     };
     for (const key of fields) {
+      if (key === 'password') continue;
       let value =
         row[key] ??
+        (key === 'firstName' ? row.first_name : undefined) ??
+        (key === 'lastName' ? row.last_name : undefined) ??
+        (key === 'addressLine1' ? row.address_line1 ?? row.address_line_1 : undefined) ??
+        (key === 'addressLine2' ? row.address_line2 ?? row.address_line_2 : undefined) ??
+        (key === 'pinCode' ? row.postalCode ?? row.postal_code ?? row.pin_code : undefined) ??
         (key === 'merchantEmail' ? row.email : undefined) ??
         (key === 'merchantPhoneNumber' ? row.phone : undefined) ??
-        (key === 'pinCode' ? row.postalCode : undefined);
+        (key === 'businessDisplayName' ? row.business_display_name : undefined) ??
+        (key === 'businessName' ? row.business_display_name : undefined) ??
+        (key === 'taxId' ? row.tax_id ?? row.ein : undefined);
       if (key === 'startDate' || key === 'renewalDate')
         value = this.dateOnly(value);
       merchant[key] =
@@ -333,7 +437,7 @@ export class CompactMerchantController {
   }) {
     await manager.query(`SELECT pg_advisory_xact_lock(842001)`);
     const numbered = await manager.query(
-      `SELECT merchant_id AS code FROM public.merchants WHERE merchant_id ~ '^MER-[0-9]+$'`,
+      `SELECT merchant_code AS code FROM public.merchants WHERE merchant_code ~ '^MCH-[0-9]+$'`,
     );
     let max = 0;
     for (const row of numbered) {
@@ -342,19 +446,19 @@ export class CompactMerchantController {
     }
     const pending = await manager.query(
       `SELECT id::text AS id FROM public.merchants
-       WHERE COALESCE(merchant_id, '') !~ '^MER-[0-9]+$'
+       WHERE merchant_code IS NULL OR merchant_code !~ '^MCH-[0-9]{4,}$'
        ORDER BY COALESCE((to_jsonb(merchants)->>'createdDate')::timestamptz, (to_jsonb(merchants)->>'created_at')::timestamptz, (to_jsonb(merchants)->>'createdAt')::timestamptz, now()), id`,
     );
     for (const row of pending) {
       max += 1;
-      const code = `MER-${String(max).padStart(4, '0')}`;
+      const code = `MCH-${String(max).padStart(4, '0')}`;
       await manager.query(
-        `UPDATE public.merchants SET merchant_id=$1, merchant_code=CASE WHEN merchant_code IS NULL OR merchant_code !~ '^MER-[0-9]+$' THEN $1 ELSE merchant_code END WHERE id::text=$2`,
+        `UPDATE public.merchants SET merchant_code=$1 WHERE id::text=$2`,
         [code, row.id],
       );
     }
     max += 1;
-    return `MER-${String(max).padStart(4, '0')}`;
+    return `MCH-${String(max).padStart(4, '0')}`;
   }
 
   @Post('create-merchant')
@@ -375,6 +479,7 @@ export class CompactMerchantController {
     delete flat.planDetails;
     const mapped: Input = {
       ...flat,
+      password: flat.password ?? merchant.password,
       merchantName: flat.merchantName ?? merchant.merchantName ?? merchant.name,
       merchantEmail:
         flat.merchantEmail ?? merchant.merchantEmail ?? merchant.email,
@@ -418,6 +523,7 @@ export class CompactMerchantController {
     let savedId = '';
     try {
       await this.db.transaction(async (manager) => {
+        await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS password varchar(255) NULL');
         const merchantColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`,
         );
@@ -430,13 +536,8 @@ export class CompactMerchantController {
         };
         const rowId = randomUUID();
         savedId = rowId;
-        const merchantKey = `MCH-${rowId.slice(0, 8).toUpperCase()}`;
-        const merchantBusinessId = `MID-${rowId.slice(0, 8).toUpperCase()}`;
         setCol('id', rowId);
-        setCol('merchant_code', merchantKey);
-        setCol('merchantCode', merchantKey);
-        setCol('merchant_id', merchantBusinessId);
-        setCol('merchantId', merchantBusinessId);
+        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
           .trim()
@@ -455,7 +556,9 @@ export class CompactMerchantController {
           input.businessDisplayName || input.businessName,
         );
         setCol('first_name', firstName || null);
+        setCol('firstName', firstName || null);
         setCol('last_name', lastName || null);
+        setCol('lastName', lastName || null);
         setCol(
           'alternate_phone',
           input.alternatePhone ? String(input.alternatePhone) : null,
@@ -737,7 +840,7 @@ export class CompactMerchantController {
   async storeTypes(@Param('id') id: string) {
     const [merchant] = await this.db.query(
       `SELECT m.id::text AS id FROM public.merchants m
-       WHERE m.id::text = $1 OR m.merchant_id = $1 OR m.merchant_code = $1
+       WHERE m.id::text = $1 OR m.merchant_code = $1
        ORDER BY m.created_at ASC NULLS LAST, m.id
        LIMIT 1`,
       [id],
@@ -835,7 +938,7 @@ export class CompactMerchantController {
   async history(@Param('id') id: string) {
     const current = await this.getRecord(id);
     const rows = await this.db.query(
-      `SELECT * FROM public.merchants WHERE id::text=$1 OR merchant_id=$1 OR merchant_code=$1`,
+      `SELECT * FROM public.merchants WHERE id::text=$1 OR merchant_code=$1`,
       [id],
     );
     return {
@@ -911,6 +1014,7 @@ export class CompactMerchantController {
           assignments.push(`"${col}" = $${values.length}`);
         };
 
+        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
         setCol('businessName', input.businessName ?? existing.businessName);
         setCol(
           'businessDisplayName',
@@ -935,15 +1039,20 @@ export class CompactMerchantController {
           'email',
           input.merchantEmail ?? existing.email ?? existing.merchantEmail,
         );
-        setCol('first_name', input.firstName ?? existing.first_name);
-        setCol('last_name', input.lastName ?? existing.last_name);
+        setCol('first_name', input.firstName ?? existing.first_name ?? existing.firstName);
+        setCol('firstName', input.firstName ?? existing.firstName ?? existing.first_name);
+        setCol('last_name', input.lastName ?? existing.last_name ?? existing.lastName);
+        setCol('lastName', input.lastName ?? existing.lastName ?? existing.last_name);
+        const phoneCountry = input.country ?? existing.country;
         setCol(
           'alternate_phone',
           input.alternatePhone !== undefined
             ? input.alternatePhone
-              ? String(input.alternatePhone)
+              ? nationalPhone(String(input.alternatePhone), phoneCountry)
               : null
-            : existing.alternate_phone,
+            : existing.alternate_phone
+              ? nationalPhone(String(existing.alternate_phone), phoneCountry)
+              : existing.alternate_phone,
         );
         setCol(
           'tax_id',
@@ -971,18 +1080,14 @@ export class CompactMerchantController {
           'postal_code',
           input.pinCode ?? existing.postal_code ?? existing.pinCode,
         );
-        setCol(
-          'merchantPhoneNumber',
+        const phoneValue = nationalPhone(
           input.merchantPhoneNumber ??
             existing.merchantPhoneNumber ??
             existing.phone,
+          phoneCountry,
         );
-        setCol(
-          'phone',
-          input.merchantPhoneNumber ??
-            existing.phone ??
-            existing.merchantPhoneNumber,
-        );
+        setCol('merchantPhoneNumber', phoneValue);
+        setCol('phone', phoneValue);
         setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
         setCol('addressLine2', input.addressLine2 ?? existing.addressLine2);
         setCol(
@@ -1005,13 +1110,35 @@ export class CompactMerchantController {
         if (input.planId !== undefined) {
           const currentPlanId =
             existing.planId ||
-            (await this.repository.merchantActivePlanId(
-              String(existing.merchantId || existing.id || id),
-            ));
-          await this.repository.assertSameStoreTypePlan(
-            currentPlanId,
-            String(input.planId),
-          );
+            (await manager.query(
+              `SELECT COALESCE(
+                 NULLIF(to_jsonb(s)->>'plan_id', ''),
+                 NULLIF(to_jsonb(s)->>'planId', ''),
+                 NULLIF(to_jsonb(m)->>'planId', ''),
+                 NULLIF(to_jsonb(m)->>'plan_id', '')
+               ) AS "planId"
+               FROM public.merchants m
+               LEFT JOIN LATERAL (
+                 SELECT sub.*
+                 FROM public.subscriptions sub
+                 WHERE COALESCE(to_jsonb(sub)->>'merchantId', to_jsonb(sub)->>'merchant_id')
+                       IN (
+                         COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text),
+                         m.id::text
+                       )
+                   AND upper(btrim(COALESCE(to_jsonb(sub)->>'status', 'ACTIVE'))) = 'ACTIVE'
+                 ORDER BY COALESCE(
+                   (to_jsonb(sub)->>'created_at')::timestamptz,
+                   (to_jsonb(sub)->>'createdAt')::timestamptz,
+                   now()
+                 ) DESC
+                 LIMIT 1
+               ) s ON true
+               WHERE m.id::text = $1
+               LIMIT 1`,
+              [String(existing.id)],
+            ))[0]?.planId;
+          await assertSameStoreTypePlan(manager, currentPlanId, String(input.planId));
         }
         setCol('planId', input.planId ?? existing.planId);
         if (requestedStoreTypeId) setCol('storeTypeId', requestedStoreTypeId);
@@ -1151,9 +1278,7 @@ export class CompactMerchantController {
     if (!current?.id) {
       const subId = `SUB-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
       setSubCol('id', subId);
-      setSubCol('subscriptionId', subId);
       setSubCol('subscription_code', subId);
-      setSubCol('subscriptionCode', subId);
       setSubCol('createdAt', new Date());
       setSubCol('created_at', new Date());
     }
@@ -1298,6 +1423,17 @@ export class CompactMerchantController {
       );
       if (body.status === 'INACTIVE') {
         await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id IN (
+             SELECT related.id
+             FROM public.merchants related
+             WHERE COALESCE(to_jsonb(related)->>'merchantId', to_jsonb(related)->>'merchantCode', related.id::text)=$1
+           )
+             AND COALESCE(is_deleted, false)=false`,
+          [target.merchantId],
+        );
+        await manager.query(
           `UPDATE public.subscriptions
            SET status='INACTIVE',
                updated_by=COALESCE($2::uuid, updated_by),
@@ -1394,6 +1530,12 @@ export class CompactMerchantController {
                updated_at=clock_timestamp()
            WHERE merchant_id=$1 AND status='ACTIVE'`,
           [merchant.id, updatedBy],
+        );
+        await manager.query(
+          `UPDATE public.stores
+           SET status='INACTIVE', updated_at=clock_timestamp()
+           WHERE merchant_id=$1 AND COALESCE(is_deleted, false)=false`,
+          [merchant.id],
         );
       });
       return {
@@ -1522,4 +1664,22 @@ async function storeTypeNameForPlan(
     [ref],
   );
   return storeType?.name || (/^[0-9a-f-]{36}$/i.test(ref) ? null : ref);
+}
+
+async function assertSameStoreTypePlan(
+  manager: { query: (sql: string, params?: unknown[]) => Promise<any[]> },
+  currentPlanId: unknown,
+  nextPlanId: string,
+): Promise<void> {
+  const currentId = String(currentPlanId || '').trim();
+  if (!currentId || currentId === nextPlanId) return;
+
+  const currentType = await storeTypeNameForPlan(manager, currentId);
+  const nextType = await storeTypeNameForPlan(manager, nextPlanId);
+  const current = String(currentType || '').trim().toUpperCase();
+  const next = String(nextType || '').trim().toUpperCase();
+  if (!current || !next || current === 'BOTH' || next === 'BOTH' || current === next) return;
+  throw new BadRequestException(
+    `Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`,
+  );
 }

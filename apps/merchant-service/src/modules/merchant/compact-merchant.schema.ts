@@ -18,7 +18,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
       await runner.query(`
         CREATE TABLE IF NOT EXISTS public.merchants (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          merchant_id varchar(100),
           merchant_code varchar(100),
           business_display_name varchar(255),
           created_at timestamptz DEFAULT now()
@@ -26,7 +25,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
 
         ALTER TABLE public.merchants
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
-          ADD COLUMN IF NOT EXISTS merchant_id varchar(100),
           ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
@@ -60,22 +58,19 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
-        UPDATE public.merchants SET merchant_code = COALESCE(merchant_code, merchant_id, 'MER-' || id::text) WHERE merchant_code IS NULL;
-        UPDATE public.merchants SET merchant_id = COALESCE(merchant_id, merchant_code, 'MER-' || id::text) WHERE merchant_id IS NULL;
-        
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);
 
       await runner.query(`
         CREATE TABLE IF NOT EXISTS public.subscriptions (
-          "subscriptionId" varchar(100) PRIMARY KEY DEFAULT ('SUB-' || gen_random_uuid()::text),
-          "merchantId" varchar(100),
+          id varchar(100) PRIMARY KEY DEFAULT ('SUB-' || gen_random_uuid()::text),
+          merchant_id varchar(100),
+          subscription_code varchar(100),
           created_at timestamptz DEFAULT now()
         );
 
         ALTER TABLE public.subscriptions
           ADD COLUMN IF NOT EXISTS id varchar(100),
-          ADD COLUMN IF NOT EXISTS "subscriptionId" varchar(100) DEFAULT ('SUB-' || gen_random_uuid()::text),
           ADD COLUMN IF NOT EXISTS merchant_id varchar(100),
           ADD COLUMN IF NOT EXISTS merchant_uuid uuid,
           ADD COLUMN IF NOT EXISTS subscription_code varchar(100),
@@ -99,7 +94,8 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
           ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
           ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
-        UPDATE public.subscriptions SET id = "subscriptionId" WHERE id IS NULL;
+        UPDATE public.subscriptions SET id = subscription_code WHERE id IS NULL AND subscription_code IS NOT NULL;
+        UPDATE public.subscriptions SET subscription_code = id WHERE subscription_code IS NULL AND id IS NOT NULL;
         UPDATE public.subscriptions SET "planId" = plan_id WHERE "planId" IS NULL AND plan_id IS NOT NULL;
         UPDATE public.subscriptions SET "billingCycle" = billing_cycle WHERE "billingCycle" IS NULL AND billing_cycle IS NOT NULL;
       `);

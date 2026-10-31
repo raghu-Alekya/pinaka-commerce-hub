@@ -13,8 +13,19 @@ export class DiscountService implements OnModuleInit {
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
   async onModuleInit(): Promise<void> {
+    let merchantDataSource: DataSource;
+    try {
+      merchantDataSource = this.merchants.requireDataSource();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[Discount sync] Database unavailable during startup (${message}); scheduled sync is disabled until PostgreSQL is available.`,
+      );
+      return;
+    }
+
     const source = new DataSource({
-      ...this.merchants.requireDataSource().options,
+      ...merchantDataSource.options,
       entities: [StoreDiscountEntity],
       synchronize: false,
       migrationsRun: false,
@@ -26,37 +37,10 @@ export class DiscountService implements OnModuleInit {
       // require one row per store, which is the established store_discounts data model.
       await source.query(`CREATE UNIQUE INDEX IF NOT EXISTS store_discounts_store_id_uq
         ON public.store_discounts (store_id)`);
-      // Keep the queryable per-discount mirror used by discount management screens.
-      await source.query(`
-        CREATE TABLE IF NOT EXISTS public.discounts (
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          store_id uuid NOT NULL,
-          discount_type varchar(30) NOT NULL CHECK (discount_type IN ('auto', 'mix_match', 'multipack')),
-          discount_id varchar(100) NOT NULL,
-          payload jsonb NOT NULL,
-          created_at timestamptz NOT NULL DEFAULT now(),
-          updated_at timestamptz NOT NULL DEFAULT now(),
-          is_deleted boolean NOT NULL DEFAULT false,
-          CONSTRAINT discounts_store_type_external_id_uq UNIQUE (store_id, discount_type, discount_id)
-        )
-      `);
-      await source.query(`CREATE UNIQUE INDEX IF NOT EXISTS discounts_store_type_external_id_uq
-        ON public.discounts (store_id, discount_type, discount_id)`);
-      // Populate the mirror from existing snapshots without removing or truncating data.
-      await source.query(`
-        INSERT INTO public.discounts (store_id, discount_type, discount_id, payload)
-        SELECT DISTINCT ON (sd.store_id, group_row.key, COALESCE(item.value->>'wordpressId', item.value->>'id', item.value->>'pchId'))
-          sd.store_id, group_row.key, COALESCE(item.value->>'wordpressId', item.value->>'id', item.value->>'pchId'), item.value
-        FROM public.store_discounts sd
-        CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(sd.payload)='object' THEN sd.payload ELSE '{}'::jsonb END) group_row(key, value)
-        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(group_row.value)='array' THEN group_row.value ELSE '[]'::jsonb END) item(value)
-        WHERE COALESCE(sd.is_deleted, false)=false
-          AND group_row.key IN ('auto', 'mix_match', 'multipack')
-          AND COALESCE(item.value->>'wordpressId', item.value->>'id', item.value->>'pchId') IS NOT NULL
-        ORDER BY sd.store_id, group_row.key, COALESCE(item.value->>'wordpressId', item.value->>'id', item.value->>'pchId')
-        ON CONFLICT (store_id, discount_type, discount_id) DO UPDATE
-          SET payload=EXCLUDED.payload, updated_at=now(), is_deleted=false
-      `);
+      const [discountFk] = await source.query(
+        `SELECT 1 FROM pg_constraint WHERE confrelid = to_regclass('public.discounts') AND contype = 'f' LIMIT 1`,
+      );
+      if (!discountFk) await source.query(`DROP TABLE IF EXISTS public.discounts`);
     } finally {
       await source.destroy();
     }
@@ -69,7 +53,7 @@ export class DiscountService implements OnModuleInit {
     this.polling = true;
     try {
       const rows = await this.merchants.requireDataSource().query(
-        `SELECT "storeId", "wordpressUrl", "encryptedJwt" FROM public.website_connections WHERE status='CONNECTED'`,
+        `SELECT store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt" FROM public.website_connections WHERE status='CONNECTED'`,
       );
       for (const row of rows) {
         try {
@@ -99,6 +83,30 @@ export class DiscountService implements OnModuleInit {
 
   async list(storeId: string, role?: string, query: Record<string, string> = {}) {
     const connection = await this.requireWordPressConnection(storeId, role);
+    return this.listFromConnection(storeId, connection, query);
+  }
+
+  async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
+    if (!actor?.id || !actor.merchantId) throw new ForbiddenException('A merchant login token is required');
+    const [store] = await this.merchants.requireDataSource().query(
+      `SELECT s.id::text AS id FROM public.stores s
+       JOIN public.merchants m ON m.id::text=s.merchant_id::text
+       JOIN public.users u ON u.id::text=$3
+       WHERE (s.id::text=$1 OR s.store_code=$1) AND m.id::text=$2
+         AND s.status='ACTIVE' AND COALESCE(s.is_deleted,false)=false
+         AND m.status='ACTIVE' AND COALESCE(m.is_deleted,false)=false
+         AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
+      [storeId, actor.merchantId, actor.id],
+    );
+    if (!store || (actor.storeId && actor.storeId !== store.id && actor.storeId !== storeId)) {
+      throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    }
+    const connection = await this.resolveWordPressConnection(store.id);
+    return this.listFromConnection(store.id, connection, query);
+  }
+
+  private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
     const { type, ...wordpressQuery } = query;
     const response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
       page: '1',
@@ -252,7 +260,7 @@ export class DiscountService implements OnModuleInit {
       pchId: String(previous.pchId ?? id),
       syncStatus: 'SYNCED',
     });
-    // saveDiscount writes store_discounts and discounts in one transaction.
+    // saveDiscount writes the store_discounts snapshot in one transaction.
     // Surface a local write failure instead of reporting a complete update.
     await this.saveDiscount(connection.storeId, group, record, id);
     return response;
@@ -643,10 +651,6 @@ export class DiscountService implements OnModuleInit {
     await this.merchants.requireDataSource().transaction(async manager => {
       const [row] = await manager.query('SELECT payload FROM public.store_discounts WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE', [storeId]);
       const payload = row?.payload ?? { auto: [], mix_match: [], multipack: [] };
-      const record = (payload[group] ?? []).find((item: any) => this.discountMatchesId(item, id));
-      const wordpressId = record?.wordpressId ?? record?.id ?? id;
-      await manager.query(`UPDATE public.discounts SET is_deleted=true,updated_at=now()
-        WHERE store_id=$1::uuid AND discount_type=$2 AND discount_id=$3`, [storeId, group, String(wordpressId)]);
       payload[group] = (payload[group] ?? []).filter((item: any) => !this.discountMatchesId(item, id));
       await this.writeDiscountSnapshot(manager, storeId, payload);
     });
@@ -660,17 +664,6 @@ export class DiscountService implements OnModuleInit {
     }
     await manager.query(`INSERT INTO public.store_discounts (store_id,payload) VALUES ($1::uuid,$2::jsonb)
       ON CONFLICT (store_id) DO UPDATE SET payload=EXCLUDED.payload,updated_at=now(),is_deleted=false`, [storeId, JSON.stringify(canonicalPayload)]);
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      for (const record of canonicalPayload[group]) {
-        const discountId = record.wordpressId ?? record.id ?? record.pchId;
-        if (discountId === undefined || discountId === null) continue;
-        await manager.query(`INSERT INTO public.discounts (store_id,discount_type,discount_id,payload)
-          VALUES ($1::uuid,$2,$3,$4::jsonb)
-          ON CONFLICT (store_id,discount_type,discount_id) DO UPDATE
-          SET payload=EXCLUDED.payload,updated_at=now(),is_deleted=false`,
-        [storeId, group, String(discountId), JSON.stringify(record)]);
-      }
-    }
   }
 
   async syncStoreDiscountsFromWordPress(params: {
@@ -770,6 +763,10 @@ export class DiscountService implements OnModuleInit {
 
   private async requireWordPressConnection(storeId: string, role?: string) {
     this.requireDiscountRole(role);
+    return this.resolveWordPressConnection(storeId);
+  }
+
+  private async resolveWordPressConnection(storeId: string) {
     const store = await this.merchants.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const connector = await this.merchants.getWebsiteConnection(store.id)
