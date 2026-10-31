@@ -20,6 +20,14 @@ export class VendorRepository {
     return StoreVendorPaymentEntity.createPayment(this.merchants.requireDataSource(), body, actor);
   }
 
+  async listStoreVendorPayments(merchantId?: string, storeId?: string, shiftId?: string) {
+    return StoreVendorPaymentEntity.listPayments(this.merchants.requireDataSource(), merchantId, storeId, shiftId);
+  }
+
+  async changeStoreVendorPayment(id: string, patch: Record<string, unknown>, softDelete = false) {
+    return StoreVendorPaymentEntity.changePayment(this.merchants.requireDataSource(), id, patch, softDelete);
+  }
+
   private store() {
     this.repo ??= this.merchants.requireDataSource().getRepository(VendorEntity);
     return this.repo;

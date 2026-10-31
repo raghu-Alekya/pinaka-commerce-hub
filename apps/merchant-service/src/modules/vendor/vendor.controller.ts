@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UnauthorizedException } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
 import { VendorRepository } from './vendor.repository';
 import { CreateVendorDto, UpdateVendorDto, normalizeVendorType } from './vendor.dto';
 import { VendorFormValidationPipe } from '../master/tenders/vendor-tendor.form.pipe';
@@ -22,14 +23,52 @@ const patchValidation = new VendorFormValidationPipe({
 });
 
 @Controller(['api/v1/store-vendor-payments', 'connector/api/v1/store-vendor-payments'])
-@RequireAuth()
 export class StoreVendorPaymentController {
   constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
 
+  @Public()
+  @Get()
+  async list(
+    @Query('merchant_id') merchantId?: string,
+    @Query('store_id') storeId?: string,
+    @Query('shift_id') shiftId?: string,
+  ) {
+    const payments = await this.repository.listStoreVendorPayments(merchantId, storeId, shiftId);
+    return {
+      success: true,
+      merchant_id: merchantId,
+      store_id: storeId,
+      shift_id: shiftId?.trim(),
+      count: payments.length,
+      payments,
+    };
+  }
+
+  @RequireAuth()
   @Post()
   async create(@Body() body: Record<string, unknown>, @Req() request: AuthenticatedRequest) {
     return { success: true, message: 'Vendor payment created',
       payment: await this.repository.createStoreVendorPayment(body, request.user) };
+  }
+
+  @Public()
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return {
+      success: true,
+      message: 'Vendor payment updated',
+      payment: await this.repository.changeStoreVendorPayment(id, body),
+    };
+  }
+
+  @Public()
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return {
+      success: true,
+      message: 'Vendor payment soft-deleted',
+      payment: await this.repository.changeStoreVendorPayment(id, {}, true),
+    };
   }
 }
 
