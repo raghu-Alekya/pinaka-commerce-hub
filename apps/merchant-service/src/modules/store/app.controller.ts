@@ -658,48 +658,53 @@ export class AppController {
     if (!response.ok) throw new BadRequestException({ message: data?.message || 'WordPress product creation failed', upstreamStatus: response.status });
     const variations: any[] = [];
     const variationErrors: { index: number; message: string }[] = [];
-    for (let index = 0; index < variationPayloads.length; index++) {
-      try {
-        const { id: variationId, ...variationBody } = variationPayloads[index];
-        const variationResponse = await fetch(params.wordpressUrl.replace(/\/+$/, '') + `/wp-json/wc/v3/products/${data.id}/variations` + (variationId ? '/' + variationId : ''), {
-          method: variationId ? 'PUT' : 'POST', headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(variationBody), signal: AbortSignal.timeout(30000),
-        });
-        const variation = await variationResponse.json();
-        if (!variationResponse.ok || !variation?.id) {
-          variationErrors.push({ index, message: variation?.message || 'Variation creation failed' });
-          break;
+    // WooCommerce variation writes are independent. Send small batches in parallel
+    // so a product with several variants does not pay one network round trip per variant.
+    for (let offset = 0; offset < variationPayloads.length && !variationErrors.length; offset += 5) {
+      const batch = variationPayloads.slice(offset, offset + 5);
+      const results = await Promise.all(batch.map(async (payload, batchIndex) => {
+        const index = offset + batchIndex;
+        try {
+          const { id: variationId, ...variationBody } = payload;
+          const variationResponse = await fetch(params.wordpressUrl.replace(/\/+$/, '') + `/wp-json/wc/v3/products/${data.id}/variations` + (variationId ? '/' + variationId : ''), {
+            method: variationId ? 'PUT' : 'POST', headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(variationBody), signal: AbortSignal.timeout(30000),
+          });
+          const variation = await variationResponse.json();
+          return variationResponse.ok && variation?.id
+            ? { index, variation }
+            : { index, error: variation?.message || 'Variation creation failed' };
+        } catch {
+          return { index, error: 'Could not confirm variation creation. Check WooCommerce before retrying.' };
         }
-        variations.push(variation);
-      } catch {
-        variationErrors.push({ index, message: 'Could not confirm variation creation. Check WooCommerce before retrying.' });
-        break;
+      }));
+      for (const result of results) {
+        if ('variation' in result && result.variation) variations.push(result.variation);
+        else if ('error' in result && result.error) variationErrors.push({ index: result.index, message: result.error });
       }
     }
     if (variationPayloads.length) {
-      try {
-        const refreshed = await fetch(params.wordpressUrl.replace(/\/+$/, '') + `/wp-json/wc/v3/products/${data.id}`, {
-          headers: { Authorization: 'Bearer ' + params.wordpressJwt, Accept: 'application/json' }, signal: AbortSignal.timeout(30000),
-        });
-        if (refreshed.ok) data = await refreshed.json();
-      } catch { /* The created parent and variation IDs remain available below. */ }
-    }
-    let synced = true;
-    try { await this.merchantRepository.syncStoreProductsFromWordPress(params); } catch { synced = false; }
-    let localSaved = synced;
-    if (!synced) {
-      try {
-        await this.merchantRepository.upsertStoreProductRecords(store.id, [data, ...variations]);
-        localSaved = true;
-      } catch {
-        localSaved = false;
+      const variationIds = new Set<number>(
+        (Array.isArray(data.variations) ? data.variations : [])
+          .map((value: unknown) => Number(typeof value === 'object' && value !== null ? (value as any).id : value))
+          .filter((id: number) => Number.isSafeInteger(id) && id > 0),
+      );
+      for (const variation of variations) {
+        if (Number.isSafeInteger(variation?.id) && variation.id > 0) variationIds.add(variation.id);
       }
+      data = { ...data, variations: [...variationIds] };
     }
+    let localSaved = false;
+    try {
+      await this.merchantRepository.upsertStoreProductRecords(store.id, [data, ...variations]);
+      localSaved = true;
+    } catch { localSaved = false; }
+    const synced = localSaved;
     return { success: variationErrors.length === 0, merchant_id: store.merchant_id, store_id: store.id, data, selections, synced, local_saved: localSaved,
       ...(variationPayloads.length ? { variations, variation_errors: variationErrors, requested_variation_count: variationPayloads.length } : {}),
       ...(variationErrors.length ? { message: 'Parent product was saved, but variation changes are incomplete. Do not repeat parent creation. Check the returned IDs and variation_errors.' }
         : !localSaved ? { message: 'Product was saved in WordPress but could not be saved to the local product catalog. Do not repeat product creation; refresh the catalog and check for the saved product.' }
-        : synced ? {} : { message: 'Product saved in WordPress and retained in the local catalog; refresh the PCH catalog to reconcile any other products. Do not repeat product creation.' }) };
+        : synced ? {} : { message: 'Product was saved in WordPress but could not be saved to the local product catalog. Do not repeat product creation; refresh the catalog and check for the saved product.' }) };
   }
 
   private prepareProductVariations(input: Record<string, unknown>, selections: Record<string, any>, updating = false): Record<string, unknown>[] {
