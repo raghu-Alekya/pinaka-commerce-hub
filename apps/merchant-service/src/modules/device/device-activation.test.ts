@@ -16,10 +16,12 @@ async function main() {
     deviceId: null,
     status: 'ACTIVE',
   };
+  const executedQueries: string[] = [];
   const dataSource = {
     transaction: async (callback: (manager: any) => Promise<any>) =>
       callback({
         query: async (sql: string, parameters: unknown[] = []) => {
+          executedQueries.push(sql);
           if (sql.includes('FROM public.devices')) {
             return parameters[0] === deviceRecord.deviceActiveCode
               ? [{ ...deviceRecord }]
@@ -54,8 +56,6 @@ async function main() {
             if (sql.includes('SET device_id')) {
               deviceRecord.deviceId = parameters[0];
               deviceRecord.serialNumber = parameters[1] as string;
-            } else if (sql.includes('SET "serialNumber"')) {
-              deviceRecord.serialNumber = parameters[0] as string;
             }
             return [];
           }
@@ -79,6 +79,11 @@ async function main() {
   assert.equal(deviceRecord.deviceId, 'SUNMI-D3-ABC123');
   assert.equal(deviceRecord.serialNumber, 'SUNMI-D3-ABC123');
   assert.equal(activated.message, 'Device activated successfully');
+  assert.equal(
+    executedQueries.some((sql) => sql.includes('SET "serialNumber" =')),
+    false,
+    'activation must not query the removed legacy serialNumber column',
+  );
 
   const repeated = await controller.activate({
     activationCode: 'PK-123456',

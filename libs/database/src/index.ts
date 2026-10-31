@@ -707,13 +707,13 @@ async function ensureLegacyQueryColumns(dataSource: DataSource): Promise<void> {
         UPDATE public.merchants SET last_name = COALESCE(last_name, "lastName") WHERE last_name IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='createdAt') THEN
-        UPDATE public.merchants SET created_at = COALESCE(NULLIF(created_at::text, ''), NULLIF("createdAt"::text, '')) WHERE created_at IS NULL;
+        UPDATE public.merchants SET created_at = COALESCE(created_at, NULLIF("createdAt"::text, '')::timestamptz) WHERE created_at IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='createdDate') THEN
-        UPDATE public.merchants SET created_at = COALESCE(NULLIF(created_at::text, ''), NULLIF("createdDate"::text, '')) WHERE created_at IS NULL;
+        UPDATE public.merchants SET created_at = COALESCE(created_at, NULLIF("createdDate"::text, '')::timestamptz) WHERE created_at IS NULL;
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='updatedAt') THEN
-        UPDATE public.merchants SET updated_at = COALESCE(NULLIF(updated_at::text, ''), NULLIF("updatedAt"::text, '')) WHERE updated_at IS NULL;
+        UPDATE public.merchants SET updated_at = COALESCE(updated_at, NULLIF("updatedAt"::text, '')::timestamptz) WHERE updated_at IS NULL;
       END IF;
       ALTER TABLE public.merchants
         DROP COLUMN IF EXISTS "merchant-code",
