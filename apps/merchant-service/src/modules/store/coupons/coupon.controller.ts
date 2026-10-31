@@ -1,16 +1,34 @@
-import { Body, Controller, Delete, Get, Headers, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
+import { Public } from '@pinaka-delivery-hub/auth';
+import { IssuingCouponService } from '../../../../loyalty-service/src/coupons/issuing-coupon.service';
+import { parseIssuingCouponRequest } from '../../../../loyalty-service/src/coupons/issuing-coupons';
 import { CouponInputDto, CouponSyncDto } from './coupon.dto';
 import { CouponService } from './coupon.service';
-import { Public } from '@pinaka-delivery-hub/auth';
 
 @Controller(['api/v1/coupons', 'connector/api/v1/coupons'])
 export class CouponController {
-  constructor(@Inject(CouponService) private readonly coupons: CouponService) {}
+  constructor(
+    @Inject(CouponService) private readonly coupons: CouponService,
+    @Inject(IssuingCouponService) private readonly issuing: IssuingCouponService,
+  ) {}
   @Post() async create(@Body() body: CouponInputDto, @Req() request: any) { return { success: true, coupon: await this.coupons.create(body, this.publicBaseUrl(request)) }; }
   @Get() async list(@Query() query: any) { return { success: true, ...(await this.coupons.list(query.merchantId, query.storeId, Number(query.page || 1), Number(query.perPage || query.per_page || 25), query.includeDeleted === 'true')) }; }
   @Post('sync') async sync(@Body() body: CouponSyncDto) { return { success: true, ...(await this.coupons.synchronize(body.storeId, body.merchantId)) }; }
   @Public()
   @Post('webhook') async webhook(@Query('storeId') storeId: string, @Headers('x-wc-webhook-topic') topic: string, @Headers('x-wc-webhook-signature') signature: string, @Body() body: any, @Req() request: any) { return { success: true, result: await this.coupons.webhook(storeId, topic, body, signature, request.rawBody || Buffer.alloc(0)) }; }
+  @Get('issuing-coupons')
+  @Post('issuing-coupons')
+  @HttpCode(HttpStatus.OK)
+  async issuingCoupons(
+    @Body() body: { line_items?: unknown; store_id?: unknown; storeId?: unknown },
+    @Headers('x-store-id') storeHeader?: string,
+  ) {
+    const request = parseIssuingCouponRequest(body, storeHeader);
+    return {
+      order_total: request.orderTotal,
+      coupons: await this.issuing.findApplicable(request.lineItems, request.orderTotal, request.storeId),
+    };
+  }
   @Post(':id/retry-sync') async retry(@Param('id') id: string) { return { success: true, coupon: await this.coupons.retry(id) }; }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, coupon: await this.coupons.get(id) }; }
   @Put(':id') async update(@Param('id') id: string, @Body() body: CouponInputDto) { return { success: true, coupon: await this.coupons.update(id, body) }; }

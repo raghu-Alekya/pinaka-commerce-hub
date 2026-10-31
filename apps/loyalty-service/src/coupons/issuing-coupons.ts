@@ -1,3 +1,36 @@
+import { BadRequestException } from '@nestjs/common';
+
+const STORE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseIssuingCouponRequest(
+  body: { line_items?: unknown; store_id?: unknown; storeId?: unknown } | null | undefined,
+  storeHeader?: string,
+): { lineItems: unknown[]; orderTotal: number; storeId: string | null } {
+  if (!Array.isArray(body?.line_items) || body.line_items.length === 0) {
+    throw new BadRequestException('line_items are required');
+  }
+  const orderTotal = orderTotalFromLineItems(body.line_items);
+  if (orderTotal <= 0) {
+    throw new BadRequestException('Calculated order total is invalid');
+  }
+  return { lineItems: body.line_items, orderTotal, storeId: requestedStoreId(body, storeHeader) };
+}
+
+function requestedStoreId(
+  body: { store_id?: unknown; storeId?: unknown },
+  storeHeader?: string,
+): string | null {
+  const header = String(storeHeader || '').trim();
+  const fromBody = String(body.store_id ?? body.storeId ?? '').trim();
+  if (header && fromBody && header !== fromBody) {
+    throw new BadRequestException('Conflicting store IDs');
+  }
+  const storeId = header || fromBody;
+  if (!storeId) return null;
+  if (!STORE_UUID.test(storeId)) throw new BadRequestException('store_id must be a UUID');
+  return storeId;
+}
+
 export type CatalogProduct = {
   id: number;
   storeId: string;
