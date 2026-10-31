@@ -5,7 +5,7 @@ import { VendorFormValidationPipe } from '../master/tenders/vendor-tendor.form.p
 import { VendorStatus, VendorType } from '../../entities/vendor.entity';
 import { RequireAuth } from '../shared/session-auth.guard';
 
-type AuthenticatedRequest = { user?: { id?: string } };
+type AuthenticatedRequest = { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } };
 
 const createValidation = new VendorFormValidationPipe({
   expectedType: CreateVendorDto,
@@ -20,6 +20,18 @@ const patchValidation = new VendorFormValidationPipe({
   forbidNonWhitelisted: true,
   skipUndefinedProperties: true,
 });
+
+@Controller(['api/v1/store-vendor-payments', 'connector/api/v1/store-vendor-payments'])
+@RequireAuth()
+export class StoreVendorPaymentController {
+  constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
+
+  @Post()
+  async create(@Body() body: Record<string, unknown>, @Req() request: AuthenticatedRequest) {
+    return { success: true, message: 'Vendor payment created',
+      payment: await this.repository.createStoreVendorPayment(body, request.user) };
+  }
+}
 
 @Controller(['api/v1/vendors', 'connector/api/v1/vendors', 'vendors'])
 @RequireAuth()

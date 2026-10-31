@@ -351,6 +351,15 @@ export class ShiftReportService {
       `, [shiftId]);
       for (const row of transactions) rows.push(this.vendorFromPayload(row.id, Number(row.total_sum || 0), row.json_payload, row.created_at));
     }
+    const saved = await this.rows<{ id: string; amount: number; description: string; payment_mode: string; vendor_name: string; vendor_id: string; created_at: Date }>(db, `
+      SELECT p.id::text AS id,p.amount::float8 AS amount,p.description,p.payment_mode,p.vendor_name,p.vendor_id::text AS vendor_id,p.created_at
+      FROM public.store_vendor_payments p JOIN public.pos_shifts s ON s.id=p.shift_id
+      WHERE p.shift_id=$1 AND p.store_id::text=s.store_id AND p.merchant_id::text=s.merchant_id
+        AND p.is_deleted=false AND p.status='ACTIVE'
+      ORDER BY p.created_at,p.id`, [shiftId]);
+    for (const payment of saved) rows.push(this.vendorFromPayload(payment.id, payment.amount, {
+      note: payment.description, payment_method: payment.payment_mode, vendor_name: payment.vendor_name, vendor_id: payment.vendor_id,
+    }, payment.created_at));
     await this.attachVendorNames(db, rows);
     return rows;
   }

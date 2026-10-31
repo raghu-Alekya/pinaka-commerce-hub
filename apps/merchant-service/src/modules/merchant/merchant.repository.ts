@@ -1,4 +1,5 @@
 import { fetchPosTaxConfiguration } from '../store-pos-configuration/pos-tax-sync';
+import { StoreVendorPaymentEntity } from '../../entities/store-vendor-payment.entity';
 import { groupFeaturesByCategory } from '../master/common/master-list';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { nationalPhone } from './countries';
@@ -942,6 +943,7 @@ export class MerchantRepository implements OnModuleInit {
       'PCH Merchant DB',
       [
         MerchantEntity,
+        StoreVendorPaymentEntity,
         StoreEntity,
         StoreTypeEntity,
         FeatureEntity,
@@ -980,7 +982,9 @@ export class MerchantRepository implements OnModuleInit {
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
+      await StoreVendorPaymentEntity.prepareSchema(this.dataSource);
       const createdTables = await createMissingTables(this.dataSource);
+      await StoreVendorPaymentEntity.ensureConstraints(this.dataSource);
     await ensurePosDataSyncSchema(this.dataSource);
     if (createdTables.length) {
       console.log(

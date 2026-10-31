@@ -1,4 +1,5 @@
-import { Inject, Controller, Get, Post, Put, Body, Param, Query, Headers, NotFoundException, BadRequestException } from '@nestjs/common';
+import { StoreVendorPaymentEntity } from '../../merchant-service/src/entities/store-vendor-payment.entity';
+import { Inject, Controller, Get, Post, Put, Delete, Body, Param, Query, Headers, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PosRepository } from './pos.repository';
 import { PosConfigRepository } from './pos-config.repository';
 import { FastkeyItem } from './pos-config.entity';
@@ -20,6 +21,43 @@ const SHIFT_REQUEST_ALIASES = [
 ] as const;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+@Controller('api/v1/store-vendor-payments')
+export class PosVendorPaymentController {
+  constructor(@Inject(PosRepository) private readonly shifts: PosRepository) {}
+
+  @Get()
+  async list(@Query('merchant_id') merchantId?: string, @Query('store_id') storeId?: string, @Query('shift_id') shiftId?: string) {
+    const payments = await StoreVendorPaymentEntity.listPayments(this.shifts.requireDataSource(), merchantId, storeId, shiftId);
+    return { success: true, merchant_id: merchantId, store_id: storeId, shift_id: shiftId?.trim(), count: payments.length, payments };
+  }
+
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return { success: true, message: 'Vendor payment updated',
+      payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, body) };
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return { success: true, message: 'Vendor payment soft-deleted',
+      payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, {}, true) };
+  }
+
+  @Post()
+  async create(@Body() body: Record<string, unknown>) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a payment JSON object');
+    if (typeof body.shift_id !== 'string' || !body.shift_id.trim()) throw new BadRequestException('shift_id is required');
+    const db = this.shifts.requireDataSource();
+    const [shift] = await db.query(
+      'SELECT created_by,merchant_id,store_id FROM public.pos_shifts WHERE id=$1', [body.shift_id.trim()]);
+    if (!shift) throw new NotFoundException('Shift not found');
+    if (!UUID_PATTERN.test(String(shift.created_by ?? ''))) throw new BadRequestException('Shift must have a valid employee UUID in created_by');
+    return { success: true, message: 'Vendor payment created', payment: await StoreVendorPaymentEntity.createPayment(db, body,
+      { id: shift.created_by, merchantId: shift.merchant_id, storeId: shift.store_id }) };
+  }
+
+}
 
 function normalizeShiftRequest<T extends object>(input: T): T {
   const request = { ...input } as T & Record<string, unknown>;
@@ -183,17 +221,18 @@ export class AppController {
   async closeShift(@Body() request: Record<string, unknown>) {
     return this.traceShift('POST /shifts/close', request, async () => {
       const write = normalizeShiftClose(request);
-      const preview = await this.shiftReport.previewClose(write.shiftId, Number(write.master.closing_balance));
-      const declared = write.master.declared_cash;
-      write.master.over_short = preview.overShort;
-      write.master.discrepancy = declared == null
-        ? preview.overShort
-        : Math.round((Number(declared) - preview.expectedTillAmount) * 100) / 100;
-      for (const field of ['over_short', 'discrepancy']) {
-        if (!write.fields.includes(field)) write.fields.push(field);
-      }
-      shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write), database_updated: true });
-      const shift = await this.posRepository.updateShift(write.shiftId, write);
+      const shift = await this.posRepository.updateShift(write.shiftId, write, async () => {
+        const preview = await this.shiftReport.previewClose(write.shiftId, Number(write.master.closing_balance));
+        const declared = write.master.declared_cash;
+        write.master.over_short = preview.overShort;
+        write.master.discrepancy = declared == null
+          ? preview.overShort
+          : Math.round((Number(declared) - preview.expectedTillAmount) * 100) / 100;
+        for (const field of ['over_short', 'discrepancy']) {
+          if (!write.fields.includes(field)) write.fields.push(field);
+        }
+        shiftDebug('normalized', { action: 'POST /shifts/close', save: summarizeShiftWrite(write), database_updated: true });
+      });
       if (!shift) throw new NotFoundException(`Shift '${write.shiftId}' not found`);
       return {
         success: true,
