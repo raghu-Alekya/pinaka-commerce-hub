@@ -79,6 +79,25 @@ export class PosAuthController {
   }
 
   /**
+   * WooCommerce product options for POS product entry.
+   * GET /api/v1/pos/auth/catalog/product-options
+   * Requires an active employee PIN session token plus x-merchant-id and x-store-id.
+   */
+  @Get('catalog/product-options')
+  @HttpCode(HttpStatus.OK)
+  async getStoreProductOptions(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreProductOptions(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
    * Store products.
    * GET /api/v1/pos/auth/catalog/products
    * Requires the POS login access token plus x-merchant-id and x-store-id.

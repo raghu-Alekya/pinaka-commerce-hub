@@ -12,6 +12,7 @@ function serviceWith(
     { verify: async (pin: string, hash: string) => hash === `hash:${pin}` } as any,
     {} as any,
     {} as any,
+    {} as any,
   );
   (service as any).authorizeStoreCatalog = async () => ({
     employeeId: sessionEmployeeId,
