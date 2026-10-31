@@ -1,3 +1,4 @@
+import { StoreVendorPaymentEntity } from '../../entities/store-vendor-payment.entity';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Brackets, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { MerchantRepository } from '../merchant/merchant.repository';
@@ -14,6 +15,10 @@ export class VendorRepository {
   private repo?: Repository<VendorEntity>;
 
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
+
+  async createStoreVendorPayment(body: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+    return StoreVendorPaymentEntity.createPayment(this.merchants.requireDataSource(), body, actor);
+  }
 
   private store() {
     this.repo ??= this.merchants.requireDataSource().getRepository(VendorEntity);

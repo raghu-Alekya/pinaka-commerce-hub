@@ -275,7 +275,7 @@ export class PosRepository implements OnModuleInit {
     return view;
   }
 
-  async updateShift(shiftId: string, write: ShiftWrite): Promise<ShiftView | null> {
+  async updateShift(shiftId: string, write: ShiftWrite, beforeSave?: () => Promise<void>): Promise<ShiftView | null> {
     const actor = write.master.updated_by ?? write.master.closed_by ?? write.master.created_by ?? null;
     if (this.isDbConnected && this.dataSource) {
       const runner = this.dataSource.createQueryRunner();
@@ -291,6 +291,7 @@ export class PosRepository implements OnModuleInit {
           await runner.rollbackTransaction();
           return null;
         }
+        if (beforeSave) await beforeSave();
         this.applyMasterPatch(shift, write);
         shiftDebug('db', { action: 'updateShift', table: 'pos_shifts', op: 'update', shift_id: shift.id, fields: write.fields, status: shift.status });
         await runner.manager.getRepository(PosShiftEntity).save(shift);
@@ -315,6 +316,7 @@ export class PosRepository implements OnModuleInit {
     shiftDebug('db-skip', { action: 'updateShift', shift_id: shiftId, reason: 'database is not connected; shift kept in memory only' });
     const shift = this.memoryShifts.find((row) => row.id === shiftId);
     if (!shift) return null;
+    if (beforeSave) await beforeSave();
     this.applyMasterPatch(shift, write);
     for (const row of this.metaRows(shift.id, write.meta)) {
       const existing = this.memoryMeta.find((meta) => meta.shift_id === shift.id && meta.meta_name === row.meta_name);
