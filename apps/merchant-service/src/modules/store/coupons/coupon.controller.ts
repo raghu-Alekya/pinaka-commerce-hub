@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
-import { IssuingCouponService } from '../../../../loyalty-service/src/coupons/issuing-coupon.service';
-import { parseIssuingCouponRequest } from '../../../../loyalty-service/src/coupons/issuing-coupons';
+import { IssuingCouponService } from './issuing-coupon.service';
+import { parseIssuingCouponRequest } from './issuing-coupons';
 import { CouponInputDto, CouponSyncDto } from './coupon.dto';
 import { CouponService } from './coupon.service';
 
