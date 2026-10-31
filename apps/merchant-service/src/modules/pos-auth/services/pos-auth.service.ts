@@ -399,7 +399,9 @@ export class PosAuthService {
       }
 
       for (const cand of candidates) {
-        const hashes = [cand.storePinHash, cand.empPinHash].filter(Boolean);
+        // A store-specific PIN overrides the employee-level fallback for this store.
+        const effectivePin = cand.storePinHash || cand.empPinHash;
+        const hashes = effectivePin ? [effectivePin] : [];
         let matched = false;
         for (const h of hashes) {
           if (await this.pinService.verify(pin, h)) {
@@ -407,7 +409,7 @@ export class PosAuthService {
             break;
           }
         }
-        if (!matched && (cand.storePinHash === pin || cand.empPinHash === pin)) {
+        if (!matched && effectivePin === pin) {
           matched = true;
         }
         if (!matched) continue;
@@ -678,10 +680,11 @@ export class PosAuthService {
     let matchedEmployeeId: string | undefined;
     let matchedEmployeeStoreId: string | undefined;
     for (const candidate of candidates) {
-      const plainPins = [candidate.storePin, candidate.employeePin]
-        .map((value) => String(value || '').trim())
-        .filter(Boolean);
-      const hashes = [candidate.storePinHash, candidate.employeePinHash].filter(Boolean);
+      // Do not also accept the old employee-wide PIN when this store has an override.
+      const effectivePin = candidate.storePin || candidate.employeePin;
+      const plainPins = effectivePin ? [String(effectivePin).trim()] : [];
+      const effectiveHash = candidate.storePinHash || candidate.employeePinHash;
+      const hashes = effectiveHash ? [effectiveHash] : [];
       let matched = plainPins.includes(pin);
       for (const hash of hashes) {
         if (!matched && await this.pinService.verify(pin, hash)) matched = true;

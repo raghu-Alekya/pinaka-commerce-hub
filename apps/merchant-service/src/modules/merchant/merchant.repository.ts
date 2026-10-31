@@ -7143,6 +7143,43 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     });
   }
 
+  /** Ensure the employee is assigned to the requested store, then persist the PIN on both records. */
+  async setEmployeeStorePin(merchantId: string, idOrCode: string, storeId: string, pin?: string): Promise<boolean> {
+    const employee = await this.getEmployeeByIdOrCode(merchantId, idOrCode);
+    if (!employee) return false;
+    const stores = await this.dataSource.query(
+      `SELECT id FROM public.stores
+       WHERE merchant_id=$1::uuid
+         AND (id::text=$2 OR COALESCE(to_jsonb(stores)->>'store_code',to_jsonb(stores)->>'storeCode')=$2)
+       LIMIT 1`,
+      [merchantId, storeId],
+    );
+    if (!stores[0]) throw new BadRequestException('Store does not belong to this merchant');
+    await this.dataSource.transaction(async (manager) => {
+      const [assignment] = await manager.query(
+        `INSERT INTO public.employee_stores (merchant_id,employee_id,store_id,is_primary,status)
+         VALUES($1::uuid,$2::uuid,$3::uuid,
+           NOT EXISTS (SELECT 1 FROM public.employee_stores WHERE employee_id=$2::uuid AND is_primary=true),
+           'ACTIVE')
+         ON CONFLICT (employee_id,store_id) DO UPDATE
+           SET merchant_id=EXCLUDED.merchant_id,status='ACTIVE',updated_at=now()
+         RETURNING id,store_id AS "storeId"`,
+        [merchantId, employee.id, stores[0].id],
+      );
+      if (pin) await this.assertUniqueStoreLoginPinWithManager(manager, assignment.storeId, employee.id, pin);
+      const pinHash = pin ? this.hashEmployeePin(pin) : null;
+      await manager.query(
+        `UPDATE public.employees SET login_pin=$2,login_pin_hash=$3,updated_at=now() WHERE id=$1::uuid AND merchant_id=$4::uuid`,
+        [employee.id, pin || null, pinHash, merchantId],
+      );
+      await manager.query(
+        `UPDATE public.employee_stores SET login_pin=$2,login_pin_hash=$3,updated_at=now() WHERE id=$1`,
+        [assignment.id, pin || null, pinHash],
+      );
+    });
+    return true;
+  }
+
   async deleteEmployee(
     merchantId: string | undefined,
     idOrCode: string,
