@@ -132,38 +132,32 @@ export class PosAuthService {
 
     const dataSource = this.merchantRepository.requireDataSource();
     const merchants: any[] = await dataSource.query(
-      `SELECT id, 
-              merchant_code AS "merchantCode", 
-              merchant_code AS "merchantId", 
-              "business_display_name" AS "businessDisplayName", 
-              "first_name" AS "firstName", "last_name" AS "lastName", email, phone, status,
-              COALESCE(
-                NULLIF(to_jsonb(m)->>'password', ''),
-                NULLIF(to_jsonb(m)->>'password_hash', ''),
-                NULLIF(to_jsonb(m)->>'passwordHash', '')
-              ) AS password,
-              (SELECT u.password_hash
-                 FROM public.users u
-                WHERE lower(u.email) = lower($1)
-                ORDER BY CASE WHEN u.status = 'ACTIVE' THEN 0 ELSE 1 END
-                LIMIT 1) AS "userPassword"
+      `SELECT m.id,
+              m.merchant_code AS "merchantCode",
+              m.merchant_code AS "merchantId",
+              m.business_display_name AS "businessDisplayName",
+              m.first_name AS "firstName",
+              m.last_name AS "lastName",
+              m.email,
+              m.phone,
+              m.status::text AS status,
+              m.password
        FROM public.merchants m
-       WHERE COALESCE(is_deleted, false) = false
-         AND (
-           lower(trim(email::text)) = lower($1)
-           OR lower(trim(COALESCE(to_jsonb(m)->>'merchantEmail', ''))) = lower($1)
-           OR lower(trim(COALESCE(to_jsonb(m)->>'merchant_email', ''))) = lower($1)
-         )
-       LIMIT 1`,
+       WHERE COALESCE(m.is_deleted, false) = false
+         AND lower(trim(m.email)) = lower(trim($1))
+       ORDER BY m.created_at DESC
+       LIMIT 5`,
       [rawMerchant],
     );
 
-    const merchant = merchants[0];
-    const merchantPasswordMatches = merchant ? await this.passwordMatches(merchant.password, password) : false;
-    const userPasswordMatches = merchant && !String(merchant.password || '').trim()
-      ? await this.passwordMatches(merchant.userPassword, password)
-      : false;
-    if (!merchant || (!merchantPasswordMatches && !userPasswordMatches)) {
+    let merchant: any;
+    for (const row of merchants) {
+      if (await this.passwordMatches(row.password, password)) {
+        merchant = row;
+        break;
+      }
+    }
+    if (!merchant) {
       throw new UnauthorizedException('Invalid merchant credentials');
     }
 
@@ -172,19 +166,24 @@ export class PosAuthService {
     }
 
     const stores: any[] = await dataSource.query(
-      `SELECT id,
-              COALESCE(to_jsonb(s)->>'store_id', id::text) AS "storeId",
-              "store_code" AS "storeCode",
-              "store_name" AS "storeName",
-              "store_website_url" AS "storeWebsiteUrl", "address_line1" AS "addressLine1",
-              city, state, country, "operational_status" AS "operationalStatus", status, "website_connector"
+      `SELECT s.id,
+              s.id::text AS "storeId",
+              s.store_code AS "storeCode",
+              s.store_name AS "storeName",
+              s.store_website_url AS "storeWebsiteUrl",
+              s.address_line1 AS "addressLine1",
+              s.city,
+              s.state,
+              s.country,
+              s.operational_status::text AS "operationalStatus",
+              s.status::text AS status,
+              s.website_connector
        FROM public.stores s
-       WHERE s.merchant_id::text = $1
+       WHERE COALESCE(s.is_deleted, false) = false
+         AND s.merchant_id = $1::uuid
          AND (
            s.id::text = $2
-           OR s.store_code = $2
-           OR COALESCE(to_jsonb(s)->>'store_id', '') = $2
-           OR COALESCE(to_jsonb(s)->>'storeId', '') = $2
+           OR lower(s.store_code) = lower($2)
          )
        LIMIT 1`,
       [String(merchant.id), rawStore],
