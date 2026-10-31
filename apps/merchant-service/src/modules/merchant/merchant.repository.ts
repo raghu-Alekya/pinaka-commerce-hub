@@ -3546,6 +3546,36 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return payload.length;
   }
 
+  async upsertStoreProductRecords(
+    storeId: string,
+    records: unknown[],
+  ): Promise<void> {
+    const incoming = records.filter(
+      (value): value is Record<string, unknown> =>
+        Boolean(value) && typeof value === 'object' &&
+        (value as Record<string, unknown>).id !== undefined &&
+        (value as Record<string, unknown>).id !== null,
+    );
+    if (!incoming.length) return;
+
+    const [saved] = await this.dataSource.query(
+      `SELECT payload FROM public.store_products
+       WHERE store_id = $1::uuid AND COALESCE(is_deleted, false) = false
+       LIMIT 1`,
+      [storeId],
+    );
+    const current = Array.isArray(saved?.payload) ? saved.payload : [];
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const value of current) {
+      if (value && typeof value === 'object' && (value as Record<string, unknown>).id != null) {
+        const record = value as Record<string, unknown>;
+        byId.set(String(record.id), record);
+      }
+    }
+    for (const record of incoming) byId.set(String(record.id), record);
+    await this.saveStoreProductPayload(storeId, [...byId.values()]);
+  }
+
   async syncStoreCategoriesFromWordPress(params: {
     storeId: string;
     includeAll?: boolean;

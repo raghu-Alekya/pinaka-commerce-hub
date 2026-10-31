@@ -14,6 +14,7 @@ import { PosLoginDto } from '../dto/pos-login.dto';
 import { PinService } from './pin.service';
 import { PosSessionService } from './pos-session.service';
 import { MerchantRepository } from '../../merchant/merchant.repository';
+import { ProductOptionsService } from '../../store/product-options.service';
 
 export interface DeviceContext {
   deviceId: string;
@@ -29,6 +30,7 @@ export class PosAuthService {
     @Inject(PinService) private readonly pinService: PinService,
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
     @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
+    @Inject(ProductOptionsService) private readonly productOptionsService: ProductOptionsService,
   ) {}
 
   async merchantPasswordLogin(input: { email?: string; password?: string }) {
@@ -560,6 +562,40 @@ export class PosAuthService {
    * Store products for the merchant and store named in the request headers.
    * The POS login access token is checked before any catalog data is read.
    */
+  async getStoreProductOptions(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(
+      authorization,
+      merchantHeader,
+      storeHeader,
+    );
+    return this.productOptionsService.getForStore(
+      scope.merchant.id,
+      scope.store.id,
+    );
+  }
+
+  async authorizeEmployeeStore(
+    authorization?: string,
+    merchantHeader?: string,
+    storeHeader?: string,
+  ) {
+    const scope = await this.authorizeStoreCatalog(
+      authorization,
+      merchantHeader,
+      storeHeader,
+    );
+    return {
+      id: scope.employeeId,
+      merchantId: scope.merchant.id,
+      storeId: scope.store.id,
+      role: 'POS_EMPLOYEE',
+    };
+  }
+
   async getMerchantStoreProducts(
     authorization?: string,
     merchantHeader?: string,
