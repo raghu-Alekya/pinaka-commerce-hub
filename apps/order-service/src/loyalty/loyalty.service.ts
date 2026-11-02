@@ -460,7 +460,7 @@ export class LoyaltyService implements OnModuleInit {
     if (!(await this.loyalty.pluginActive(scope))) {
       throw fail(403, 'loyalty_plugin_inactive', 'The Pinaka Loyalty plugin is not active. Loyalty points cannot be processed.');
     }
-    const flags = await this.loyalty.readConfig(scope, 'settings');
+    const flags = await this.loyalty.readConfig(scope, 'loyality_settings');
     if (flags.enable_loyalty_points !== 'yes') {
       throw fail(403, 'loyalty_disabled', 'The Loyalty Points system is currently disabled by the administrator.');
     }
