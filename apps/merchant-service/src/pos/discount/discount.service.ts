@@ -87,23 +87,23 @@ export class DiscountService implements OnModuleInit {
   }
 
   async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
-    if (!actor?.id || !actor.merchantId) throw new ForbiddenException('A merchant login token is required');
-    const [store] = await this.merchants.requireDataSource().query(
-      `SELECT s.id::text AS id FROM public.stores s
-       JOIN public.merchants m ON m.id::text=s.merchant_id::text
-       JOIN public.users u ON u.id::text=$3
-       WHERE (s.id::text=$1 OR s.store_code=$1) AND m.id::text=$2
-         AND s.status='ACTIVE' AND COALESCE(s.is_deleted,false)=false
-         AND m.status='ACTIVE' AND COALESCE(m.is_deleted,false)=false
-         AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
-         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
-      [storeId, actor.merchantId, actor.id],
-    );
-    if (!store || (actor.storeId && actor.storeId !== store.id && actor.storeId !== storeId)) {
-      throw new ForbiddenException('Store does not belong to the authenticated merchant');
-    }
+    const store = await this.resolveMerchantStore(storeId, actor);
     const connection = await this.resolveWordPressConnection(store.id);
     return this.listFromConnection(store.id, connection, query);
+  }
+
+  async resolveMerchantStore(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined) {
+    if (!actor?.id || !actor.merchantId) throw new ForbiddenException('A merchant login token is required');
+    // Match the merchant/vendor APIs: resolve the requested store through the
+    // repository, then compare its merchant identity using UUID/code aliases.
+    const store = await this.merchants.getStoreById(storeId);
+    if (!store || !(await this.merchants.storeMatchesMerchant(store, actor.merchantId))) {
+      throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    }
+    if (String(store.status).trim().toUpperCase() !== 'ACTIVE') {
+      throw new ForbiddenException('Store is currently inactive');
+    }
+    return { id: store.id };
   }
 
   private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
@@ -209,7 +209,7 @@ export class DiscountService implements OnModuleInit {
         ...input,
         ...body,
       });
-      Object.assign(record, { id: wordpressId, pchId: String(wordpressId), syncStatus: 'SYNCED' });
+      Object.assign(record, { id: wordpressId });
       await this.saveDiscount(connection.storeId, group, record);
     }
     return group === 'multipack' && wordpressId !== undefined && wordpressId !== null
@@ -245,8 +245,8 @@ export class DiscountService implements OnModuleInit {
     if (input.required_quantity !== undefined && input.qty === undefined && input.quantity === undefined) merged.qty = input.required_quantity;
     this.validateCreateInput(group, merged);
     await this.validateDiscountPrice(storeId, group, merged);
-    await this.assertDiscountIsUnique(connection, group, merged, String(wordpressId));
-    if (group === 'multipack') await this.assertMultipackRuleIsUnique(connection, merged, String(wordpressId));
+    await this.assertDiscountIsUnique(connection, group, merged, [id, String(wordpressId)]);
+    if (group === 'multipack') await this.assertMultipackRuleIsUnique(connection, merged, [id, String(wordpressId)]);
     const body = { ...this.toWordPressPayload(merged), discount_id: Number(wordpressId) };
     const response = await this.wordpressRequest(connection, 'custom-discount/update-discount', 'POST', body);
     const sourceRecord = await this.fetchWordPressDiscount(connection, group, wordpressId);
@@ -256,9 +256,6 @@ export class DiscountService implements OnModuleInit {
     const record = this.canonicalizeRequestRecord({ ...baseRecord, ...merged, ...this.toWordPressPayload(merged) });
     Object.assign(record, {
       id: wordpressId,
-      wordpressId: String(wordpressId),
-      pchId: String(previous.pchId ?? id),
-      syncStatus: 'SYNCED',
     });
     // saveDiscount writes the store_discounts snapshot in one transaction.
     // Surface a local write failure instead of reporting a complete update.
@@ -466,21 +463,27 @@ export class DiscountService implements OnModuleInit {
   }
 
   private async assertDiscountIsUnique(
-    connection: { wordpressUrl: string; wordpressJwt: string },
+    connection: { storeId: string; wordpressUrl: string; wordpressJwt: string },
     group: string,
     input: Record<string, any>,
-    excludedId?: string,
+    excludedIds: string[] = [],
   ) {
     // Multipack has no name/code in the reference API; its unique key is product + qty.
     if (group === 'multipack') return;
     const name = this.discountName(input);
     if (!name?.trim()) throw new BadRequestException('code is required');
     const normalizedName = this.normalizeDiscountName(name);
-    const records = await this.fetchWordPressDiscounts(connection, group);
+    let localRecords: Record<string, any>[] = [];
+    if (typeof this.merchants?.requireDataSource === 'function') {
+      const localPayload = await this.readDiscountPayload(connection.storeId);
+      localRecords = Array.isArray(localPayload[group]) ? localPayload[group] : [];
+    }
+    const records = [...localRecords, ...await this.fetchWordPressDiscounts(connection, group)];
+    const excluded = new Set(excludedIds.map(String));
     const duplicate = records.find(record => {
       const existingName = this.discountName(record);
       return existingName !== undefined && this.normalizeDiscountName(existingName) === normalizedName
-        && (excludedId === undefined || !this.discountMatchesId(record, excludedId));
+        && ![...excluded].some(id => this.discountMatchesId(record, id));
     });
     if (duplicate) throw new ConflictException(`A ${group} discount named '${name}' already exists`);
   }
@@ -490,21 +493,27 @@ export class DiscountService implements OnModuleInit {
   }
 
   private async assertMultipackRuleIsUnique(
-    connection: { wordpressUrl: string; wordpressJwt: string },
+    connection: { storeId: string; wordpressUrl: string; wordpressJwt: string },
     input: Record<string, any>,
-    excludedId?: string,
+    excludedIds: string[] = [],
   ) {
     const ids: unknown[] = [input.product_id ?? input.main_product_id ?? input.productId];
     const quantity = Number(input.qty ?? input.quantity ?? input.required_quantity);
     if (!this.isPositiveInteger(ids[0]) || !Number.isInteger(quantity) || quantity < 1) {
       throw new BadRequestException('Multipack discounts require a product_id and positive integer qty');
     }
-    const records = await this.fetchWordPressDiscounts(connection, 'multipack');
+    let localRecords: Record<string, any>[] = [];
+    if (typeof this.merchants?.requireDataSource === 'function') {
+      const localPayload = await this.readDiscountPayload(connection.storeId);
+      localRecords = Array.isArray(localPayload.multipack) ? localPayload.multipack : [];
+    }
+    const records = [...localRecords, ...await this.fetchWordPressDiscounts(connection, 'multipack')];
+    const excluded = new Set(excludedIds.map(String));
     for (const productId of ids) {
       const duplicate = records.find(record =>
         String(record.product_id ?? record.productId ?? '') === String(productId)
         && Number(record.qty ?? record.quantity ?? record.required_quantity) === quantity
-        && (excludedId === undefined || !this.discountMatchesId(record, excludedId)),
+        && ![...excluded].some(id => this.discountMatchesId(record, id)),
       );
       if (duplicate) throw new ConflictException(`A multipack discount already exists for product '${productId}' and quantity ${quantity}`);
     }
@@ -552,6 +561,9 @@ export class DiscountService implements OnModuleInit {
     for (const alias of ['date_starts', 'date_start', 'startDate', 'date_expires', 'date_expire', 'expiryDate']) {
       delete canonical[alias];
     }
+    delete canonical.pchId;
+    delete canonical.wordpressId;
+    delete canonical.syncStatus;
     return canonical;
   }
 
@@ -564,6 +576,9 @@ export class DiscountService implements OnModuleInit {
     for (const alias of ['date_starts', 'date_start', 'startDate', 'date_expires', 'date_expire', 'expiryDate']) {
       delete canonical[alias];
     }
+    delete canonical.pchId;
+    delete canonical.wordpressId;
+    delete canonical.syncStatus;
     return canonical;
   }
 
