@@ -71,29 +71,41 @@ export class LoyaltyRepository {
   }
 
   async pluginActive(scope: LoyaltyScope, db: Queryable = this.orders.database() as Queryable): Promise<boolean> {
-    try {
-      const rows = await this.query(db,
-        `SELECT 1
-           FROM public.store_entitlements AS entitlement
-           JOIN public.features AS feature ON feature.id = entitlement.feature_id
-          WHERE entitlement.store_id = $1::uuid
-            AND entitlement.enabled IS TRUE
-            AND (entitlement.effective_from IS NULL OR entitlement.effective_from <= now())
-            AND (entitlement.effective_until IS NULL OR entitlement.effective_until > now())
-            AND lower(COALESCE(
-                  to_jsonb(feature)->>'feature_key',
-                  to_jsonb(feature)->>'feature_code',
-                  to_jsonb(feature)->>'featureKey',
-                  ''
-                )) = 'loyalty'
-          LIMIT 1`,
-        [scope.storeId],
-      );
-      return rows.length > 0;
-    } catch (error) {
-      if (!missingRelation(error)) throw error;
-      return false;
-    }
+    const entitled = await this.featureActive(db,
+      `SELECT 1
+         FROM public.store_entitlements AS entitlement
+         JOIN public.features AS feature ON feature.id = entitlement.feature_id
+        WHERE entitlement.store_id = $1::uuid
+          AND entitlement.enabled IS TRUE
+          AND (entitlement.effective_from IS NULL OR entitlement.effective_from <= now())
+          AND (entitlement.effective_until IS NULL OR entitlement.effective_until > now())
+          AND (
+            lower(COALESCE(to_jsonb(feature)->>'name', '')) LIKE '%loyal%'
+            OR lower(COALESCE(
+                 to_jsonb(feature)->>'feature_key',
+                 to_jsonb(feature)->>'feature_code',
+                 to_jsonb(feature)->>'featureKey',
+                 ''
+               )) = 'loyalty'
+          )
+        LIMIT 1`,
+      [scope.storeId],
+    );
+    if (entitled) return true;
+    return this.featureActive(db,
+      `SELECT 1
+         FROM public.store_features AS store_feature
+         LEFT JOIN public.features AS feature ON feature.id = store_feature.feature_id
+        WHERE store_feature.store_id = $1::uuid
+          AND store_feature.enabled IS TRUE
+          AND (
+            lower(store_feature.feature_name) LIKE '%loyal%'
+            OR lower(COALESCE(feature.name, '')) LIKE '%loyal%'
+            OR lower(COALESCE(feature.feature_code, '')) = 'loyalty'
+          )
+        LIMIT 1`,
+      [scope.storeId],
+    );
   }
 
   async readConfig(scope: LoyaltyScope, name: string, db?: Queryable): Promise<Record<string, unknown>> {
@@ -463,6 +475,16 @@ export class LoyaltyRepository {
         ORDER BY ledger.points_created_date DESC NULLS LAST, ledger.created_at DESC`,
       [customerId, scope.merchantId, scope.storeId],
     );
+  }
+
+  private async featureActive(db: Queryable, sql: string, parameters: unknown[]): Promise<boolean> {
+    try {
+      const rows = await this.query(db, sql, parameters);
+      return rows.length > 0;
+    } catch (error) {
+      if (!missingRelation(error)) throw error;
+      return false;
+    }
   }
 
   private async query(db: Queryable, sql: string, parameters: unknown[] = []): Promise<Array<Record<string, any>>> {
