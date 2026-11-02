@@ -35,6 +35,7 @@ import {
 @Injectable()
 export class OrderRepository implements OnModuleInit {
   private dataSource?: DataSource;
+  private loyaltyPaymentVoid?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
   private storeOrderRepo?: Repository<StoreOrderEntity>;
   private itemRepo?: Repository<OrderItemEntity>;
   private historyRepo?: Repository<OrderStatusHistoryEntity>;
@@ -116,6 +117,12 @@ export class OrderRepository implements OnModuleInit {
 
   database() {
     return this.isDbConnected ? this.dataSource : undefined;
+  }
+
+  registerLoyaltyPaymentVoid(
+    handler: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>,
+  ): void {
+    this.loyaltyPaymentVoid = handler;
   }
 
   async createOrder(orderData: any): Promise<{ order: OrderEntity; items: OrderItemEntity[]; storeOrder: StoreOrderEntity | null; duplicate: boolean }> {
@@ -1469,6 +1476,13 @@ export class OrderRepository implements OnModuleInit {
     });
     const order = this.projectOrder(saved);
     await this.cacheOrder(order);
+    if (this.loyaltyPaymentVoid) {
+      await this.loyaltyPaymentVoid({
+        merchantId: saved.merchantId,
+        storeId: saved.storeId,
+        orderId: saved.orderId,
+      });
+    }
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
