@@ -302,7 +302,9 @@ export class StorePosConfigurationsService {
 
     const taxes = this.taxList(taxesConfig);
     const currency = this.textOrNull(taxesConfig?.currency);
-    const currencySymbol = this.textOrNull(taxesConfig?.currencySymbol);
+    const currencySymbol = this.textOrNull(
+      taxesConfig?.currency_symbol ?? taxesConfig?.currencySymbol,
+    );
     const [notesDenom, coinDenom] = await this.cashDenominations(resolvedStoreId, cashConfig);
     const safe = await this.safeDrop(resolvedStoreId, safeConfig, currencySymbol);
     const roles = await this.storeRoles(resolvedStoreId);

@@ -1,4 +1,5 @@
 import { DataSource } from 'typeorm';
+import { ensureStorePosConfigurationSchema } from './store-pos-configuration.schema';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -39,6 +40,10 @@ export async function savePosConfigDocument(
   configurationName: string,
   value: Record<string, any>,
 ): Promise<Record<string, any>> {
+  // Older local databases may have this table without the composite
+  // uniqueness required by the upsert below. Ensure the schema on write so
+  // configuration saves self-heal before executing ON CONFLICT.
+  await ensureStorePosConfigurationSchema(db);
   const payload = { ...value };
   delete payload.id;
   delete payload.storeId;

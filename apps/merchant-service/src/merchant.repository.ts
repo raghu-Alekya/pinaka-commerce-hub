@@ -3350,6 +3350,28 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return payload.length;
   }
 
+  /**
+   * Removes a product and its variations from the cached catalog after a
+   * successful WooCommerce delete. This is the fallback used when a complete
+   * catalog sync cannot be performed.
+   */
+  async removeStoreProductFromCatalog(storeId: string, productId: string | number): Promise<void> {
+    await this.dataSource.query(`
+      UPDATE public.store_products
+         SET payload = COALESCE((
+           SELECT jsonb_agg(item)
+             FROM jsonb_array_elements(
+               CASE WHEN jsonb_typeof(payload) = 'array' THEN payload ELSE '[]'::jsonb END
+             ) AS item
+            WHERE COALESCE(item->>'id', '') <> $2
+              AND COALESCE(item->>'parent_id', '') <> $2
+         ), '[]'::jsonb),
+             updated_at = now()
+       WHERE store_id = $1::uuid
+         AND COALESCE(is_deleted, false) = false
+    `, [storeId, String(productId)]);
+  }
+
   async syncStoreCategoriesFromWordPress(params: {
     storeId: string;
     wordpressUrl: string;
