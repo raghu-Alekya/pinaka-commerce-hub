@@ -226,7 +226,7 @@ export class LoyaltyService implements OnModuleInit {
         throw fail(400, 'invalid_amount_unit', `Invalid "Amount per Unit" setting detected. Please set a valid value in Loyalty Settings. (Current: ${settings.redeemAmount})`);
       }
       const amount = Number.isFinite(redeemAmount) ? redeemAmount : 0;
-      const nextLines = upsertLoyaltyLine(lines, loyaltyProduct, amount);
+      const nextLines = upsertLoyaltyLine(lines, loyaltyProduct, amount, order.order_id);
       const priced = priceOrder(order, nextLines);
       order.line_items = nextLines;
       order.status = 'pending';
@@ -559,11 +559,11 @@ function couponCount(value: unknown): number {
   return value.filter((coupon) => String((coupon as { code?: unknown })?.code || '').trim()).length;
 }
 
-function upsertLoyaltyLine(lines: OrderLine[], product: CatalogProduct, amount: number): OrderLine[] {
+function upsertLoyaltyLine(lines: OrderLine[], product: CatalogProduct, amount: number, orderId: string): OrderLine[] {
   const next = lines.map((line) => ({ ...line }));
   const index = next.findIndex((line) => isLoyaltyLine(line, product.id));
   const loyalty: OrderLine = {
-    ...(index >= 0 ? next[index] : { id: `LOYALTY-${product.id}` }),
+    ...(index >= 0 ? next[index] : { id: `LOYALTY-${orderId}`.slice(0, 100) }),
     product_id: product.id,
     name: 'Loyalty',
     quantity: 1,

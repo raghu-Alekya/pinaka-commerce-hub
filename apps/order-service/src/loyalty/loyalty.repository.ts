@@ -327,15 +327,19 @@ export class LoyaltyRepository {
   async replaceCanonicalLines(orderId: string, lines: Array<Record<string, unknown>>, manager: Queryable): Promise<void> {
     await manager.query(`DELETE FROM public.order_line_items WHERE order_id = $1::uuid`, [orderId]);
     if (!lines.length) return;
+    const used = new Set<string>();
     for (const [index, line] of lines.entries()) {
-      const quantity = Number(line.quantity ?? 1);
-      const total = Number(line.total ?? line.subtotal ?? 0);
+      const quantity = finiteNumber(line.quantity, 1);
+      const total = finiteNumber(line.total ?? line.subtotal, 0);
+      let id = String(line.id || `ITEM-${orderId}-${index + 1}`).slice(0, 100);
+      if (used.has(id)) id = `ITEM-${orderId}-${index + 1}`.slice(0, 100);
+      used.add(id);
       await manager.query(
         `INSERT INTO public.order_line_items
            (id, order_id, product_id, product_name, quantity, unit_price, total_price, modifiers)
          VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb)`,
         [
-          String(line.id || `ITEM-${orderId}-${index + 1}`).slice(0, 100),
+          id,
           orderId,
           String(line.product_id ?? line.productId ?? '').slice(0, 100),
           String(line.name || 'Sales Item').slice(0, 255),
@@ -498,6 +502,11 @@ export class LoyaltyRepository {
       throw error;
     }
   }
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function normalize(result: unknown): Array<Record<string, any>> {
