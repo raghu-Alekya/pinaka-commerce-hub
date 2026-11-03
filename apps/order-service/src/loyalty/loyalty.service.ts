@@ -346,7 +346,7 @@ export class LoyaltyService implements OnModuleInit {
     const payload = jsonBody(body);
     const validated = validateSettingsUpdate(payload);
     if ('code' in validated) throw fail(400, validated.code, validated.message);
-    const current = await this.loyalty.readConfig(scope, 'pinaka_loyalty');
+    const current = await this.loyalty.readConfig(scope, 'store_loyalty');
     const stored = storedSettingsPatch(validated.settings, current);
     stored.pinaka_loyalty_mode = current.pinaka_loyalty_mode ?? 'order';
     await this.loyalty.saveLoyaltyConfig(scope, stored);
@@ -374,7 +374,7 @@ export class LoyaltyService implements OnModuleInit {
       const customer = await this.loyalty.findCustomerById(scope, customerId, manager);
       if (!customer) return;
       const settings = await this.settings(scope, manager);
-      const stored = await this.loyalty.readConfig(scope, 'pinaka_loyalty', manager);
+      const stored = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
       const ratioDollar = stored.pinaka_loyalty_ratio_dollar === undefined ? undefined : Number(stored.pinaka_loyalty_ratio_dollar);
       const ratioPoint = stored.pinaka_loyalty_ratio_point === undefined ? undefined : Number(stored.pinaka_loyalty_ratio_point);
       const selected = new Set(input.items.map((item) => item.orderItemId));
@@ -457,7 +457,7 @@ export class LoyaltyService implements OnModuleInit {
 
   private async assertEnabled(scope: LoyaltyScope): Promise<LoyaltySettings> {
     await this.loyalty.ensure();
-    const flags = await this.loyalty.readConfig(scope, 'loyality_settings');
+    const flags = await this.loyalty.readConfig(scope, 'store_loyalty');
     if (flags.enable_loyalty_points !== 'yes') {
       throw fail(403, 'loyalty_disabled', 'The Loyalty Points system is currently disabled by the administrator.');
     }
@@ -465,7 +465,7 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   private async settings(scope: LoyaltyScope, manager?: EntityManager): Promise<LoyaltySettings> {
-    const stored = await this.loyalty.readConfig(scope, 'pinaka_loyalty', manager);
+    const stored = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
     return { ...defaultLoyaltySettings(), ...settingsFromStored(stored) };
   }
 
