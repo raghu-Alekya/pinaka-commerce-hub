@@ -106,6 +106,20 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
            )
            AND NOT (COALESCE(payment.metadata, '{}'::jsonb) ? 'pos_change_returned')
       `);
+      await manager.query(`
+        UPDATE public.store_pos_payments AS payment
+           SET change_amount = CASE
+             WHEN COALESCE(payment.metadata->>'pos_change_returned', '') ~ '^[0-9]+(\.[0-9]+)?$'
+               THEN GREATEST(0, (payment.metadata->>'pos_change_returned')::numeric)
+             ELSE 0
+           END
+         WHERE payment.metadata ? 'pos_change_returned'
+           AND payment.change_amount IS DISTINCT FROM CASE
+             WHEN COALESCE(payment.metadata->>'pos_change_returned', '') ~ '^[0-9]+(\.[0-9]+)?$'
+               THEN GREATEST(0, (payment.metadata->>'pos_change_returned')::numeric)
+             ELSE 0
+           END
+      `);
     }
 
     await manager.query(`
