@@ -124,6 +124,26 @@ export class DiscountService implements OnModuleInit {
         );
       }
     }
+    // Usage is recorded by PCH when the discount is applied to an order. Overlay
+    // the locally tracked total because the WordPress list can lag behind PCH.
+    let localPayload: any = {};
+    try {
+      localPayload = await this.readDiscountPayload(storeId);
+    } catch {
+      // A WordPress list response remains available when the local snapshot DB
+      // is temporarily unavailable; the next poll retries the local write.
+    }
+    for (const group of ['auto', 'mix_match', 'multipack']) {
+      const remoteRecords = response?.data?.[group];
+      const localRecords = localPayload[group];
+      if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
+      for (const remote of remoteRecords) {
+        const local = localRecords.find((item: any) => this.discountMatchesId(item, String(remote?.id)));
+        if (!local) continue;
+        const used = Number(local.usage_count ?? local.usageCount ?? 0);
+        if (Number.isFinite(used)) remote.usage_count = Math.max(0, used);
+      }
+    }
     if (!type) return response;
     const group = this.discountGroup(type);
     return {
@@ -348,15 +368,20 @@ export class DiscountService implements OnModuleInit {
     const type = this.discountGroup(input.type);
     const commonFields = ['discount_type', 'amount', 'date_starts', 'date_expires'];
     const typeFields: Record<typeof type, string[]> = {
-      auto: ['code', 'minimum_amount', 'maximum_amount', 'min_qty', 'max_qty', 'product_ids', 'usage_limit',
+      auto: ['code', 'minimum_amount', 'maximum_amount', 'min_qty', 'max_qty', 'product_ids', 'usage_limit', 'usage_count',
         'product_id', 'pinaka_discount_auto_apply'],
-      mix_match: ['code', 'minimum_amount', 'maximum_amount', 'min_qty', 'max_qty', 'usage_limit',
+      mix_match: ['code', 'minimum_amount', 'maximum_amount', 'min_qty', 'max_qty', 'usage_limit', 'usage_count',
         'product_id', 'main_product_id', 'discount_product_ids', 'required_product_ids', 'required_product_id', 'required_products'],
-      multipack: ['code', 'usage_limit', 'product_id', 'main_product_id', 'qty', 'quantity', 'required_quantity'],
+      multipack: ['code', 'usage_limit', 'usage_count', 'product_id', 'main_product_id', 'qty', 'quantity', 'required_quantity'],
     };
     const allowed = [...commonFields, ...typeFields[type]];
     const output: Record<string, any> = { type };
     for (const key of allowed) if (input[key] !== undefined) output[key] = input[key];
+    for (const [snakeCase, camelCase] of [['usage_limit', 'usageLimit'], ['usage_count', 'usageCount']] as const) {
+      if (output[snakeCase] === undefined && input[camelCase] !== undefined) {
+        output[snakeCase] = input[camelCase];
+      }
+    }
     const mainProductId = input.main_product_id ?? input.product_id;
     if (mainProductId !== undefined) {
       // Keep both names for the custom WordPress endpoint and the admin table,
@@ -547,6 +572,17 @@ export class DiscountService implements OnModuleInit {
 
   private canonicalizeWordPressRecord(record: Record<string, any>) {
     const canonical = { ...record };
+    // The custom WordPress endpoint has returned both WooCommerce snake_case
+    // fields and camelCase fields over time. Keep the stored/API shape aligned
+    // with the snake_case names used by discount updates and consumers.
+    if (canonical.usage_limit === undefined && canonical.usageLimit !== undefined) {
+      canonical.usage_limit = canonical.usageLimit;
+    }
+    if (canonical.usage_count === undefined && canonical.usageCount !== undefined) {
+      canonical.usage_count = canonical.usageCount;
+    }
+    delete canonical.usageLimit;
+    delete canonical.usageCount;
     if (canonical.start_date === undefined) {
       canonical.start_date = canonical.date_starts ?? canonical.date_start ?? canonical.startDate;
     }
@@ -611,6 +647,23 @@ export class DiscountService implements OnModuleInit {
     return undefined;
   }
 
+  private async pushUsageCountToWordPress(
+    connection: { wordpressUrl: string; wordpressJwt: string },
+    group: string,
+    discountId: string | number,
+    usageCount: number,
+  ): Promise<boolean> {
+    const response = await this.wordpressRequest(connection, 'custom-discount/update-discount', 'POST', {
+      type: group,
+      discount_id: Number(discountId),
+      usage_count: usageCount,
+    });
+    if (response?.success === false) return false;
+    const refreshed = await this.fetchWordPressDiscount(connection, group, discountId);
+    const persistedCount = Number(refreshed?.usage_count ?? refreshed?.usageCount);
+    return Number.isFinite(persistedCount) && persistedCount === usageCount;
+  }
+
   private async wordpressRequest(connection: { wordpressUrl: string; wordpressJwt: string }, path: string, method: string, body?: any, query: Record<string, string> = {}) {
     const url = new URL(`${connection.wordpressUrl.replace(/\/+$/, '')}/wp-json/pinaka-pos/v1/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, value);
@@ -656,7 +709,18 @@ export class DiscountService implements OnModuleInit {
       const payload = row?.payload ?? { auto: [], mix_match: [], multipack: [] };
       const records = Array.isArray(payload[group]) ? payload[group] : [];
       const index = replaceId ? records.findIndex((item: any) => this.discountMatchesId(item, replaceId)) : -1;
-      if (index >= 0) records[index] = record; else records.push(record);
+      if (index >= 0) {
+        const current = records[index];
+        const currentUsed = Math.max(Number(current?.usage_count ?? current?.usageCount ?? 0), 0);
+        record.pch_used_order_ids = Array.isArray(current?.pch_used_order_ids) ? current.pch_used_order_ids : [];
+        // Once a local snapshot exists, PCH is authoritative. A stale or
+        // divergent WordPress count must not replace the PCH value.
+        record.usage_count = currentUsed;
+        record.usageCount = currentUsed;
+        record.pch_usage_sync_pending = current?.pch_usage_sync_pending === true
+          || record.pch_usage_sync_pending === true;
+        records[index] = record;
+      } else records.push(record);
       payload[group] = records;
       await this.writeDiscountSnapshot(manager, storeId, payload);
     });
@@ -685,7 +749,7 @@ export class DiscountService implements OnModuleInit {
     storeId: string;
     wordpressUrl: string;
     wordpressJwt: string;
-  }): Promise<{ discountCount: number; skippedCount: number }> {
+  }): Promise<{ discountCount: number; skippedCount: number; usageSyncPendingCount: number }> {
     const [table] = await this.merchants.requireDataSource().query("SELECT to_regclass('public.store_products') AS name");
     if (!table?.name) throw new BadRequestException('Sync products for this store before syncing discounts');
     const [saved] = await this.merchants.requireDataSource().query(
@@ -696,6 +760,7 @@ export class DiscountService implements OnModuleInit {
       throw new BadRequestException('Sync products for this store before syncing discounts');
     }
     const payload: Record<string, Record<string, unknown>[]> = { auto: [], mix_match: [], multipack: [] };
+    const localPayload = await this.readDiscountPayload(params.storeId);
     const seen = new Set<string>();
     let skippedCount = 0;
     let completed = false;
@@ -718,6 +783,32 @@ export class DiscountService implements OnModuleInit {
           const key = group + ':' + discount.id;
           if (seen.has(key)) continue;
           seen.add(key);
+          const localRecords = Array.isArray(localPayload[group]) ? localPayload[group] : [];
+          const localRecord = localRecords.find((item: any) => this.discountMatchesId(item, String(discount.id)));
+          if (localRecord) {
+            const localUsage = Math.max(Number(localRecord.usage_count ?? localRecord.usageCount ?? 0), 0);
+            const remoteUsage = Math.max(Number(discount.usage_count ?? discount.usageCount ?? 0), 0);
+            const usedOrderIds = Array.isArray(localRecord.pch_used_order_ids)
+              ? localRecord.pch_used_order_ids.map(String)
+              : [];
+            let usageSynced = localRecord.pch_usage_sync_pending !== true && remoteUsage === localUsage;
+            if (!usageSynced) {
+              try {
+                usageSynced = await this.pushUsageCountToWordPress(
+                  { wordpressUrl: params.wordpressUrl, wordpressJwt: params.wordpressJwt },
+                  group,
+                  discount.id,
+                  localUsage,
+                );
+              } catch (error: any) {
+                console.warn(`[Discount sync] Usage update failed for ${group} discount ${discount.id}: ${error?.message ?? 'unknown error'}`);
+              }
+            }
+            discount.usage_count = localUsage;
+            discount.usageCount = discount.usage_count;
+            discount.pch_usage_sync_pending = !usageSynced;
+            if (usedOrderIds.length) discount.pch_used_order_ids = usedOrderIds;
+          }
           // Mirror all discounts from WooCommerce. A discount can reference products
           // that are not present in the local product snapshot; filtering those here
           // makes sync and get-all disagree with the source and silently loses rules.
@@ -737,7 +828,11 @@ export class DiscountService implements OnModuleInit {
     if (!completed) throw new BadRequestException('Discount pagination limit reached; saved discounts were not replaced');
     await this.merchants.requireDataSource().transaction(manager =>
       this.writeDiscountSnapshot(manager, params.storeId, payload));
-    return { discountCount: Object.values(payload).reduce((sum, items) => sum + items.length, 0), skippedCount };
+    return {
+      discountCount: Object.values(payload).reduce((sum, items) => sum + items.length, 0),
+      skippedCount,
+      usageSyncPendingCount: Object.values(payload).flat().filter(item => item.pch_usage_sync_pending === true).length,
+    };
   }
 
   private connectorEncryptionKey(): Buffer {
