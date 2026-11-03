@@ -265,6 +265,17 @@ export class OrderRepository implements OnModuleInit {
           const storeOrderRepository = manager.getRepository(StoreOrderEntity);
           const paymentRows = this.buildStorePosPaymentRows(id, order, orderData, sourcePayload, storeOrder);
           const persistedStoreOrder = await storeOrderRepository.save(storeOrderRepository.create(storeOrder));
+          await this.recordCustomDiscountUsage(
+            manager,
+            orderData.storeId,
+            id,
+            order.paymentStatus,
+            order.orderStatus,
+            orderData.status,
+            storeOrder.couponLines,
+            storeOrder.metaData,
+            sourcePayload?.line_items,
+          );
           await this.saveLineItems(manager, id, items, true);
           await this.saveStatusHistory(manager, storeOrder.statusHistory[0] as OrderStatusHistoryEntity);
           if (paymentRows.length) {
@@ -432,6 +443,96 @@ export class OrderRepository implements OnModuleInit {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+  }
+
+  private async recordCustomDiscountUsage(
+    manager: EntityManager,
+    storeId: string,
+    orderId: string,
+    paymentStatus: PaymentStatus,
+    orderStatus: OrderStatus,
+    sourceOrderStatus: unknown,
+    couponLines: unknown,
+    metadata: unknown,
+    lineItems: unknown,
+  ): Promise<void> {
+    const normalizedPaymentStatus = String(paymentStatus).trim().toUpperCase();
+    const normalizedOrderStatus = String(orderStatus).trim().toUpperCase();
+    const normalizedSourceStatus = String(sourceOrderStatus ?? '').trim().toLowerCase();
+    if (normalizedPaymentStatus !== PaymentStatus.PAID
+      || ['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
+      || ['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus)) return;
+    const couponCodes = Array.isArray(couponLines)
+      ? couponLines.map((line: any) => String(line?.code ?? '').trim().toLowerCase())
+      : [];
+    const metadataCodes = Array.isArray(metadata)
+      ? metadata
+        .filter((entry: any) => ['_pinaka_discount_code', 'pinaka_discount_code', 'discount_code', '_discount_code']
+          .includes(String(entry?.key ?? '').trim().toLowerCase()))
+        .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
+      : [];
+    const ruleIds = Array.isArray(lineItems)
+      ? lineItems.flatMap((line: any) => Array.isArray(line?.meta_data)
+        ? line.meta_data
+          .filter((entry: any) => String(entry?.key ?? '').trim() === '_pos_discount_rule_id')
+          .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
+        : [])
+      : [];
+    const codes = [...new Set([...couponCodes, ...metadataCodes].filter(Boolean))];
+    const ids = [...new Set(ruleIds.filter(Boolean))];
+    if (!codes.length && !ids.length) return;
+    const rows = await manager.query(
+      `SELECT payload FROM public.store_discounts
+        WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
+      [storeId],
+    ).catch((error: unknown) => {
+      const code = error && typeof error === 'object' ? (error as any).driverError?.code : undefined;
+      if (code === '42P01' || code === '42703') return [];
+      throw error;
+    });
+    const payload = rows[0]?.payload;
+    if (!payload) return;
+    let changed = false;
+    for (const group of ['auto', 'mix_match', 'multipack']) {
+      const records = Array.isArray(payload[group]) ? payload[group] : [];
+      for (const record of records) {
+        const code = String(record.code ?? record.discount_code ?? record.name ?? '').trim().toLowerCase();
+        const recordIds = [record.id, record.pchId, record.wordpressId]
+          .filter((value: unknown) => value !== undefined && value !== null)
+          .map((value: unknown) => String(value).trim().toLowerCase());
+        const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
+        const ruleIdMatches = ids.some(ruleId => {
+          if (!ruleId.startsWith(rulePrefix)) return false;
+          const suffix = ruleId.slice(rulePrefix.length);
+          return recordIds.includes(suffix);
+        });
+        if (!codes.includes(code) && !ruleIdMatches) continue;
+        const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
+        if (usedOrderIds.includes(orderId)) continue;
+        const usageCount = Math.max(Number(record.usage_count ?? record.usageCount ?? 0), 0);
+        const usageLimitValue = record.usage_limit ?? record.usageLimit;
+        const usageLimit = usageLimitValue === null || usageLimitValue === undefined || usageLimitValue === ''
+          ? null
+          : Number(usageLimitValue);
+        if (usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && usageCount >= usageLimit) {
+          throw new BadRequestException(`Discount '${code || record.code || record.id}' has reached its usage limit`);
+        }
+        usedOrderIds.push(orderId);
+        record.pch_used_order_ids = usedOrderIds;
+        const count = usageCount + 1;
+        record.usage_count = count;
+        record.usageCount = count;
+        record.pch_usage_sync_pending = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await manager.query(
+        `UPDATE public.store_discounts SET payload=$2::jsonb, updated_at=now()
+          WHERE store_id=$1::uuid`,
+        [storeId, JSON.stringify(payload)],
+      );
+    }
   }
 
   private buildStorePosPaymentRows(
