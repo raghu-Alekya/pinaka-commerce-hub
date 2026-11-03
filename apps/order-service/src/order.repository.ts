@@ -36,6 +36,7 @@ import {
 export class OrderRepository implements OnModuleInit {
   private dataSource?: DataSource;
   private loyaltyPaymentVoid?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
+  private loyaltyOrderCompleted?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
   private storeOrderRepo?: Repository<StoreOrderEntity>;
   private itemRepo?: Repository<OrderItemEntity>;
   private historyRepo?: Repository<OrderStatusHistoryEntity>;
@@ -123,6 +124,25 @@ export class OrderRepository implements OnModuleInit {
     handler: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>,
   ): void {
     this.loyaltyPaymentVoid = handler;
+  }
+
+  registerLoyaltyOrderCompleted(
+    handler: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>,
+  ): void {
+    this.loyaltyOrderCompleted = handler;
+  }
+
+  private async notifyLoyaltyCompleted(
+    scope: { merchantId: string; storeId: string; orderId: string },
+    status: unknown,
+  ): Promise<void> {
+    const normalized = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+    if (normalized !== 'completed' || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
+    try {
+      await this.loyaltyOrderCompleted(scope);
+    } catch (error) {
+      console.error('[Loyalty] Completed order credit failed', error);
+    }
   }
 
   async createOrder(orderData: any): Promise<{ order: OrderEntity; items: OrderItemEntity[]; storeOrder: StoreOrderEntity | null; duplicate: boolean }> {
@@ -311,6 +331,11 @@ export class OrderRepository implements OnModuleInit {
       }
       const savedOrder = this.projectOrder(savedStoreOrder);
       await this.cacheOrder(savedOrder);
+      await this.notifyLoyaltyCompleted({
+        merchantId: savedStoreOrder.merchantId,
+        storeId: savedStoreOrder.storeId,
+        orderId: savedStoreOrder.orderId,
+      }, savedStoreOrder.status);
       console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
       return { order: savedOrder, items, storeOrder: savedStoreOrder, duplicate: false };
     } else {
@@ -1362,6 +1387,11 @@ export class OrderRepository implements OnModuleInit {
       if (this.historyRepo) await this.historyRepo.save(this.historyRepo.create(history));
       const order = this.projectOrder(saved);
       await this.cacheOrder(order);
+      await this.notifyLoyaltyCompleted({
+        merchantId: saved.merchantId,
+        storeId: saved.storeId,
+        orderId: saved.orderId,
+      }, saved.status);
       return order;
     }
     const graph = await this.getOrderByReference(orderId);
@@ -1377,6 +1407,11 @@ export class OrderRepository implements OnModuleInit {
       status: normalizedStatus.toLowerCase().replace(/_/g, '-'),
     };
     await this.cacheOrder(order);
+    await this.notifyLoyaltyCompleted({
+      merchantId: order.merchantId,
+      storeId: order.storeId,
+      orderId: order.id,
+    }, normalizedStatus);
     return order;
   }
 
@@ -1437,6 +1472,11 @@ export class OrderRepository implements OnModuleInit {
     });
     const order = this.projectOrder(saved);
     await this.cacheOrder(order);
+    await this.notifyLoyaltyCompleted({
+      merchantId: saved.merchantId,
+      storeId: saved.storeId,
+      orderId: saved.orderId,
+    }, saved.status);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1622,6 +1662,11 @@ export class OrderRepository implements OnModuleInit {
         orderId: saved.orderId,
       });
     }
+    await this.notifyLoyaltyCompleted({
+      merchantId: saved.merchantId,
+      storeId: saved.storeId,
+      orderId: saved.orderId,
+    }, saved.status);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 

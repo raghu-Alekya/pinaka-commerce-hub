@@ -86,4 +86,9 @@ export async function ensureLoyaltySchema(db: DataSource | EntityManager): Promi
     ON public.store_customer_loyalty_points (customer_id, order_id, source_refund_id)
     WHERE source_refund_id IS NOT NULL
   `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS store_customer_loyalty_points_credit_uidx
+    ON public.store_customer_loyalty_points (customer_id, order_id)
+    WHERE source_refund_id IS NULL AND credited_points > 0
+  `);
 }

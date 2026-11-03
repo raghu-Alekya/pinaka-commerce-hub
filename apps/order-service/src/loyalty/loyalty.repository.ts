@@ -413,6 +413,50 @@ export class LoyaltyRepository {
     };
   }
 
+  async hasOrderCredit(scope: LoyaltyScope, customerId: string, orderId: string, manager?: Queryable): Promise<boolean> {
+    const rows = await this.query(manager || await this.ensure(),
+      `SELECT 1
+         FROM public.store_customer_loyalty_points
+        WHERE customer_id = $1::uuid AND merchant_id = $2::uuid AND store_id = $3::uuid
+          AND order_id = $4::uuid
+          AND credited_points > 0
+          AND source_refund_id IS NULL
+        LIMIT 1`,
+      [customerId, scope.merchantId, scope.storeId, orderId],
+    );
+    return rows.length > 0;
+  }
+
+  async insertCredit(scope: LoyaltyScope, input: {
+    customerId: string;
+    contact: string;
+    orderId: string;
+    clientOrderId: string | null;
+    creditedPoints: number;
+    expiresAt: Date;
+  }, manager: Queryable): Promise<boolean> {
+    const rows = await this.query(manager,
+      `INSERT INTO public.store_customer_loyalty_points
+         (customer_id, merchant_id, store_id, contact, order_id, client_order_id,
+          credited_points, redeemed_points, expired_points,
+          points_created_date, points_expiry_date, points_status)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid, $6, $7, 0, 0, now(), $8, 'active')
+       ON CONFLICT (customer_id, order_id) WHERE source_refund_id IS NULL AND credited_points > 0
+       DO NOTHING
+       RETURNING id`,
+      [input.customerId, scope.merchantId, scope.storeId, input.contact, input.orderId,
+        input.clientOrderId, input.creditedPoints, input.expiresAt],
+    );
+    return rows.length > 0;
+  }
+
+  async updateLineItems(orderId: string, lines: unknown, manager: Queryable): Promise<void> {
+    await manager.query(
+      `UPDATE public.store_orders SET line_items = $2::jsonb, updated_at = now() WHERE order_id = $1::uuid`,
+      [orderId, JSON.stringify(lines || [])],
+    );
+  }
+
   async insertExpired(scope: LoyaltyScope, input: {
     customerId: string;
     contact: string;
