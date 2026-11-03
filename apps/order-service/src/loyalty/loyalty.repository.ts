@@ -126,7 +126,7 @@ export class LoyaltyRepository {
     await db.query(
       `INSERT INTO public.store_pos_configurations
          (store_id, configuration_name, configuration_value, created_by, updated_by)
-       VALUES ($1::uuid, 'pinaka_loyalty', $2::jsonb, $3::uuid, $3::uuid)
+       VALUES ($1::uuid, 'store_loyalty', $2::jsonb, $3::uuid, $3::uuid)
        ON CONFLICT (store_id, configuration_name) DO UPDATE
          SET configuration_value = EXCLUDED.configuration_value,
              updated_by = EXCLUDED.updated_by,
