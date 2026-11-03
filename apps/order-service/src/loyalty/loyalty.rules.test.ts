@@ -5,6 +5,7 @@ import {
   flattenCatalog,
   liveRedemption,
   loyaltyUsername,
+  earnedOrderPoints,
   partialRefundExpiredPoints,
   paymentIsVoid,
   presentSettings,
@@ -108,6 +109,12 @@ test('conflict rule blocks coupons, discounts, and special products only when di
   assert.equal(redemptionBlocked({
     conflictRule: 'enable', discountTotal: 5, couponCount: 1, hasPayout: true, hasDiscountProduct: true, hasCashback: true,
   }), false);
+});
+
+test('completed orders earn floor of spend divided by the dollar ratio', () => {
+  assert.equal(earnedOrderPoints(45.5, 10, 1), 4);
+  assert.equal(earnedOrderPoints(9.99, 10, 1), 0);
+  assert.equal(earnedOrderPoints(20, 0, 1), 0);
 });
 
 test('partial refund expiry follows item and order modes and caps at the balance', () => {

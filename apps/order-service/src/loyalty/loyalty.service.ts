@@ -25,6 +25,7 @@ import {
   availableFromLedger,
   closedOrderStatus,
   defaultLoyaltySettings,
+  earnedOrderPoints,
   findNamedProduct,
   flattenCatalog,
   formatDate,
@@ -68,6 +69,7 @@ export class LoyaltyService implements OnModuleInit {
         console.error('[Loyalty] Payment void balance update failed', error);
       }
     });
+    this.orders.registerLoyaltyOrderCompleted((scope) => this.creditCompletedOrder(scope));
   }
 
   async getPoints(contactValue: unknown, scope: LoyaltyScope) {
@@ -441,6 +443,59 @@ export class LoyaltyService implements OnModuleInit {
       const customers = await this.loyalty.deleteOrderLedger(scope, order.order_id, order.client_order_id, manager);
       for (const customerId of customers) await this.recalculate(scope, customerId, manager);
     });
+  }
+
+  async creditCompletedOrder(scope: LoyaltyScope & { orderId: string }): Promise<void> {
+    await this.loyalty.transaction(async (manager) => {
+      const flags = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
+      if (flags.enable_loyalty_points !== 'yes') return;
+      const order = await this.loyalty.lockOrder(scope, scope.orderId, manager);
+      if (!order) return;
+      const status = String(order.status || order.order_status || '').toLowerCase().replace(/_/g, '-');
+      if (status !== 'completed') return;
+      const customer = await this.customerForCompletedOrder(scope, order, manager);
+      if (!customer) return;
+      if (await this.loyalty.hasOrderCredit(scope, customer.id, order.order_id, manager)) return;
+      const settings = await this.settings(scope, manager);
+      const earnBase = Number(order.total);
+      if (settings.minSpend > 0 && (!Number.isFinite(earnBase) || earnBase < settings.minSpend)) return;
+      let points = 0;
+      if (settings.mode === 'item') {
+        const products = flattenCatalog(await this.loyalty.catalog(scope, manager));
+        const lines = asLines(order.line_items).map((line) => {
+          if (isLoyaltyLine(line)) return line;
+          const earned = Math.floor(taggedItemPoints([line], products));
+          return earned > 0 ? withLineMeta(line, '_credited_loyalty_points', earned) : line;
+        });
+        points = lines.reduce((sum, line) => sum + Math.trunc(Number(lineMeta(line, '_credited_loyalty_points')) || 0), 0);
+        if (points > 0) await this.loyalty.updateLineItems(order.order_id, lines, manager);
+      } else {
+        points = earnedOrderPoints(Number.isFinite(earnBase) ? earnBase : 0, settings.ratioDollar, settings.ratioPoint);
+      }
+      if (points <= 0) return;
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + Math.max(0, settings.expiryDays || 0));
+      const inserted = await this.loyalty.insertCredit(scope, {
+        customerId: customer.id,
+        contact: String(metaValue(order, 'contact') || customer.email || customer.mobile || ''),
+        orderId: order.order_id,
+        clientOrderId: order.client_order_id,
+        creditedPoints: points,
+        expiresAt,
+      }, manager);
+      if (inserted) await this.recalculate(scope, customer.id, manager);
+    });
+  }
+
+  private async customerForCompletedOrder(scope: LoyaltyScope, order: OrderRow, manager: EntityManager): Promise<CustomerRow | undefined> {
+    const linked = String(metaValue(order, 'loyaltyuser_id') || '').trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(linked)) {
+      const customer = await this.loyalty.findCustomerById(scope, linked, manager);
+      if (customer) return customer;
+    }
+    const contact = String(metaValue(order, 'contact') || '').trim();
+    if (!contact) return undefined;
+    return this.loyalty.findCustomer(scope, contact, isEmailContact(contact), manager);
   }
 
   private async recalculate(scope: LoyaltyScope, customerId: string, manager: EntityManager): Promise<void> {

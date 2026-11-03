@@ -349,6 +349,11 @@ export function redemptionBlocked(input: {
   return input.discountTotal > 0 || input.couponCount > 0 || input.hasPayout || input.hasDiscountProduct || input.hasCashback;
 }
 
+export function earnedOrderPoints(total: number, ratioDollar: number, ratioPoint: number): number {
+  if (!(total > 0) || !(ratioDollar > 0) || !(ratioPoint > 0)) return 0;
+  return Math.floor((total / ratioDollar) * ratioPoint);
+}
+
 export function partialRefundExpiredPoints(input: {
   mode: LoyaltyMode;
   creditedPoints: number[];
