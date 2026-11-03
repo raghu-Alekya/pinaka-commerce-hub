@@ -1656,7 +1656,7 @@ export class OrderRepository implements OnModuleInit {
          AND ($2::date IS NULL OR (created_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
       );
       const payments = await manager.query(
-        `SELECT payment_method,amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
+        `SELECT payment_method,amount,status,change_amount,refund_amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
          AND ($2::date IS NULL OR (COALESCE(payment_at,created_at) AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
       );
       const refunds = await manager.query(
