@@ -306,7 +306,10 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   async allCustomers(scope: LoyaltyScope) {
-    await this.assertEnabled(scope);
+    // Customer balances/history remain viewable even when the loyalty
+    // program is disabled. The disabled flag should block earning/redeeming,
+    // not hide previously stored customers from the administrator.
+    await this.loyalty.ensure();
     const customers = await this.loyalty.customersWithContact(scope);
     const data = [];
     for (const customer of customers) {
@@ -337,18 +340,21 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   async getSettings(scope: LoyaltyScope) {
-    await this.assertEnabled(scope);
+    // Administrators must be able to read and configure settings before the
+    // loyalty feature is enabled.
+    await this.loyalty.ensure();
     return { success: true, data: presentSettings(await this.settings(scope)) };
   }
 
   async updateSettings(body: Record<string, unknown> | undefined, scope: LoyaltyScope) {
-    await this.assertEnabled(scope);
+    // Settings must be editable while the feature is disabled so an
+    // administrator can configure and enable the loyalty program.
+    await this.loyalty.ensure();
     const payload = jsonBody(body);
     const validated = validateSettingsUpdate(payload);
     if ('code' in validated) throw fail(400, validated.code, validated.message);
     const current = await this.loyalty.readConfig(scope, 'store_loyalty');
     const stored = storedSettingsPatch(validated.settings, current);
-    stored.pinaka_loyalty_mode = current.pinaka_loyalty_mode ?? 'order';
     await this.loyalty.saveLoyaltyConfig(scope, stored);
     return {
       success: true,

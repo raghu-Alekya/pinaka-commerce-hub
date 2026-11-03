@@ -4,6 +4,8 @@ export interface LoyaltySettings {
   ratioDollar: number;
   ratioPoint: number;
   newCustomerPoints: number;
+  defaultPoints: number;
+  loyaltyTag: string;
   redeemPoint: number;
   redeemAmount: number;
   expiryDays: number;
@@ -24,6 +26,9 @@ export interface LoyaltySettingsView {
   ratio_dollar: number;
   ratio_point: number;
   new_customer_points: number;
+  default_points: number;
+  loyalty_tag: string;
+  mode: LoyaltyMode;
   redeem_point: number;
   redeem_amt: number;
   expiry_days: number;
@@ -76,6 +81,8 @@ export function defaultLoyaltySettings(): LoyaltySettings {
     ratioDollar: 0,
     ratioPoint: 0,
     newCustomerPoints: 0,
+    defaultPoints: 0,
+    loyaltyTag: 'LoyaltyPoints',
     redeemPoint: 0,
     redeemAmount: 0,
     expiryDays: 365,
@@ -98,6 +105,9 @@ export function presentSettings(settings: LoyaltySettings): LoyaltySettingsView 
     ratio_dollar: settings.ratioDollar,
     ratio_point: settings.ratioPoint,
     new_customer_points: settings.newCustomerPoints,
+    default_points: settings.defaultPoints,
+    loyalty_tag: settings.loyaltyTag,
+    mode: settings.mode,
     redeem_point: settings.redeemPoint,
     redeem_amt: settings.redeemAmount,
     expiry_days: settings.expiryDays,
@@ -116,6 +126,8 @@ export function settingsFromStored(value: Record<string, unknown> | undefined): 
   settings.ratioDollar = numberOr(source.pinaka_loyalty_ratio_dollar, 0);
   settings.ratioPoint = numberOr(source.pinaka_loyalty_ratio_point, 0);
   settings.newCustomerPoints = numberOr(source.pinaka_new_customer_points, 0);
+  settings.defaultPoints = numberOr(source.pinaka_loyalty_default_points, settings.newCustomerPoints);
+  settings.loyaltyTag = String(source.pinaka_loyalty_tag || 'LoyaltyPoints');
   settings.redeemPoint = numberOr(source.pinaka_loyalty_redeem_point, 0);
   settings.redeemAmount = numberOr(source.pinaka_loyalty_redeem_amt, 0);
   settings.expiryDays = numberOr(source.pinaka_loyalty_expiry_days, 365);
@@ -139,6 +151,9 @@ export function storedSettingsPatch(settings: LoyaltySettings, previous: Record<
     pinaka_loyalty_ratio_dollar: settings.ratioDollar,
     pinaka_loyalty_ratio_point: settings.ratioPoint,
     pinaka_new_customer_points: settings.newCustomerPoints,
+    pinaka_loyalty_default_points: settings.defaultPoints,
+    pinaka_loyalty_tag: settings.loyaltyTag,
+    pinaka_loyalty_mode: settings.mode,
     pinaka_loyalty_redeem_point: settings.redeemPoint,
     pinaka_loyalty_redeem_amt: settings.redeemAmount,
     pinaka_loyalty_expiry_days: settings.expiryDays,
@@ -191,7 +206,13 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: `Invalid points range: Minimum points (${values.pinaka_loyalty_min_points}) cannot be greater than Maximum points (${values.pinaka_loyalty_max_points}).`,
     };
   }
-  const settings = settingsFromStored({ ...values, pinaka_loyalty_conflict_rule: conflict });
+  const defaultPoints = nonNegativeInteger(body.pinaka_loyalty_default_points ?? 0);
+  if (defaultPoints === undefined) return { code: 'invalid_integer_field', message: 'The field "pinaka_loyalty_default_points" must be an integer value.' };
+  const loyaltyTag = String(body.pinaka_loyalty_tag || 'LoyaltyPoints').trim();
+  if (!loyaltyTag) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_tag" cannot be empty.' };
+  const mode = body.pinaka_loyalty_mode === 'item' ? 'item' : body.pinaka_loyalty_mode === 'order' ? 'order' : undefined;
+  if (!mode) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_mode" must be order or item.' };
+  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict });
   return { settings };
 }
 
