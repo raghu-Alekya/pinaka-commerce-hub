@@ -79,7 +79,7 @@ export class DeviceRepository {
       });
     } catch (error: any) {
       if ((error?.driverError?.code || error?.code) === '23505') {
-        throw new ConflictException('Device code, serial number, or activation code already exists');
+        throw new ConflictException('Device code or activation code already exists');
       }
       throw error;
     }

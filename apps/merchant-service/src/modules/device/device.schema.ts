@@ -32,6 +32,40 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
       SET device_active_code = authorization_code 
       WHERE device_active_code IS NULL AND authorization_code IS NOT NULL
     `);
+    // Serial numbers are informational identifiers and may repeat, including
+    // within one merchant. Remove legacy global and merchant-scoped uniqueness.
+    await manager.query('DROP INDEX IF EXISTS public.devices_merchant_serial_number_uidx');
+    await manager.query(`
+      DO $serial_migration$
+      DECLARE item record;
+      BEGIN
+        FOR item IN
+          SELECT c.conname AS name
+          FROM pg_constraint c
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = 'serial_number'
+          WHERE c.conrelid = 'public.devices'::regclass
+            AND c.contype = 'u'
+            AND c.conkey = ARRAY[a.attnum]::smallint[]
+        LOOP
+          EXECUTE format('ALTER TABLE public.devices DROP CONSTRAINT %I', item.name);
+        END LOOP;
+        FOR item IN
+          SELECT idx.relname AS name
+          FROM pg_index i
+          JOIN pg_class tbl ON tbl.oid = i.indrelid
+          JOIN pg_class idx ON idx.oid = i.indexrelid
+          JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attname = 'serial_number'
+          WHERE tbl.oid = 'public.devices'::regclass
+            AND i.indisunique
+            AND i.indnkeyatts = 1
+            AND i.indkey[0] = a.attnum
+            AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid)
+        LOOP
+          EXECUTE format('DROP INDEX public.%I', item.name);
+        END LOOP;
+      END
+      $serial_migration$
+    `);
     await manager.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS devices_device_active_code_uidx
       ON public.devices (device_active_code)
