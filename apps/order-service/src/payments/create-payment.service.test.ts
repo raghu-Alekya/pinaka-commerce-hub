@@ -40,6 +40,7 @@ function sale(overrides: Record<string, unknown> = {}) {
 
 function kickbackSettings() {
   return {
+    payment_gateway_provider: 'kickback',
     providers: [{
       provider: 'Kickback',
       deviceId: 'poi-1',
@@ -381,6 +382,18 @@ test('two configured gateways are not guessed', async () => {
   assert.deepEqual(charges, []);
 });
 
+test('saved credentials without a selected provider do not charge or save a payment', async () => {
+  const { service, inserts, charges } = harness({
+    config: { providers: [kickbackSettings().providers[0]] },
+  });
+  await assert.rejects(
+    () => service.create(cardBody(), context),
+    (error: unknown) => error instanceof BadRequestException && /payment_gateway_provider/.test(error.message),
+  );
+  assert.equal(inserts.length, 0);
+  assert.deepEqual(charges, []);
+});
+
 test('payment_gateway_provider payrock selects Payroc', async () => {
   const { service, charges } = harness({
     config: {
@@ -530,6 +543,8 @@ test('gateway selection uses the saved card payment settings', () => {
   const single = resolvePaymentGateway(kickbackSettings());
   assert.equal(single.ok, true);
   if (single.ok) assert.equal(single.gateway, 'kickback');
+  const credentialsOnly = resolvePaymentGateway({ providers: [kickbackSettings().providers[0]] });
+  assert.equal(credentialsOnly.ok, false);
   const selected = resolvePaymentGateway({
     payment_gateway_provider: 'payrock',
     providers: [kickbackSettings().providers[0], payrocSettings().providers[0]],
