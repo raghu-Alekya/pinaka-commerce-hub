@@ -76,22 +76,39 @@ export class LoyaltyService implements OnModuleInit {
   async getPoints(contactValue: unknown, scope: LoyaltyScope) {
     await this.assertEnabled(scope);
     const contact = requiredContact(contactValue, 'Please enter mobile no or email');
-    const customer = await this.loyalty.findCustomer(scope, contact, isEmailContact(contact));
-    if (!customer) {
+    const email = isEmailContact(contact);
+    const result = await this.loyalty.transaction(async (manager) => {
+      let customer = await this.loyalty.findCustomer(scope, contact, email, manager);
+      if (!customer) {
+        const orderIds = await this.loyalty.eligibleOrderIdsForContact(scope, contact, manager);
+        if (!orderIds.length) return undefined;
+        customer = await this.loyalty.insertCustomer(scope, {
+          name: loyaltyCustomerName(contact, email),
+          email: email ? contact : null,
+          mobile: email ? null : contact,
+          username: loyaltyUsername(contact, email),
+        }, manager);
+        await this.loyalty.writeMeta(customer.id, {
+          contact,
+          ...(email ? { billing_email: contact } : { billing_phone: contact }),
+        }, manager);
+        for (const orderId of orderIds) await this.creditOrder(scope, orderId, manager, customer);
+      } else {
+        await this.creditCustomerHistory(scope, customer, contact, manager);
+      }
+      return this.availablePoints(scope, customer.id, manager);
+    });
+    if (result === undefined) {
       return {
         success: true,
         message: 'No loyalty points record found for the given contact.',
         data: { contact, available_points: 0 },
       };
     }
-    const available = await this.loyalty.transaction(async (manager) => {
-      await this.creditCustomerHistory(scope, customer, contact, manager);
-      return this.availablePoints(scope, customer.id, manager);
-    });
     return {
       success: true,
       message: 'Loyalty points retrieved successfully.',
-      data: { contact, available_points: available },
+      data: { contact, available_points: result },
     };
   }
 
@@ -499,7 +516,7 @@ export class LoyaltyService implements OnModuleInit {
     if (flags.enable_loyalty_points !== 'yes') return;
     const order = await this.loyalty.lockOrder(scope, orderId, manager);
     if (!order || !orderEarnsLoyalty(order.status, order.order_status, order.payment_status)) return;
-    const customer = await this.customerForCompletedOrder(scope, order, manager) || preferred;
+    const customer = preferred || await this.customerForCompletedOrder(scope, order, manager);
     if (!customer) return;
     if (await this.loyalty.hasOrderCredit(scope, customer.id, order.order_id, manager)) return;
     const settings = await this.settings(scope, manager);
