@@ -168,6 +168,14 @@ export class LoyaltyRepository {
                 AND (
                   regexp_replace(COALESCE(customer.mobile, ''), '\\D', '', 'g') = regexp_replace($3, '\\D', '', 'g')
                   OR regexp_replace(COALESCE(phone.meta_value #>> '{}', ''), '\\D', '', 'g') = regexp_replace($3, '\\D', '', 'g')
+                  OR (
+                    length(regexp_replace($3, '\\D', '', 'g')) >= 10
+                    AND right(regexp_replace(COALESCE(customer.mobile, ''), '\\D', '', 'g'), 10) = right(regexp_replace($3, '\\D', '', 'g'), 10)
+                  )
+                  OR (
+                    length(regexp_replace($3, '\\D', '', 'g')) >= 10
+                    AND right(regexp_replace(COALESCE(phone.meta_value #>> '{}', ''), '\\D', '', 'g'), 10) = right(regexp_replace($3, '\\D', '', 'g'), 10)
+                  )
                 )
               )
             )
@@ -458,14 +466,39 @@ export class LoyaltyRepository {
                    OR (
                      $5 <> ''
                      AND meta.meta_key IN ('contact', 'billing_phone')
-                     AND regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g') = $5
+                     AND (
+                       regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g') = $5
+                       OR (
+                         length($5) >= 10
+                         AND right(regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g'), 10) = right($5, 10)
+                       )
+                     )
                    )
                  )
             )
-            OR ($5 <> '' AND regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g') = $5)
+            OR (
+              $5 <> ''
+              AND (
+                regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g') = $5
+                OR (
+                  length($5) >= 10
+                  AND right(regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g'), 10) = right($5, 10)
+                )
+              )
+            )
             OR (
               position('@' in $4) > 0
               AND lower(COALESCE(sale.request_payload #>> '{billing,email}', '')) = lower($4)
+            )
+            OR (
+              $5 <> ''
+              AND (
+                regexp_replace(COALESCE(sale.request_payload #>> '{billing,phone}', ''), '\\D', '', 'g') = $5
+                OR (
+                  length($5) >= 10
+                  AND right(regexp_replace(COALESCE(sale.request_payload #>> '{billing,phone}', ''), '\\D', '', 'g'), 10) = right($5, 10)
+                )
+              )
             )
           )
           AND NOT EXISTS (
@@ -477,6 +510,72 @@ export class LoyaltyRepository {
                AND ledger.source_refund_id IS NULL
           )`,
       [scope.merchantId, scope.storeId, customerId, contact, digits],
+    );
+    return rows.map((row) => String(row.order_id));
+  }
+
+  async eligibleOrderIdsForContact(scope: LoyaltyScope, contact: string, manager: Queryable): Promise<string[]> {
+    const digits = contact.replace(/\D/g, '');
+    const rows = await this.query(manager,
+      `SELECT sale.order_id
+         FROM public.store_orders AS sale
+        WHERE sale.merchant_id = $1::uuid
+          AND sale.store_id = $2::uuid
+          AND (
+            lower(replace(COALESCE(sale.status, ''), '_', '-')) IN ('completed', 'wc-completed')
+            OR lower(replace(COALESCE(sale.order_status, ''), '_', '-')) IN ('completed', 'wc-completed')
+            OR (
+              upper(COALESCE(sale.payment_status, '')) = 'PAID'
+              AND lower(replace(COALESCE(sale.status, ''), '_', '-')) NOT IN ('cancelled', 'canceled', 'refunded', 'failed')
+              AND lower(replace(COALESCE(sale.order_status, ''), '_', '-')) NOT IN ('cancelled', 'canceled', 'refunded', 'failed')
+            )
+          )
+          AND (
+            EXISTS (
+              SELECT 1
+                FROM public.store_orders_meta AS meta
+               WHERE meta.order_id = sale.order_id
+                 AND (
+                   (meta.meta_key = 'contact' AND lower(meta.meta_value #>> '{}') = lower($3))
+                   OR (
+                     $4 <> ''
+                     AND meta.meta_key IN ('contact', 'billing_phone')
+                     AND (
+                       regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g') = $4
+                       OR (
+                         length($4) >= 10
+                         AND right(regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g'), 10) = right($4, 10)
+                       )
+                     )
+                   )
+                 )
+            )
+            OR (
+              $4 <> ''
+              AND (
+                regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g') = $4
+                OR (
+                  length($4) >= 10
+                  AND right(regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g'), 10) = right($4, 10)
+                )
+              )
+            )
+            OR (
+              position('@' in $3) > 0
+              AND lower(COALESCE(sale.request_payload #>> '{billing,email}', '')) = lower($3)
+            )
+            OR (
+              $4 <> ''
+              AND (
+                regexp_replace(COALESCE(sale.request_payload #>> '{billing,phone}', ''), '\\D', '', 'g') = $4
+                OR (
+                  length($4) >= 10
+                  AND right(regexp_replace(COALESCE(sale.request_payload #>> '{billing,phone}', ''), '\\D', '', 'g'), 10) = right($4, 10)
+                )
+              )
+            )
+          )`,
+      [scope.merchantId, scope.storeId, contact, digits],
     );
     return rows.map((row) => String(row.order_id));
   }
