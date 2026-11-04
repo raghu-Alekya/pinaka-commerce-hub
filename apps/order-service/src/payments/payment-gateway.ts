@@ -141,6 +141,17 @@ export function resolvePaymentGateway(configuration: unknown, requested?: unknow
   return { ok: true, gateway: 'offline' };
 }
 
+export function payrocOrderReference(...candidates: Array<unknown>): string {
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim().replace(/^#/, '');
+    if (value.length >= 1 && value.length <= 24) return value;
+  }
+  const compact = candidates
+    .map((candidate) => String(candidate ?? '').replace(/[^A-Za-z0-9]/g, ''))
+    .find((value) => value.length > 0);
+  return (compact || 'order').slice(0, 24);
+}
+
 export function interpretKickback(raw: string): GatewayOutcome {
   const details: Record<string, unknown> = {};
   const params = new URLSearchParams(raw);
@@ -213,12 +224,13 @@ export async function chargePayroc(
   if (!token) {
     return { kind: 'failed', statusCode: 500, message: 'Unable to obtain Payroc token' };
   }
+  const gatewayOrderId = payrocOrderReference(input.orderId);
   const payload = {
     processingTerminalId: input.terminalId,
     operator: input.operator,
     order: {
-      orderId: input.orderId,
-      description: `WooCommerce Order #${input.orderId}`,
+      orderId: gatewayOrderId,
+      description: `WooCommerce Order #${gatewayOrderId}`,
       currency: 'USD',
       amount: Math.round(input.amount * 100),
     },

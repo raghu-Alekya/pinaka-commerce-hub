@@ -16,6 +16,7 @@ import {
   isPhpEmpty,
   readPaymentAmount,
   resolvePaymentGateway,
+  payrocOrderReference,
   transactionFields,
   type GatewayOutcome,
 } from './payment-gateway';
@@ -166,7 +167,7 @@ export class CreatePaymentService {
         terminalId: resolved.credentials.terminalId,
         secretKey: resolved.credentials.secretKey,
         amount,
-        orderId: order.order_id,
+        orderId: payrocOrderReference(body.order_id, order.client_order_id, order.order_id),
         operator: context.userId,
       });
     if (outcome.kind === 'failed') throw new HttpException(outcome.message, outcome.statusCode);
