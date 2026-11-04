@@ -549,6 +549,15 @@ test('Payroc pending without errors is approved and an errors payload is decline
   if (declined.kind !== 'declined') return;
   assert.equal(declined.message, 'Payroc payment failed');
   assert.deepEqual(declined.response, { errors: [{ message: 'Declined' }] });
+  const missing = interpretPayroc(JSON.stringify({
+    type: 'https://docs.payroc.com/api/errors#not-found',
+    title: 'Not found',
+    status: 404,
+    detail: 'Resource not found',
+  }));
+  assert.equal(missing.kind, 'declined');
+  if (missing.kind !== 'declined') return;
+  assert.equal(missing.message, 'Resource not found');
 });
 
 test('gateway selection uses the saved card payment settings', () => {
