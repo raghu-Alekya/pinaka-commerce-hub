@@ -15,6 +15,7 @@ export interface LoyaltySettings {
   minPoints: number;
   maxPoints: number;
   redeemPercent: number;
+  allowRedemption: boolean;
   mode: LoyaltyMode;
   payoutProductIds: string[];
   discountProductIds: string[];
@@ -38,6 +39,7 @@ export interface LoyaltySettingsView {
   min_points: number;
   max_points: number;
   redeem_perc: number;
+  allow_redemption: boolean;
 }
 
 export interface CatalogProduct {
@@ -92,6 +94,7 @@ export function defaultLoyaltySettings(): LoyaltySettings {
     minPoints: 0,
     maxPoints: 0,
     redeemPercent: 0,
+    allowRedemption: true,
     mode: 'order',
     payoutProductIds: [],
     discountProductIds: [],
@@ -117,6 +120,7 @@ export function presentSettings(settings: LoyaltySettings): LoyaltySettingsView 
     min_points: settings.minPoints,
     max_points: settings.maxPoints,
     redeem_perc: settings.redeemPercent,
+    allow_redemption: settings.allowRedemption,
   };
 }
 
@@ -137,6 +141,7 @@ export function settingsFromStored(value: Record<string, unknown> | undefined): 
   settings.minPoints = numberOr(source.pinaka_loyalty_min_points, 0);
   settings.maxPoints = numberOr(source.pinaka_loyalty_max_points, 0);
   settings.redeemPercent = numberOr(source.pinaka_loyalty_redeem_perc, 0);
+  settings.allowRedemption = booleanOr(source.pinaka_loyalty_allow_redemption, settings.redeemPoint > 0 && settings.redeemAmount > 0);
   settings.mode = String(source.pinaka_loyalty_mode || 'order').toLowerCase() === 'item' ? 'item' : 'order';
   settings.payoutProductIds = idList(source.pinaka_payout_product_id);
   settings.discountProductIds = idList(source.pinaka_discount_product_id);
@@ -163,6 +168,7 @@ export function storedSettingsPatch(settings: LoyaltySettings, previous: Record<
     pinaka_loyalty_min_points: settings.minPoints,
     pinaka_loyalty_max_points: settings.maxPoints,
     pinaka_loyalty_redeem_perc: settings.redeemPercent,
+    pinaka_loyalty_allow_redemption: settings.allowRedemption,
   };
 }
 
@@ -188,6 +194,10 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: 'The "pinaka_loyalty_conflict_rule" value must be enable or disable',
     };
   }
+  const allowRedemption = booleanValue(body.pinaka_loyalty_allow_redemption);
+  if (allowRedemption === undefined) {
+    return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_allow_redemption" must be boolean.' };
+  }
   if (values.pinaka_loyalty_redeem_perc > 100) {
     return {
       code: 'invalid_percentage',
@@ -212,7 +222,7 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
   if (!loyaltyTag) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_tag" cannot be empty.' };
   const mode = body.pinaka_loyalty_mode === 'item' ? 'item' : body.pinaka_loyalty_mode === 'order' ? 'order' : undefined;
   if (!mode) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_mode" must be order or item.' };
-  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict });
+  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict, pinaka_loyalty_allow_redemption: allowRedemption });
   return { settings };
 }
 
@@ -474,6 +484,16 @@ function nonNegativeInteger(value: unknown): number | undefined {
 function numberOr(value: unknown, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  if (value === true || value === 1 || value === '1' || value === 'true' || value === 'yes') return true;
+  if (value === false || value === 0 || value === '0' || value === 'false' || value === 'no') return false;
+  return undefined;
+}
+
+function booleanOr(value: unknown, fallback: boolean): boolean {
+  return booleanValue(value) ?? fallback;
 }
 
 function idList(value: unknown): string[] {
