@@ -67,6 +67,7 @@ function payrocSettings() {
 
 function harness(options: {
   order?: Record<string, unknown> | null;
+  clientOrder?: Record<string, unknown> | null;
   netpay?: unknown;
   config?: unknown;
   payments?: Array<Record<string, unknown>>;
@@ -99,6 +100,8 @@ function harness(options: {
         if (sql.includes('FROM public.store_pos_payments')) return options.payments ?? [];
         if (sql.includes('FROM public.store_orders AS sale')) {
           lookupParams.push(params);
+          const clientLookup = sql.includes("'_pos_client_order_id'");
+          if (clientLookup) return options.clientOrder ? [options.clientOrder] : [];
           return options.order === null ? [] : [options.order ?? sale()];
         }
         throw new Error(`Unexpected SQL: ${sql}`);
@@ -423,6 +426,25 @@ test('validation matches the WordPress required fields', async () => {
     (error: unknown) => error instanceof BadRequestException && error.message === 'amount must be zero or greater',
   );
   assert.equal(queries.length, 0);
+});
+
+test('a _pos_client_order_id resolves to the internal order used by the payment', async () => {
+  const clientOrderId = '59dd2e9b-3851-4aab-99ff-f4034a9ca896';
+  const { service, inserts, charges, lookupParams } = harness({
+    order: null,
+    clientOrder: sale({ client_order_id: clientOrderId }),
+    config: kickbackSettings(),
+    kickback: approvedKickback,
+  });
+  const result = await service.create({ ...cardBody(), order_id: clientOrderId }, context);
+  assert.equal(result.success, true);
+  assert.equal(lookupParams.length, 2);
+  assert.deepEqual(lookupParams[0], [merchantId, storeId, clientOrderId]);
+  assert.deepEqual(lookupParams[1], [merchantId, storeId, clientOrderId]);
+  assert.equal(inserts[0][0], orderId);
+  assert.equal(inserts[0][4], clientOrderId);
+  assert.notEqual(inserts[0][0], clientOrderId);
+  assert.deepEqual(charges, ['kickback']);
 });
 
 test('an unknown order is rejected before a gateway charge', async () => {

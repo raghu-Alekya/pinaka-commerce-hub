@@ -176,17 +176,9 @@ export class CreatePaymentService {
   }
 
   private async findOrder(context: CreatePaymentContext, orderKey: string): Promise<SaleRow | null> {
-    const rows = await this.query<SaleRow>(
-      `SELECT sale.order_id::text AS order_id,
-              sale.merchant_id::text AS merchant_id,
-              sale.store_id::text AS store_id,
-              sale.client_order_id,
-              sale.device_id,
-              sale.currency,
-              sale.total,
-              sale.status,
-              sale.order_status
-         FROM public.store_orders AS sale
+    const params = [context.merchantId, context.storeId, orderKey];
+    const internal = await this.query<SaleRow>(
+      `${ORDER_LOOKUP_SELECT}
         WHERE sale.merchant_id = $1::uuid
           AND sale.store_id = $2::uuid
           AND (
@@ -197,9 +189,40 @@ export class CreatePaymentService {
           )
         ORDER BY sale.created_at DESC
         LIMIT 1`,
-      [context.merchantId, context.storeId, orderKey],
+      params,
     );
-    return rows[0] ?? null;
+    if (internal[0]) return internal[0];
+    // POS sends _pos_client_order_id when that value was not copied onto
+    // store_orders.client_order_id. The payment still uses sale.order_id.
+    const byClientOrder = await this.query<SaleRow>(
+      `${ORDER_LOOKUP_SELECT}
+        WHERE sale.merchant_id = $1::uuid
+          AND sale.store_id = $2::uuid
+          AND (
+            EXISTS (
+              SELECT 1
+                FROM public.store_orders_meta AS meta
+               WHERE meta.order_id = sale.order_id
+                 AND meta.meta_key = '_pos_client_order_id'
+                 AND btrim(both '"' from btrim(COALESCE(meta.meta_value #>> '{}', ''))) = $3
+            )
+            OR EXISTS (
+              SELECT 1
+                FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(sale.meta_data) = 'array' THEN sale.meta_data ELSE '[]'::jsonb END
+                  || CASE WHEN jsonb_typeof(sale.metadata) = 'array' THEN sale.metadata ELSE '[]'::jsonb END
+                  || CASE WHEN jsonb_typeof(sale.request_payload->'meta_data') = 'array'
+                       THEN sale.request_payload->'meta_data' ELSE '[]'::jsonb END
+                ) AS entry
+               WHERE entry->>'key' = '_pos_client_order_id'
+                 AND btrim(both '"' from btrim(COALESCE(entry->>'value', ''))) = $3
+            )
+          )
+        ORDER BY sale.created_at DESC
+        LIMIT 1`,
+      params,
+    );
+    return byClientOrder[0] ?? null;
   }
 
   private async gatewayConfiguration(storeId: string): Promise<unknown> {
@@ -410,6 +433,18 @@ export class CreatePaymentService {
     }
   }
 }
+
+const ORDER_LOOKUP_SELECT = `
+  SELECT sale.order_id::text AS order_id,
+         sale.merchant_id::text AS merchant_id,
+         sale.store_id::text AS store_id,
+         sale.client_order_id,
+         sale.device_id,
+         sale.currency,
+         sale.total,
+         sale.status,
+         sale.order_status
+    FROM public.store_orders AS sale`;
 
 function declineBody(outcome: Extract<GatewayOutcome, { kind: 'declined' }>): CreatePaymentDecline {
   return {
