@@ -158,7 +158,7 @@ test('Kickback approval is saved on the existing payment table and completes the
   assert.equal(result.order_total, 200);
   assert.equal(result.order_status, 'completed');
   assert.deepEqual(charges, ['kickback']);
-  assert.deepEqual(lookupParams[0], [merchantId, storeId, '16186']);
+  assert.deepEqual(lookupParams[0], [storeId, '16186']);
   assert.equal(inserts.length, 1);
   const params = inserts[0];
   assert.equal(params[0], orderId);
@@ -439,11 +439,25 @@ test('a _pos_client_order_id resolves to the internal order used by the payment'
   const result = await service.create({ ...cardBody(), order_id: clientOrderId }, context);
   assert.equal(result.success, true);
   assert.equal(lookupParams.length, 2);
-  assert.deepEqual(lookupParams[0], [merchantId, storeId, clientOrderId]);
-  assert.deepEqual(lookupParams[1], [merchantId, storeId, clientOrderId]);
+  assert.deepEqual(lookupParams[0], [storeId, clientOrderId]);
+  assert.deepEqual(lookupParams[1], [storeId, clientOrderId]);
   assert.equal(inserts[0][0], orderId);
   assert.equal(inserts[0][4], clientOrderId);
   assert.notEqual(inserts[0][0], clientOrderId);
+  assert.deepEqual(charges, ['kickback']);
+});
+
+test('an order saved under another merchant is found by the store', async () => {
+  const orderMerchant = '44444444-4444-4444-8444-444444444444';
+  const { service, inserts, charges } = harness({
+    order: sale({ merchant_id: orderMerchant, client_order_id: '2629333373' }),
+    config: kickbackSettings(),
+    kickback: approvedKickback,
+  });
+  const result = await service.create({ ...cardBody(), order_id: '2629333373' }, context);
+  assert.equal(result.success, true);
+  assert.equal(inserts[0][1], orderMerchant);
+  assert.notEqual(inserts[0][1], merchantId);
   assert.deepEqual(charges, ['kickback']);
 });
 
