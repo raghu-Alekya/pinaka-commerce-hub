@@ -173,8 +173,12 @@ export function interpretKickback(raw: string): GatewayOutcome {
 export function interpretPayroc(raw: string): GatewayOutcome {
   const parsed = safeJson(raw);
   const record = asRecord(parsed);
-  if (record && hasPayrocErrors(record.errors)) {
-    return { kind: 'declined', message: 'Payroc payment failed', response: parsed };
+  if (record && isPayrocProblem(record)) {
+    const detail = record.detail;
+    const message = hasPayrocErrors(record.errors)
+      ? 'Payroc payment failed'
+      : typeof detail === 'string' && detail.trim() ? detail : 'Payroc payment failed';
+    return { kind: 'declined', message, response: parsed };
   }
   const details = record ?? {};
   return {
@@ -264,7 +268,19 @@ async function postGateway(
 ): Promise<GatewayOutcome> {
   try {
     const response = await fetchImpl(url, init);
-    return interpret(await response.text());
+    const raw = await response.text();
+    const outcome = interpret(raw);
+    if (response.status >= 400 && outcome.kind === 'approved') {
+      const parsed = safeJson(raw);
+      const record = asRecord(parsed);
+      const detail = record?.detail;
+      return {
+        kind: 'declined',
+        message: typeof detail === 'string' && detail.trim() ? detail : fallback,
+        response: parsed ?? raw,
+      };
+    }
+    return outcome;
   } catch (error: unknown) {
     return {
       kind: 'failed',
@@ -302,6 +318,12 @@ function hasPayrocErrors(errors: unknown): boolean {
   if (errors == null || errors === false || errors === '') return false;
   if (Array.isArray(errors)) return errors.length > 0;
   return typeof errors === 'object' ? true : Boolean(errors);
+}
+
+function isPayrocProblem(record: Record<string, unknown>): boolean {
+  if (hasPayrocErrors(record.errors)) return true;
+  if (typeof record.status === 'number' && record.status >= 400) return true;
+  return typeof record.type === 'string' && record.type.includes('docs.payroc.com/api/errors');
 }
 
 function safeJson(raw: string): unknown {
