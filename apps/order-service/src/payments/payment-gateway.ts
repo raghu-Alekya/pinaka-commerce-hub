@@ -93,24 +93,27 @@ function readCredentials(provider: Record<string, unknown>): GatewayCredentials 
 }
 
 /**
- * WordPress charges only the gateway named by pinaka_payment_gateway_provider.
- * Saved Kickback or Payroc credentials do not by themselves enable a gateway.
- * `default` and `offline` match the WordPress Offline radio and skip the processor.
+ * card_payment_settings stores the gateway list on `cardPayments`.
+ * Older documents use `providers`. A named provider, on the document or the
+ * payment request, chooses Kickback or Payroc. One saved gateway is that
+ * choice. Two saved gateways without a choice are not guessed: the card
+ * payment is still stored, and no terminal is charged.
  */
-export function resolvePaymentGateway(configuration: unknown): ResolvedGateway {
+export function resolvePaymentGateway(configuration: unknown, requested?: unknown): ResolvedGateway {
   const document = asRecord(
     typeof configuration === 'string'
       ? safeJson(configuration)
       : configuration,
   ) ?? {};
-  const providers = Array.isArray(document.providers)
-    ? document.providers.flatMap((item) => {
-      const record = asRecord(item);
-      const gateway = record ? normalizeGatewayName(record.provider) : null;
-      if (!record || (gateway !== 'kickback' && gateway !== 'payroc')) return [];
-      return [{ gateway, credentials: readCredentials(record) }];
-    })
-    : [];
+  const source = Array.isArray(document.cardPayments)
+    ? document.cardPayments
+    : Array.isArray(document.providers) ? document.providers : [];
+  const providers = source.flatMap((item) => {
+    const record = asRecord(item);
+    const gateway = record ? normalizeGatewayName(record.provider) : null;
+    if (!record || (gateway !== 'kickback' && gateway !== 'payroc')) return [];
+    return [{ gateway, credentials: readCredentials(record) }];
+  });
 
   const selectorKeys = [
     'payment_gateway_provider',
@@ -118,10 +121,12 @@ export function resolvePaymentGateway(configuration: unknown): ResolvedGateway {
     'selectedProvider',
     'selected_provider',
   ];
-  let selected: 'kickback' | 'payroc' | 'offline' | null = null;
-  for (const key of selectorKeys) {
-    selected = normalizeGatewayName(document[key]);
-    if (selected) break;
+  let selected = normalizeGatewayName(requested);
+  if (!selected) {
+    for (const key of selectorKeys) {
+      selected = normalizeGatewayName(document[key]);
+      if (selected) break;
+    }
   }
   if (!selected && typeof document.provider === 'string') {
     selected = normalizeGatewayName(document.provider);
@@ -132,11 +137,8 @@ export function resolvePaymentGateway(configuration: unknown): ResolvedGateway {
     const match = providers.find((item) => item.gateway === selected);
     return { ok: true, gateway: selected, credentials: match?.credentials ?? EMPTY_CREDENTIALS };
   }
-  if (providers.length === 0) return { ok: true, gateway: 'offline' };
-  return {
-    ok: false,
-    message: 'Card gateway is not selected. Set payment_gateway_provider to kickback, payroc, or default. Saved credentials are not treated as enabled.',
-  };
+  if (providers.length === 1) return { ok: true, gateway: providers[0].gateway, credentials: providers[0].credentials };
+  return { ok: true, gateway: 'offline' };
 }
 
 export function interpretKickback(raw: string): GatewayOutcome {

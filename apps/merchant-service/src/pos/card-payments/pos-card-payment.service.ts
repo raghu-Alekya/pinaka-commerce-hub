@@ -78,6 +78,7 @@ export class PosCardPaymentService {
   }
 
   private providers(document: Record<string, any> | null): Array<Record<string, any>> {
+    if (Array.isArray(document?.cardPayments)) return document.cardPayments;
     return Array.isArray(document?.providers) ? document.providers : [];
   }
 
@@ -94,11 +95,12 @@ export class PosCardPaymentService {
     delete preserved.createdAt;
     delete preserved.updatedAt;
     delete preserved.providers;
+    delete preserved.cardPayments;
     return savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'card_payment_settings', {
       ...preserved,
       merchantId,
       ...(selector !== undefined ? { payment_gateway_provider: selector === 'payrock' ? 'payroc' : selector } : {}),
-      providers,
+      cardPayments: providers,
     });
   }
 

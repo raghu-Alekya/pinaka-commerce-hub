@@ -361,37 +361,51 @@ test('a card payment with no configured gateway is recorded without calling a pr
   assert.equal(inserts[0][15], null);
 });
 
-test('two configured gateways are not guessed', async () => {
+test('two configured gateways are not guessed and the card payment is still stored', async () => {
   const { service, inserts, charges } = harness({
     config: {
-      providers: [
-        { provider: 'Kickback', deviceId: 'a', secretKey: 'k', processorMerchantId: '1', terminalId: '', webhookUrl: 'https://example.test/k' },
+      cardPayments: [
         { provider: 'Payroc', deviceId: 'b', secretKey: 'p', processorMerchantId: '2', terminalId: 't', webhookUrl: 'https://example.test/p' },
+        { provider: 'Kickback', deviceId: 'a', secretKey: 'k', processorMerchantId: '1', terminalId: '', webhookUrl: 'https://example.test/k' },
       ],
     },
   });
-  await assert.rejects(
-    () => service.create(cardBody(), context),
-    (error: unknown) => {
-      assert.ok(error instanceof BadRequestException);
-      assert.match(error.message, /payment_gateway_provider/);
-      return true;
-    },
-  );
-  assert.equal(inserts.length, 0);
+  const result = await service.create(cardBody(), context);
+  assert.equal(result.success, true);
   assert.deepEqual(charges, []);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0][15], null);
 });
 
-test('saved credentials without a selected provider do not charge or save a payment', async () => {
+test('a cardPayments entry is charged when the request names that provider', async () => {
   const { service, inserts, charges } = harness({
-    config: { providers: [kickbackSettings().providers[0]] },
+    config: {
+      cardPayments: [
+        { provider: 'Payroc', deviceId: 'serial', secretKey: 'payroc-secret', processorMerchantId: '6562', terminalId: '6562001', webhookUrl: 'https://example.test/p' },
+        { provider: 'Kickback', deviceId: 'poi', secretKey: 'kick-secret', processorMerchantId: 'Alekta', terminalId: '', webhookUrl: 'https://example.test/k' },
+      ],
+    },
+    payroc: { kind: 'approved', transactionId: 'pi_saved', details: { paymentInstructionId: 'pi_saved', status: 'approved' } },
   });
-  await assert.rejects(
-    () => service.create(cardBody(), context),
-    (error: unknown) => error instanceof BadRequestException && /payment_gateway_provider/.test(error.message),
-  );
-  assert.equal(inserts.length, 0);
-  assert.deepEqual(charges, []);
+  const result = await service.create({ ...cardBody(), provider: 'Payroc' }, context);
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.equal(result.transaction_id, 'pi_saved');
+  assert.deepEqual(charges, ['payroc']);
+  assert.equal(inserts[0][15], 'payroc');
+  assert.equal(inserts[0][16], 'pi_saved');
+});
+
+test('one saved cardPayments gateway is used for the card sale', async () => {
+  const { service, inserts, charges } = harness({
+    config: { cardPayments: [kickbackSettings().providers[0]] },
+    kickback: approvedKickback,
+  });
+  const result = await service.create(cardBody(), context);
+  assert.equal(result.success, true);
+  assert.deepEqual(charges, ['kickback']);
+  assert.equal(inserts[0][15], 'kickback');
+  assert.equal(inserts[0][16], 'txn-1');
 });
 
 test('payment_gateway_provider payrock selects Payroc', async () => {
@@ -543,18 +557,30 @@ test('gateway selection uses the saved card payment settings', () => {
   const single = resolvePaymentGateway(kickbackSettings());
   assert.equal(single.ok, true);
   if (single.ok) assert.equal(single.gateway, 'kickback');
-  const credentialsOnly = resolvePaymentGateway({ providers: [kickbackSettings().providers[0]] });
-  assert.equal(credentialsOnly.ok, false);
+  const credentialsOnly = resolvePaymentGateway({ cardPayments: [kickbackSettings().providers[0]] });
+  assert.equal(credentialsOnly.ok, true);
+  if (credentialsOnly.ok) assert.equal(credentialsOnly.gateway, 'kickback');
+  const storedShape = resolvePaymentGateway({
+    cardPayments: [payrocSettings().providers[0], kickbackSettings().providers[0]],
+  }, 'Payroc');
+  assert.equal(storedShape.ok, true);
+  if (storedShape.ok) assert.equal(storedShape.gateway, 'payroc');
+  const ambiguous = resolvePaymentGateway({
+    cardPayments: [kickbackSettings().providers[0], payrocSettings().providers[0]],
+  });
+  assert.equal(ambiguous.ok, true);
+  if (ambiguous.ok) assert.equal(ambiguous.gateway, 'offline');
   const selected = resolvePaymentGateway({
     payment_gateway_provider: 'payrock',
     providers: [kickbackSettings().providers[0], payrocSettings().providers[0]],
   });
   assert.equal(selected.ok, true);
   if (selected.ok) assert.equal(selected.gateway, 'payroc');
-  const ambiguous = resolvePaymentGateway({
+  const legacyProviders = resolvePaymentGateway({
     providers: [kickbackSettings().providers[0], payrocSettings().providers[0]],
   });
-  assert.equal(ambiguous.ok, false);
+  assert.equal(legacyProviders.ok, true);
+  if (legacyProviders.ok) assert.equal(legacyProviders.gateway, 'offline');
 });
 
 test('Kickback sale posts the WordPress request', async () => {

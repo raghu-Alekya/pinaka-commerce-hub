@@ -92,7 +92,7 @@ export class CreatePaymentService {
     if (!order) throw new NotFoundException('Invalid order ID');
 
     const gatewayResult = paymentMethodRaw.toLowerCase() === 'card'
-      ? await this.chargeCard(order, amount, context)
+      ? await this.chargeCard(order, amount, context, body)
       : { provider: null as string | null, transactionId: '', details: null as Record<string, unknown> | null };
     if ('decline' in gatewayResult) return gatewayResult.decline;
 
@@ -146,9 +146,11 @@ export class CreatePaymentService {
     order: SaleRow,
     amount: number,
     context: CreatePaymentContext,
+    body: Record<string, unknown>,
   ): Promise<{ provider: string | null; transactionId: string; details: Record<string, unknown> | null } | { decline: CreatePaymentDecline }> {
     const configuration = await this.gatewayConfiguration(context.storeId);
-    const resolved = resolvePaymentGateway(configuration);
+    const requested = body.payment_gateway_provider ?? body.pinaka_payment_gateway_provider ?? body.provider;
+    const resolved = resolvePaymentGateway(configuration, requested);
     if (!resolved.ok) throw new BadRequestException(resolved.message);
     if (resolved.gateway === 'offline') {
       return { provider: null, transactionId: '', details: null };
