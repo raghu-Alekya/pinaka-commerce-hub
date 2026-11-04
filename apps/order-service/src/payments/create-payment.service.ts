@@ -273,7 +273,7 @@ export class CreatePaymentService {
     const deviceId = input.order.device_id?.trim() ? input.order.device_id.trim() : null;
     const details = input.details ?? {};
     const metadata = {
-      source: 'pinaka-pos/v1/payments/create-payment',
+      source: 'api/v1/payments/create-payment',
       payment_status: 'success',
       void: false,
       transaction_details: details,
