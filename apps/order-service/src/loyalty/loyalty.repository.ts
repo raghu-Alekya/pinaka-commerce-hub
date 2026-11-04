@@ -434,6 +434,23 @@ export class LoyaltyRepository {
     };
   }
 
+  async expireDuePoints(scope: LoyaltyScope, customerId: string, manager: Queryable): Promise<void> {
+    await manager.query(
+      `UPDATE public.store_customer_loyalty_points
+          SET expired_points = GREATEST(0, credited_points - redeemed_points),
+              points_status = 'expired',
+              updated_at = now()
+        WHERE customer_id = $1::uuid
+          AND merchant_id = $2::uuid
+          AND store_id = $3::uuid
+          AND points_status = 'active'
+          AND points_expiry_date IS NOT NULL
+          AND points_expiry_date <= now()
+          AND credited_points > redeemed_points` ,
+      [customerId, scope.merchantId, scope.storeId],
+    );
+  }
+
   async completedUncreditedOrderIds(
     scope: LoyaltyScope,
     customerId: string,
@@ -719,11 +736,22 @@ export class LoyaltyRepository {
   async ledgerForCustomer(scope: LoyaltyScope, customerId: string): Promise<Array<Record<string, unknown>>> {
     return this.query(await this.ensure(),
       `SELECT ledger.order_id::text AS order_id, ledger.client_order_id, sale.order_number,
+              sale.total AS order_amount,
               ledger.credited_points, ledger.redeemed_points, ledger.expired_points, ledger.points_status,
               ledger.points_created_date, ledger.points_expiry_date,
               COALESCE(meta.meta_value #>> '{}', '0') AS order_redeem_points
          FROM public.store_customer_loyalty_points AS ledger
-         LEFT JOIN public.store_orders AS sale ON sale.order_id = ledger.order_id
+         LEFT JOIN LATERAL (
+           SELECT candidate.order_number, candidate.total
+             FROM public.store_orders AS candidate
+            WHERE candidate.order_id = ledger.order_id
+               OR (ledger.client_order_id IS NOT NULL
+                   AND candidate.client_order_id = ledger.client_order_id)
+               OR (ledger.client_order_id IS NOT NULL
+                   AND candidate.order_number = ledger.client_order_id)
+            ORDER BY (candidate.order_id = ledger.order_id) DESC
+            LIMIT 1
+         ) AS sale ON true
          LEFT JOIN public.store_orders_meta AS meta
            ON meta.order_id = ledger.order_id AND meta.meta_key = 'redeem_points'
         WHERE ledger.customer_id = $1::uuid

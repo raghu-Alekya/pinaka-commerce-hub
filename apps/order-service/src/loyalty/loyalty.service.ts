@@ -250,6 +250,11 @@ export class LoyaltyService implements OnModuleInit {
       if (!(settings.redeemAmount > 0)) {
         throw fail(400, 'invalid_amount_unit', `Invalid "Amount per Unit" setting detected. Please set a valid value in Loyalty Settings. (Current: ${settings.redeemAmount})`);
       }
+      const customer = await this.customerForOrder(scope, order, contact, manager);
+      const availableBeforeRedemption = customer ? await this.availablePoints(scope, customer.id, manager) : 0;
+      // Match WooCommerce: only points actually available in the FIFO ledger
+      // may be redeemed; never create a redemption larger than the balance.
+      const appliedRedeemPoints = Math.min(redeemPoints, Math.trunc(Math.max(0, availableBeforeRedemption)));
       const amount = Number.isFinite(redeemAmount) ? redeemAmount : 0;
       const nextLines = upsertLoyaltyLine(lines, loyaltyProduct, amount, order.order_id);
       const priced = priceOrder(order, nextLines);
@@ -262,21 +267,20 @@ export class LoyaltyService implements OnModuleInit {
       order.total = priced.total;
       await this.loyalty.saveOrder(order, manager);
       await this.loyalty.replaceCanonicalLines(order.order_id, nextLines as Array<Record<string, unknown>>, manager);
-      const customer = await this.customerForOrder(scope, order, contact, manager);
-      if (customer && redeemPoints > 0) {
+      if (customer && appliedRedeemPoints > 0) {
         await this.loyalty.insertRedeem(scope, {
           customerId: customer.id,
           contact,
           orderId: order.order_id,
           clientOrderId: order.client_order_id,
-          redeemedPoints: redeemPoints,
+          redeemedPoints: appliedRedeemPoints,
         }, manager);
         await this.recalculate(scope, customer.id, manager);
       }
       const available = customer ? await this.availablePoints(scope, customer.id, manager) : 0;
       await this.putOrderMeta(order, [
         { key: 'contact', value: contact },
-        { key: 'redeem_points', value: redeemPoints },
+          { key: 'redeem_points', value: appliedRedeemPoints },
         { key: 'redeem_amount', value: amount },
         { key: 'new_net_pay_amt', value: priced.total },
       ], manager);
@@ -288,7 +292,7 @@ export class LoyaltyService implements OnModuleInit {
           order_total: priced.total,
           contact,
           redeem_amount: amount,
-          used_points: redeemPoints,
+          used_points: appliedRedeemPoints,
           available_points: available,
         },
       };
@@ -346,8 +350,16 @@ export class LoyaltyService implements OnModuleInit {
     const customers = await this.loyalty.customersWithContact(scope);
     const data = [];
     for (const customer of customers) {
-      const meta = await this.loyalty.readMeta(customer.id);
-      const transactions = await this.loyalty.ledgerForCustomer(scope, customer.id);
+      const snapshot = await this.loyalty.transaction(async (manager) => {
+        await this.loyalty.expireDuePoints(scope, customer.id, manager);
+        await this.recalculate(scope, customer.id, manager);
+        return {
+          meta: await this.loyalty.readMeta(customer.id, manager),
+          transactions: await this.loyalty.ledgerForCustomer(scope, customer.id),
+        };
+      });
+      const meta = snapshot.meta;
+      const transactions = applyFifoTransactionStatuses(snapshot.transactions);
       data.push({
         user_id: customer.id,
         name: customer.name,
@@ -359,10 +371,11 @@ export class LoyaltyService implements OnModuleInit {
         last_updated: formatDate(meta.pinaka_last_updated || customer.created_at),
         transactions: transactions.map((row) => ({
           order_id: publicOrderId(row.client_order_id, row.order_number || row.order_id),
+          order_amount: row.order_amount == null ? null : Number(row.order_amount),
           credited_points: Number(row.credited_points) || 0,
           redeemed_points: Number(row.redeemed_points) || 0,
           expired_points: Number(row.expired_points) || 0,
-          points_status: String(row.points_status || ''),
+          points_status: normalizeCustomerTransactionStatus(row.points_status),
           points_created_date: formatDate(row.points_created_date),
           points_expiry_date: formatDate(row.points_expiry_date),
           order_redeem_points: Number(row.order_redeem_points) || 0,
@@ -637,6 +650,29 @@ export class LoyaltyService implements OnModuleInit {
     await this.loyalty.saveOrder(order, manager);
     await this.loyalty.deleteOrderMeta(order.order_id, keys, manager);
   }
+}
+
+function applyFifoTransactionStatuses(rows: Array<Record<string, any>>): Array<Record<string, any>> {
+  const result = rows.map((row) => ({ ...row }));
+  const credits = result
+    .filter((row) => Number(row.credited_points) > 0 && String(row.points_status).toLowerCase() === 'active')
+    .sort((a, b) => new Date(String(a.points_created_date || 0)).getTime() - new Date(String(b.points_created_date || 0)).getTime());
+  let remainingRedeemed = result.reduce((sum, row) => sum + Math.max(0, Number(row.redeemed_points) || 0), 0);
+  for (const credit of credits) {
+    const credited = Math.max(0, Number(credit.credited_points) || 0);
+    const expired = Math.max(0, Number(credit.expired_points) || 0);
+    const consumed = Math.min(credited, remainingRedeemed);
+    remainingRedeemed -= consumed;
+    if (expired >= credited) credit.points_status = 'expired';
+    else if (consumed >= credited) credit.points_status = 'used';
+    else credit.points_status = 'active';
+  }
+  return result;
+}
+
+function normalizeCustomerTransactionStatus(status: unknown): string {
+  const value = String(status || '').trim().toLowerCase();
+  return value === 'redeemed' ? 'used' : value;
 }
 
 function jsonBody(body: Record<string, unknown> | undefined): Record<string, unknown> {

@@ -357,7 +357,11 @@ export class AppController {
     const paymentsCompleted = Array.isArray(declaredPayments) && declaredPayments.length > 0
       && declaredPayments.every((payment: any) => String(payment?.status || '').trim().toLowerCase() === 'completed');
     const normalizedStatus = completedFinancialMovement && paymentsCompleted ? 'completed' : body?.status;
-    const status = String(normalizedStatus || '').toUpperCase();
+    // OrderStatus values are lowercase (for example `completed`). Keep the
+    // canonical value when normalizing WooCommerce/POS status input so a
+    // completed create request is persisted as completed and can trigger the
+    // loyalty completion hook.
+    const status = String(normalizedStatus || '').trim().toLowerCase().replace(/^wc-/, '').replace(/-/g, '_');
     const requestPayload = completedFinancialMovement && paymentsCompleted
       ? { ...body, status: normalizedStatus }
       : body;
