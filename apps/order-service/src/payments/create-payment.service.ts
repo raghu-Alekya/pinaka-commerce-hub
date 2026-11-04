@@ -204,7 +204,7 @@ export class CreatePaymentService {
                 FROM public.store_orders_meta AS meta
                WHERE meta.order_id = sale.order_id
                  AND meta.meta_key = '_pos_client_order_id'
-                 AND btrim(both '"' from btrim(COALESCE(meta.meta_value #>> '{}', ''))) = $3
+                 AND btrim(COALESCE(meta.meta_value #>> '{}', ''), '"') = $3
             )
             OR EXISTS (
               SELECT 1
@@ -215,7 +215,7 @@ export class CreatePaymentService {
                        THEN sale.request_payload->'meta_data' ELSE '[]'::jsonb END
                 ) AS entry
                WHERE entry->>'key' = '_pos_client_order_id'
-                 AND btrim(both '"' from btrim(COALESCE(entry->>'value', ''))) = $3
+                 AND btrim(COALESCE(entry->>'value', ''), '"') = $3
             )
           )
         ORDER BY sale.created_at DESC
@@ -425,10 +425,12 @@ export class CreatePaymentService {
       if (Array.isArray(result) && Array.isArray(result[0])) return result[0] as T[];
       return Array.isArray(result) ? result as T[] : [];
     } catch (error: unknown) {
-      const code = error instanceof QueryFailedError
-        ? (error as { driverError?: { code?: string } }).driverError?.code
+      const driver = error instanceof QueryFailedError
+        ? (error as { driverError?: { code?: string; message?: string } }).driverError
         : undefined;
-      if (code === '22P02') throw new BadRequestException('x-merchant-id and x-store-id must be UUIDs');
+      if (driver?.code === '22P02') throw new BadRequestException('x-merchant-id and x-store-id must be UUIDs');
+      const detail = driver?.message || (error instanceof Error ? error.message : 'Payment query failed');
+      console.error(`[Payment] database query failed: ${detail}`);
       throw error;
     }
   }
