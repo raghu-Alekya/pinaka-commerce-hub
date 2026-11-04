@@ -524,6 +524,7 @@ export class CompactMerchantController {
     try {
       await this.db.transaction(async (manager) => {
         await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS password varchar(255) NULL');
+        await manager.query('ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL');
         const merchantColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants'`,
         );
@@ -537,7 +538,11 @@ export class CompactMerchantController {
         const rowId = randomUUID();
         savedId = rowId;
         setCol('id', rowId);
-        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
+        if (input.password !== undefined) {
+          const passwordHash = await this.hashMerchantPassword(input.password);
+          setCol('password', passwordHash);
+          setCol('actual_password', passwordHash);
+        }
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
           .trim()
@@ -1014,7 +1019,11 @@ export class CompactMerchantController {
           assignments.push(`"${col}" = $${values.length}`);
         };
 
-        if (input.password !== undefined) setCol('password', await this.hashMerchantPassword(input.password));
+        if (input.password !== undefined) {
+          const passwordHash = await this.hashMerchantPassword(input.password);
+          setCol('password', passwordHash);
+          setCol('actual_password', passwordHash);
+        }
         setCol('businessName', input.businessName ?? existing.businessName);
         setCol(
           'businessDisplayName',
