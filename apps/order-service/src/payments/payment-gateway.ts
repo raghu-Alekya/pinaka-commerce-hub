@@ -93,9 +93,9 @@ function readCredentials(provider: Record<string, unknown>): GatewayCredentials 
 }
 
 /**
- * The active gateway is the WordPress provider selection when that value is
- * stored on card_payment_settings. Otherwise a store with one saved provider
- * uses that provider. No saved provider matches the WordPress "Offline" option.
+ * WordPress charges only the gateway named by pinaka_payment_gateway_provider.
+ * Saved Kickback or Payroc credentials do not by themselves enable a gateway.
+ * `default` and `offline` match the WordPress Offline radio and skip the processor.
  */
 export function resolvePaymentGateway(configuration: unknown): ResolvedGateway {
   const document = asRecord(
@@ -132,11 +132,10 @@ export function resolvePaymentGateway(configuration: unknown): ResolvedGateway {
     const match = providers.find((item) => item.gateway === selected);
     return { ok: true, gateway: selected, credentials: match?.credentials ?? EMPTY_CREDENTIALS };
   }
-  if (providers.length === 1) return { ok: true, gateway: providers[0].gateway, credentials: providers[0].credentials };
   if (providers.length === 0) return { ok: true, gateway: 'offline' };
   return {
     ok: false,
-    message: 'Multiple card gateways are configured for this store. Set payment_gateway_provider to kickback or payroc.',
+    message: 'Card gateway is not selected. Set payment_gateway_provider to kickback, payroc, or default. Saved credentials are not treated as enabled.',
   };
 }
 
