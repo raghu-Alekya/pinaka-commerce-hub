@@ -421,11 +421,21 @@ export class AppController {
   ) {
     const connection = await this.requireWordPressConnection(storeId, request.user?.role);
     const count = await this.merchantRepository.syncStoreCategoriesFromWordPress(connection);
+    let categoryTaxCount = 0;
+    try {
+      categoryTaxCount = await this.merchantRepository.syncCategoryWithTax(connection);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `Synced ${count} categories, but category tax sync failed: ${message}`,
+      );
+    }
     return {
       success: true,
-      message: `Synced ${count} categories.`,
+      message: `Synced ${count} categories and ${categoryTaxCount} categories with tax.`,
       storeId: connection.storeId,
       categoryCount: count,
+      categoryTaxCount,
     };
   }
 
