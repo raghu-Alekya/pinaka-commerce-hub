@@ -279,8 +279,9 @@ export class CouponService implements OnModuleInit {
     let rows: Connection[] = [];
     try {
       rows = await this.repository().manager.query(
-        `SELECT "merchantId", "storeId", "storeUrl", "consumerKey", "consumerSecret", "webhookSecret"
-           FROM public.woocommerce_connections WHERE "storeId" = $1 AND "syncStatus" = 'ACTIVE' LIMIT 1`, [storeId]);
+        `SELECT merchant_id AS "merchantId", store_id AS "storeId", store_url AS "storeUrl",
+                consumer_key AS "consumerKey", consumer_secret AS "consumerSecret", webhook_secret AS "webhookSecret"
+           FROM public.woocommerce_connections WHERE store_id = $1 AND sync_status = 'ACTIVE' LIMIT 1`, [storeId]);
     } catch (error: any) {
       if (error?.driverError?.code !== '42P01' && error?.code !== '42P01') throw error;
     }
@@ -290,8 +291,8 @@ export class CouponService implements OnModuleInit {
     }
 
     const websiteRows = await this.repository().manager.query(
-      `SELECT "merchantId", "storeId", "wordpressUrl", "encryptedJwt", status
-         FROM public.website_connections WHERE "storeId" = $1 AND status = 'CONNECTED' LIMIT 1`, [storeId]);
+      `SELECT merchant_id AS "merchantId", store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt", status
+         FROM public.website_connections WHERE store_id = $1 AND status = 'CONNECTED' LIMIT 1`, [storeId]);
     if (!websiteRows.length) throw new NotFoundException(`No active WooCommerce or WordPress connection for store '${storeId}'`);
     return {
       merchantId: websiteRows[0].merchantId,

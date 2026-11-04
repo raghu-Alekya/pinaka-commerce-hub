@@ -2,6 +2,7 @@ import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 't
 import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
 import { StoreEntity } from './store.entity';
 
+/** Store-scoped role feature overrides. Role checks use feature_permissions; this table stays for that override. */
 @Entity('store_role_features')
 @Audited()
 export class StoreRoleFeatureEntity extends AuditColumns {

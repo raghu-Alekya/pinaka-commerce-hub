@@ -16,13 +16,17 @@ export class StoresOverviewDto {
 
 export class EmployeesOverviewDto {
   total_count!: number;
+  active_count!: number;
+  inactive_count!: number;
   without_roles_count!: number;
   locked_count!: number;
   growth_percentage!: number;
 }
 
 export class SubscriptionsOverviewDto {
+  total_count!: number;
   active_count!: number;
+  inactive_count!: number;
   expiring_count!: number;
   payment_pending_count!: number;
   growth_percentage!: number;

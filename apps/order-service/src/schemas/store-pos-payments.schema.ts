@@ -30,10 +30,11 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
         payment_method varchar(100) NOT NULL,
         payment_method_title varchar(150),
         amount numeric(12, 2) NOT NULL CHECK (amount >= 0),
-        order_total numeric(12, 2) NOT NULL CHECK (order_total >= 0),
+        order_total numeric(12, 2) NOT NULL,
         remaining numeric(12, 2) NOT NULL DEFAULT 0 CHECK (remaining >= 0),
+        refundable_remaining numeric(12, 2) NOT NULL DEFAULT 0 CHECK (refundable_remaining >= 0),
+        change_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (change_amount >= 0),
         refund_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (refund_amount >= 0),
-        balance_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (balance_amount >= 0),
         currency varchar(3),
         status varchar(50) NOT NULL DEFAULT 'completed',
         entry_type varchar(20) NOT NULL DEFAULT 'payment'
@@ -50,8 +51,36 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments
-        ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS balance_amount numeric(12, 2) NOT NULL DEFAULT 0
+        ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) NOT NULL DEFAULT 0
+    `);
+    // A payout-only order has a negative net. The cash received stays in amount
+    // (zero or positive). order_total keeps the signed net so the line item and
+    // the payment row describe the same cash movement.
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP CONSTRAINT IF EXISTS store_pos_payments_order_total_check
+    `);
+    await manager.query(`
+      DO $drop_order_total_floor$
+      DECLARE
+        constraint_name text;
+      BEGIN
+        -- Postgres stores the rule as CHECK ((order_total >= (0)::numeric)),
+        -- so a search for the literal ">= 0" does not see it.
+        FOR constraint_name IN
+          SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+           WHERE n.nspname = 'public'
+             AND t.relname = 'store_pos_payments'
+             AND c.contype = 'c'
+             AND regexp_replace(pg_get_constraintdef(c.oid), '[[:space:]()]+', '', 'g') ILIKE '%order_total>=0%'
+        LOOP
+          EXECUTE format('ALTER TABLE public.store_pos_payments DROP CONSTRAINT %I', constraint_name);
+        END LOOP;
+      END
+      $drop_order_total_floor$
     `);
     await manager.query(`
       DO $json_migration$
@@ -65,7 +94,9 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
             UPDATE public.store_pos_payments
                SET metadata = COALESCE(metadata, '{}'::jsonb)
                  || jsonb_build_object('source_payload', raw_payload)
-             WHERE raw_payload <> '{}'::jsonb
+             WHERE raw_payload IS NOT NULL
+               AND raw_payload <> '{}'::jsonb
+               AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'source_payload')
           $sql$;
         END IF;
         IF EXISTS (
@@ -78,10 +109,83 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
                SET metadata = COALESCE(metadata, '{}'::jsonb)
                  || jsonb_build_object('provider_response', provider_response)
              WHERE provider_response IS NOT NULL
+               AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'provider_response')
           $sql$;
         END IF;
       END
       $json_migration$
+    `);
+    await manager.query(`
+      DO $balance_columns$
+      DECLARE
+        legacy_remaining boolean;
+      BEGIN
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'store_pos_payments'
+             AND column_name = 'remaining'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'store_pos_payments'
+             AND column_name = 'refundable_remaining'
+        ) INTO legacy_remaining;
+        IF legacy_remaining THEN
+          ALTER TABLE public.store_pos_payments RENAME COLUMN remaining TO refundable_remaining;
+        END IF;
+        ALTER TABLE public.store_pos_payments
+          ADD COLUMN IF NOT EXISTS refundable_remaining numeric(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS remaining numeric(12, 2) NOT NULL DEFAULT 0 CHECK (remaining >= 0),
+          ADD COLUMN IF NOT EXISTS change_amount numeric(12, 2) NOT NULL DEFAULT 0 CHECK (change_amount >= 0);
+        IF legacy_remaining THEN
+          WITH captured AS (
+            SELECT order_id,
+                   SUM(amount) FILTER (
+                     WHERE entry_type = 'payment' AND is_void = false AND deleted_at IS NULL
+                       AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled')
+                   ) AS tendered
+              FROM public.store_pos_payments
+             GROUP BY order_id
+          )
+          UPDATE public.store_pos_payments AS payment
+             SET refundable_remaining = GREATEST(0, payment.amount - payment.refund_amount),
+                 remaining = CASE
+                   WHEN upper(COALESCE(sale.order_status, '')) IN ('COMPLETED', 'REFUNDED', 'CANCELLED')
+                     OR lower(COALESCE(sale.status, '')) IN ('completed', 'refunded', 'cancelled')
+                     THEN 0
+                   WHEN COALESCE(payment.metadata #>> '{source_payload,remaining}', '') ~ '^[0-9]+(\.[0-9]+)?$'
+                     THEN GREATEST(0, (payment.metadata #>> '{source_payload,remaining}')::numeric)
+                   ELSE GREATEST(0, payment.order_total - COALESCE(captured.tendered, 0))
+                 END,
+                 change_amount = CASE
+                   WHEN COALESCE(payment.metadata->>'pos_change_returned',
+                                 payment.metadata #>> '{source_payload,pos_change_returned}', '') ~ '^[0-9]+(\.[0-9]+)?$'
+                     THEN GREATEST(0, COALESCE(NULLIF(payment.metadata->>'pos_change_returned', ''),
+                                               payment.metadata #>> '{source_payload,pos_change_returned}')::numeric)
+                   ELSE 0
+                 END
+            FROM public.store_orders AS sale
+            LEFT JOIN captured ON captured.order_id = sale.order_id
+           WHERE sale.order_id = payment.order_id;
+        END IF;
+      END
+      $balance_columns$
+    `);
+    // `remaining` is order balance; `refundable_remaining` supports refunds.
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP CONSTRAINT IF EXISTS store_pos_payments_balance_consistent_ck
+    `);
+    await manager.query(`
+      UPDATE public.store_pos_payments
+         SET refundable_remaining = GREATEST(0, amount - refund_amount)
+       WHERE refundable_remaining IS DISTINCT FROM GREATEST(0, amount - refund_amount)
+    `);
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP COLUMN IF EXISTS balance_amount,
+        DROP COLUMN IF EXISTS parent_payment_id,
+        DROP COLUMN IF EXISTS provider_response,
+        DROP COLUMN IF EXISTS raw_payload
     `);
     await manager.query(`
       UPDATE public.store_pos_payments
@@ -150,21 +254,17 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     await manager.query(`
       UPDATE public.store_pos_payments
          SET refund_amount = amount,
-             balance_amount = remaining
+             remaining = 0,
+             refundable_remaining = 0,
+             change_amount = 0
        WHERE entry_type = 'refund'
          AND refund_amount = 0
     `);
     await manager.query(`
       UPDATE public.store_pos_payments
-         SET balance_amount = GREATEST(0, amount - refund_amount)
-       WHERE balance_amount IS DISTINCT FROM GREATEST(0, amount - refund_amount)
-    `);
-    await manager.query(`
-      UPDATE public.store_pos_payments
-         SET remaining = balance_amount,
+         SET refundable_remaining = GREATEST(0, amount - refund_amount),
              updated_at = now()
-       WHERE refund_amount > 0
-         AND remaining IS DISTINCT FROM balance_amount
+       WHERE refundable_remaining IS DISTINCT FROM GREATEST(0, amount - refund_amount)
     `);
     // Some pre-payment-ledger orders have refund rows but no captured payment
     // row. Reconstruct their single original payment from the immutable order
@@ -173,14 +273,14 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
       INSERT INTO public.store_pos_payments (
         order_id, merchant_id, store_id, local_id, client_order_id, device_id,
         shift_id, user_id, payment_type, payment_method, payment_method_title,
-        amount, order_total, remaining, refund_amount, balance_amount, currency,
-        status, entry_type, payment_at, metadata
+        amount, order_total, remaining, refundable_remaining, change_amount,
+        refund_amount, currency, status, entry_type, payment_at, metadata
       )
       SELECT sale.order_id, sale.merchant_id, sale.store_id,
              'legacy-payment:' || sale.order_id::text, sale.client_order_id,
              sale.device_id, sale.shift_id, sale.placed_by, 'pos_payment',
              COALESCE(NULLIF(sale.payment_method, ''), 'cash'),
-             sale.payment_method_title, sale.total, sale.total, 0, 0, sale.total,
+             sale.payment_method_title, sale.total, sale.total, 0, sale.total, 0, 0,
              sale.currency, 'completed', 'payment', sale.created_at,
              jsonb_build_object(
                'inferred_legacy_payment', true,
@@ -221,6 +321,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
              AND is_void = false
              AND deleted_at IS NULL
              AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+             AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'
            ORDER BY created_at, id
            FOR UPDATE
         LOOP
@@ -251,7 +352,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
                 );
               UPDATE public.store_pos_payments
                  SET refund_amount = LEAST(amount, refund_amount + allocated),
-                     balance_amount = GREATEST(0, amount - (refund_amount + allocated)),
+                     refundable_remaining = GREATEST(0, amount - (refund_amount + allocated)),
                      status = CASE
                        WHEN refund_amount + allocated >= amount THEN 'refunded'
                        ELSE 'partially-refunded'
@@ -304,13 +405,11 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
       ON public.store_pos_payments (store_id, shift_id, payment_at DESC)
       WHERE deleted_at IS NULL
     `);
-    // Do not drop deprecated columns during application startup. Production
-    // deployments may briefly run old and new service versions together, and
-    // an older instance can still write raw_payload/provider_response. New
-    // installations omit those columns and this version no longer reads or
-    // writes them. Existing values are copied into metadata above; physical
-    // removal belongs in a separately scheduled migration after every service
-    // instance and external SQL consumer has moved to the new contract.
+    await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        DROP CONSTRAINT IF EXISTS store_pos_payments_remaining_consistent_ck
+    `);
+    // Refund constraints protect the canonical refundable balance.
     await manager.query(`
       DO $constraints$
       BEGIN
@@ -322,11 +421,11 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
             CHECK (refund_amount <= amount) NOT VALID;
         END IF;
         IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_balance_consistent_ck'
+          SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_refundable_remaining_consistent_ck'
         ) THEN
           ALTER TABLE public.store_pos_payments
-            ADD CONSTRAINT store_pos_payments_balance_consistent_ck
-            CHECK (balance_amount = amount - refund_amount) NOT VALID;
+            ADD CONSTRAINT store_pos_payments_refundable_remaining_consistent_ck
+            CHECK (refundable_remaining = amount - refund_amount) NOT VALID;
         END IF;
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint WHERE conname = 'store_pos_payments_active_local_id_ck'
@@ -347,7 +446,7 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments
-        VALIDATE CONSTRAINT store_pos_payments_balance_consistent_ck
+        VALIDATE CONSTRAINT store_pos_payments_refundable_remaining_consistent_ck
     `);
     await manager.query(`
       ALTER TABLE public.store_pos_payments
