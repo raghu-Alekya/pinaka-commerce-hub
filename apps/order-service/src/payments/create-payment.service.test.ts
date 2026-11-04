@@ -14,6 +14,7 @@ import {
   interpretKickback,
   interpretPayroc,
   resolvePaymentGateway,
+  payrocOrderReference,
   type FetchLike,
   type GatewayOutcome,
 } from './payment-gateway';
@@ -600,6 +601,16 @@ test('Kickback sale posts the WordPress request', async () => {
   assert.equal(params.get('response_method'), 'synchronous');
 });
 
+test('Payroc orderId stays within 1 to 24 characters', () => {
+  assert.equal(
+    payrocOrderReference('2629333374', '6d9306b1-74ea-4e30-b527-840a2c6b116f'),
+    '2629333374',
+  );
+  const fromInternal = payrocOrderReference('6d9306b1-74ea-4e30-b527-840a2c6b116f', '2629333374');
+  assert.equal(fromInternal, '2629333374');
+  assert.equal(payrocOrderReference(orderId).length <= 24, true);
+});
+
 test('Payroc sale posts the WordPress request and reuses the token', async () => {
   const calls: string[] = [];
   const tokens = new Map<string, { token: string; expiresAt: number }>();
@@ -611,11 +622,13 @@ test('Payroc sale posts the WordPress request and reuses the token', async () =>
       return new Response(JSON.stringify({ access_token: 'tok' }));
     }
     const body = JSON.parse(String(init?.body));
+    const gatewayOrderId = payrocOrderReference(orderId);
     assert.equal(target, `${PAYROC_API_URL}/v1/devices/SERIAL1/payment-instructions`);
     assert.equal(body.processingTerminalId, 'TERM1');
     assert.equal(body.operator, 'user-7');
-    assert.equal(body.order.orderId, orderId);
-    assert.equal(body.order.description, `WooCommerce Order #${orderId}`);
+    assert.equal(body.order.orderId, gatewayOrderId);
+    assert.equal(gatewayOrderId.length <= 24, true);
+    assert.equal(body.order.description, `WooCommerce Order #${gatewayOrderId}`);
     assert.equal(body.order.currency, 'USD');
     assert.equal(body.order.amount, 20000);
     assert.equal(body.autoCapture, true);
