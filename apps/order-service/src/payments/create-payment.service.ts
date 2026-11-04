@@ -176,16 +176,18 @@ export class CreatePaymentService {
   }
 
   private async findOrder(context: CreatePaymentContext, orderKey: string): Promise<SaleRow | null> {
-    const params = [context.merchantId, context.storeId, orderKey];
+    // Order reads are store-scoped. The saved order merchant can differ from
+    // the POS x-merchant-id header, so the header is not a match condition.
+    const params = [context.storeId, orderKey];
     const internal = await this.query<SaleRow>(
       `${ORDER_LOOKUP_SELECT}
-        WHERE sale.merchant_id = $1::uuid
-          AND sale.store_id = $2::uuid
+        WHERE sale.store_id = $1::uuid
           AND (
-            sale.order_id::text = $3
-            OR sale.id::text = $3
-            OR sale.client_order_id = $3
-            OR sale.order_number = $3
+            sale.order_id::text = $2
+            OR sale.id::text = $2
+            OR sale.client_order_id = $2
+            OR sale.order_number = $2
+            OR sale.order_number = '#' || $2
           )
         ORDER BY sale.created_at DESC
         LIMIT 1`,
@@ -196,15 +198,14 @@ export class CreatePaymentService {
     // store_orders.client_order_id. The payment still uses sale.order_id.
     const byClientOrder = await this.query<SaleRow>(
       `${ORDER_LOOKUP_SELECT}
-        WHERE sale.merchant_id = $1::uuid
-          AND sale.store_id = $2::uuid
+        WHERE sale.store_id = $1::uuid
           AND (
             EXISTS (
               SELECT 1
                 FROM public.store_orders_meta AS meta
                WHERE meta.order_id = sale.order_id
                  AND meta.meta_key = '_pos_client_order_id'
-                 AND btrim(COALESCE(meta.meta_value #>> '{}', ''), '"') = $3
+                 AND btrim(COALESCE(meta.meta_value #>> '{}', ''), '"') = $2
             )
             OR EXISTS (
               SELECT 1
@@ -215,7 +216,7 @@ export class CreatePaymentService {
                        THEN sale.request_payload->'meta_data' ELSE '[]'::jsonb END
                 ) AS entry
                WHERE entry->>'key' = '_pos_client_order_id'
-                 AND btrim(COALESCE(entry->>'value', ''), '"') = $3
+                 AND btrim(COALESCE(entry->>'value', ''), '"') = $2
             )
           )
         ORDER BY sale.created_at DESC
