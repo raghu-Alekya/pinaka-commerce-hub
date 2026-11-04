@@ -5,8 +5,6 @@ import { CreatePaymentService } from './create-payment.service';
 @Controller([
   'api/v1/payments',
   'connector/api/v1/payments',
-  'pinaka-pos/v1/payments',
-  'wp-json/pinaka-pos/v1/payments',
 ])
 export class CreatePaymentController {
   constructor(@Inject(CreatePaymentService) private readonly payments: CreatePaymentService) {}
