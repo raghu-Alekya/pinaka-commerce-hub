@@ -41,6 +41,9 @@ test('settings accept zero integers and reject ranges and percentages', () => {
       ratio_dollar: 10,
       ratio_point: 1,
       new_customer_points: 0,
+      default_points: 0,
+      loyalty_tag: 'LoyaltyPoints',
+      mode: 'order',
       redeem_point: 100,
       redeem_amt: 10,
       expiry_days: 365,
@@ -50,6 +53,7 @@ test('settings accept zero integers and reject ranges and percentages', () => {
       min_points: 0,
       max_points: 10000,
       redeem_perc: 0,
+      allow_redemption: true,
     });
   }
   const percentage = validateSettingsUpdate({ ...settingsBody, pinaka_loyalty_redeem_perc: 101 });

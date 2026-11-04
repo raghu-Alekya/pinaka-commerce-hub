@@ -194,8 +194,10 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: 'The "pinaka_loyalty_conflict_rule" value must be enable or disable',
     };
   }
-  const allowRedemption = booleanValue(body.pinaka_loyalty_allow_redemption);
-  if (allowRedemption === undefined) {
+  const allowRedemption = body.pinaka_loyalty_allow_redemption === undefined
+    ? undefined
+    : booleanValue(body.pinaka_loyalty_allow_redemption);
+  if (body.pinaka_loyalty_allow_redemption !== undefined && allowRedemption === undefined) {
     return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_allow_redemption" must be boolean.' };
   }
   if (values.pinaka_loyalty_redeem_perc > 100) {
@@ -220,9 +222,19 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
   if (defaultPoints === undefined) return { code: 'invalid_integer_field', message: 'The field "pinaka_loyalty_default_points" must be an integer value.' };
   const loyaltyTag = String(body.pinaka_loyalty_tag || 'LoyaltyPoints').trim();
   if (!loyaltyTag) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_tag" cannot be empty.' };
-  const mode = body.pinaka_loyalty_mode === 'item' ? 'item' : body.pinaka_loyalty_mode === 'order' ? 'order' : undefined;
+  const requestedMode = body.pinaka_loyalty_mode;
+  const mode = requestedMode === undefined || requestedMode === null || requestedMode === ''
+    ? 'order'
+    : requestedMode === 'item' ? 'item' : requestedMode === 'order' ? 'order' : undefined;
   if (!mode) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_mode" must be order or item.' };
-  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict, pinaka_loyalty_allow_redemption: allowRedemption });
+  const settings = settingsFromStored({
+    ...values,
+    pinaka_loyalty_default_points: defaultPoints,
+    pinaka_loyalty_tag: loyaltyTag,
+    pinaka_loyalty_mode: mode,
+    pinaka_loyalty_conflict_rule: conflict,
+    ...(allowRedemption === undefined ? {} : { pinaka_loyalty_allow_redemption: allowRedemption }),
+  });
   return { settings };
 }
 
