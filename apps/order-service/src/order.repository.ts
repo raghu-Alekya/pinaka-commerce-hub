@@ -136,10 +136,15 @@ export class OrderRepository implements OnModuleInit {
     scope: { merchantId: string; storeId: string; orderId: string },
     status: unknown,
     orderStatus?: unknown,
+    paymentStatus?: unknown,
   ): Promise<void> {
     const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/_/g, '-');
-    if ((normalize(status) !== 'completed' && normalize(orderStatus) !== 'completed')
-      || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
+    const current = normalize(status);
+    const internal = normalize(orderStatus);
+    const closed = ['cancelled', 'canceled', 'refunded', 'failed'];
+    const earns = !closed.includes(current) && !closed.includes(internal)
+      && (current === 'completed' || internal === 'completed' || String(paymentStatus || '').trim().toUpperCase() === 'PAID');
+    if (!earns || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
     try {
       await this.loyaltyOrderCompleted(scope);
     } catch (error) {
@@ -337,7 +342,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: savedStoreOrder.merchantId,
         storeId: savedStoreOrder.storeId,
         orderId: savedStoreOrder.orderId,
-      }, savedStoreOrder.status, savedStoreOrder.orderStatus);
+      }, savedStoreOrder.status, savedStoreOrder.orderStatus, savedStoreOrder.paymentStatus);
       console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
       return { order: savedOrder, items, storeOrder: savedStoreOrder, duplicate: false };
     } else {
@@ -1393,7 +1398,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: saved.merchantId,
         storeId: saved.storeId,
         orderId: saved.orderId,
-      }, saved.status, saved.orderStatus);
+      }, saved.status, saved.orderStatus, saved.paymentStatus);
       return order;
     }
     const graph = await this.getOrderByReference(orderId);
@@ -1478,7 +1483,7 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status, saved.orderStatus);
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1668,7 +1673,7 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status, saved.orderStatus);
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 

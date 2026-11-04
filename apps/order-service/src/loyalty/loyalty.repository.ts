@@ -29,6 +29,7 @@ export interface OrderRow {
   client_order_id: string | null;
   order_number: string;
   customer_phone?: string | null;
+  payment_status?: string | null;
   status: string;
   order_status: string;
   total: string | number;
@@ -440,6 +441,11 @@ export class LoyaltyRepository {
           AND (
             lower(replace(COALESCE(sale.status, ''), '_', '-')) IN ('completed', 'wc-completed')
             OR lower(replace(COALESCE(sale.order_status, ''), '_', '-')) IN ('completed', 'wc-completed')
+            OR (
+              upper(COALESCE(sale.payment_status, '')) = 'PAID'
+              AND lower(replace(COALESCE(sale.status, ''), '_', '-')) NOT IN ('cancelled', 'canceled', 'refunded', 'failed')
+              AND lower(replace(COALESCE(sale.order_status, ''), '_', '-')) NOT IN ('cancelled', 'canceled', 'refunded', 'failed')
+            )
           )
           AND (
             EXISTS (

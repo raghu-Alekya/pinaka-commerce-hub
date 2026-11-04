@@ -261,6 +261,16 @@ export function orderIsCompleted(status: unknown, orderStatus: unknown): boolean
   return normalize(status) === 'completed' || normalize(orderStatus) === 'completed';
 }
 
+export function orderEarnsLoyalty(status: unknown, orderStatus: unknown, paymentStatus: unknown): boolean {
+  const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
+  const current = normalize(status);
+  const internal = normalize(orderStatus);
+  const closed = ['cancelled', 'canceled', 'refunded', 'failed'];
+  if (closed.includes(current) || closed.includes(internal)) return false;
+  if (current === 'completed' || internal === 'completed') return true;
+  return String(paymentStatus || '').trim().toUpperCase() === 'PAID';
+}
+
 export function closedOrderStatus(status: unknown): boolean {
   const value = String(status || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
   return value === 'completed' || value === 'cancelled' || value === 'canceled' || value === 'refunded';
