@@ -28,9 +28,11 @@ export interface OrderRow {
   store_id: string;
   client_order_id: string | null;
   order_number: string;
+  customer_phone?: string | null;
   status: string;
   order_status: string;
   total: string | number;
+  grand_total?: string | number;
   discount_total: string | number;
   tax_total: string | number;
   subtotal: string | number;
@@ -157,7 +159,17 @@ export class LoyaltyRepository {
           WHERE customer.merchant_id = $1::uuid
             AND customer.store_id = $2::uuid
             AND customer.customer_role = 'customer'
-            AND (customer.mobile = $3 OR phone.meta_value #>> '{}' = $3)
+            AND (
+              customer.mobile = $3
+              OR phone.meta_value #>> '{}' = $3
+              OR (
+                regexp_replace($3, '\\D', '', 'g') <> ''
+                AND (
+                  regexp_replace(COALESCE(customer.mobile, ''), '\\D', '', 'g') = regexp_replace($3, '\\D', '', 'g')
+                  OR regexp_replace(COALESCE(phone.meta_value #>> '{}', ''), '\\D', '', 'g') = regexp_replace($3, '\\D', '', 'g')
+                )
+              )
+            )
           ORDER BY customer.created_at ASC
           LIMIT 1`,
         [scope.merchantId, scope.storeId, contact],
@@ -413,6 +425,56 @@ export class LoyaltyRepository {
     };
   }
 
+  async completedUncreditedOrderIds(
+    scope: LoyaltyScope,
+    customerId: string,
+    contact: string,
+    manager: Queryable,
+  ): Promise<string[]> {
+    const digits = contact.replace(/\D/g, '');
+    const rows = await this.query(manager,
+      `SELECT sale.order_id
+         FROM public.store_orders AS sale
+        WHERE sale.merchant_id = $1::uuid
+          AND sale.store_id = $2::uuid
+          AND (
+            lower(replace(COALESCE(sale.status, ''), '_', '-')) IN ('completed', 'wc-completed')
+            OR lower(replace(COALESCE(sale.order_status, ''), '_', '-')) IN ('completed', 'wc-completed')
+          )
+          AND (
+            EXISTS (
+              SELECT 1
+                FROM public.store_orders_meta AS meta
+               WHERE meta.order_id = sale.order_id
+                 AND (
+                   (meta.meta_key = 'loyaltyuser_id' AND meta.meta_value #>> '{}' = $3)
+                   OR (meta.meta_key = 'contact' AND lower(meta.meta_value #>> '{}') = lower($4))
+                   OR (
+                     $5 <> ''
+                     AND meta.meta_key IN ('contact', 'billing_phone')
+                     AND regexp_replace(COALESCE(meta.meta_value #>> '{}', ''), '\\D', '', 'g') = $5
+                   )
+                 )
+            )
+            OR ($5 <> '' AND regexp_replace(COALESCE(sale.customer_phone, ''), '\\D', '', 'g') = $5)
+            OR (
+              position('@' in $4) > 0
+              AND lower(COALESCE(sale.request_payload #>> '{billing,email}', '')) = lower($4)
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM public.store_customer_loyalty_points AS ledger
+             WHERE ledger.customer_id = $3::uuid
+               AND ledger.order_id = sale.order_id
+               AND ledger.credited_points > 0
+               AND ledger.source_refund_id IS NULL
+          )`,
+      [scope.merchantId, scope.storeId, customerId, contact, digits],
+    );
+    return rows.map((row) => String(row.order_id));
+  }
+
   async hasOrderCredit(scope: LoyaltyScope, customerId: string, orderId: string, manager?: Queryable): Promise<boolean> {
     const rows = await this.query(manager || await this.ensure(),
       `SELECT 1
@@ -448,6 +510,48 @@ export class LoyaltyRepository {
         input.clientOrderId, input.creditedPoints, input.expiresAt],
     );
     return rows.length > 0;
+  }
+
+  async insertRedeem(scope: LoyaltyScope, input: {
+    customerId: string;
+    contact: string;
+    orderId: string;
+    clientOrderId: string | null;
+    redeemedPoints: number;
+  }, manager: Queryable): Promise<void> {
+    await this.query(manager,
+      `INSERT INTO public.store_customer_loyalty_points
+         (customer_id, merchant_id, store_id, contact, order_id, client_order_id,
+          credited_points, redeemed_points, expired_points,
+          points_created_date, points_expiry_date, points_status)
+       SELECT $1::uuid, $2::uuid, $3::uuid, $4, $5::uuid, $6, 0, $7, 0, now(), now(), 'redeemed'
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM public.store_customer_loyalty_points
+           WHERE customer_id = $1::uuid
+             AND merchant_id = $2::uuid
+             AND store_id = $3::uuid
+             AND order_id = $5::uuid
+             AND redeemed_points > 0
+             AND source_refund_id IS NULL
+        )`,
+      [input.customerId, scope.merchantId, scope.storeId, input.contact, input.orderId,
+        input.clientOrderId, input.redeemedPoints],
+    );
+  }
+
+  async deleteOrderRedemption(scope: LoyaltyScope, customerId: string, orderId: string, manager: Queryable): Promise<void> {
+    await this.query(manager,
+      `DELETE FROM public.store_customer_loyalty_points
+        WHERE customer_id = $1::uuid
+          AND merchant_id = $2::uuid
+          AND store_id = $3::uuid
+          AND order_id = $4::uuid
+          AND redeemed_points > 0
+          AND credited_points = 0
+          AND source_refund_id IS NULL`,
+      [customerId, scope.merchantId, scope.storeId, orderId],
+    );
   }
 
   async updateLineItems(orderId: string, lines: unknown, manager: Queryable): Promise<void> {

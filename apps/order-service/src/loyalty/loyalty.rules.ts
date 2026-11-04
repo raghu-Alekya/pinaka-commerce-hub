@@ -213,6 +213,11 @@ export function loyaltyCustomerName(contact: string, email: boolean): string {
   return `Customer ${contact.slice(-4)}`;
 }
 
+export function orderIsCompleted(status: unknown, orderStatus: unknown): boolean {
+  const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
+  return normalize(status) === 'completed' || normalize(orderStatus) === 'completed';
+}
+
 export function closedOrderStatus(status: unknown): boolean {
   const value = String(status || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
   return value === 'completed' || value === 'cancelled' || value === 'canceled' || value === 'refunded';

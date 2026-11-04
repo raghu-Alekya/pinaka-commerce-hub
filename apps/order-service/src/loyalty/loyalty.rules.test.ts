@@ -6,6 +6,7 @@ import {
   liveRedemption,
   loyaltyUsername,
   earnedOrderPoints,
+  orderIsCompleted,
   partialRefundExpiredPoints,
   paymentIsVoid,
   presentSettings,
@@ -109,6 +110,12 @@ test('conflict rule blocks coupons, discounts, and special products only when di
   assert.equal(redemptionBlocked({
     conflictRule: 'enable', discountTotal: 5, couponCount: 1, hasPayout: true, hasDiscountProduct: true, hasCashback: true,
   }), false);
+});
+
+test('an order is completed from either status column', () => {
+  assert.equal(orderIsCompleted('processing', 'COMPLETED'), true);
+  assert.equal(orderIsCompleted('completed', 'CREATED'), true);
+  assert.equal(orderIsCompleted('processing', 'CREATED'), false);
 });
 
 test('completed orders earn floor of spend divided by the dollar ratio', () => {

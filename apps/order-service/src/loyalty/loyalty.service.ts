@@ -36,6 +36,7 @@ import {
   liveRedemption,
   loyaltyCustomerName,
   loyaltyUsername,
+  orderIsCompleted,
   partialRefundExpiredPoints,
   paymentIsVoid,
   presentSettings,
@@ -83,11 +84,14 @@ export class LoyaltyService implements OnModuleInit {
         data: { contact, available_points: 0 },
       };
     }
-    const meta = await this.loyalty.readMeta(customer.id);
+    const available = await this.loyalty.transaction(async (manager) => {
+      await this.creditCustomerHistory(scope, customer, contact, manager);
+      return this.availablePoints(scope, customer.id, manager);
+    });
     return {
       success: true,
       message: 'Loyalty points retrieved successfully.',
-      data: { contact, available_points: Number(meta.pinaka_available_points) || 0 },
+      data: { contact, available_points: available },
     };
   }
 
@@ -124,8 +128,9 @@ export class LoyaltyService implements OnModuleInit {
       ];
       if (existing && settings.mode === 'item') metaEntries.push({ key: 'order_loyalty_points', value: itemPoints });
       await this.putOrderMeta(order, metaEntries, manager);
+      await this.creditCustomerHistory(scope, customer, contact, manager);
       const meta = await this.loyalty.readMeta(customer.id, manager);
-      const available = Number(meta.pinaka_available_points) || 0;
+      const available = await this.availablePoints(scope, customer.id, manager);
       const welcome = welcomePoints({
         availablePoints: available,
         alreadyAdded: meta.new_customer_points_added,
@@ -240,9 +245,17 @@ export class LoyaltyService implements OnModuleInit {
       await this.loyalty.saveOrder(order, manager);
       await this.loyalty.replaceCanonicalLines(order.order_id, nextLines as Array<Record<string, unknown>>, manager);
       const customer = await this.customerForOrder(scope, order, contact, manager);
-      const current = customer ? Number((await this.loyalty.readMeta(customer.id, manager)).pinaka_available_points) || 0 : 0;
-      const available = Math.max(0, current - redeemPoints);
-      if (customer) await this.loyalty.writeMeta(customer.id, { pinaka_available_points: available }, manager);
+      if (customer && redeemPoints > 0) {
+        await this.loyalty.insertRedeem(scope, {
+          customerId: customer.id,
+          contact,
+          orderId: order.order_id,
+          clientOrderId: order.client_order_id,
+          redeemedPoints: redeemPoints,
+        }, manager);
+        await this.recalculate(scope, customer.id, manager);
+      }
+      const available = customer ? await this.availablePoints(scope, customer.id, manager) : 0;
       await this.putOrderMeta(order, [
         { key: 'contact', value: contact },
         { key: 'redeem_points', value: redeemPoints },
@@ -280,8 +293,8 @@ export class LoyaltyService implements OnModuleInit {
       const redeemPoints = Number(metaValue(order, 'redeem_points')) || 0;
       const customer = await this.customerForOrder(scope, order, contact, manager);
       if (customer && redeemPoints > 0) {
-        const current = Number((await this.loyalty.readMeta(customer.id, manager)).pinaka_available_points) || 0;
-        await this.loyalty.writeMeta(customer.id, { pinaka_available_points: current + redeemPoints }, manager);
+        await this.loyalty.deleteOrderRedemption(scope, customer.id, order.order_id, manager);
+        await this.recalculate(scope, customer.id, manager);
       }
       const nextLines = asLines(order.line_items).filter((line) => !isLoyaltyLine(line, loyaltyProduct?.id));
       const priced = priceOrder(order, nextLines);
@@ -447,44 +460,64 @@ export class LoyaltyService implements OnModuleInit {
 
   async creditCompletedOrder(scope: LoyaltyScope & { orderId: string }): Promise<void> {
     await this.loyalty.transaction(async (manager) => {
-      const flags = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
-      if (flags.enable_loyalty_points !== 'yes') return;
-      const order = await this.loyalty.lockOrder(scope, scope.orderId, manager);
-      if (!order) return;
-      const status = String(order.status || order.order_status || '').toLowerCase().replace(/_/g, '-');
-      if (status !== 'completed') return;
-      const customer = await this.customerForCompletedOrder(scope, order, manager);
-      if (!customer) return;
-      if (await this.loyalty.hasOrderCredit(scope, customer.id, order.order_id, manager)) return;
-      const settings = await this.settings(scope, manager);
-      const earnBase = Number(order.total);
-      if (settings.minSpend > 0 && (!Number.isFinite(earnBase) || earnBase < settings.minSpend)) return;
-      let points = 0;
-      if (settings.mode === 'item') {
-        const products = flattenCatalog(await this.loyalty.catalog(scope, manager));
-        const lines = asLines(order.line_items).map((line) => {
-          if (isLoyaltyLine(line)) return line;
-          const earned = Math.floor(taggedItemPoints([line], products));
-          return earned > 0 ? withLineMeta(line, '_credited_loyalty_points', earned) : line;
-        });
-        points = lines.reduce((sum, line) => sum + Math.trunc(Number(lineMeta(line, '_credited_loyalty_points')) || 0), 0);
-        if (points > 0) await this.loyalty.updateLineItems(order.order_id, lines, manager);
-      } else {
-        points = earnedOrderPoints(Number.isFinite(earnBase) ? earnBase : 0, settings.ratioDollar, settings.ratioPoint);
-      }
-      if (points <= 0) return;
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + Math.max(0, settings.expiryDays || 0));
-      const inserted = await this.loyalty.insertCredit(scope, {
-        customerId: customer.id,
-        contact: String(metaValue(order, 'contact') || customer.email || customer.mobile || ''),
-        orderId: order.order_id,
-        clientOrderId: order.client_order_id,
-        creditedPoints: points,
-        expiresAt,
-      }, manager);
-      if (inserted) await this.recalculate(scope, customer.id, manager);
+      await this.creditOrder(scope, scope.orderId, manager);
     });
+  }
+
+  private async creditCustomerHistory(scope: LoyaltyScope, customer: CustomerRow, contact: string, manager: EntityManager): Promise<void> {
+    const orderIds = await this.loyalty.completedUncreditedOrderIds(scope, customer.id, contact, manager);
+    for (const orderId of orderIds) await this.creditOrder(scope, orderId, manager, customer);
+  }
+
+  private async availablePoints(scope: LoyaltyScope, customerId: string, manager?: EntityManager): Promise<number> {
+    const totals = await this.loyalty.ledgerTotals(scope, customerId, manager);
+    return availableFromLedger(totals.credited, totals.redeemed, totals.expired);
+  }
+
+  private async creditOrder(scope: LoyaltyScope, orderId: string, manager: EntityManager, preferred?: CustomerRow): Promise<void> {
+    const flags = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
+    if (flags.enable_loyalty_points !== 'yes') return;
+    const order = await this.loyalty.lockOrder(scope, orderId, manager);
+    if (!order || !orderIsCompleted(order.status, order.order_status)) return;
+    const customer = await this.customerForCompletedOrder(scope, order, manager) || preferred;
+    if (!customer) return;
+    if (await this.loyalty.hasOrderCredit(scope, customer.id, order.order_id, manager)) return;
+    const settings = await this.settings(scope, manager);
+    const lines = asLines(order.line_items);
+    const loyaltyReduction = lines.filter((line) => isLoyaltyLine(line)).reduce((sum, line) => {
+      const total = Number(line.total ?? line.subtotal);
+      return sum + (Number.isFinite(total) && total < 0 ? Math.abs(total) : 0);
+    }, 0);
+    let earnBase = Number(order.total);
+    if (!(earnBase > 0)) earnBase = Number(order.grand_total);
+    if (!Number.isFinite(earnBase)) earnBase = 0;
+    earnBase += loyaltyReduction;
+    if (settings.minSpend > 0 && earnBase < settings.minSpend) return;
+    let points = 0;
+    if (settings.mode === 'item') {
+      const products = flattenCatalog(await this.loyalty.catalog(scope, manager));
+      const creditedLines = lines.map((line) => {
+        if (isLoyaltyLine(line)) return line;
+        const earned = Math.floor(taggedItemPoints([line], products));
+        return earned > 0 ? withLineMeta(line, '_credited_loyalty_points', earned) : line;
+      });
+      points = creditedLines.reduce((sum, line) => sum + Math.trunc(Number(lineMeta(line, '_credited_loyalty_points')) || 0), 0);
+      if (points > 0) await this.loyalty.updateLineItems(order.order_id, creditedLines, manager);
+    } else {
+      points = earnedOrderPoints(earnBase, settings.ratioDollar, settings.ratioPoint);
+    }
+    if (points <= 0) return;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + Math.max(0, settings.expiryDays || 0));
+    const inserted = await this.loyalty.insertCredit(scope, {
+      customerId: customer.id,
+      contact: orderContact(order) || customer.email || customer.mobile || '',
+      orderId: order.order_id,
+      clientOrderId: order.client_order_id,
+      creditedPoints: points,
+      expiresAt,
+    }, manager);
+    if (inserted) await this.recalculate(scope, customer.id, manager);
   }
 
   private async customerForCompletedOrder(scope: LoyaltyScope, order: OrderRow, manager: EntityManager): Promise<CustomerRow | undefined> {
@@ -493,9 +526,22 @@ export class LoyaltyService implements OnModuleInit {
       const customer = await this.loyalty.findCustomerById(scope, linked, manager);
       if (customer) return customer;
     }
-    const contact = String(metaValue(order, 'contact') || '').trim();
+    const contact = orderContact(order);
     if (!contact) return undefined;
-    return this.loyalty.findCustomer(scope, contact, isEmailContact(contact), manager);
+    const email = isEmailContact(contact);
+    const existing = await this.loyalty.findCustomer(scope, contact, email, manager);
+    if (existing) return existing;
+    const created = await this.loyalty.insertCustomer(scope, {
+      name: loyaltyCustomerName(contact, email),
+      email: email ? contact : null,
+      mobile: email ? null : contact,
+      username: loyaltyUsername(contact, email),
+    }, manager);
+    await this.loyalty.writeMeta(created.id, {
+      contact,
+      ...(email ? { billing_email: contact } : { billing_phone: contact }),
+    }, manager);
+    return created;
   }
 
   private async recalculate(scope: LoyaltyScope, customerId: string, manager: EntityManager): Promise<void> {
@@ -587,6 +633,22 @@ function fail(status: number, code: string, message: string): HttpException {
 
 function metaValue(order: OrderRow, key: string): unknown {
   return asMeta(order.meta_data).find((entry) => entry.key === key)?.value;
+}
+
+function orderContact(order: OrderRow): string {
+  for (const key of ['contact', 'billing_email', 'billing_phone']) {
+    const value = String(metaValue(order, key) || '').trim();
+    if (value) return value;
+  }
+  const phone = String(order.customer_phone || '').trim();
+  if (phone) return phone;
+  const payload = order.request_payload;
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const billing = record.billing && typeof record.billing === 'object' ? record.billing as Record<string, unknown> : {};
+  const email = String(billing.email || record.billing_email || '').trim();
+  if (email) return email;
+  return String(billing.phone || record.billing_phone || record.customer_phone || '').trim();
 }
 
 function asMeta(value: unknown): Array<{ key: string; value: unknown }> {
