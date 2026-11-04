@@ -135,9 +135,11 @@ export class OrderRepository implements OnModuleInit {
   private async notifyLoyaltyCompleted(
     scope: { merchantId: string; storeId: string; orderId: string },
     status: unknown,
+    orderStatus?: unknown,
   ): Promise<void> {
-    const normalized = String(status || '').trim().toLowerCase().replace(/_/g, '-');
-    if (normalized !== 'completed' || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
+    const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/_/g, '-');
+    if ((normalize(status) !== 'completed' && normalize(orderStatus) !== 'completed')
+      || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
     try {
       await this.loyaltyOrderCompleted(scope);
     } catch (error) {
@@ -324,7 +326,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: savedStoreOrder.merchantId,
         storeId: savedStoreOrder.storeId,
         orderId: savedStoreOrder.orderId,
-      }, savedStoreOrder.status);
+      }, savedStoreOrder.status, savedStoreOrder.orderStatus);
       console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
       return { order: savedOrder, items, storeOrder: savedStoreOrder, duplicate: false };
     } else {
@@ -1252,7 +1254,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: saved.merchantId,
         storeId: saved.storeId,
         orderId: saved.orderId,
-      }, saved.status);
+      }, saved.status, saved.orderStatus);
       return order;
     }
     const graph = await this.getOrderByReference(orderId);
@@ -1337,7 +1339,7 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status);
+    }, saved.status, saved.orderStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1527,7 +1529,7 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status);
+    }, saved.status, saved.orderStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
