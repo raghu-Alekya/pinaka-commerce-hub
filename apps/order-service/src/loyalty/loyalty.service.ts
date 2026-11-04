@@ -36,7 +36,7 @@ import {
   liveRedemption,
   loyaltyCustomerName,
   loyaltyUsername,
-  orderIsCompleted,
+  orderEarnsLoyalty,
   partialRefundExpiredPoints,
   paymentIsVoid,
   presentSettings,
@@ -128,6 +128,7 @@ export class LoyaltyService implements OnModuleInit {
       ];
       if (existing && settings.mode === 'item') metaEntries.push({ key: 'order_loyalty_points', value: itemPoints });
       await this.putOrderMeta(order, metaEntries, manager);
+      await this.creditOrder(scope, order.order_id, manager, customer);
       await this.creditCustomerHistory(scope, customer, contact, manager);
       const meta = await this.loyalty.readMeta(customer.id, manager);
       const available = await this.availablePoints(scope, customer.id, manager);
@@ -484,7 +485,7 @@ export class LoyaltyService implements OnModuleInit {
     const flags = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
     if (flags.enable_loyalty_points !== 'yes') return;
     const order = await this.loyalty.lockOrder(scope, orderId, manager);
-    if (!order || !orderIsCompleted(order.status, order.order_status)) return;
+    if (!order || !orderEarnsLoyalty(order.status, order.order_status, order.payment_status)) return;
     const customer = await this.customerForCompletedOrder(scope, order, manager) || preferred;
     if (!customer) return;
     if (await this.loyalty.hasOrderCredit(scope, customer.id, order.order_id, manager)) return;
