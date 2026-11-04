@@ -101,7 +101,7 @@ export class LoyaltyService implements OnModuleInit {
     const contact = requiredContact(payload.contact, 'Please enter email or mobile number.');
     const email = isEmailContact(contact);
     return this.loyalty.transaction(async (manager) => {
-      const order = await this.requireOpenOrder(scope, payload.order_id, manager, 'redeem');
+      const order = await this.orderForLoyaltyCustomer(scope, payload.order_id, manager);
       const settings = await this.settings(scope, manager);
       const lines = asLines(order.line_items);
       const products = settings.mode === 'item' ? flattenCatalog(await this.loyalty.catalog(scope, manager)) : [];
@@ -144,13 +144,20 @@ export class LoyaltyService implements OnModuleInit {
           new_customer_points_added: 1,
         }, manager);
       }
-      const quote = liveRedemption({
-        orderTotal: Number(order.total) || 0,
-        availablePoints: available,
-        redeemPoint: settings.redeemPoint,
-        redeemAmount: settings.redeemAmount,
-        ebtEligibleTotal: Number(metaValue(order, '_pinaka_ebt_eligible_total')) || 0,
-      });
+      const quote = settings.allowRedemption
+        ? liveRedemption({
+          orderTotal: Number(order.total) || 0,
+          availablePoints: available,
+          redeemPoint: settings.redeemPoint,
+          redeemAmount: settings.redeemAmount,
+          ebtEligibleTotal: Number(metaValue(order, '_pinaka_ebt_eligible_total')) || 0,
+        })
+        : {
+          redeemPoints: 0,
+          valueRedeemed: 0,
+          newPayable: roundMoney(Number(order.total) || 0),
+          message: 'Loyalty customer processed successfully.',
+        };
       return {
         success: true,
         message: quote.message,
@@ -181,6 +188,9 @@ export class LoyaltyService implements OnModuleInit {
     return this.loyalty.transaction(async (manager) => {
       const order = await this.requireOpenOrder(scope, payload.order_id, manager, 'redeem');
       const settings = await this.settings(scope, manager);
+      if (!settings.allowRedemption) {
+        throw fail(400, 'redemption_disabled', 'Loyalty point redemption is turned off in Loyalty Settings.');
+      }
       const products = flattenCatalog(await this.loyalty.catalog(scope, manager));
       const loyaltyProduct = findNamedProduct(products, 'loyalty', settings.loyaltyProductIds);
       if (!loyaltyProduct) throw fail(400, 'product_missing', 'Please create a "Loyalty" product before redeeming points.');
@@ -574,6 +584,19 @@ export class LoyaltyService implements OnModuleInit {
   private async settings(scope: LoyaltyScope, manager?: EntityManager): Promise<LoyaltySettings> {
     const stored = await this.loyalty.readConfig(scope, 'store_loyalty', manager);
     return { ...defaultLoyaltySettings(), ...settingsFromStored(stored) };
+  }
+
+  private async orderForLoyaltyCustomer(scope: LoyaltyScope, orderId: unknown, manager: EntityManager): Promise<OrderRow> {
+    const key = String(orderId ?? '').trim();
+    if (!key) throw fail(404, 'invalid_order', 'The provided Order ID does not exist in WooCommerce orders.');
+    const order = await this.loyalty.lockOrder(scope, key, manager);
+    if (!order) throw fail(404, 'invalid_order', 'The provided Order ID does not exist in WooCommerce orders.');
+    const status = String(order.status || order.order_status || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
+    if (status === 'cancelled' || status === 'canceled' || status === 'refunded') {
+      const label = status.charAt(0).toUpperCase() + status.slice(1);
+      throw fail(400, 'invalid_order_status', `Cannot redeem points for an order that is already ${label}.`);
+    }
+    return order;
   }
 
   private async requireOpenOrder(scope: LoyaltyScope, orderId: unknown, manager: EntityManager, action: 'redeem' | 'remove'): Promise<OrderRow> {
