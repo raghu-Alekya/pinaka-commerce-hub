@@ -4,6 +4,8 @@ export interface LoyaltySettings {
   ratioDollar: number;
   ratioPoint: number;
   newCustomerPoints: number;
+  defaultPoints: number;
+  loyaltyTag: string;
   redeemPoint: number;
   redeemAmount: number;
   expiryDays: number;
@@ -13,6 +15,7 @@ export interface LoyaltySettings {
   minPoints: number;
   maxPoints: number;
   redeemPercent: number;
+  allowRedemption: boolean;
   mode: LoyaltyMode;
   payoutProductIds: string[];
   discountProductIds: string[];
@@ -24,6 +27,9 @@ export interface LoyaltySettingsView {
   ratio_dollar: number;
   ratio_point: number;
   new_customer_points: number;
+  default_points: number;
+  loyalty_tag: string;
+  mode: LoyaltyMode;
   redeem_point: number;
   redeem_amt: number;
   expiry_days: number;
@@ -33,6 +39,7 @@ export interface LoyaltySettingsView {
   min_points: number;
   max_points: number;
   redeem_perc: number;
+  allow_redemption: boolean;
 }
 
 export interface CatalogProduct {
@@ -76,6 +83,8 @@ export function defaultLoyaltySettings(): LoyaltySettings {
     ratioDollar: 0,
     ratioPoint: 0,
     newCustomerPoints: 0,
+    defaultPoints: 0,
+    loyaltyTag: 'LoyaltyPoints',
     redeemPoint: 0,
     redeemAmount: 0,
     expiryDays: 365,
@@ -85,6 +94,7 @@ export function defaultLoyaltySettings(): LoyaltySettings {
     minPoints: 0,
     maxPoints: 0,
     redeemPercent: 0,
+    allowRedemption: true,
     mode: 'order',
     payoutProductIds: [],
     discountProductIds: [],
@@ -98,6 +108,9 @@ export function presentSettings(settings: LoyaltySettings): LoyaltySettingsView 
     ratio_dollar: settings.ratioDollar,
     ratio_point: settings.ratioPoint,
     new_customer_points: settings.newCustomerPoints,
+    default_points: settings.defaultPoints,
+    loyalty_tag: settings.loyaltyTag,
+    mode: settings.mode,
     redeem_point: settings.redeemPoint,
     redeem_amt: settings.redeemAmount,
     expiry_days: settings.expiryDays,
@@ -107,6 +120,7 @@ export function presentSettings(settings: LoyaltySettings): LoyaltySettingsView 
     min_points: settings.minPoints,
     max_points: settings.maxPoints,
     redeem_perc: settings.redeemPercent,
+    allow_redemption: settings.allowRedemption,
   };
 }
 
@@ -116,6 +130,8 @@ export function settingsFromStored(value: Record<string, unknown> | undefined): 
   settings.ratioDollar = numberOr(source.pinaka_loyalty_ratio_dollar, 0);
   settings.ratioPoint = numberOr(source.pinaka_loyalty_ratio_point, 0);
   settings.newCustomerPoints = numberOr(source.pinaka_new_customer_points, 0);
+  settings.defaultPoints = numberOr(source.pinaka_loyalty_default_points, settings.newCustomerPoints);
+  settings.loyaltyTag = String(source.pinaka_loyalty_tag || 'LoyaltyPoints');
   settings.redeemPoint = numberOr(source.pinaka_loyalty_redeem_point, 0);
   settings.redeemAmount = numberOr(source.pinaka_loyalty_redeem_amt, 0);
   settings.expiryDays = numberOr(source.pinaka_loyalty_expiry_days, 365);
@@ -125,6 +141,7 @@ export function settingsFromStored(value: Record<string, unknown> | undefined): 
   settings.minPoints = numberOr(source.pinaka_loyalty_min_points, 0);
   settings.maxPoints = numberOr(source.pinaka_loyalty_max_points, 0);
   settings.redeemPercent = numberOr(source.pinaka_loyalty_redeem_perc, 0);
+  settings.allowRedemption = booleanOr(source.pinaka_loyalty_allow_redemption, settings.redeemPoint > 0 && settings.redeemAmount > 0);
   settings.mode = String(source.pinaka_loyalty_mode || 'order').toLowerCase() === 'item' ? 'item' : 'order';
   settings.payoutProductIds = idList(source.pinaka_payout_product_id);
   settings.discountProductIds = idList(source.pinaka_discount_product_id);
@@ -139,6 +156,9 @@ export function storedSettingsPatch(settings: LoyaltySettings, previous: Record<
     pinaka_loyalty_ratio_dollar: settings.ratioDollar,
     pinaka_loyalty_ratio_point: settings.ratioPoint,
     pinaka_new_customer_points: settings.newCustomerPoints,
+    pinaka_loyalty_default_points: settings.defaultPoints,
+    pinaka_loyalty_tag: settings.loyaltyTag,
+    pinaka_loyalty_mode: settings.mode,
     pinaka_loyalty_redeem_point: settings.redeemPoint,
     pinaka_loyalty_redeem_amt: settings.redeemAmount,
     pinaka_loyalty_expiry_days: settings.expiryDays,
@@ -148,6 +168,7 @@ export function storedSettingsPatch(settings: LoyaltySettings, previous: Record<
     pinaka_loyalty_min_points: settings.minPoints,
     pinaka_loyalty_max_points: settings.maxPoints,
     pinaka_loyalty_redeem_perc: settings.redeemPercent,
+    pinaka_loyalty_allow_redemption: settings.allowRedemption,
   };
 }
 
@@ -173,6 +194,10 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: 'The "pinaka_loyalty_conflict_rule" value must be enable or disable',
     };
   }
+  const allowRedemption = booleanValue(body.pinaka_loyalty_allow_redemption);
+  if (allowRedemption === undefined) {
+    return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_allow_redemption" must be boolean.' };
+  }
   if (values.pinaka_loyalty_redeem_perc > 100) {
     return {
       code: 'invalid_percentage',
@@ -191,7 +216,13 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: `Invalid points range: Minimum points (${values.pinaka_loyalty_min_points}) cannot be greater than Maximum points (${values.pinaka_loyalty_max_points}).`,
     };
   }
-  const settings = settingsFromStored({ ...values, pinaka_loyalty_conflict_rule: conflict });
+  const defaultPoints = nonNegativeInteger(body.pinaka_loyalty_default_points ?? 0);
+  if (defaultPoints === undefined) return { code: 'invalid_integer_field', message: 'The field "pinaka_loyalty_default_points" must be an integer value.' };
+  const loyaltyTag = String(body.pinaka_loyalty_tag || 'LoyaltyPoints').trim();
+  if (!loyaltyTag) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_tag" cannot be empty.' };
+  const mode = body.pinaka_loyalty_mode === 'item' ? 'item' : body.pinaka_loyalty_mode === 'order' ? 'order' : undefined;
+  if (!mode) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_mode" must be order or item.' };
+  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict, pinaka_loyalty_allow_redemption: allowRedemption });
   return { settings };
 }
 
@@ -463,6 +494,16 @@ function nonNegativeInteger(value: unknown): number | undefined {
 function numberOr(value: unknown, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  if (value === true || value === 1 || value === '1' || value === 'true' || value === 'yes') return true;
+  if (value === false || value === 0 || value === '0' || value === 'false' || value === 'no') return false;
+  return undefined;
+}
+
+function booleanOr(value: unknown, fallback: boolean): boolean {
+  return booleanValue(value) ?? fallback;
 }
 
 function idList(value: unknown): string[] {
