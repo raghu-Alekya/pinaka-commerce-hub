@@ -226,6 +226,7 @@ function formatDataSyncProduct(product: DataSyncRow, configuration: DataSyncRow 
     },
   };
 }
+//
 
 async function ensurePosDataSyncSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {

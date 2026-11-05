@@ -84,6 +84,7 @@ export class DeviceRepository {
       throw error;
     }
   }
+  //
 
   private repository() {
     return this.merchants.requireDataSource().getRepository(MerchantDeviceEntity);

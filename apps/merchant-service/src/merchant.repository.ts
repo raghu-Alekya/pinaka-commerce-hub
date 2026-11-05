@@ -1730,6 +1730,7 @@ export class MerchantRepository implements OnModuleInit {
         (!filters.from || device.createdAt >= filters.from) && (!filters.to || device.createdAt < filters.to));
       const devices = filtered.slice((filters.page - 1) * filters.limit, filters.page * filters.limit);
       return { devices, total: filtered.length, summary: {} };
+      //
     }
     const query = this.deviceRepo.createQueryBuilder('device').where('device.is_deleted = false');
     if (filters.search) query.andWhere(`(device.device_name ILIKE :search OR device.device_code ILIKE :search OR device.serial_number ILIKE :search)`, { search: `%${filters.search}%` });
