@@ -15,6 +15,16 @@ export class OrderUpdatePresenter {
     delete stored.date_modified;
     delete stored.date_modified_gmt;
     const totalTax = storeOrder?.taxTotal ?? graph.order.taxAmount;
+    const sourceLines = (Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : stored.line_items) as PosLineItem[] | undefined;
+    const feeLines = (Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : stored.fee_lines) as PosFeeLine[] | undefined;
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(graph.order.metadata) ? graph.order.metadata : []),
+      ...(Array.isArray(stored.meta_data) ? stored.meta_data as Array<{ key?: string; value?: unknown }> : []),
+    ];
+    const redemption = loyaltyAmountFromMeta(metadata);
+    const storedTotal = Number(storeOrder?.total ?? graph.order.totalAmount);
     const request = {
       ...stored,
       status: storeOrder?.status || String(graph.order.orderStatus || '').toLowerCase(),
@@ -26,9 +36,9 @@ export class OrderUpdatePresenter {
       total: storeOrder?.total ?? graph.order.totalAmount,
       total_tax: totalTax,
       cart_tax: storeOrder?.taxTotal ?? stored.cart_tax,
-      line_items: storeOrder?.lineItems ?? stored.line_items,
+      line_items: sourceLines,
       coupon_lines: storeOrder?.couponLines ?? stored.coupon_lines,
-      fee_lines: storeOrder?.feeLines ?? stored.fee_lines,
+      fee_lines: withLoyaltyDiscountFee(feeLines, redemption, Number.isFinite(storedTotal) ? storedTotal : 0),
       tax_lines: storeOrder?.taxLines ?? stored.tax_lines,
     };
     return this.responses.present(this.responses.profileFor(request), {
