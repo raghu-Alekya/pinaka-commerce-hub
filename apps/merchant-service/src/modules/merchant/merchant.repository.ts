@@ -161,7 +161,7 @@ interface StoreProductTaxConfiguration {
 /** `required` is optional on older mapping rows. */
 const mappingRequired = `COALESCE((to_jsonb(mapping)->>'required')::boolean, false)`;
 
-export type DataSyncActor = { id?: string; role?: string; storeId?: string; deviceId?: string };
+export type DataSyncActor = { id?: string; role?: string; merchantId?: string; storeId?: string; deviceId?: string };
 
 type DataSyncProduct = Record<string, unknown> & { id: string | number };
 
@@ -3413,7 +3413,8 @@ private async productDataSyncContext(deviceId: string | undefined, merchantId: s
     }
     const rows = await this.requireDataSource().query(`
       SELECT d.id::text AS id,to_jsonb(d)->>'device_code' AS device_code,
-             to_jsonb(d)->>'deviceCode' AS legacy_device_code,d.device_id,m.store_id::text AS store_id
+             to_jsonb(d)->>'deviceCode' AS legacy_device_code,d.device_id,
+             m.store_id::text AS store_id,s.merchant_id::text AS merchant_id
       FROM public.devices d JOIN public.store_devices m ON m.device_id::text=d.id::text
       JOIN public.stores s ON s.id::text=m.store_id::text
       WHERE (d.id::text=$1 OR to_jsonb(d)->>'device_code'=$1 OR to_jsonb(d)->>'deviceCode'=$1 OR d.device_id=$1)
@@ -3424,9 +3425,14 @@ private async productDataSyncContext(deviceId: string | undefined, merchantId: s
     if (!rows.length) throw new NotFoundException('Device has no active mapping for the specified merchant_id and store_id');
     if (rows.length > 1) throw new ConflictException('Device has ambiguous store mappings');
     const row = rows[0];
-    if (actor.role !== 'OWNER') {
+    const role = actor.role?.trim().toUpperCase();
+    const isOwner = role === 'OWNER';
+    const isAdmin = role === 'ADMIN' || role === 'MERCHANT_ADMIN';
+    if (!isOwner) {
       if (actor.storeId !== row.store_id) throw new ForbiddenException('Device does not belong to your store');
-      if (actor.deviceId && ![row.id,row.device_code,row.legacy_device_code,row.device_id].filter(value => typeof value === 'string').map(value => value.trim()).includes(actor.deviceId.trim())) throw new ForbiddenException('Device does not match the authenticated session');
+      if (actor.merchantId && actor.merchantId !== row.merchant_id) throw new ForbiddenException('Device does not belong to your merchant');
+      if (isAdmin && !actor.merchantId) throw new ForbiddenException('Merchant-scoped admin session is required');
+      if (!isAdmin && actor.deviceId && ![row.id,row.device_code,row.legacy_device_code,row.device_id].filter(value => typeof value === 'string').map(value => value.trim()).includes(actor.deviceId.trim())) throw new ForbiddenException('Device does not match the authenticated session');
     }
     return { storeId: row.store_id as string, deviceId: row.id as string, label: deviceId.trim() };
   }
