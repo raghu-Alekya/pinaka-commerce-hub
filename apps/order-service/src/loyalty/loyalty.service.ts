@@ -741,15 +741,16 @@ function couponCount(value: unknown): number {
 function upsertLoyaltyLine(lines: OrderLine[], product: CatalogProduct, amount: number, orderId: string): OrderLine[] {
   const next = lines.map((line) => ({ ...line }));
   const index = next.findIndex((line) => isLoyaltyLine(line, product.id));
-  const loyalty: OrderLine = {
-    ...(index >= 0 ? next[index] : { id: `LOYALTY-${orderId}`.slice(0, 100) }),
+  const current = index >= 0 ? next[index] : { id: `LOYALTY-${orderId}`.slice(0, 100) };
+  const value = (-Math.abs(amount)).toFixed(2);
+  const loyalty = withLineMeta({
+    ...current,
     product_id: product.id,
     name: 'Loyalty',
     quantity: 1,
-    subtotal: -amount,
-    total: -amount,
-    meta_data: index >= 0 ? next[index].meta_data : [],
-  };
+    subtotal: value,
+    total: value,
+  }, '_pos_item_type', 'loyalty');
   if (index >= 0) next[index] = loyalty;
   else next.push(loyalty);
   return next;
@@ -758,7 +759,8 @@ function upsertLoyaltyLine(lines: OrderLine[], product: CatalogProduct, amount: 
 function isLoyaltyLine(line: OrderLine, productId?: string): boolean {
   const name = String(line.name || '').trim().toLowerCase();
   const id = String(line.product_id ?? line.productId ?? '');
-  return name === 'loyalty' || (Boolean(productId) && id === productId);
+  const itemType = String(lineMeta(line, '_pos_item_type') || '').trim().toLowerCase();
+  return name === 'loyalty' || itemType === 'loyalty' || (Boolean(productId) && id === productId);
 }
 
 function priceOrder(order: OrderRow, lines: OrderLine[]): {

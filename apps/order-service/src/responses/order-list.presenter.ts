@@ -10,6 +10,7 @@ import {
   representedCouponDiscount,
   sumLineTotals,
 } from '../calculations/store-order.calculations';
+import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../loyalty/loyalty-line';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -95,6 +96,7 @@ export class OrderListPresenter {
       feeLines: corrected.feeLines,
       taxLines: corrected.taxLines,
     });
+    const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
     const correctedStoredTotal = corrected.corrected
       ? sumLineTotals(corrected.lineItems as any[]) + effectiveFeeTotal(corrected.calculationFees as any[])
         + Number(request.shipping_total ?? request.shippingTotal ?? 0)
@@ -113,14 +115,7 @@ export class OrderListPresenter {
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
     })));
-    const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
-    const loyaltyAlreadyIncluded = corrected.lineItems.some((line: any) =>
-      String(line?.name || '').trim().toLowerCase() === 'loyalty'
-      || Math.abs(Number(line?.total || 0) + loyaltyAmount) < 0.01,
-    );
-    const total = this.money(
-      Math.max(0, calculatedTotal - (loyaltyAmount > 0 && !loyaltyAlreadyIncluded ? loyaltyAmount : 0)),
-    );
+    const total = this.money(Math.max(0, calculatedTotal));
     const totalNumber = Number(total);
     const calculatedRefundTotal = this.refundTotal(row.refunds, status);
     const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
@@ -163,7 +158,7 @@ export class OrderListPresenter {
         || (request.date_paid ? String(request.date_paid) : paidAt),
       coupon_lines: coupons,
       line_items: lineItems,
-      fee_lines: corrected.feeLines,
+      fee_lines: withLoyaltyDiscountFee(corrected.feeLines, loyaltyAmount, calculatedTotal),
       tax_lines: corrected.taxLines,
       refund_order_total: totalNumber,
       refund_total: refundTotal,
@@ -459,13 +454,7 @@ export class OrderListPresenter {
       ...(Array.isArray(order.metadata) ? order.metadata : []),
       ...(Array.isArray(request.meta_data) ? request.meta_data : []),
     ] as Array<{ key?: string; value?: unknown }>;
-    const entry = metadata.find((item) => item?.key === 'redeemed_value');
-    const legacyEntry = metadata.find((item) => item?.key === 'redeem_amount');
-    const storedValue = entry?.value && typeof entry.value === 'object'
-      ? (entry.value as { redeem_amount?: unknown }).redeem_amount
-      : entry?.value;
-    const amount = Number(storedValue ?? legacyEntry?.value ?? 0);
-    return Number.isFinite(amount) ? Math.max(0, amount) : 0;
+    return loyaltyAmountFromMeta(metadata);
   }
 
   private orderPlacedAt(
