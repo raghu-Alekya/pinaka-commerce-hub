@@ -100,7 +100,7 @@ export class OrderListPresenter {
         + Number(request.shipping_total ?? request.shippingTotal ?? 0)
         + Number(storeOrder?.tipAmount ?? order.tipAmount ?? 0)
       : storeOrder?.total ?? order.totalAmount;
-    const total = this.money(listOrderTotal({
+    const calculatedTotal = Number(this.money(listOrderTotal({
       total: correctedStoredTotal,
       tax,
       taxLines: corrected.taxLines,
@@ -112,7 +112,15 @@ export class OrderListPresenter {
       feeLines: corrected.calculationFees,
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
-    }));
+    })));
+    const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
+    const loyaltyAlreadyIncluded = corrected.lineItems.some((line: any) =>
+      String(line?.name || '').trim().toLowerCase() === 'loyalty'
+      || Math.abs(Number(line?.total || 0) + loyaltyAmount) < 0.01,
+    );
+    const total = this.money(
+      Math.max(0, calculatedTotal - (loyaltyAmount > 0 && !loyaltyAlreadyIncluded ? loyaltyAmount : 0)),
+    );
     const totalNumber = Number(total);
     const calculatedRefundTotal = this.refundTotal(row.refunds, status);
     const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
@@ -138,6 +146,7 @@ export class OrderListPresenter {
       date_created: this.listDate(order.createdAt, timeZone),
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
+      loyalty_amount: this.money(loyaltyAmount),
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
@@ -437,6 +446,26 @@ export class OrderListPresenter {
     const metadata = Array.isArray(order.metadata) ? order.metadata : [];
     const value = metadata.find((entry) => entry?.key === key)?.value;
     return value === undefined || value === null ? '' : String(value);
+  }
+
+  private loyaltyAmount(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): number {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    const entry = metadata.find((item) => item?.key === 'redeemed_value');
+    const legacyEntry = metadata.find((item) => item?.key === 'redeem_amount');
+    const storedValue = entry?.value && typeof entry.value === 'object'
+      ? (entry.value as { redeem_amount?: unknown }).redeem_amount
+      : entry?.value;
+    const amount = Number(storedValue ?? legacyEntry?.value ?? 0);
+    return Number.isFinite(amount) ? Math.max(0, amount) : 0;
   }
 
   private orderPlacedAt(
