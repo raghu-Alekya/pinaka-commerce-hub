@@ -290,6 +290,11 @@ export class StorePosConfigurationsService {
     const cashConfig = configByName.get('cash_denominations') ?? null;
     const safeConfig = configByName.get('safe_and_safe_drop') ?? null;
     const registerConfig = configByName.get('cash_register_settings') ?? null;
+    const functionalityConfig = configByName.get('functionality_settings') ?? {};
+    const featureSettings = (functionalityConfig.features && typeof functionalityConfig.features === 'object')
+      ? functionalityConfig.features as Record<string, unknown>
+      : functionalityConfig;
+    const featureEnabled = (key: string) => Boolean(featureSettings[key]);
 
     const storeRows = await this.optionalRows(
       `SELECT store_website_url, store_name, address_line1, city, state, country, postal_code, phone
@@ -338,22 +343,22 @@ export class StorePosConfigurationsService {
       vendor_payment_types: vendorPaymentTypes,
       employees,
       custom_features: [
-        { name: 'payout', enabled: true },
-        { name: 'fast_keys', enabled: true },
-        { name: 'custom_item', enabled: true },
-        { name: 'cash_payments', enabled: true },
-        { name: 'card_payments', enabled: true },
-        { name: 'partial_payments', enabled: true },
-        { name: 'pay_later', enabled: true },
-        { name: 'ebt_payments', enabled: true },
-        { name: 'full_refunds', enabled: true },
-        { name: 'partial_refunds', enabled: true },
-        { name: 'discounts', enabled: true },
-        { name: 'merchant_discount', enabled: true },
-        { name: 'coupons', enabled: true },
-        { name: 'loyalty', enabled: true },
-        { name: 'customer_display', enabled: true },
-        { name: 'weighing_scale', enabled: true },
+        { name: 'payout', enabled: featureEnabled('payouts') },
+        { name: 'fast_keys', enabled: featureEnabled('fastKeys') },
+        { name: 'custom_item', enabled: featureEnabled('customItems') },
+        { name: 'cash_payments', enabled: featureEnabled('cashPayments') },
+        { name: 'card_payments', enabled: featureEnabled('cardPayments') },
+        { name: 'partial_payments', enabled: featureEnabled('partialPayments') },
+        { name: 'pay_later', enabled: featureEnabled('payLater') },
+        { name: 'ebt_payments', enabled: featureEnabled('ebtPayments') },
+        { name: 'full_refunds', enabled: featureEnabled('fullRefunds') },
+        { name: 'partial_refunds', enabled: featureEnabled('partialRefunds') },
+        { name: 'discounts', enabled: featureEnabled('discounts') },
+        { name: 'merchant_discount', enabled: featureEnabled('merchantDiscounts') },
+        { name: 'coupons', enabled: featureEnabled('coupons') },
+        { name: 'loyalty', enabled: featureEnabled('loyalty') },
+        { name: 'customer_display', enabled: featureEnabled('customerDisplay') },
+        { name: 'weighing_scale', enabled: featureEnabled('weighingScale') },
       ],
       order_types: [
         { slug: 'rest-api', name: 'Shop Order' },
