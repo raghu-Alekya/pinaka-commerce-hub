@@ -139,3 +139,4 @@ export async function ensureMerchantDevicesSchema(db: DataSource): Promise<void>
     `);
   });
 }
+//
