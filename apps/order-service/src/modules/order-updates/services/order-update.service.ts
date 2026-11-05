@@ -23,6 +23,7 @@ import {
   type PosLineItem,
   type PosTaxLine,
 } from '../../../calculations/store-order.calculations';
+import { isLoyaltyRedemptionLine } from '../../../loyalty/loyalty-line';
 import type { OrderGraph, OrderMutationDraft } from '../order-update.types';
 import { OrderCancellationService } from './order-cancellation.service';
 import { OrderCouponCatalog } from './order-coupon.catalog';
@@ -238,10 +239,17 @@ export class OrderUpdateService {
     });
   }
 
+  private retainLoyaltyLine(current: unknown, next: unknown[]): unknown[] {
+    const previous = Array.isArray(current) ? current : [];
+    const loyalty = previous.find((line) => isLoyaltyRedemptionLine(line as PosLineItem));
+    if (!loyalty || next.some((line) => isLoyaltyRedemptionLine(line as PosLineItem))) return next;
+    return [...next, loyalty];
+  }
+
   private overlay(graph: OrderGraph, draft: OrderMutationDraft): void {
     const storeOrder = graph.storeOrder;
     if (!storeOrder) return;
-    if (draft.lineItems) storeOrder.lineItems = draft.lineItems;
+    if (draft.lineItems) storeOrder.lineItems = this.retainLoyaltyLine(storeOrder.lineItems, draft.lineItems);
     if (draft.couponLines) storeOrder.couponLines = draft.couponLines;
     if (draft.feeLines) storeOrder.feeLines = draft.feeLines;
     if (draft.taxLines) storeOrder.taxLines = draft.taxLines;
@@ -285,7 +293,7 @@ export class OrderUpdateService {
 
     const storeOrder = graph.storeOrder;
     if (storeOrder) {
-      if (draft.lineItems) storeOrder.lineItems = draft.lineItems;
+      if (draft.lineItems) storeOrder.lineItems = this.retainLoyaltyLine(storeOrder.lineItems, draft.lineItems);
       if (draft.couponLines) storeOrder.couponLines = draft.couponLines;
       if (draft.feeLines) storeOrder.feeLines = draft.feeLines;
       if (draft.taxLines) storeOrder.taxLines = draft.taxLines;

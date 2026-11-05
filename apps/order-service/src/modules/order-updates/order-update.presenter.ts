@@ -1,5 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { totalExcludingTax, type PosFeeLine, type PosLineItem } from '../../calculations/store-order.calculations';
+import {
+  totalExcludingTax,
+  type PosFeeLine,
+  type PosLineItem,
+} from '../../calculations/store-order.calculations';
+import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../../loyalty/loyalty-line';
 import { OrderResponsePresenter } from '../../responses/order-response.presenter';
 import type { OrderGraph } from './order-update.types';
 
@@ -16,24 +21,34 @@ export class OrderUpdatePresenter {
     delete stored.date_modified;
     delete stored.date_modified_gmt;
     const totalTax = storeOrder?.taxTotal ?? graph.order.taxAmount;
+    const sourceLines = (Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : stored.line_items) as PosLineItem[] | undefined;
+    const feeLines = (Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : stored.fee_lines) as PosFeeLine[] | undefined;
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(graph.order.metadata) ? graph.order.metadata : []),
+      ...(Array.isArray(stored.meta_data) ? stored.meta_data as Array<{ key?: string; value?: unknown }> : []),
+    ];
+    const redemption = loyaltyAmountFromMeta(metadata);
+    const storedTotal = Number(storeOrder?.total ?? graph.order.totalAmount);
     const request = {
       ...stored,
       status: storeOrder?.status || String(graph.order.orderStatus || '').toLowerCase(),
       currency: storeOrder?.currency || stored.currency,
       discount_total: storeOrder?.discountTotal ?? graph.order.discountAmount,
       total: totalExcludingTax({
-        total: storeOrder?.total ?? graph.order.totalAmount,
+        total: Number.isFinite(storedTotal) ? storedTotal : 0,
         tax: totalTax,
-        lineItems: (storeOrder?.lineItems ?? stored.line_items) as PosLineItem[] | undefined,
-        feeLines: (storeOrder?.feeLines ?? stored.fee_lines) as PosFeeLine[] | undefined,
+        lineItems: sourceLines,
+        feeLines,
         shippingTotal: stored.shipping_total ?? stored.shippingTotal,
         tip: storeOrder?.tipAmount ?? graph.order.tipAmount,
       }),
       total_tax: totalTax,
       cart_tax: storeOrder?.taxTotal ?? stored.cart_tax,
-      line_items: storeOrder?.lineItems ?? stored.line_items,
+      line_items: sourceLines,
       coupon_lines: storeOrder?.couponLines ?? stored.coupon_lines,
-      fee_lines: storeOrder?.feeLines ?? stored.fee_lines,
+      fee_lines: withLoyaltyDiscountFee(feeLines, redemption, Number.isFinite(storedTotal) ? storedTotal : 0),
       tax_lines: storeOrder?.taxLines ?? stored.tax_lines,
     };
     return this.responses.present(this.responses.profileFor(request), {

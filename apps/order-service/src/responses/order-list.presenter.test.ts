@@ -406,3 +406,41 @@ test('total-orders does not mark individual lines on a fully refunded order', ()
   const result = new OrderListPresenter().present(1, 10, 1, [row('refunded')]);
   assert.equal(result.orders_data[0].line_items[0].is_refund_item, false);
 });
+
+test('total-orders adds the loyalty discount fee without changing the total', () => {
+  const sample = row('completed');
+  sample.order.totalAmount = 100;
+  sample.order.taxAmount = 8;
+  sample.order.metadata = [{ key: 'redeemed_value', value: 10 }];
+  sample.storeOrder.total = 108;
+  sample.storeOrder.taxTotal = 8;
+  sample.storeOrder.taxLines = [{ rate_percent: 8, tax_total: '8.00' }];
+  sample.storeOrder.feeLines = [];
+  sample.storeOrder.lineItems = [{ name: 'Product A', quantity: 1, subtotal: '100.00', total: '100.00' }];
+  sample.refunds = [];
+  const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
+  const loyalty = order.fee_lines.find((fee: { name?: string }) => fee.name === 'loyalty_discount');
+  assert.equal(order.line_items.length, 1);
+  assert.equal(loyalty.total, '-10.00');
+  assert.equal(loyalty.tax_status, 'none');
+  assert.equal(order.total, '108.00');
+});
+
+test('total-orders does not add a second loyalty fee or reduce the total again', () => {
+  const sample = row('completed');
+  sample.order.totalAmount = 90;
+  sample.order.taxAmount = 0;
+  sample.order.metadata = [{ key: 'redeem_amount', value: 10 }];
+  sample.storeOrder.total = 90;
+  sample.storeOrder.taxTotal = 0;
+  sample.storeOrder.taxLines = [];
+  sample.storeOrder.feeLines = [{ name: 'loyalty_discount', total: '-10.00', tax_status: 'none' }];
+  sample.storeOrder.lineItems = [
+    { name: 'Product A', quantity: 1, subtotal: '100.00', total: '100.00' },
+  ];
+  sample.refunds = [];
+  const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
+  const loyalty = order.fee_lines.filter((fee: { name?: string }) => fee.name === 'loyalty_discount');
+  assert.equal(loyalty.length, 1);
+  assert.equal(order.total, '90.00');
+});
