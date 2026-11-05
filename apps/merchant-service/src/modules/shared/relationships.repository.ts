@@ -1284,7 +1284,7 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
     if (config.name === 'StoreTypeFeatures') {
       const rows = await manager.query(
         `SELECT id, name, status,
-           MAX(COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code')) AS "featureKey",
+           COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey",
            NULL::text AS category
          FROM public.features f WHERE id = ANY($1::uuid[])`,
         [items.map((item) => item.featureId)],
