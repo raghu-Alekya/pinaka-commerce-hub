@@ -1850,7 +1850,7 @@ export class MerchantRepository implements OnModuleInit {
       const code = error.driverError?.code || error.code;
       if (code === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -1889,7 +1889,7 @@ export class MerchantRepository implements OnModuleInit {
       if (error instanceof NotFoundException) throw error;
       if ((error.driverError?.code || error.code) === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -3453,6 +3453,15 @@ async getProductDataChanges(deviceId: string | undefined, merchantId: string | u
         "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='currency_taxes'",
         [context.storeId],
       );
+      const [promotionalSettings] = await manager.query(
+        "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='promotional_images'",
+        [context.storeId],
+      );
+      const promotionalValue = promotionalSettings?.configuration_value ?? {};
+      const promotionalImages = {
+        enabled: promotionalValue.enabled === true,
+        images: Array.isArray(promotionalValue.images) ? promotionalValue.images : [],
+      };
       const rawProducts = this.productDataSyncProducts(saved.payload);
       const formatted = [...rawProducts.values()]
         .filter(product => product.type !== 'variation' && !(Number(product.parent_id) > 0))
@@ -3488,7 +3497,7 @@ async getProductDataChanges(deviceId: string | undefined, merchantId: string | u
       if (!Number.isSafeInteger(lastVersion)) throw new ConflictException('Sync version exceeds supported integer range');
       const delivered = changes.length ? changes[changes.length-1].event_version : lastVersion;
       await manager.query('UPDATE public.pos_data_sync_devices SET delivered_version=GREATEST(delivered_version,$3::bigint) WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,delivered]);
-      return { status: true, device_id: context.label, last_sync_version: lastVersion, changes };
+      return { status: true, device_id: context.label, last_sync_version: lastVersion, changes, promotional_images: promotionalImages };
     });
   }
 
@@ -3501,7 +3510,21 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       if (!device) throw new BadRequestException('Call get-data-changes before acknowledging');
       if (version! < Number(device.last_sync_version) || version! > Number(device.delivered_version)) throw new BadRequestException('Version must be between the acknowledged and delivered versions');
       await manager.query('UPDATE public.pos_data_sync_devices SET last_sync_version=$3::bigint WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,version]);
-      return { status: true, message: 'Sync version updated successfully', device_id: context.label, last_sync_version: version };
+      const [promotionalSettings] = await manager.query(
+        "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='promotional_images'",
+        [context.storeId],
+      );
+      const promotionalValue = promotionalSettings?.configuration_value ?? {};
+      return {
+        status: true,
+        message: 'Sync version updated successfully',
+        device_id: context.label,
+        last_sync_version: version,
+        promotional_images: {
+          enabled: promotionalValue.enabled === true,
+          images: Array.isArray(promotionalValue.images) ? promotionalValue.images : [],
+        },
+      };
     });
   }
 

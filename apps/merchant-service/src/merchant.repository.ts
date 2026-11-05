@@ -1661,7 +1661,7 @@ export class MerchantRepository implements OnModuleInit {
       const code = error.driverError?.code || error.code;
       if (code === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -1700,7 +1700,7 @@ export class MerchantRepository implements OnModuleInit {
       if (error instanceof NotFoundException) throw error;
       if ((error.driverError?.code || error.code) === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
