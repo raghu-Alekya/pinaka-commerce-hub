@@ -220,6 +220,7 @@ export class LoyaltyService implements OnModuleInit {
           { key: 'contact', value: contact },
           { key: 'redeem_points', value: 0 },
           { key: 'redeem_amount', value: 0 },
+          { key: 'redeemed_value', value: 0 },
           { key: 'loyalty_redeem_blocked', value: 'yes' },
         ], manager);
         return {
@@ -282,6 +283,7 @@ export class LoyaltyService implements OnModuleInit {
         { key: 'contact', value: contact },
           { key: 'redeem_points', value: appliedRedeemPoints },
         { key: 'redeem_amount', value: amount },
+        { key: 'redeemed_value', value: amount },
         { key: 'new_net_pay_amt', value: priced.total },
       ], manager);
       return {
@@ -329,7 +331,7 @@ export class LoyaltyService implements OnModuleInit {
       if ((await this.loyalty.paymentCount(order.order_id, manager)) === 0) order.status = 'processing';
       await this.loyalty.saveOrder(order, manager);
       await this.loyalty.replaceCanonicalLines(order.order_id, nextLines as Array<Record<string, unknown>>, manager);
-      await this.removeOrderMeta(order, ['redeem_points', 'redeem_amount', 'new_net_pay_amt'], manager);
+      await this.removeOrderMeta(order, ['redeem_points', 'redeem_amount', 'redeemed_value', 'new_net_pay_amt'], manager);
       return {
         success: true,
         message: 'points removed returned successfully.',

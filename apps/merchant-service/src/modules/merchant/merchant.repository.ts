@@ -980,6 +980,9 @@ export class MerchantRepository implements OnModuleInit {
       ],
       { synchronize: false, legacyQueryColumns: true },
       );
+      await this.dataSource.query(
+        'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
+      );
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
