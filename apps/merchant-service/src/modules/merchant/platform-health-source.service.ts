@@ -52,7 +52,7 @@ export class PlatformHealthSourceService {
         SELECT COUNT(*)::integer AS eligible_count,
                COUNT(*) FILTER (WHERE EXISTS (
                  SELECT 1 FROM public.website_connections wc
-                  WHERE wc."storeId" = s.id::text
+                  WHERE wc.store_id = s.id::text
                     AND wc.status = 'CONNECTED'
                ))::integer AS synchronized_count
           FROM eligible_stores s

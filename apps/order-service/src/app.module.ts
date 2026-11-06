@@ -14,11 +14,16 @@ import { FullOrderRefundController } from './full-order-refund.controller';
 import { FullOrderRefundService } from './full-order-refund.service';
 import { PartialOrderRefundController } from './partial-order-refund.controller';
 import { PartialOrderRefundService } from './partial-order-refund.service';
+import { OrderWebsiteSyncService } from './website-sync/order-website-sync.service';
+import { LoyaltyModule } from './loyalty/loyalty.module';
+import { CreatePaymentController } from './payments/create-payment.controller';
+import { CreatePaymentService } from './payments/create-payment.service';
+import { PaymentGatewayClient } from './payments/payment-gateway.client';
 
 @Module({
-  imports: [OrderPersistenceModule, OrderUpdatesModule],
+  imports: [OrderPersistenceModule, OrderUpdatesModule, LoyaltyModule],
   // Register fixed order paths before AppController's dynamic GET /:id route.
-  controllers: [CompletedOrdersController, RefundValidUserController, RefundAmountController, FullOrderRefundController, PartialOrderRefundController, AppController, StorePosPaymentsController],
-  providers: [OrderResponsePresenter, OrderListPresenter, CompletedOrderPresenter, RefundAmountService, FullOrderRefundService, PartialOrderRefundService],
+  controllers: [CompletedOrdersController, RefundValidUserController, RefundAmountController, FullOrderRefundController, PartialOrderRefundController, CreatePaymentController, AppController, StorePosPaymentsController],
+  providers: [OrderResponsePresenter, OrderListPresenter, CompletedOrderPresenter, RefundAmountService, FullOrderRefundService, PartialOrderRefundService, OrderWebsiteSyncService, CreatePaymentService, PaymentGatewayClient],
 })
 export class AppModule {}

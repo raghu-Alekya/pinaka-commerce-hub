@@ -31,6 +31,14 @@ export class PosLoginDto {
 
   @IsOptional()
   @IsString()
+  device_id?: string;
+
+  @IsOptional()
+  @IsString()
+  'device-id'?: string;
+
+  @IsOptional()
+  @IsString()
   deviceCode?: string;
 
   @IsOptional()

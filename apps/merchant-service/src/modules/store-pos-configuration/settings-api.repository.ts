@@ -12,6 +12,8 @@ export interface SettingsScope {
 @Injectable()
 export class SettingsApiRepository {
   private readonly configurationName = 'settings';
+  private readonly promotionalImagesConfigurationName = 'promotional_images';
+  private readonly legacyPromotionalImagesConfigurationName = 'customer_display_promotional_images';
 
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
@@ -28,13 +30,41 @@ export class SettingsApiRepository {
     return rows[0]?.configuration_value ?? {};
   }
 
-  async merge(scope: SettingsScope, patch: SettingsJson): Promise<SettingsJson> {
+  async readConfigurationFlags(scope: SettingsScope): Promise<SettingsJson> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT DISTINCT ON (configuration_name) configuration_name, configuration_value
+       FROM public.store_pos_configurations
+       WHERE store_id = $1::uuid AND configuration_name = ANY($2::text[])
+       ORDER BY configuration_name, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC`,
+      [storeId, ['safe_and_safe_drop', 'currency_taxes', 'cashback_settings']],
+    );
+    return Object.fromEntries(rows.map((row: any) => [row.configuration_name, row.configuration_value ?? {}]));
+  }
+
+  async merge(scope: SettingsScope, patch: SettingsJson, configurations: Record<string, SettingsJson> = {}): Promise<SettingsJson> {
     const { db, storeId, actorId } = await this.resolveScope(scope);
     return db.transaction(async (manager) => {
       await manager.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         [`${storeId}:${this.configurationName}`],
       );
+      for (const [name, value] of Object.entries(configurations)) {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${storeId}:${name}`]);
+        const parameters = [storeId, name, JSON.stringify(value), actorId];
+        const result = await manager.query(
+          `UPDATE public.store_pos_configurations
+           SET configuration_value = COALESCE(configuration_value, '{}'::jsonb) || $3::jsonb,
+               updated_by = $4::uuid, updated_at = now()
+           WHERE store_id = $1::uuid AND configuration_name = $2 RETURNING id`, parameters,
+        );
+        const rows = Array.isArray(result[0]) ? result[0] : result;
+        if (!rows[0]) await manager.query(
+          `INSERT INTO public.store_pos_configurations
+             (store_id, configuration_name, configuration_value, created_by, updated_by)
+           VALUES ($1::uuid, $2, $3::jsonb, $4::uuid, $4::uuid)`, parameters,
+        );
+      }
       const params = [storeId, this.configurationName, JSON.stringify(patch), actorId];
       const updateResult = await manager.query(
         `UPDATE public.store_pos_configurations
@@ -59,6 +89,93 @@ export class SettingsApiRepository {
     });
   }
 
+  async readPromotionalImages(scope: SettingsScope): Promise<SettingsJson | null> {
+    const { db, storeId } = await this.resolveScope(scope);
+    await this.renameLegacyPromotionalImagesRow(db, storeId);
+    const rows = await db.query(
+      `SELECT configuration_value, created_at, updated_at
+       FROM public.store_pos_configurations
+       WHERE store_id = $1::uuid AND configuration_name = $2
+       LIMIT 1`,
+      [storeId, this.promotionalImagesConfigurationName],
+    );
+    const row = rows[0];
+    if (!row) return { enabled: false, images: [] };
+    return { ...(row.configuration_value ?? {}), createdAt: row.created_at, updatedAt: row.updated_at };
+  }
+
+  async savePromotionalImages(scope: SettingsScope, value: SettingsJson): Promise<SettingsJson> {
+    const { db, storeId, actorId } = await this.resolveScope(scope);
+    return db.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${storeId}:${this.promotionalImagesConfigurationName}`]);
+      await this.renameLegacyPromotionalImagesRow(manager, storeId);
+      const currentRows = await manager.query(
+        `SELECT configuration_value FROM public.store_pos_configurations
+         WHERE store_id = $1::uuid AND configuration_name = $2 LIMIT 1`,
+        [storeId, this.promotionalImagesConfigurationName],
+      );
+      const currentImages = Array.isArray(currentRows[0]?.configuration_value?.images)
+        ? currentRows[0].configuration_value.images as Array<{ id: string; url: string }>
+        : [];
+      const incomingImages = value.images as Array<{ id: string; url: string }>;
+      const removeIds = Array.isArray(value.removeIds) ? new Set(value.removeIds as string[]) : new Set<string>();
+      const retainedImages = currentImages.filter((image) => !removeIds.has(image.id));
+      const images = incomingImages.length === 0 && removeIds.size === 0 ? [] : [...retainedImages];
+      for (const image of incomingImages) {
+        const existingIndex = images.findIndex((saved) => saved.id === image.id || saved.url === image.url);
+        if (existingIndex < 0) images.push(image);
+        else images[existingIndex] = image;
+      }
+      if (images.length > 20) throw new BadRequestException('A maximum of 20 promotional images is allowed');
+      const nextValue = { enabled: value.enabled, images };
+      const rows = await manager.query(
+        `INSERT INTO public.store_pos_configurations
+           (store_id, configuration_name, configuration_value, created_by, updated_by)
+         VALUES ($1::uuid, $2, $3::jsonb, $4::uuid, $4::uuid)
+         ON CONFLICT (store_id, configuration_name) DO UPDATE
+           SET configuration_value = EXCLUDED.configuration_value,
+               updated_by = EXCLUDED.updated_by,
+               updated_at = now()
+         RETURNING configuration_value, created_at, updated_at`,
+        [storeId, this.promotionalImagesConfigurationName, JSON.stringify(nextValue), actorId],
+      );
+      return { ...rows[0].configuration_value, createdAt: rows[0].created_at, updatedAt: rows[0].updated_at };
+    });
+  }
+
+  private async renameLegacyPromotionalImagesRow(db: any, storeId: string): Promise<void> {
+    await db.query(
+      `UPDATE public.store_pos_configurations AS legacy
+       SET configuration_name = $3
+       WHERE legacy.store_id = $1::uuid
+         AND legacy.configuration_name = $2
+         AND NOT EXISTS (
+           SELECT 1 FROM public.store_pos_configurations AS current
+           WHERE current.store_id = legacy.store_id AND current.configuration_name = $3
+         )`,
+      [storeId, this.legacyPromotionalImagesConfigurationName, this.promotionalImagesConfigurationName],
+    );
+    await db.query(
+      `UPDATE public.store_pos_configurations AS configuration
+       SET configuration_value = jsonb_build_object(
+         'enabled', COALESCE(configuration.configuration_value->'enabled', 'false'::jsonb),
+         'images', COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'id', COALESCE(image.value->'id', to_jsonb(gen_random_uuid()::text)),
+             'url', image.value->'url'
+           ) ORDER BY image.ordinality)
+           FROM jsonb_array_elements(
+             CASE WHEN jsonb_typeof(configuration.configuration_value->'images') = 'array'
+               THEN configuration.configuration_value->'images' ELSE '[]'::jsonb END
+           ) WITH ORDINALITY AS image(value, ordinality)
+           WHERE image.value ? 'url'
+         ), '[]'::jsonb)
+       )
+       WHERE configuration.store_id = $1::uuid AND configuration.configuration_name = $2`,
+      [storeId, this.promotionalImagesConfigurationName],
+    );
+  }
+
   private async resolveScope(scope: SettingsScope) {
     const storeKey = this.text(scope.storeHeader || scope.user?.storeId);
     const merchantKey = this.text(scope.merchantHeader || scope.user?.merchantId);
@@ -73,7 +190,7 @@ export class SettingsApiRepository {
        FROM public.stores s
        JOIN public.merchants m ON m.id = s.merchant_id
        WHERE (s.id::text = $1 OR s.store_code = $1)
-         AND (m.id::text = $2 OR m.merchant_code = $2 OR m.merchant_id::text = $2)
+         AND (m.id::text = $2 OR m.merchant_code = $2)
        LIMIT 1`,
       [storeKey, merchantKey],
     );

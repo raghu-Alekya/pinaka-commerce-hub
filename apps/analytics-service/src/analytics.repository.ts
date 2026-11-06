@@ -89,4 +89,83 @@ export class AnalyticsRepository implements OnModuleInit {
     const kpis = await this.getDashboardKpis(storeId);
     return kpis.channelBreakdown || {};
   }
+
+  async querySalesReport(storeId: string, merchantId: string, timezone: string, startDate: string, endDate: string) {
+    return this.dataSource.query(`
+      SELECT (created_at AT TIME ZONE $3)::date::text AS local_date,
+             COUNT(*)::int AS orders,
+             COALESCE(SUM(total), 0)::numeric(14,2)::text AS sales
+        FROM public.store_orders
+       WHERE store_id = $1
+         AND merchant_id = $2
+         AND lower(status) IN ('completed', 'processing')
+         AND (created_at AT TIME ZONE $3)::date >= $4::date
+         AND (created_at AT TIME ZONE $3)::date <= $5::date
+       GROUP BY 1
+       ORDER BY 1
+    `, [storeId, merchantId, timezone, startDate, endDate]) as Promise<Array<{ local_date: string; orders: number; sales: string }>>;
+  }
+
+  async getStoreReportTimezone(storeId: string): Promise<string | undefined> {
+    const rows = await this.dataSource.query(`
+      SELECT timezone FROM public.store_orders
+       WHERE store_id = $1 AND NULLIF(timezone, '') IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 1
+    `, [storeId]) as Array<{ timezone: string }>;
+    return rows[0]?.timezone;
+  }
+
+  async queryShiftSales(storeId: string, merchantId: string, timezone: string, date: string) {
+    return this.dataSource.query(`
+      SELECT shift.id AS shift_id,
+             COALESCE(
+               NULLIF(BTRIM(CONCAT_WS(' ', opener.first_name, opener.last_name)), ''),
+               NULLIF(cashier.meta_value #>> '{}', ''),
+               NULLIF(title.meta_value #>> '{}', ''),
+               'Unknown'
+             ) AS shift_name,
+             COUNT(sale.order_id)::int AS orders,
+             COALESCE(SUM(sale.total), 0)::numeric(14,2)::text AS sales
+        FROM public.pos_shifts AS shift
+        LEFT JOIN LATERAL (
+          SELECT meta_value
+            FROM public.pos_shift_meta
+           WHERE shift_id = shift.id AND meta_name = 'user_id' AND status = 'ACTIVE'
+           ORDER BY id
+           LIMIT 1
+        ) AS opener_meta ON true
+        LEFT JOIN LATERAL (
+          SELECT meta_value
+            FROM public.pos_shift_meta
+           WHERE shift_id = shift.id AND meta_name = 'cashier_name' AND status = 'ACTIVE'
+           ORDER BY id
+           LIMIT 1
+        ) AS cashier ON true
+        LEFT JOIN LATERAL (
+          SELECT first_name, last_name
+            FROM public.employees AS employee
+           WHERE employee.id::text = COALESCE(NULLIF(opener_meta.meta_value #>> '{}', ''), shift.created_by)
+              OR to_jsonb(employee)->>'user_id' = COALESCE(NULLIF(opener_meta.meta_value #>> '{}', ''), shift.created_by)
+           ORDER BY employee.id
+           LIMIT 1
+        ) AS opener ON true
+        LEFT JOIN LATERAL (
+          SELECT meta_value
+            FROM public.pos_shift_meta
+           WHERE shift_id = shift.id AND meta_name = 'title' AND status = 'ACTIVE'
+           ORDER BY id
+           LIMIT 1
+        ) AS title ON true
+        LEFT JOIN public.store_orders AS sale
+          ON (sale.shift_id = shift.id OR sale.local_shift_id = shift.id)
+         AND sale.store_id::text = shift.store_id
+         AND lower(sale.status) = 'completed'
+       WHERE shift.store_id = $1
+         AND shift.merchant_id = $2
+         AND (shift.opened_at AT TIME ZONE $3)::date = $4::date
+       GROUP BY shift.id, opener.first_name, opener.last_name, cashier.meta_value, title.meta_value, shift.opened_at
+       ORDER BY shift.opened_at ASC, shift.id ASC
+    `, [storeId, merchantId, timezone, date]) as Promise<Array<{ shift_id: string; shift_name: string; orders: number; sales: string }>>;
+  }
 }

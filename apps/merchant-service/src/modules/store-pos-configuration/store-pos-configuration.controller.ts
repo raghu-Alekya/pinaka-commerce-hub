@@ -1,19 +1,47 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  HttpCode,
   Inject,
   Param,
   Patch,
   Post,
   Put,
   Req,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
+import { requestOrigin } from './pos-configuration-image.service';
 import { StorePosConfigurationsService } from './store-pos-configuration.service';
 import { CreateStorePosConfigurationDto } from './dto/create-store-pos-configuration.dto';
 import { UpdateStorePosConfigurationDto } from './dto/update-store-pos-configuration.dto';
+import { UploadedPosIcon } from './pos-configuration-image.service';
+
+type IconRequest = {
+  protocol?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  user?: { id?: string };
+  get(name: string): string | undefined;
+};
+
+const { memoryStorage } = require('multer');
+const storeIconUpload = FileInterceptor('image', {
+  storage: memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (
+    _request: unknown,
+    file: { mimetype: string },
+    callback: (error: Error | null, accept: boolean) => void,
+  ) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    callback(allowed ? null : new BadRequestException('Icon image must be PNG, JPG, or WEBP'), allowed);
+  },
+});
 
 @Controller([
   'api/v1/store/store-pos-configuration',
@@ -34,10 +62,26 @@ export class StorePosConfigurationController {
   @Post()
   create(
     @Body() dto: CreateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
-    return this.service.create(dto, request.user?.id);
+    return this.service.create(dto, request.user?.id, requestOrigin(request));
   }
+  /**
+   * Store a POS icon in this merchant store's images folder.
+   *
+   * POST /api/v1/store/store-pos-configuration/:storeId/images
+   */
+  @Post(':storeId/images')
+  @HttpCode(201)
+  @UseInterceptors(storeIconUpload)
+  uploadIcon(
+    @Param('storeId') storeId: string,
+    @UploadedFile() file: UploadedPosIcon | undefined,
+    @Req() request: IconRequest,
+  ) {
+    return this.service.saveStoreIcon(storeId, file, requestOrigin(request));
+  }
+
   /**
    * Create or update a store POS configuration.
    *
@@ -46,9 +90,9 @@ export class StorePosConfigurationController {
   @Put()
   upsert(
     @Body() dto: CreateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
-    return this.service.upsert(dto, request.user?.id);
+    return this.service.upsert(dto, request.user?.id, requestOrigin(request));
   }
 
   /**
@@ -59,18 +103,20 @@ export class StorePosConfigurationController {
   @Get(':storeId')
   findByStore(
     @Param('storeId') storeId: string,
+    @Req() request: IconRequest,
   ) {
-    return this.service.findByStoreId(storeId);
+    return this.service.findByStoreId(storeId, requestOrigin(request));
   }
 
   /**
-   * Get customized POS store configuration.
+   * POS terminal asset payload. Denomination icons are URLs under this
+   * store's /uploads/{merchant}/{store}/images folder.
    *
    * GET /api/v1/store/store-pos-configuration/:storeId/bootstrap
    */
   @Get(':storeId/bootstrap')
-  getStoreBootstrap(@Param('storeId') storeId: string) {
-    return this.service.getStoreInfo(storeId);
+  getStoreBootstrap(@Param('storeId') storeId: string, @Req() request: IconRequest) {
+    return this.service.getStoreInfo(storeId, requestOrigin(request));
   }
   /**
    * Get a specific POS configuration.
@@ -81,10 +127,12 @@ export class StorePosConfigurationController {
   findOne(
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
+    @Req() request: IconRequest,
   ) {
     return this.service.findPresented(
       storeId,
       configurationName,
+      requestOrigin(request),
     );
   }
 
@@ -97,10 +145,12 @@ export class StorePosConfigurationController {
   getValue(
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
+    @Req() request: IconRequest,
   ) {
     return this.service.getConfigurationValue(
       storeId,
       configurationName,
+      requestOrigin(request),
     );
   }
 
@@ -114,13 +164,14 @@ export class StorePosConfigurationController {
     @Param('storeId') storeId: string,
     @Param('configurationName') configurationName: string,
     @Body() dto: UpdateStorePosConfigurationDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: IconRequest,
   ) {
     return this.service.update(
       storeId,
       configurationName,
       dto,
       request.user?.id,
+      requestOrigin(request),
     );
   }
 

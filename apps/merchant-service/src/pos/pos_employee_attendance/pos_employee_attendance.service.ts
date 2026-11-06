@@ -25,7 +25,14 @@ export class PosEmployeeAttendanceService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.attendance.ensureSchema();
+    try {
+      await this.attendance.ensureSchema();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[POS attendance] Database schema unavailable during startup (${message}); attendance endpoints will require PostgreSQL.`,
+      );
+    }
   }
 
   async clockIn(dto: PosEmployeeAttendanceClockDto) {
