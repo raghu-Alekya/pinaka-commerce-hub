@@ -145,8 +145,7 @@ export class OrderListPresenter {
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
-      change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
-      cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
+      change_amount: this.money(this.metaValueFromPayloadOrOrder(request, order, 'pos_change_returned')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,
@@ -441,6 +440,14 @@ export class OrderListPresenter {
     const metadata = Array.isArray(order.metadata) ? order.metadata : [];
     const value = metadata.find((entry) => entry?.key === key)?.value;
     return value === undefined || value === null ? '' : String(value);
+  }
+
+  private metaValueFromPayloadOrOrder(request: Record<string, unknown>, order: OrderEntity, key: string): string {
+    const entries = Array.isArray(request.meta_data) ? request.meta_data : [];
+    const payloadValue = entries.find((entry: any) => entry?.key === key)?.value;
+    return payloadValue !== undefined && payloadValue !== null && payloadValue !== ''
+      ? String(payloadValue)
+      : this.metaValue(order, key);
   }
 
   private loyaltyAmount(
