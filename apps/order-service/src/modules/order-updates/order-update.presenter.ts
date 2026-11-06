@@ -53,9 +53,43 @@ export class OrderUpdatePresenter {
       request,
     });
     const responseMeta = Array.isArray(response?.meta_data) ? response.meta_data : [];
+    const storedMeta = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+    ];
+    const storedValue = (key: string, fallback: unknown) => {
+      const value = storedMeta.find((entry: any) => entry?.key === key)?.value;
+      return value === undefined || value === null || value === '' ? fallback : value;
+    };
+    const paymentEntry = [
+      ...storedMeta,
+      ...(Array.isArray(graph.order.metadata) ? graph.order.metadata : []),
+      ...(Array.isArray(stored.meta_data) ? stored.meta_data : []),
+    ].find((entry: any) => entry?.key === '_pos_payments');
+    const payments = Array.isArray(paymentEntry?.value) ? paymentEntry.value : null;
+    let cashReceived = storedValue('pos_cash_received', response.cash_received);
+    let changeAmount = storedValue('pos_change_returned', response.change_amount);
+    if (payments) {
+      let cash = 0;
+      let tendered = 0;
+      for (const payment of payments) {
+        const status = String(payment?.status ?? 'completed').trim().toLowerCase();
+        if (!['', 'completed', 'pending', 'voided'].includes(status)) continue;
+        const amount = Number(payment?.amount ?? payment?.total ?? payment?.value ?? 0);
+        if (!Number.isFinite(amount)) continue;
+        const signed = status === 'voided' ? -Math.abs(amount) : Math.max(0, amount);
+        tendered += signed;
+        const method = String(payment?.method ?? payment?.payment_method ?? payment?.paymentMethod ?? '')
+          .trim().toLowerCase().replace(/[\s_]+/g, '-');
+        if (method === 'cash' || method === 'pos-cash') cash += signed;
+      }
+      const total = Number(response.total ?? storeOrder?.total ?? graph.order.totalAmount ?? 0);
+      cashReceived = Number(cash.toFixed(2));
+      changeAmount = Math.max(0, Number((tendered - total).toFixed(2)));
+    }
     const replacementValues: Record<string, unknown> = {
-      pos_cash_received: response.cash_received,
-      pos_change_returned: response.change_amount,
+      pos_cash_received: cashReceived,
+      pos_change_returned: changeAmount,
     };
     const replacedKeys = new Set<string>();
     response.meta_data = responseMeta.map((entry: any) => {
@@ -73,6 +107,8 @@ export class OrderUpdatePresenter {
         });
       }
     }
+    response.cash_received = replacementValues.pos_cash_received;
+    response.change_amount = replacementValues.pos_change_returned;
     return response;
   }
 }
