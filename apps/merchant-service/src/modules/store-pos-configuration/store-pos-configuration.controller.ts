@@ -166,6 +166,16 @@ export class StorePosConfigurationController {
     @Body() dto: UpdateStorePosConfigurationDto,
     @Req() request: IconRequest,
   ) {
+    // Support both the documented wrapper and the flat body used by existing
+    // Printer Settings clients. Keep only the known printer fields.
+    if (dto.configurationValue === undefined) {
+      const { header, footer, address, logo, logoName } = dto;
+      const configurationValue = Object.fromEntries(
+        Object.entries({ header, footer, address, logo, logoName })
+          .filter(([, value]) => value !== undefined),
+      );
+      if (Object.keys(configurationValue).length) dto.configurationValue = configurationValue;
+    }
     return this.service.update(
       storeId,
       configurationName,
