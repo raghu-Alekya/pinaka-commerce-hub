@@ -43,7 +43,7 @@ export class OrderUpdatePresenter {
       fee_lines: withLoyaltyDiscountFee(feeLines, redemption, Number.isFinite(storedTotal) ? storedTotal : 0),
       tax_lines: storeOrder?.taxLines ?? stored.tax_lines,
     };
-    return this.responses.present(this.responses.profileFor(request), {
+    const response = this.responses.present(this.responses.profileFor(request), {
       result: {
         order: graph.order,
         items: graph.items,
@@ -52,5 +52,27 @@ export class OrderUpdatePresenter {
       },
       request,
     });
+    const responseMeta = Array.isArray(response?.meta_data) ? response.meta_data : [];
+    const replacementValues: Record<string, unknown> = {
+      pos_cash_received: response.cash_received,
+      pos_change_returned: response.change_amount,
+    };
+    const replacedKeys = new Set<string>();
+    response.meta_data = responseMeta.map((entry: any) => {
+      const key = String(entry?.key ?? '').trim();
+      if (!Object.prototype.hasOwnProperty.call(replacementValues, key)) return entry;
+      replacedKeys.add(key);
+      return { ...entry, key, value: replacementValues[key] };
+    });
+    for (const key of Object.keys(replacementValues)) {
+      if (!replacedKeys.has(key)) {
+        response.meta_data.push({
+          id: response.meta_data.length + 1,
+          key,
+          value: replacementValues[key],
+        });
+      }
+    }
+    return response;
   }
 }
