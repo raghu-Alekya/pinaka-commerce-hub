@@ -62,8 +62,8 @@ export class OrderResponsePresenter {
       storeOrderId: result.storeOrder?.id ?? null,
       orderId: result.order.id,
       orderNumber: result.order.orderNumber,
-      change_amount: this.money(this.metaAmount(result.order.metadata, 'pos_change_returned')),
-      cash_received: this.money(this.metaAmount(result.order.metadata, 'pos_cash_received')),
+      change_amount: this.money(this.changeAmount(result.order.metadata, result.storeOrder?.total ?? result.order.totalAmount)),
+      cash_received: this.money(this.cashReceived(result.order.metadata)),
       order: result.order,
       items: result.items,
     };
@@ -72,6 +72,11 @@ export class OrderResponsePresenter {
   private toWooCommerce(context: OrderResponseContext) {
     const { result, request } = context;
     const { order, items } = result;
+    const orderMetadata = Array.isArray(order.metadata) ? order.metadata : [];
+    const requestMetadata = Array.isArray(request.meta_data) ? request.meta_data : [];
+    const metadata = orderMetadata.some((entry: any) => entry?.key === '_pos_payments')
+      ? orderMetadata
+      : requestMetadata.length ? requestMetadata : orderMetadata;
     const createdAt = new Date(order.createdAt);
     const updatedAt = new Date(order.updatedAt);
     const timeZone = result.storeOrder?.timezone || 'UTC';
@@ -120,8 +125,11 @@ export class OrderResponsePresenter {
       cart_hash: request.cart_hash || '',
       number: String(request.number || order.orderNumber || '').replace(/^#/, ''),
       meta_data: this.metaData(order.metadata),
-      change_amount: this.money(this.metaAmount(order.metadata, 'pos_change_returned')),
-      cash_received: this.money(this.metaAmount(order.metadata, 'pos_cash_received')),
+      change_amount: this.money(this.changeAmount(
+        metadata,
+        request.total ?? request.grand_total ?? result.storeOrder?.total ?? order.totalAmount,
+      )),
+      cash_received: this.money(this.cashReceived(metadata)),
       line_items: lineItems,
       tax_lines: this.taxLines(request.tax_lines),
       shipping_lines: Array.isArray(request.shipping_lines) ? request.shipping_lines : [],
@@ -316,6 +324,42 @@ export class OrderResponsePresenter {
 
   private money(value: unknown): string {
     return Number(value || 0).toFixed(2);
+  }
+
+  private cashReceived(metadata: unknown): number {
+    const entries = Array.isArray(metadata) ? metadata : [];
+    const payments = entries.find((entry: any) => entry?.key === '_pos_payments')?.value;
+    if (!Array.isArray(payments)) return Number(this.metaAmount(metadata, 'pos_cash_received')) || 0;
+    return payments
+      .slice()
+      .sort((a: any, b: any) => Number(a?.local_id ?? a?.localId ?? 0) - Number(b?.local_id ?? b?.localId ?? 0))
+      .reduce((sum: number, payment: any) => {
+      const status = String(payment?.status ?? 'completed').trim().toLowerCase();
+      const method = String(payment?.method ?? payment?.payment_method ?? payment?.paymentMethod ?? '')
+        .trim().toLowerCase().replace(/[\s_]+/g, '-');
+      if (!['', 'completed', 'pending', 'voided'].includes(status) || !['cash', 'pos-cash'].includes(method)) return sum;
+      const amount = Number(payment?.amount ?? payment?.total ?? payment?.value ?? 0);
+      if (!Number.isFinite(amount)) return sum;
+      return status === 'voided' ? sum - Math.abs(amount) : sum + Math.max(0, amount);
+    }, 0);
+  }
+
+  private changeAmount(metadata: unknown, orderTotal: unknown): number {
+    const entries = Array.isArray(metadata) ? metadata : [];
+    const payments = entries.find((entry: any) => entry?.key === '_pos_payments')?.value;
+    if (!Array.isArray(payments)) return Number(this.metaAmount(metadata, 'pos_change_returned')) || 0;
+    const paid = payments
+      .slice()
+      .sort((a: any, b: any) => Number(a?.local_id ?? a?.localId ?? 0) - Number(b?.local_id ?? b?.localId ?? 0))
+      .reduce((sum: number, payment: any) => {
+        const status = String(payment?.status ?? 'completed').trim().toLowerCase();
+        if (!['', 'completed', 'pending', 'voided'].includes(status)) return sum;
+        const amount = Number(payment?.amount ?? payment?.total ?? payment?.value ?? 0);
+        if (!Number.isFinite(amount)) return sum;
+        return status === 'voided' ? sum - Math.abs(amount) : sum + Math.max(0, amount);
+      }, 0);
+    const total = Number(orderTotal ?? 0);
+    return Number.isFinite(total) ? Math.max(0, paid - total) : 0;
   }
 
   private formatWooDate(value: Date, timeZone: string): string {

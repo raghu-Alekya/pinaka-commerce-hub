@@ -1,10 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  totalExcludingTax,
-  type PosFeeLine,
-  type PosLineItem,
-} from '../../calculations/store-order.calculations';
-import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../../loyalty/loyalty-line';
 import { OrderResponsePresenter } from '../../responses/order-response.presenter';
 import type { OrderGraph } from './order-update.types';
 
@@ -36,14 +30,10 @@ export class OrderUpdatePresenter {
       status: storeOrder?.status || String(graph.order.orderStatus || '').toLowerCase(),
       currency: storeOrder?.currency || stored.currency,
       discount_total: storeOrder?.discountTotal ?? graph.order.discountAmount,
-      total: totalExcludingTax({
-        total: Number.isFinite(storedTotal) ? storedTotal : 0,
-        tax: totalTax,
-        lineItems: sourceLines,
-        feeLines,
-        shippingTotal: stored.shipping_total ?? stored.shippingTotal,
-        tip: storeOrder?.tipAmount ?? graph.order.tipAmount,
-      }),
+      // Use the stored gross order total for payment/change calculations.
+      // Removing tax here made change incorrect (30.00 - 18.37 instead of
+      // 30.00 - 20.04 for the order-detail response).
+      total: storeOrder?.total ?? graph.order.totalAmount,
       total_tax: totalTax,
       cart_tax: storeOrder?.taxTotal ?? stored.cart_tax,
       line_items: sourceLines,
