@@ -17,7 +17,7 @@ export class StoreVendorMappingRepository {
        LEFT JOIN public.vendor_stores vs
          ON vs.vendor_id = v.id AND vs.store_id = $2::uuid AND vs.merchant_id = $1::uuid
        WHERE mv.merchant_id = $1::uuid AND mv.status = 'ACTIVE'
-         AND v.is_deleted = false AND v.status = 'ACTIVE'
+         AND v.deleted_at IS NULL AND v.status = 'ACTIVE'
        ORDER BY assigned DESC, v.vendor_name ASC, v.id ASC`,
       [merchantId, storeId],
     );

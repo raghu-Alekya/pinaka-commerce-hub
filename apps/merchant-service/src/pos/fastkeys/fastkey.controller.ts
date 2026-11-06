@@ -29,7 +29,7 @@ import { FastkeyService } from './fastkey.service';
 type AuthenticatedRequest = {
   protocol?: string;
   headers?: Record<string, string | string[] | undefined>;
-  user?: { id?: string };
+  user?: { id?: string; storeId?: string };
   get(name: string): string | undefined;
 };
 
@@ -129,6 +129,7 @@ export class FastkeyController {
     return this.service.getByUser(
       request.user?.id,
       this.requestOrigin(request),
+      request.user?.storeId,
     );
   }
 

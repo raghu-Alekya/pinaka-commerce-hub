@@ -2,7 +2,7 @@
   "info": {
     "name": "PCH - POS Data Sync",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Reads store_products from PCH; does not call WordPress. Device must have an active store mapping. Use an Owner token or a token scoped to the matching store/device. First poll returns the store snapshot as created events. Repeated polls retain changes until acknowledged. Deleted products return data:null. Changes made only in WordPress appear after PCH product sync. On startup the service creates pos_data_sync_snapshots, pos_data_sync_events and pos_data_sync_devices. Ack only after applying all events through last_sync_version; do not send acknowledgement when changes is empty and no positive version is available. Both endpoints require merchant_id and store_id UUIDs matching the device mapping."
+    "description": "Reads store_products from PCH; does not call WordPress. Device must have an active store mapping. Use an Owner token, an Admin token scoped to the matching merchant/store, or a device-scoped token matching the device. First poll returns the store snapshot as created events. Repeated polls retain changes until acknowledged. Deleted products return data:null. Every poll also returns the latest promotional_images {enabled, images} store configuration, even when there are no product changes; POS/customer display clients should apply it on every poll. Changes made only in WordPress appear after PCH product sync. On startup the service creates pos_data_sync_snapshots, pos_data_sync_events and pos_data_sync_devices. Ack only after applying all events through last_sync_version; do not send acknowledgement when changes is empty and no positive version is available. Both endpoints require merchant_id and store_id UUIDs matching the device mapping."
   },
   "auth": {
     "type": "bearer",
@@ -42,7 +42,7 @@
   ],
   "item": [
     {
-      "name": "Get local product changes",
+      "name": "Get local product and promotional image changes",
       "request": {
         "method": "GET",
         "header": [],

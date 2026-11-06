@@ -19,31 +19,18 @@ async function initDb(dbName) {
         id VARCHAR(100) PRIMARY KEY,
         merchant_id VARCHAR(100) NOT NULL,
         store_id VARCHAR(100) NOT NULL,
-        register_id UUID,
         device_id VARCHAR(100) NOT NULL,
-        opening_device_id UUID,
-        opened_by_employee_id UUID,
-        closed_by_employee_id UUID,
-        shift_number VARCHAR(100),
-        cashier_name VARCHAR(150) NOT NULL,
-        opening_cash DECIMAL(10,2) DEFAULT 200.00,
-        total_cash_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_card_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_safe_drops DECIMAL(10,2) DEFAULT 0.00,
-        total_paid_outs DECIMAL(10,2) DEFAULT 0.00,
-        drawer_denominations JSONB,
-        drawer_total_amount DECIMAL(12,2),
-        tube_denominations JSONB,
-        tube_total_amount DECIMAL(12,2),
-        total_amount DECIMAL(12,2),
-        closing_cash_actual DECIMAL(10,2),
-        expected_cash_in_drawer DECIMAL(10,2),
-        declared_cash DECIMAL(10,2),
-        cash_difference DECIMAL(10,2),
-        discrepancy DECIMAL(10,2),
-        opening_note TEXT,
-        closing_note TEXT,
+        opening_device_id VARCHAR(100),
+        closing_device_id VARCHAR(100),
+        created_by VARCHAR(100),
+        updated_by VARCHAR(100),
+        closed_by VARCHAR(100),
         status VARCHAR(50) DEFAULT 'OPEN',
+        opening_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+        closing_balance DECIMAL(12,2),
+        over_short DECIMAL(12,2),
+        declared_cash DECIMAL(12,2),
+        discrepancy DECIMAL(12,2),
         opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         closed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -51,8 +38,25 @@ async function initDb(dbName) {
       );
     `);
     await client.query(`
-      ALTER TABLE pos_shifts
-      ADD COLUMN IF NOT EXISTS register_id UUID;
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS opening_balance DECIMAL(12,2) DEFAULT 0;
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS closing_balance DECIMAL(12,2);
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS over_short DECIMAL(12,2);
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100);
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100);
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS closed_by VARCHAR(100);
+      ALTER TABLE pos_shifts ADD COLUMN IF NOT EXISTS closing_device_id VARCHAR(100);
+    `);
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'pos_shifts'
+            AND column_name = 'cashier_name' AND is_nullable = 'NO'
+        ) THEN
+          ALTER TABLE pos_shifts ALTER COLUMN cashier_name DROP NOT NULL;
+        END IF;
+      END $$;
     `);
     console.log(`✅ Table created/verified: pos_shifts in ${dbName}`);
 
@@ -74,59 +78,40 @@ async function initDb(dbName) {
     // 3. Seed two complete demo shifts and a cash movement
     await client.query(`
       INSERT INTO pos_shifts (
-        id, merchant_id, store_id, register_id, device_id,
-        opening_device_id, opened_by_employee_id, closed_by_employee_id,
-        shift_number, cashier_name, opening_cash, total_cash_sales,
-        total_card_sales, total_safe_drops, total_paid_outs,
-        expected_cash_in_drawer, declared_cash, closing_cash_actual,
-        cash_difference, discrepancy, opening_note, closing_note,
-        status, opened_at, closed_at, created_at, updated_at
+        id, merchant_id, store_id, device_id, opening_device_id, closing_device_id,
+        created_by, closed_by, status, opening_balance, closing_balance,
+        over_short, declared_cash, discrepancy, opened_at, closed_at, created_at, updated_at
       )
       VALUES
         (
-          'SHIFT-8001', 'MCH-1001', 'STR-5001',
-          '80000000-0000-4000-8000-000000000001',
-          'SUNMI-D3-PRO-01', '81000000-0000-4000-8000-000000000001',
+          'SHIFT-8001', 'MCH-1001', 'STR-5001', 'SUNMI-D3-PRO-01',
+          '81000000-0000-4000-8000-000000000001', '81000000-0000-4000-8000-000000000001',
           '82000000-0000-4000-8000-000000000001', '83000000-0000-4000-8000-000000000001',
-          'SHF001', 'Sarah Jenkins', 200.00, 1000.00, 250.00, 500.00, 0.00,
-          700.00, 695.00, 695.00, -5.00, -5.00,
-          'Opening float counted: $200.00', 'Cash short by $5.00 at close',
-          'CLOSED', CURRENT_TIMESTAMP - INTERVAL '8 hours', CURRENT_TIMESTAMP,
+          'CLOSED', 200.00, 695.00, -5.00, 695.00, -5.00,
+          CURRENT_TIMESTAMP - INTERVAL '8 hours', CURRENT_TIMESTAMP,
           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         ),
         (
-          'SHIFT-8002', 'MCH-1001', 'STR-5001',
-          '80000000-0000-4000-8000-000000000002',
-          'SUNMI-D3-PRO-02', '81000000-0000-4000-8000-000000000002',
+          'SHIFT-8002', 'MCH-1001', 'STR-5001', 'SUNMI-D3-PRO-02',
+          '81000000-0000-4000-8000-000000000002', '81000000-0000-4000-8000-000000000002',
           '82000000-0000-4000-8000-000000000002', '83000000-0000-4000-8000-000000000002',
-          'SHF002', 'Alex Morgan', 300.00, 500.00, 100.00, 100.00, 20.00,
-          680.00, 680.00, 680.00, 0.00, 0.00,
-          'Opening float counted: $300.00', 'Drawer counted and balanced',
-          'CLOSED', CURRENT_TIMESTAMP - INTERVAL '6 hours', CURRENT_TIMESTAMP,
+          'CLOSED', 300.00, 680.00, 0.00, 680.00, 0.00,
+          CURRENT_TIMESTAMP - INTERVAL '6 hours', CURRENT_TIMESTAMP,
           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
       ON CONFLICT (id) DO UPDATE SET
         merchant_id = EXCLUDED.merchant_id,
         store_id = EXCLUDED.store_id,
-        register_id = EXCLUDED.register_id,
         device_id = EXCLUDED.device_id,
         opening_device_id = EXCLUDED.opening_device_id,
-        opened_by_employee_id = EXCLUDED.opened_by_employee_id,
-        closed_by_employee_id = EXCLUDED.closed_by_employee_id,
-        shift_number = EXCLUDED.shift_number,
-        cashier_name = EXCLUDED.cashier_name,
-        opening_cash = EXCLUDED.opening_cash,
-        total_cash_sales = EXCLUDED.total_cash_sales,
-        total_card_sales = EXCLUDED.total_card_sales,
-        total_safe_drops = EXCLUDED.total_safe_drops,
-        total_paid_outs = EXCLUDED.total_paid_outs,
-        expected_cash_in_drawer = EXCLUDED.expected_cash_in_drawer,
+        closing_device_id = EXCLUDED.closing_device_id,
+        created_by = EXCLUDED.created_by,
+        closed_by = EXCLUDED.closed_by,
+        opening_balance = EXCLUDED.opening_balance,
+        closing_balance = EXCLUDED.closing_balance,
+        over_short = EXCLUDED.over_short,
         declared_cash = EXCLUDED.declared_cash,
-        closing_cash_actual = EXCLUDED.closing_cash_actual,
-        cash_difference = EXCLUDED.cash_difference,
         discrepancy = EXCLUDED.discrepancy,
-        opening_note = EXCLUDED.opening_note,
-        closing_note = EXCLUDED.closing_note,
         status = EXCLUDED.status,
         opened_at = EXCLUDED.opened_at,
         closed_at = EXCLUDED.closed_at,
@@ -137,7 +122,7 @@ async function initDb(dbName) {
       ON CONFLICT (id) DO NOTHING;
     `);
     const { rows: seededShifts } = await client.query(`
-      SELECT id, merchant_id, store_id, cashier_name
+      SELECT id, merchant_id, store_id, opening_balance, status
       FROM pos_shifts
       WHERE id = ANY($1)
       ORDER BY id

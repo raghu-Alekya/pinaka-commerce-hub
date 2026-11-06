@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosOpeningBalanceEntity } from './pos-opening-balance.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { SavePosOpeningBalanceDto } from './pos-opening-balance.dto';
 
 export interface PosOpeningBalanceRecord {
@@ -33,7 +33,12 @@ export class PosOpeningBalanceService {
     if (await this.findByStore(store.id)) {
       throw new ConflictException('Opening balance settings already exist for this store');
     }
-    const saved = await this.repo().save(this.repo().create(this.fields(store.id, store.merchantId, body)));
+    const saved = await savePosConfigDocument(
+      this.merchants.requireDataSource(),
+      store.id,
+      'opening_balance',
+      this.fields(store.merchantId, body),
+    );
     return { success: true, openingBalance: this.present(saved) };
   }
 
@@ -41,7 +46,12 @@ export class PosOpeningBalanceService {
     const store = await this.requireStore(storeId);
     const current = await this.findByStore(store.id);
     if (!current) throw new NotFoundException('Opening balance settings are not configured for this store');
-    const saved = await this.repo().save({ id: current.id, ...this.fields(store.id, store.merchantId, body) });
+    const saved = await savePosConfigDocument(
+      this.merchants.requireDataSource(),
+      store.id,
+      'opening_balance',
+      this.fields(store.merchantId, body),
+    );
     return { success: true, openingBalance: this.present(saved) };
   }
 
@@ -51,38 +61,33 @@ export class PosOpeningBalanceService {
     return store;
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosOpeningBalanceEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.repo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'opening_balance');
   }
 
-  private fields(storeId: string, merchantId: string, body: SavePosOpeningBalanceDto) {
+  private fields(merchantId: string, body: SavePosOpeningBalanceDto) {
     return {
-      storeId,
       merchantId,
       requireOpeningBalance: body.requireOpeningBalance,
-      defaultOpeningAmount: String(body.defaultOpeningAmount),
+      defaultOpeningAmount: Number(body.defaultOpeningAmount),
       managerApprovalRequired: body.managerApprovalRequired,
-      varianceTolerance: String(body.varianceTolerance),
+      varianceTolerance: Number(body.varianceTolerance),
       allowCashierOverride: body.allowCashierOverride,
       countByDenomination: body.countByDenomination,
     };
   }
 
-  private present(record: PosOpeningBalanceEntity): PosOpeningBalanceRecord {
+  private present(record: Record<string, any>): PosOpeningBalanceRecord {
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      requireOpeningBalance: record.requireOpeningBalance,
+      requireOpeningBalance: Boolean(record.requireOpeningBalance),
       defaultOpeningAmount: Number(record.defaultOpeningAmount),
-      managerApprovalRequired: record.managerApprovalRequired,
+      managerApprovalRequired: Boolean(record.managerApprovalRequired),
       varianceTolerance: Number(record.varianceTolerance),
-      allowCashierOverride: record.allowCashierOverride,
-      countByDenomination: record.countByDenomination,
+      allowCashierOverride: Boolean(record.allowCashierOverride),
+      countByDenomination: Boolean(record.countByDenomination),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

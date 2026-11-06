@@ -1,5 +1,6 @@
 import { storeSetup } from '../master/store-setup/store-setup';
-import { ValidationPipe, HttpCode, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { ValidationPipe, HttpCode, Inject, Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, UploadedFile, UseGuards, UseInterceptors, NotFoundException, BadRequestException, ConflictException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository, DataSyncActor } from '../merchant/merchant.repository';
@@ -9,11 +10,25 @@ import { PlanCode } from '../../entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
 import { SaveStoreEmployeesDto, AssignStoreEmployeeLoginPinDto, StoreEmployeeAssignmentDto, UpdateStoreEmployeeAssignmentDto } from '../master/store-setup/store-setup.dto';
 import { WebsiteConnectionEntity } from '../../entities/website-connection.entity';
+import { ProductOptionsService } from './product-options.service';
+import { PosEmployeeCatalogGuard } from './pos-employee-catalog.guard';
 
+type ProductImageUpload = { buffer: Buffer; mimetype: string };
+const productImageUpload = FileInterceptor('image', {
+  storage: require('multer').memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_request: unknown, file: ProductImageUpload, callback: (error: Error | null, accept: boolean) => void) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    callback(allowed ? null : new BadRequestException('Product image must be JPG, PNG, or WebP'), allowed);
+  },
+});
 
 @Controller(['api/v1', 'connector/api/v1'])
 export class AppController {
-  constructor(@Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository) {}
+  constructor(
+    @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
+    @Inject(ProductOptionsService) private readonly productOptionsService: ProductOptionsService,
+  ) {}
 
   @Get('data-sync/get-data-changes')
   @RequireAuth()
@@ -227,7 +242,7 @@ export class AppController {
 
     const store = await this.merchantRepository.createStore(merchant.id, {
       storeName: body.storeName || `${merchant.businessName} - Main Store`,
-      storeCode: body.storeCode || 'STR-MAIN-01',
+      storeCode: body.storeCode,
       storeType: body.businessType || 'GROCERY',
       address: body.address || { street: '123 Main St', city: 'Austin', state: 'TX', zipCode: '78701', country: 'USA' },
       taxRate: body.taxRate || 8.25,
@@ -444,6 +459,592 @@ export class AppController {
     };
   }
 
+  @Post('merchants/:merchantId/stores/:storeId/catalog/products')
+  @RequireAuth()
+  @UseInterceptors(productImageUpload)
+  async createStoreProduct(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string,
+    @Body() input: Record<string, unknown>, @Req() request: { headers?: Record<string, unknown>; user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+    @UploadedFile() image?: ProductImageUpload) {
+    return this.mutateStoreProduct(merchantId, storeId, input, request, image);
+  }
+
+  @Put('merchants/:merchantId/stores/:storeId/catalog/products/:productId')
+  @RequireAuth()
+  @UseInterceptors(productImageUpload)
+  updateStoreProduct(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string, @Param('productId') productId: string,
+    @Body() input: Record<string, unknown>, @Req() request: { headers?: Record<string, unknown>; user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+    @UploadedFile() image?: ProductImageUpload) {
+    return this.mutateStoreProduct(merchantId, storeId, input, request, image, productId);
+  }
+
+  @Delete('merchants/:merchantId/stores/:storeId/catalog/products/:productId')
+  @RequireAuth()
+  async deleteStoreProduct(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string, @Param('productId') productId: string,
+    @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    if (!/^[1-9]\d*$/.test(productId)) throw new BadRequestException('productId must be a positive WooCommerce product ID');
+    const { store, params } = await this.productCatalogConnection(merchantId, storeId, request.user);
+    const data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
+    let synced = true;
+    try { await this.merchantRepository.syncStoreProductsFromWordPress(params); } catch { synced = false; }
+    return { success: true, merchant_id: store.merchant_id, store_id: store.id, data, synced,
+      message: synced ? 'Product moved to WooCommerce trash and PCH catalog synced.' : 'Product moved to WooCommerce trash; PCH sync failed. Run product sync to refresh PCH.' };
+  }
+
+  @Post('pos/auth/catalog/products')
+  @Public()
+  @UseGuards(PosEmployeeCatalogGuard)
+  @UseInterceptors(productImageUpload)
+  createPosStoreProduct(
+    @Body() input: Record<string, unknown>,
+    @Req() request: { headers?: Record<string, unknown>; user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+    @UploadedFile() image?: ProductImageUpload,
+  ) {
+    return this.mutateStoreProduct(
+      request.user?.merchantId || '',
+      request.user?.storeId || '',
+      input,
+      request,
+      image,
+    );
+  }
+
+  @Put('pos/auth/catalog/products/:productId')
+  @Public()
+  @UseGuards(PosEmployeeCatalogGuard)
+  @UseInterceptors(productImageUpload)
+  updatePosStoreProduct(
+    @Param('productId') productId: string,
+    @Body() input: Record<string, unknown>,
+    @Req() request: { headers?: Record<string, unknown>; user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+    @UploadedFile() image?: ProductImageUpload,
+  ) {
+    return this.mutateStoreProduct(
+      request.user?.merchantId || '',
+      request.user?.storeId || '',
+      input,
+      request,
+      image,
+      productId,
+    );
+  }
+
+  @Delete('pos/auth/catalog/products/:productId')
+  @Public()
+  @UseGuards(PosEmployeeCatalogGuard)
+  async deletePosStoreProduct(
+    @Param('productId') productId: string,
+    @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+  ) {
+    if (!/^[1-9]\d*$/.test(productId)) throw new BadRequestException('productId must be a positive WooCommerce product ID');
+    const { store, params } = await this.productCatalogConnection(
+      request.user?.merchantId || '',
+      request.user?.storeId || '',
+      request.user,
+    );
+    const data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
+    let synced = true;
+    try { await this.merchantRepository.syncStoreProductsFromWordPress(params); } catch { synced = false; }
+    return {
+      success: true,
+      merchant_id: store.merchant_id,
+      store_id: store.id,
+      data,
+      synced,
+      message: synced
+        ? 'Product moved to WooCommerce trash and PCH catalog synced.'
+        : 'Product moved to WooCommerce trash; PCH sync failed. Run product sync to refresh PCH.',
+    };
+  }
+
+  private async productWriteRequest(params: { wordpressUrl: string; wordpressJwt: string }, path: string, method: string, body?: unknown) {
+    let response: Response;
+    try {
+      response = await fetch(params.wordpressUrl.replace(/\/+$/, '') + '/wp-json/wc/v3/' + path, {
+        method, headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json', Accept: 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000),
+      });
+    } catch { throw new BadRequestException('Could not confirm the WordPress product operation. Check the product before retrying.'); }
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data) throw new BadRequestException({ message: data?.message || 'WordPress product operation failed', upstreamStatus: response.status });
+    return data;
+  }
+
+  private async mutateStoreProduct(merchantId: string, storeId: string, input: Record<string, unknown>,
+    request: { headers?: Record<string, unknown>; user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }, image?: ProductImageUpload, productId?: string) {
+    if (productId !== undefined && !/^[1-9]\d*$/.test(productId)) throw new BadRequestException('productId must be a positive WooCommerce product ID');
+    const { store, params } = await this.productCatalogConnection(merchantId, storeId, request.user);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a product JSON object');
+    if (String(request.headers?.['content-type'] ?? '').toLowerCase().startsWith('multipart/form-data')) {
+      if (input.product !== undefined) {
+        if (Object.keys(input).length !== 1) throw new BadRequestException('Send product JSON or individual form fields, not both');
+        try { input = JSON.parse(String(input.product)); } catch { throw new BadRequestException('product must contain valid JSON'); }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('product must be a JSON object');
+      } else {
+        input = { ...input };
+        for (const key of ['categories','tags','images','attributes','default_attributes','dimensions','variations']) {
+          if (typeof input[key] === 'string') {
+            try { input[key] = JSON.parse(input[key] as string); } catch { throw new BadRequestException(`${key} must contain valid JSON`); }
+          }
+        }
+        for (const key of ['sold_individually','reviews_allowed','manage_stock','virtual','downloadable','featured']) {
+          if (input[key] === undefined) continue;
+          if (input[key] !== 'true' && input[key] !== 'false') throw new BadRequestException(`${key} must be true or false`);
+          input[key] = input[key] === 'true';
+        }
+        for (const key of ['stock_quantity','menu_order']) {
+          if (input[key] === undefined) continue;
+          if (!/^-?\d+$/.test(String(input[key])) || !Number.isSafeInteger(Number(input[key]))) throw new BadRequestException(`${key} must be an integer`);
+          input[key] = Number(input[key]);
+        }
+      }
+    }
+    input = this.normalizeProductInput(input);
+    if (input.images !== undefined && !Array.isArray(input.images)) throw new BadRequestException('images must be an array');
+    if ((!productId || input.name !== undefined) && (typeof input.name !== 'string' || !input.name.trim())) throw new BadRequestException('name is required');
+    if (input.type !== undefined && !['simple', 'variable'].includes(String(input.type))) throw new BadRequestException('type must be simple or variable');
+    const allowed = ['name','description','short_description','type','status','regular_price','sale_price','sku','weight',
+      'sold_individually','reviews_allowed','tax_status','tax_class','categories','tags','images','attributes',
+      'default_attributes','manage_stock','stock_quantity','stock_status','backorders','dimensions','virtual','downloadable',
+      'catalog_visibility','featured','purchase_note','menu_order','variations'];
+    if (Object.keys(input).some(key => !allowed.includes(key))) throw new BadRequestException('Unsupported product field');
+    if (productId) {
+      if (!Object.keys(input).length && !image) throw new BadRequestException('Provide at least one field or image to update');
+      const existing = await this.productWriteRequest(params, `products/${productId}`, 'GET');
+      if (input.variations !== undefined && Array.isArray(input.variations)) {
+        input = { ...input, type: input.type ?? existing.type, attributes: input.attributes ?? existing.attributes };
+        const entries: any[] = [];
+        const ids = new Set<number>();
+        for (const entry of input.variations as any[]) {
+          if (entry?.id === undefined) { entries.push(entry); continue; }
+          if (!Number.isSafeInteger(entry.id) || entry.id <= 0 || ids.has(entry.id)) throw new BadRequestException('Variation IDs must be positive and unique');
+          ids.add(entry.id);
+          const current = await this.productWriteRequest(params, `products/${productId}/variations/${entry.id}`, 'GET');
+          entries.push({ regular_price: current.regular_price, sale_price: current.sale_price, manage_stock: current.manage_stock,
+            stock_quantity: current.stock_quantity, stock_status: current.stock_status, attributes: current.attributes.map((a: any) => ({ id: a.id, option: a.option })), ...entry });
+        }
+        input.variations = entries;
+      }
+    }
+    const selections = await this.validateProductSelections(params, input);
+    const variationPayloads = this.prepareProductVariations(input, selections, Boolean(productId));
+    input = { ...input };
+    delete input.variations;
+    if (image) {
+      const extension = image.mimetype === 'image/png' ? 'png' : image.mimetype === 'image/webp' ? 'webp' : 'jpg';
+      let mediaResponse: Response;
+      try {
+        mediaResponse = await fetch(params.wordpressUrl.replace(/\/+$/, '') + '/wp-json/wp/v2/media', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': image.mimetype,
+            'Content-Disposition': `attachment; filename="product-${randomBytes(12).toString('hex')}.${extension}"`, Accept: 'application/json' },
+          body: new Blob([new Uint8Array(image.buffer)], { type: image.mimetype }), signal: AbortSignal.timeout(30000),
+        });
+      } catch { throw new BadRequestException('Could not upload the product image to WordPress'); }
+      const media = await mediaResponse.json().catch(() => null);
+      if (!mediaResponse.ok || !Number.isSafeInteger(media?.id) || media.id <= 0) {
+        throw new BadRequestException({ message: media?.message || 'WordPress image upload failed', upstreamStatus: mediaResponse.status });
+      }
+      input = { ...input, images: [{ id: media.id }, ...(input.images as unknown[] ?? [])] };
+    }
+    let response: Response;
+    try {
+      response = await fetch(params.wordpressUrl.replace(/\/+$/, '') + '/wp-json/wc/v3/products' + (productId ? '/' + productId : ''), {
+        method: productId ? 'PUT' : 'POST', headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(input), signal: AbortSignal.timeout(30000),
+      });
+    } catch {
+      throw new BadRequestException('Could not confirm product save with WordPress. Check the store catalog before retrying to avoid duplicates.');
+    }
+    let data = await response.json();
+    if (!response.ok) throw new BadRequestException({ message: data?.message || 'WordPress product creation failed', upstreamStatus: response.status });
+    const variations: any[] = [];
+    const variationErrors: { index: number; message: string }[] = [];
+    // WooCommerce variation writes are independent. Send small batches in parallel
+    // so a product with several variants does not pay one network round trip per variant.
+    for (let offset = 0; offset < variationPayloads.length && !variationErrors.length; offset += 5) {
+      const batch = variationPayloads.slice(offset, offset + 5);
+      const results = await Promise.all(batch.map(async (payload, batchIndex) => {
+        const index = offset + batchIndex;
+        try {
+          const { id: variationId, ...variationBody } = payload;
+          const variationResponse = await fetch(params.wordpressUrl.replace(/\/+$/, '') + `/wp-json/wc/v3/products/${data.id}/variations` + (variationId ? '/' + variationId : ''), {
+            method: variationId ? 'PUT' : 'POST', headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(variationBody), signal: AbortSignal.timeout(30000),
+          });
+          const variation = await variationResponse.json();
+          return variationResponse.ok && variation?.id
+            ? { index, variation }
+            : { index, error: variation?.message || 'Variation creation failed' };
+        } catch {
+          return { index, error: 'Could not confirm variation creation. Check WooCommerce before retrying.' };
+        }
+      }));
+      for (const result of results) {
+        if ('variation' in result && result.variation) variations.push(result.variation);
+        else if ('error' in result && result.error) variationErrors.push({ index: result.index, message: result.error });
+      }
+    }
+    if (variationPayloads.length) {
+      const variationIds = new Set<number>(
+        (Array.isArray(data.variations) ? data.variations : [])
+          .map((value: unknown) => Number(typeof value === 'object' && value !== null ? (value as any).id : value))
+          .filter((id: number) => Number.isSafeInteger(id) && id > 0),
+      );
+      for (const variation of variations) {
+        if (Number.isSafeInteger(variation?.id) && variation.id > 0) variationIds.add(variation.id);
+      }
+      data = { ...data, variations: [...variationIds] };
+    }
+    let localSaved = false;
+    try {
+      await this.merchantRepository.upsertStoreProductRecords(store.id, [data, ...variations]);
+      localSaved = true;
+    } catch { localSaved = false; }
+    const synced = localSaved;
+    return { success: variationErrors.length === 0, merchant_id: store.merchant_id, store_id: store.id, data, selections, synced, local_saved: localSaved,
+      ...(variationPayloads.length ? { variations, variation_errors: variationErrors, requested_variation_count: variationPayloads.length } : {}),
+      ...(variationErrors.length ? { message: 'Parent product was saved, but variation changes are incomplete. Do not repeat parent creation. Check the returned IDs and variation_errors.' }
+        : !localSaved ? { message: 'Product was saved in WordPress but could not be saved to the local product catalog. Do not repeat product creation; refresh the catalog and check for the saved product.' }
+        : synced ? {} : { message: 'Product was saved in WordPress but could not be saved to the local product catalog. Do not repeat product creation; refresh the catalog and check for the saved product.' }) };
+  }
+
+  private prepareProductVariations(input: Record<string, unknown>, selections: Record<string, any>, updating = false): Record<string, unknown>[] {
+    if (input.variations === undefined) return [];
+    if (input.type !== 'variable') throw new BadRequestException('variations requires type variable');
+    if (!Array.isArray(input.variations) || !input.variations.length || input.variations.length > 100) throw new BadRequestException('variations must contain between 1 and 100 entries');
+    const parentAttributes = (input.attributes as any[] ?? []).filter(attribute => attribute.variation === true);
+    if (!parentAttributes.length) throw new BadRequestException('Set variation=true on the parent attributes');
+    const combinations = new Set<string>();
+    return input.variations.map((variation: any, index: number) => {
+      const fail = (message: string): never => { throw new BadRequestException(`variations[${index}]: ${message}`); };
+      if (!variation || typeof variation !== 'object' || Array.isArray(variation)) return fail('must be an object');
+      const allowed = ['regular_price','sale_price','sku','manage_stock','stock_quantity','stock_status','backorders','attributes','weight','dimensions','description','status','image','tax_class', ...(updating ? ['id'] : [])];
+      if (Object.keys(variation).some(key => !allowed.includes(key))) return fail('unsupported variation field');
+      for (const field of ['regular_price','sale_price']) {
+        if (field === 'sale_price' && (variation[field] === undefined || variation[field] === '')) continue;
+        if (typeof variation[field] !== 'string' || !/^\d+(\.\d+)?$/.test(variation[field]) || !Number.isFinite(Number(variation[field]))) return fail(`${field} must be a non-negative price string`);
+      }
+      if (variation.sale_price && Number(variation.sale_price) > Number(variation.regular_price)) return fail('sale_price must not exceed regular_price');
+      if (variation.manage_stock !== undefined && typeof variation.manage_stock !== 'boolean') return fail('manage_stock must be boolean');
+      if (variation.manage_stock === true && (!Number.isSafeInteger(variation.stock_quantity) || variation.stock_quantity < 0)) return fail('stock_quantity must be a non-negative integer when manage_stock is true');
+      if (variation.stock_status !== undefined && !['instock','outofstock','onbackorder'].includes(variation.stock_status)) return fail('invalid stock_status');
+      if (!Array.isArray(variation.attributes) || variation.attributes.length !== parentAttributes.length) return fail('select one term for every parent variation attribute');
+      const seen = new Set<number>();
+      const attributes = variation.attributes.map((attribute: any) => {
+        if (!attribute || !parentAttributes.some(parent => parent.id === attribute.id) || seen.has(attribute.id)) return fail('invalid or repeated attribute id');
+        seen.add(attribute.id);
+        const terms = selections.attributes?.find((selected: any) => selected.id === attribute.id)?.terms ?? [];
+        if (attribute.term_id !== undefined && attribute.option !== undefined) return fail('send term_id or option, not both');
+        const term = terms.find((item: any) => attribute.term_id !== undefined ? item.id === attribute.term_id : item.name === attribute.option || item.slug === attribute.option);
+        if (!term) return fail('term must be selected on the parent attribute');
+        return { id: attribute.id, option: term.name };
+      });
+      const combination = JSON.stringify([...attributes].sort((a,b) => a.id-b.id));
+      if (combinations.has(combination)) return fail('duplicate attribute combination');
+      combinations.add(combination);
+      return { ...variation, attributes, ...(variation.manage_stock !== true && variation.stock_status === undefined ? { stock_status: 'instock' } : {}) };
+    });
+  }
+
+  @Get('merchants/:merchantId/stores/:storeId/catalog/product-options')
+  @RequireAuth()
+  async getProductOptions(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string,
+    @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    const { store, params } = await this.productCatalogConnection(merchantId, storeId, request.user);
+    return this.productOptionsService.getFromConnection(
+      { merchantId: store.merchant_id, storeId: store.id },
+      params,
+    );
+  }
+
+  private async productOptionCollection(params: { wordpressUrl: string; wordpressJwt: string }, path: string): Promise<any[]> {
+    return this.productOptionsService.collect(params, path);
+  }
+
+  private async validateProductSelections(params: { wordpressUrl: string; wordpressJwt: string }, input: Record<string, unknown>) {
+    const selections: Record<string, any> = {};
+    for (const key of ['categories', 'tags'] as const) {
+      if (input[key] === undefined) continue;
+      if (!Array.isArray(input[key])) throw new BadRequestException(`${key} must be an array`);
+      const options = (input[key] as any[]).length
+        ? await this.productOptionCollection(params, 'products/' + key)
+        : [];
+      const resolved = (input[key] as any[]).map((item) => {
+        const rawId = typeof item === 'number' ? item : item?.id;
+        if (Number.isSafeInteger(Number(rawId)) && Number(rawId) > 0) {
+          return options.find((option) => Number(option.id) === Number(rawId));
+        }
+        const label = typeof item === 'string'
+          ? item.trim().toLowerCase()
+          : String(item?.name ?? item?.slug ?? '').trim().toLowerCase();
+        return options.find((option) =>
+          String(option.name ?? '').trim().toLowerCase() === label ||
+          String(option.slug ?? '').trim().toLowerCase() === label,
+        );
+      });
+      if (resolved.some((option) => !option)) {
+        throw new BadRequestException(`${key} contains an option that does not exist in this connected store`);
+      }
+      const unique = [...new Map(resolved.map((option) => [Number(option.id), option])).values()];
+      input[key] = unique.map((option) => ({ id: Number(option.id) }));
+      selections[key] = unique;
+    }
+    if (input.tax_class !== undefined) {
+      const taxLabel = typeof input.tax_class === 'object' && input.tax_class !== null
+        ? String((input.tax_class as any).slug ?? (input.tax_class as any).name ?? '')
+        : String(input.tax_class);
+      const classes = [{ name: 'Standard', slug: '' }, ...(await this.productOptionCollection(params, 'taxes/classes'))];
+      const selected = classes.find(item =>
+        item.slug.toLowerCase() === taxLabel.trim().toLowerCase() ||
+        item.name.toLowerCase() === taxLabel.trim().toLowerCase(),
+      );
+      if (!selected) throw new BadRequestException('tax_class does not exist in this connected store; use a tax class name or slug from product-options.');
+      input.tax_class = selected.slug;
+      selections.tax_class = selected;
+    }
+    if (Array.isArray(input.variations)) {
+      for (const variation of input.variations as any[]) {
+        if (variation?.tax_class === undefined) continue;
+        const taxLabel = typeof variation.tax_class === 'object' && variation.tax_class !== null
+          ? String(variation.tax_class.slug ?? variation.tax_class.name ?? '')
+          : String(variation.tax_class);
+        const classes = [{ name: 'Standard', slug: '' }, ...(await this.productOptionCollection(params, 'taxes/classes'))];
+        const selected = classes.find(item =>
+          item.slug.toLowerCase() === taxLabel.trim().toLowerCase() ||
+          item.name.toLowerCase() === taxLabel.trim().toLowerCase(),
+        );
+        if (!selected) throw new BadRequestException('A variation tax_class does not exist in this connected store');
+        variation.tax_class = selected.slug;
+      }
+    }
+    if (input.attributes !== undefined) {
+      if (!Array.isArray(input.attributes)) throw new BadRequestException('attributes must be an array');
+      const attributes = input.attributes as any[];
+      const options = attributes.length ? await this.productOptionCollection(params, 'products/attributes') : [];
+      selections.attributes = [];
+      for (const attribute of attributes) {
+        if (!attribute || typeof attribute !== 'object' || Array.isArray(attribute)) throw new BadRequestException('Each attribute must be an object');
+        const definition = options.find(option => option.id === attribute.id);
+        if (!definition) throw new BadRequestException('Attribute id does not exist in this connected store');
+        const terms = await this.productOptionCollection(params, `products/attributes/${definition.id}/terms`);
+        let selected: any[];
+        if (attribute.term_ids !== undefined) {
+          if (attribute.options !== undefined) throw new BadRequestException('Send attribute term_ids or options, not both');
+          if (!Array.isArray(attribute.term_ids)) throw new BadRequestException('term_ids must be an array');
+          selected = attribute.term_ids.map((id: unknown) => terms.find(term => term.id === id));
+        } else {
+          if (!Array.isArray(attribute.options)) throw new BadRequestException('Attribute options or term_ids are required');
+          selected = attribute.options.map((name: unknown) => terms.find(term => term.name === name || term.slug === name));
+        }
+        if (selected.some(term => !term)) throw new BadRequestException(`One or more terms do not exist for attribute ${definition.name}`);
+        attribute.options = [...new Set(selected.map(term => term.name))];
+        delete attribute.term_ids;
+        selections.attributes.push({ id: definition.id, name: definition.name, terms: selected });
+      }
+    }
+    return selections;
+  }
+
+  private normalizeProductInput(input: Record<string, unknown>): Record<string, unknown> {
+    const normalized: Record<string, any> = { ...input };
+    const moveAlias = (target: string, aliases: string[]) => {
+      if (normalized[target] === undefined) {
+        const alias = aliases.find((key) => normalized[key] !== undefined);
+        if (alias) normalized[target] = normalized[alias];
+      }
+      for (const alias of aliases) delete normalized[alias];
+    };
+    const normalizePricesAndStock = (record: Record<string, any>) => {
+      if (record.regular_price === undefined) {
+        record.regular_price = record.regularPrice ?? record.price;
+      }
+      if (record.sale_price === undefined) record.sale_price = record.salePrice;
+      if (record.stock_quantity === undefined) {
+        record.stock_quantity = record.stockQuantity ?? record.stock ?? record.quantity;
+      }
+      if (record.stock_status === undefined) record.stock_status = record.stockStatus;
+      for (const alias of ['regularPrice', 'price', 'salePrice', 'stockQuantity', 'stock', 'quantity', 'stockStatus']) {
+        delete record[alias];
+      }
+      for (const key of ['regular_price', 'sale_price']) {
+        if (typeof record[key] === 'number' && Number.isFinite(record[key])) {
+          record[key] = String(record[key]);
+        }
+      }
+      if (record.sku !== undefined && record.sku !== null) record.sku = String(record.sku).trim();
+      if (record.stock_quantity !== undefined && record.stock_quantity !== null && record.stock_quantity !== '') {
+        const quantity = Number(record.stock_quantity);
+        if (!Number.isSafeInteger(quantity) || quantity < 0) {
+          throw new BadRequestException('stock_quantity must be a non-negative integer');
+        }
+        record.stock_quantity = quantity;
+        if (record.manage_stock === undefined) record.manage_stock = true;
+      } else {
+        delete record.stock_quantity;
+      }
+      if (record.manage_stock === 'true') record.manage_stock = true;
+      if (record.manage_stock === 'false') record.manage_stock = false;
+    };
+
+    moveAlias('type', ['productType']);
+    moveAlias('tax_class', ['taxClass']);
+    moveAlias('tax_status', ['taxStatus']);
+    if (normalized.tax !== undefined) {
+      const tax = normalized.tax;
+      if (normalized.tax_class === undefined && normalized.tax_status === undefined) {
+        const label = typeof tax === 'object' && tax !== null
+          ? String(tax.slug ?? tax.name ?? '')
+          : String(tax);
+        if (['taxable', 'shipping', 'none'].includes(label.toLowerCase())) {
+          normalized.tax_status = label.toLowerCase();
+        } else {
+          normalized.tax_class = tax;
+        }
+      }
+      delete normalized.tax;
+    }
+
+    const categoryValues = [normalized.category, normalized.subcategory, normalized.sub_category]
+      .filter((value) => value !== undefined && value !== null && value !== '');
+    if (categoryValues.length) {
+      const existing = normalized.categories === undefined
+        ? []
+        : Array.isArray(normalized.categories) ? normalized.categories : [normalized.categories];
+      normalized.categories = [...existing, ...categoryValues.flatMap((value) => Array.isArray(value) ? value : [value])];
+    }
+    for (const alias of ['category', 'subcategory', 'sub_category']) delete normalized[alias];
+    if (normalized.categories !== undefined && !Array.isArray(normalized.categories)) {
+      normalized.categories = [normalized.categories];
+    }
+    if (normalized.tags !== undefined && !Array.isArray(normalized.tags)) normalized.tags = [normalized.tags];
+    if (normalized.tag !== undefined) {
+      const existing = normalized.tags === undefined ? [] : normalized.tags;
+      normalized.tags = [...existing, ...(Array.isArray(normalized.tag) ? normalized.tag : [normalized.tag])];
+      delete normalized.tag;
+    }
+
+    normalizePricesAndStock(normalized);
+    if (Array.isArray(normalized.variations)) {
+      normalized.variations = normalized.variations.map((variation: any) => {
+        if (!variation || typeof variation !== 'object' || Array.isArray(variation)) return variation;
+        const normalizedVariation = { ...variation };
+        if (normalizedVariation.regular_price === undefined) {
+          normalizedVariation.regular_price = normalizedVariation.regularPrice ?? normalizedVariation.price;
+        }
+        if (normalizedVariation.sale_price === undefined) normalizedVariation.sale_price = normalizedVariation.salePrice;
+        if (normalizedVariation.stock_quantity === undefined) {
+          normalizedVariation.stock_quantity = normalizedVariation.stockQuantity ?? normalizedVariation.stock ?? normalizedVariation.quantity;
+        }
+        if (normalizedVariation.stock_status === undefined) normalizedVariation.stock_status = normalizedVariation.stockStatus;
+        if (normalizedVariation.tax_class === undefined) normalizedVariation.tax_class = normalizedVariation.taxClass ?? normalizedVariation.tax;
+        for (const alias of ['regularPrice', 'price', 'salePrice', 'stockQuantity', 'stock', 'quantity', 'stockStatus', 'taxClass', 'tax']) {
+          delete normalizedVariation[alias];
+        }
+        normalizePricesAndStock(normalizedVariation);
+        return normalizedVariation;
+      });
+    }
+    return normalized;
+  }
+
+  private async productCatalogConnection(merchantId: string, storeId: string,
+    actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+
+    if (!actor?.id) throw new ForbiddenException('Authentication is required');
+    const db = this.merchantRepository.requireDataSource();
+    const [store] = await db.query(
+      `SELECT s.id::text AS id, m.id::text AS merchant_id FROM public.stores s
+       JOIN public.merchants m ON m.id::text=s.merchant_id::text
+       WHERE s.id::text=$1 AND m.id::text=$2 AND COALESCE(s.is_deleted,false)=false
+         AND COALESCE(m.is_deleted,false)=false AND m.status='ACTIVE'`, [storeId, merchantId],
+    );
+    if (!store) throw new NotFoundException('Store not found for this merchant');
+    if ((actor.merchantId && actor.merchantId !== store.merchant_id) || (actor.storeId && actor.storeId !== store.id)) {
+      throw new ForbiddenException('Store does not match the authenticated session');
+    }
+    if (actor.role !== 'OWNER' && actor.role !== 'POS_EMPLOYEE') {
+      const [owner] = await db.query(
+        `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
+         WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+           AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
+        [actor.id, store.merchant_id],
+      );
+      if (!owner || actor.merchantId !== store.merchant_id) throw new ForbiddenException('Merchant access is required');
+    }
+    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
+    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) throw new BadRequestException('Connect and validate the WordPress site first');
+    const params = { storeId: store.id, wordpressUrl: connector.wordpressUrl, wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt) };
+    return { store, params };
+  }
+
+  @Post('stores/:storeId/catalog/:taxonomy')
+  @RequireAuth()
+  createCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('POST', storeId, taxonomy, undefined, body, request.user);
+  }
+
+  @Put('stores/:storeId/catalog/:taxonomy/:termId')
+  @RequireAuth()
+  updateCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Param('termId') termId: string, @Body() body: Record<string, unknown>, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('PUT', storeId, taxonomy, termId, body, request.user);
+  }
+
+  @Delete('stores/:storeId/catalog/:taxonomy/:termId')
+  @RequireAuth()
+  deleteCatalogTerm(@Param('storeId') storeId: string, @Param('taxonomy') taxonomy: string, @Param('termId') termId: string, @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
+    return this.mutateCatalogTerm('DELETE', storeId, taxonomy, termId, {}, request.user);
+  }
+
+  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+    if (!['categories', 'tags'].includes(taxonomy)) throw new NotFoundException('Catalog taxonomy must be categories or tags');
+    if (method !== 'POST' && (!termId || !/^[1-9]\d*$/.test(termId))) throw new BadRequestException('termId must be a positive WooCommerce ID');
+    if (!actor?.id) throw new ForbiddenException('Authentication is required');
+    const [store] = await this.merchantRepository.requireDataSource().query(
+      `SELECT s.id::text AS id,m.id::text AS merchant_id FROM public.stores s
+       JOIN public.merchants m ON m.id::text=s.merchant_id::text
+       WHERE (s.id::text=$1 OR s.store_code=$1) AND COALESCE(s.is_deleted,false)=false
+         AND COALESCE(m.is_deleted,false)=false AND m.status='ACTIVE'`, [storeId],
+    );
+    if (!store) throw new NotFoundException('Store not found');
+    if (actor.merchantId && actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    if (actor.role !== 'OWNER') {
+      const [owner] = await this.merchantRepository.requireDataSource().query(
+        `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
+         WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
+           AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`, [actor.id, store.merchant_id],
+      );
+      if (!owner || actor.merchantId !== store.merchant_id || (actor.storeId && actor.storeId !== store.id)) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    }
+    const allowed = taxonomy === 'categories' ? ['name','slug','description','parent','display','image','menu_order'] : ['name','slug','description'];
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a JSON object');
+    if (Object.keys(input).some(key => !allowed.includes(key))) throw new BadRequestException('Unsupported category or tag field');
+    if (method === 'POST' && (typeof input.name !== 'string' || !input.name.trim())) throw new BadRequestException('name is required');
+    for (const key of ['name','slug','description','display']) {
+      if (input[key] !== undefined && (typeof input[key] !== 'string' || (key === 'name' && !String(input[key]).trim()))) throw new BadRequestException(key + ' must be a string');
+    }
+    for (const key of ['parent','menu_order']) {
+      if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || Number(input[key]) < 0)) throw new BadRequestException(key + ' must be a non-negative integer');
+    }
+    if (method === 'PUT' && !Object.keys(input).length) throw new BadRequestException('Supply at least one field to update');
+    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
+    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) throw new BadRequestException('Connect and validate the WordPress site first');
+    const params = { storeId: store.id, wordpressUrl: connector.wordpressUrl, wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt) };
+    const suffix = termId ? '/' + termId : '';
+    const response = await fetch(params.wordpressUrl.replace(/\/+$/, '') + '/wp-json/wc/v3/products/' + taxonomy + suffix + (method === 'DELETE' ? '?force=true' : ''), {
+      method, headers: { Authorization: 'Bearer ' + params.wordpressJwt, 'Content-Type': 'application/json' },
+      ...(method !== 'DELETE' ? { body: JSON.stringify(input) } : {}), signal: AbortSignal.timeout(30000),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new BadRequestException({ message: data?.message || 'WordPress category/tag operation failed', upstreamStatus: response.status });
+    let synced = true;
+    try {
+      if (taxonomy === 'categories') await this.merchantRepository.syncStoreCategoriesFromWordPress({ ...params, includeAll: true });
+      else await this.merchantRepository.syncStoreTagsFromWordPress(params);
+    } catch {
+      synced = false;
+    }
+    return { success: true, storeId: store.id, taxonomy, data, synced, ...(synced ? {} : { message: 'WordPress change succeeded; refresh the PCH catalog using its sync API. Do not repeat the create operation.' }) };
+  }
+
   @Get('stores/:storeId/catalog/products/sku/:sku')
   async getStoreProductBySku(
     @Param('storeId') storeId: string,
@@ -474,6 +1075,7 @@ export class AppController {
       categoryCount: catalog.categories.length,
       productCount: catalog.products.length,
       categories: catalog.categories,
+      categoriesWithTax: catalog.categoriesWithTax,
       products: catalog.products,
     };
   }
@@ -484,6 +1086,13 @@ export class AppController {
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
     const payload = await this.merchantRepository.getStoreCategoriesByStoreId(store.id);
     return payload;
+  }
+
+  @Get('stores/:storeId/catalog/get-categories-with-tax')
+  async getCategoriesWithTax(@Param('storeId') storeId: string) {
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return this.merchantRepository.getStoreCategoriesWithTax(store.id);
   }
 
   @Get('stores/:storeId/catalog/taxonomies')

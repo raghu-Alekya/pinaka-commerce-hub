@@ -17,6 +17,7 @@ test('partial refund returns the Woo-compatible response', async () => {
   const result = await service({
     kind: 'created', orderId: 'order-uuid', orderNumber: '4364',
     refundedAmount: 10.77, refundId: '2b0a40c1-4281-44b3-a558-1ab9ba6a8a8d',
+    orderStatus: 'partial-refund',
   }).refund({
     order_id: 31345,
     reason: 'items are damaged',

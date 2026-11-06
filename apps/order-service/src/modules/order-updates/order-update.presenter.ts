@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { totalExcludingTax, type PosFeeLine, type PosLineItem } from '../../calculations/store-order.calculations';
 import { OrderResponsePresenter } from '../../responses/order-response.presenter';
 import type { OrderGraph } from './order-update.types';
 
@@ -14,13 +15,21 @@ export class OrderUpdatePresenter {
     const storeOrder = graph.storeOrder;
     delete stored.date_modified;
     delete stored.date_modified_gmt;
+    const totalTax = storeOrder?.taxTotal ?? graph.order.taxAmount;
     const request = {
       ...stored,
       status: storeOrder?.status || String(graph.order.orderStatus || '').toLowerCase(),
       currency: storeOrder?.currency || stored.currency,
       discount_total: storeOrder?.discountTotal ?? graph.order.discountAmount,
-      total: storeOrder?.total ?? graph.order.totalAmount,
-      total_tax: storeOrder?.taxTotal ?? graph.order.taxAmount,
+      total: totalExcludingTax({
+        total: storeOrder?.total ?? graph.order.totalAmount,
+        tax: totalTax,
+        lineItems: (storeOrder?.lineItems ?? stored.line_items) as PosLineItem[] | undefined,
+        feeLines: (storeOrder?.feeLines ?? stored.fee_lines) as PosFeeLine[] | undefined,
+        shippingTotal: stored.shipping_total ?? stored.shippingTotal,
+        tip: storeOrder?.tipAmount ?? graph.order.tipAmount,
+      }),
+      total_tax: totalTax,
       cart_tax: storeOrder?.taxTotal ?? stored.cart_tax,
       line_items: storeOrder?.lineItems ?? stored.line_items,
       coupon_lines: storeOrder?.couponLines ?? stored.coupon_lines,

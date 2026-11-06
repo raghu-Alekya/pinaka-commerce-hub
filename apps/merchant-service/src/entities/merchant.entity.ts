@@ -1,4 +1,4 @@
-import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { MerchantStatus } from './commerce-enums';
 
 export { MerchantStatus } from './commerce-enums';
@@ -28,30 +28,23 @@ export interface KycDocument {
   uploadedAt: string;
 }
 
-@Check('merchants_distinct_identity_code', `"merchant_code" <> "merchant_id"`)
 @Entity('merchants')
 export class MerchantEntity {
+  @Column({ name: 'password', type: 'varchar', length: 255, nullable: true, select: false })
+  password?: string | null;
+
   // =========================================================
   // IDENTITY
   // =========================================================
 
-  @Column({
-    name: 'id',
-    type: 'uuid',
-    unique: true,
-    default: () => 'gen_random_uuid()',
-  })
+  @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @PrimaryColumn({
-    name: 'merchant_code',
-    type: 'varchar',
-    length: 100,
-  })
-  merchantCode!: string;
-
+  /**
+   * Human-readable merchant code, assigned by the merchants trigger (MCH-0001).
+   */
   @Column({
-    name: 'merchant_id',
+    name: 'merchant_code',
     type: 'varchar',
     length: 100,
     unique: true,
