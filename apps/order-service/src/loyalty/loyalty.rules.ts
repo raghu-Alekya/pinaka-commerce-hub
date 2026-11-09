@@ -325,7 +325,8 @@ export function welcomePoints(input: {
   return input.mode === 'item' ? configured + input.itemPoints : configured;
 }
 
-export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[]): number {
+export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[], loyaltyTag = 'loyaltypoints'): number {
+  const requiredTag = String(loyaltyTag || 'loyaltypoints').trim().toLowerCase();
   let total = 0;
   for (const line of lines) {
     const productId = String(line.product_id ?? line.productId ?? '').trim();
@@ -334,7 +335,7 @@ export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[])
     const parent = direct?.parentId
       ? products.find((product) => product.id === direct.parentId) || direct
       : direct;
-    if (!parent || !parent.tags.includes('loyaltypoints')) continue;
+    if (!parent || !parent.tags.includes(requiredTag)) continue;
     const quantity = Number(line.quantity ?? 1);
     const useVariation = Boolean(variationId) && variationId !== '0';
     const variation = useVariation ? products.find((product) => product.id === variationId) : undefined;
