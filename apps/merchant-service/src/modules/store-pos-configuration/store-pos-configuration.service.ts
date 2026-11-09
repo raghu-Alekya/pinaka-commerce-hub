@@ -357,6 +357,7 @@ export class StorePosConfigurationsService {
         { name: 'merchant_discount', enabled: featureEnabled('merchantDiscounts') },
         { name: 'coupons', enabled: featureEnabled('coupons') },
         { name: 'loyalty', enabled: featureEnabled('loyalty') },
+        { name: 'cashback', enabled: featureEnabled('cashback') },
         { name: 'customer_display', enabled: featureEnabled('customerDisplay') },
         { name: 'weighing_scale', enabled: featureEnabled('weighingScale') },
       ],
