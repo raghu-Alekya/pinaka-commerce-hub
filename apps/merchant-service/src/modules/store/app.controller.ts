@@ -508,7 +508,7 @@ export class AppController {
     // for a full catalog sync here: it can be slow and causes the local proxy
     // to return 504 after the delete itself has already succeeded.
     return { success: true, merchant_id: store.merchant_id, store_id: store.id, data, synced: false,
-      message: 'Product removed from the PCH catalog and moved to WooCommerce trash.' };
+      message: 'Product deleted successfully.' };
   }
 
   @Post('pos/auth/catalog/products')
@@ -575,7 +575,7 @@ export class AppController {
       store_id: store.id,
       data,
       synced: false,
-      message: 'Product removed from the PCH catalog and moved to WooCommerce trash.',
+      message: 'Product deleted successfully.',
     };
   }
 

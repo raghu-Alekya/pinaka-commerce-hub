@@ -126,14 +126,25 @@ export class LoyaltyRepository {
   async saveLoyaltyConfig(scope: LoyaltyScope, value: Record<string, unknown>, manager?: Queryable): Promise<void> {
     const db = manager || await this.ensure();
     const actor = uuidOrNull(scope.actorId);
+    const updated = await db.query(
+      `UPDATE public.store_pos_configurations
+          SET configuration_value = $2::jsonb,
+              updated_by = $3::uuid,
+              updated_at = now()
+        WHERE store_id = $1::uuid
+          AND configuration_name = 'store_loyalty'
+        RETURNING id`,
+      [scope.storeId, JSON.stringify(value), actor],
+    );
+    if (updated.length) return;
     await db.query(
       `INSERT INTO public.store_pos_configurations
          (store_id, configuration_name, configuration_value, created_by, updated_by)
-       VALUES ($1::uuid, 'store_loyalty', $2::jsonb, $3::uuid, $3::uuid)
-       ON CONFLICT (store_id, configuration_name) DO UPDATE
-         SET configuration_value = EXCLUDED.configuration_value,
-             updated_by = EXCLUDED.updated_by,
-             updated_at = now()`,
+       SELECT $1::uuid, 'store_loyalty', $2::jsonb, $3::uuid, $3::uuid
+        WHERE NOT EXISTS (
+          SELECT 1 FROM public.store_pos_configurations
+           WHERE store_id = $1::uuid AND configuration_name = 'store_loyalty'
+        )`,
       [scope.storeId, JSON.stringify(value), actor],
     );
   }
@@ -236,13 +247,26 @@ export class LoyaltyRepository {
   async writeMeta(customerId: string, entries: Record<string, unknown>, manager: Queryable): Promise<void> {
     const pairs = Object.entries(entries);
     if (!pairs.length) return;
-    await manager.query(
-      `INSERT INTO public.store_customer_meta_data (customer_id, meta_key, meta_value)
-       VALUES ${pairs.map((_, index) => `($1::uuid, $${index * 2 + 2}, $${index * 2 + 3}::jsonb)`).join(', ')}
-       ON CONFLICT (customer_id, meta_key)
-       DO UPDATE SET meta_value = EXCLUDED.meta_value, updated_at = now()`,
-      [customerId, ...pairs.flatMap(([key, value]) => [key, JSON.stringify(value)])],
-    );
+    for (const [key, value] of pairs) {
+      const updated = await manager.query(
+        `UPDATE public.store_customer_meta_data
+            SET meta_value = $3::jsonb,
+                updated_at = now()
+          WHERE customer_id = $1::uuid AND meta_key = $2
+          RETURNING id`,
+        [customerId, key, JSON.stringify(value)],
+      );
+      if (updated.length) continue;
+      await manager.query(
+        `INSERT INTO public.store_customer_meta_data (customer_id, meta_key, meta_value)
+         SELECT $1::uuid, $2, $3::jsonb
+          WHERE NOT EXISTS (
+            SELECT 1 FROM public.store_customer_meta_data
+             WHERE customer_id = $1::uuid AND meta_key = $2
+          )`,
+        [customerId, key, JSON.stringify(value)],
+      );
+    }
   }
 
   async lockOrder(scope: LoyaltyScope, orderKey: string, manager: Queryable): Promise<OrderRow | undefined> {

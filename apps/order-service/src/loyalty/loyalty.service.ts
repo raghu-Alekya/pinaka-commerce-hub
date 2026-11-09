@@ -122,7 +122,7 @@ export class LoyaltyService implements OnModuleInit {
       const settings = await this.settings(scope, manager);
       const lines = asLines(order.line_items);
       const products = settings.mode === 'item' ? flattenCatalog(await this.loyalty.catalog(scope, manager)) : [];
-      const itemPoints = settings.mode === 'item' ? taggedItemPoints(lines, products) : 0;
+      const itemPoints = settings.mode === 'item' ? taggedItemPoints(lines, products, settings.loyaltyTag) : 0;
       let customer = await this.loyalty.findCustomer(scope, contact, email, manager);
       const existing = Boolean(customer);
       if (!customer) {
@@ -537,7 +537,7 @@ export class LoyaltyService implements OnModuleInit {
       const products = flattenCatalog(await this.loyalty.catalog(scope, manager));
       const creditedLines = lines.map((line) => {
         if (isLoyaltyLine(line)) return line;
-        const earned = Math.floor(taggedItemPoints([line], products));
+        const earned = Math.floor(taggedItemPoints([line], products, settings.loyaltyTag));
         return earned > 0 ? withLineMeta(line, '_credited_loyalty_points', earned) : line;
       });
       points = creditedLines.reduce((sum, line) => sum + Math.trunc(Number(lineMeta(line, '_credited_loyalty_points')) || 0), 0);
