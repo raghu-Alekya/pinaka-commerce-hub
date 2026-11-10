@@ -155,6 +155,18 @@ export class SettingsApiService {
     };
     const target = targets[key];
     const configurations = target ? { [target[0]]: { [target[1]]: Boolean(enabled) } } : {};
+    if (key === 'enable_safes' && !enabled) {
+      configurations.safe_and_safe_drop = {
+        ...(configurations.safe_and_safe_drop ?? {}),
+        dropEnabled: false,
+      };
+    }
+    if (key === 'enable_safes_drop' && enabled) {
+      const currentFlags = await this.repository.readConfigurationFlags(scope);
+      if (!this.boolean(currentFlags.safe_and_safe_drop?.enabled)) {
+        throw new BadRequestException('Safe must be enabled before Safe Drop can be enabled.');
+      }
+    }
     if (key === 'enable_cashback' || key === 'enable_service_charge') {
       const configKey = key === 'enable_cashback' ? 'cashback' : 'service_charge';
       const current = (await this.repository.read(scope))[configKey] ?? {};

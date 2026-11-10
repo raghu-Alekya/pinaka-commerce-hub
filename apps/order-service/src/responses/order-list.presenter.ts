@@ -478,8 +478,8 @@ export class OrderListPresenter {
       ...(Array.isArray(order.metadata) ? order.metadata : []),
       ...(Array.isArray(request.meta_data) ? request.meta_data : []),
     ] as Array<{ key?: string; value?: unknown }>;
-    const pointsEntry = metadata.find((item) => item?.key === 'redeem_points');
-    const amountEntry = metadata.find((item) => item?.key === 'redeem_amount');
+    const pointsEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_points');
+    const amountEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_amount');
     const points = Number(pointsEntry?.value ?? 0);
     const amount = Number(amountEntry?.value ?? loyaltyAmountFromMeta(metadata));
     return {

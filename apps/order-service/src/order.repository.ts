@@ -3133,8 +3133,36 @@ export class OrderRepository implements OnModuleInit {
       const code = error && typeof error === 'object'
         ? (error as { driverError?: { code?: string } }).driverError?.code
         : undefined;
-      if (code === '42P01') return;
-      throw error;
+      if (code !== '42P01') throw error;
+      rows = [];
+    }
+    // Older loyalty redemptions were written to the points ledger before
+    // redeem_points was mirrored into store_orders_meta. Keep total-orders
+    // consistent with the loyalty detail endpoint for those orders.
+    try {
+      const ledgerRows: Array<{ order_id: string; redeemed_points: unknown }> = await this.dataSource.query(
+        `SELECT order_id::text AS order_id, COALESCE(SUM(redeemed_points), 0) AS redeemed_points
+           FROM public.store_customer_loyalty_points
+          WHERE order_id = ANY($1::uuid[])
+          GROUP BY order_id`,
+        [ids],
+      );
+      const existing = new Map<string, number>();
+      rows.forEach((row) => {
+        if (row.meta_key !== 'redeem_points') return;
+        existing.set(row.order_id, Number(row.meta_value) || 0);
+      });
+      ledgerRows.forEach((row) => {
+        const points = Math.max(0, Math.trunc(Number(row.redeemed_points) || 0));
+        if (points > (existing.get(row.order_id) || 0)) {
+          rows.push({ order_id: row.order_id, meta_key: 'redeem_points', meta_value: points });
+        }
+      });
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code !== '42P01') throw error;
     }
     const byOrder = new Map<string, Array<{ key: string; value: unknown }>>();
     rows.forEach((row) => {

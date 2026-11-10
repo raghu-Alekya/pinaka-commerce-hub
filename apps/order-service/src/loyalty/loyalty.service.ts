@@ -256,7 +256,12 @@ export class LoyaltyService implements OnModuleInit {
       // Match WooCommerce: only points actually available in the FIFO ledger
       // may be redeemed; never create a redemption larger than the balance.
       const appliedRedeemPoints = Math.min(redeemPoints, Math.trunc(Math.max(0, availableBeforeRedemption)));
-      const amount = Number.isFinite(redeemAmount) ? redeemAmount : 0;
+      // The POS may send redeem_points without redeem_amount. In that case
+      // use the configured value for one redemption unit; otherwise the
+      // points ledger is updated while the order shows $0.00 used.
+      const amount = Number.isFinite(redeemAmount) && redeemAmount > 0
+        ? redeemAmount
+        : roundMoney(settings.redeemAmount);
       const nextLines = upsertLoyaltyLine(lines, loyaltyProduct, amount, order.order_id);
       const priced = priceOrder(order, nextLines);
       order.line_items = nextLines;
