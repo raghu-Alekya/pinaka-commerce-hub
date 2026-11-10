@@ -295,6 +295,10 @@ export class StorePosConfigurationsService {
       ? functionalityConfig.features as Record<string, unknown>
       : functionalityConfig;
     const featureEnabled = (key: string) => Boolean(featureSettings[key]);
+    const configurationEnabled = (configuration: Record<string, unknown> | null | undefined, key: string) => {
+      const value = configuration?.[key];
+      return value === true || value === 1 || value === '1';
+    };
 
     const storeRows = await this.optionalRows(
       `SELECT store_website_url, store_name, address_line1, city, state, country, postal_code, phone
@@ -346,7 +350,6 @@ export class StorePosConfigurationsService {
         { name: 'payout', enabled: featureEnabled('payouts') },
         { name: 'fast_keys', enabled: featureEnabled('fastKeys') },
         { name: 'custom_item', enabled: featureEnabled('customItems') },
-        { name: 'cash_payments', enabled: featureEnabled('cashPayments') },
         { name: 'card_payments', enabled: featureEnabled('cardPayments') },
         { name: 'partial_payments', enabled: featureEnabled('partialPayments') },
         { name: 'pay_later', enabled: featureEnabled('payLater') },
@@ -357,7 +360,9 @@ export class StorePosConfigurationsService {
         { name: 'merchant_discount', enabled: featureEnabled('merchantDiscounts') },
         { name: 'coupons', enabled: featureEnabled('coupons') },
         { name: 'loyalty', enabled: featureEnabled('loyalty') },
-        { name: 'cashback', enabled: featureEnabled('cashback') },
+        { name: 'cashback', enabled: configurationEnabled(configByName.get('cashback_settings'), 'enabled') },
+        { name: 'safe', enabled: configurationEnabled(safeConfig, 'enabled') },
+        { name: 'safe_drop', enabled: configurationEnabled(safeConfig, 'dropEnabled') || configurationEnabled(safeConfig, 'dropenabled') },
         { name: 'customer_display', enabled: featureEnabled('customerDisplay') },
         { name: 'weighing_scale', enabled: featureEnabled('weighingScale') },
       ],
