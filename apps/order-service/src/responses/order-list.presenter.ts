@@ -97,6 +97,7 @@ export class OrderListPresenter {
       taxLines: corrected.taxLines,
     });
     const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
+    const loyaltyRedemption = this.loyaltyRedemption(order, storeOrder, request);
     const correctedStoredTotal = corrected.corrected
       ? sumLineTotals(corrected.lineItems as any[]) + effectiveFeeTotal(corrected.calculationFees as any[])
         + Number(request.shipping_total ?? request.shippingTotal ?? 0)
@@ -142,6 +143,8 @@ export class OrderListPresenter {
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
       loyalty_amount: this.money(loyaltyAmount),
+      redeem_points: loyaltyRedemption.points,
+      redeem_amount: this.money(loyaltyRedemption.amount),
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
@@ -462,6 +465,27 @@ export class OrderListPresenter {
       ...(Array.isArray(request.meta_data) ? request.meta_data : []),
     ] as Array<{ key?: string; value?: unknown }>;
     return loyaltyAmountFromMeta(metadata);
+  }
+
+  private loyaltyRedemption(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): { points: number; amount: number } {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    const pointsEntry = metadata.find((item) => item?.key === 'redeem_points');
+    const amountEntry = metadata.find((item) => item?.key === 'redeem_amount');
+    const points = Number(pointsEntry?.value ?? 0);
+    const amount = Number(amountEntry?.value ?? loyaltyAmountFromMeta(metadata));
+    return {
+      points: Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0,
+      amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    };
   }
 
   private orderPlacedAt(
