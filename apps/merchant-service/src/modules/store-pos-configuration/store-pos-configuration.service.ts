@@ -289,6 +289,7 @@ export class StorePosConfigurationsService {
     const taxesConfig = configByName.get('currency_taxes') ?? null;
     const cashConfig = configByName.get('cash_denominations') ?? null;
     const safeConfig = configByName.get('safe_and_safe_drop') ?? null;
+    const serviceChargeConfig = configByName.get('service_charges') ?? null;
     const registerConfig = configByName.get('cash_register_settings') ?? null;
     const functionalityConfig = configByName.get('functionality_settings') ?? {};
     const featureSettings = (functionalityConfig.features && typeof functionalityConfig.features === 'object')
@@ -363,6 +364,7 @@ export class StorePosConfigurationsService {
         { name: 'cashback', enabled: configurationEnabled(configByName.get('cashback_settings'), 'enabled') },
         { name: 'safe', enabled: configurationEnabled(safeConfig, 'enabled') },
         { name: 'safe_drop', enabled: configurationEnabled(safeConfig, 'dropEnabled') || configurationEnabled(safeConfig, 'dropenabled') },
+        { name: 'service_charge', enabled: configurationEnabled(serviceChargeConfig, 'enabled') },
         { name: 'customer_display', enabled: featureEnabled('customerDisplay') },
         { name: 'weighing_scale', enabled: featureEnabled('weighingScale') },
       ],
