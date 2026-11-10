@@ -16,8 +16,10 @@ export function isLoyaltyRedemptionLine(line: LoyaltyLine | null | undefined): b
 }
 
 export function loyaltyAmountFromMeta(metadata: Array<{ key?: string; value?: unknown }>): number {
-  const entry = metadata.find((item) => item?.key === 'redeemed_value');
-  const legacy = metadata.find((item) => item?.key === 'redeem_amount');
+  // Metadata can be present both on the order and in store_orders_meta. The
+  // latter is the authoritative/latest copy, so read from the end.
+  const entry = [...metadata].reverse().find((item) => item?.key === 'redeemed_value');
+  const legacy = [...metadata].reverse().find((item) => item?.key === 'redeem_amount');
   const stored = entry?.value && typeof entry.value === 'object'
     ? (entry.value as { redeem_amount?: unknown }).redeem_amount
     : entry?.value;
