@@ -481,7 +481,10 @@ export class OrderListPresenter {
     const pointsEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_points');
     const amountEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_amount');
     const points = Number(pointsEntry?.value ?? 0);
-    const amount = Number(amountEntry?.value ?? loyaltyAmountFromMeta(metadata));
+    const storedAmount = Number(amountEntry?.value);
+    const amount = Number.isFinite(storedAmount) && storedAmount > 0
+      ? storedAmount
+      : loyaltyAmountFromMeta(metadata);
     return {
       points: Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0,
       amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
