@@ -3597,6 +3597,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   async upsertStoreProductRecords(
     storeId: string,
     records: unknown[],
+    deletedVariationId?: string,
   ): Promise<void> {
     const incoming = records.filter(
       (value): value is Record<string, unknown> =>
@@ -3621,6 +3622,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       }
     }
     for (const record of incoming) byId.set(String(record.id), record);
+    if (deletedVariationId) byId.delete(deletedVariationId);
     await this.saveStoreProductPayload(storeId, [...byId.values()]);
   }
 

@@ -487,6 +487,36 @@ export class AppController {
     return this.mutateStoreProduct(merchantId, storeId, input, request, image, productId);
   }
 
+  @Delete('merchants/:merchantId/stores/:storeId/catalog/products/:productId/variations/:variationId')
+  @RequireAuth()
+  async deleteStoreProductVariation(
+    @Param('merchantId') merchantId: string,
+    @Param('storeId') storeId: string,
+    @Param('productId') productId: string,
+    @Param('variationId') variationId: string,
+    @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } },
+  ) {
+    if (!/^[1-9]\d*$/.test(productId) || !/^[1-9]\d*$/.test(variationId)) {
+      throw new BadRequestException('productId and variationId must be positive WooCommerce IDs');
+    }
+    const { store, params } = await this.productCatalogConnection(merchantId, storeId, request.user);
+    const data = await this.productWriteRequest(params, `products/${productId}/variations/${variationId}?force=true`, 'DELETE');
+
+    let synced = false;
+    try {
+      const parent = await this.productWriteRequest(params, `products/${productId}`, 'GET');
+      await this.merchantRepository.upsertStoreProductRecords(store.id, [parent], variationId);
+      synced = true;
+    } catch {
+      // The variation has already been deleted in WooCommerce.
+    }
+    return {
+      success: true, merchant_id: store.merchant_id, store_id: store.id, data, synced,
+      message: synced ? 'Product variation deleted successfully.'
+        : 'Variation deleted in WordPress. Run catalog sync to refresh the local product catalog.',
+    };
+  }
+
   @Delete('merchants/:merchantId/stores/:storeId/catalog/products/:productId')
   @RequireAuth()
   async deleteStoreProduct(@Param('merchantId') merchantId: string, @Param('storeId') storeId: string, @Param('productId') productId: string,
