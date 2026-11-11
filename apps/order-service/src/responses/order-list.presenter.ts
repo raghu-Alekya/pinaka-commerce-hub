@@ -149,7 +149,6 @@ export class OrderListPresenter {
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
       change_amount: this.money(this.metaValueFromPayloadOrOrder(request, order, 'pos_change_returned')),
-      cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
       currency,

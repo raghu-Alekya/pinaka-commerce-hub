@@ -117,10 +117,9 @@ export class DiscountService implements OnModuleInit {
       const records = response?.data?.[group];
       if (!Array.isArray(records)) continue;
       for (const record of records) {
-        const recordId = record?.id ?? record?.discount_id ?? record?.wordpressId;
-        if (recordId === undefined || recordId === null) continue;
+        if (record?.id === undefined || record?.id === null) continue;
         await this.persistWithoutChangingResponse(
-          () => this.saveDiscount(storeId, group, this.canonicalizeWordPressRecord(record), String(recordId)),
+          () => this.saveDiscount(storeId, group, this.canonicalizeWordPressRecord(record), String(record.id)),
           storeId,
         );
       }
@@ -139,34 +138,10 @@ export class DiscountService implements OnModuleInit {
       const localRecords = localPayload[group];
       if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
       for (const remote of remoteRecords) {
-        const remoteId = remote?.id ?? remote?.discount_id ?? remote?.wordpressId;
-        if (remoteId === undefined || remoteId === null) continue;
-        const local = localRecords.find((item: any) => this.discountMatchesId(item, String(remoteId)));
+        const local = localRecords.find((item: any) => this.discountMatchesId(item, String(remote?.id)));
         if (!local) continue;
         const used = Number(local.usage_count ?? local.usageCount ?? 0);
         if (Number.isFinite(used)) remote.usage_count = Math.max(0, used);
-      }
-    }
-    // WooCommerce may omit a used rule from its admin listing. Keep a locally
-    // tracked applied discount visible even when the remote catalog leaves it out.
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      if (Number(wordpressQuery.page ?? 1) !== 1) break;
-      const remoteRecords = response?.data?.[group];
-      const localRecords = localPayload[group];
-      if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
-      const remoteIds = new Set(remoteRecords.map((item: any) => String(item?.id ?? item?.discount_id ?? item?.wordpressId ?? '')));
-      for (const local of localRecords) {
-        const localId = local?.id ?? local?.discount_id ?? local?.wordpressId;
-        if (localId === undefined || localId === null || remoteIds.has(String(localId))) continue;
-        const used = Number(local.usage_count ?? local.usageCount ?? 0);
-        const orderIds = Array.isArray(local.pch_used_order_ids) ? local.pch_used_order_ids : [];
-        const applications = local.pch_used_applications_by_order;
-        if (!(Number.isFinite(used) && used > 0) && !orderIds.length
-          && !(applications && typeof applications === 'object' && Object.keys(applications).length)) continue;
-        const retained = this.canonicalizeWordPressRecord(local);
-        retained.usage_count = Math.max(Number.isFinite(used) ? Math.max(0, used) : 0, orderIds.length);
-        remoteRecords.push(retained);
-        remoteIds.add(String(localId));
       }
     }
     if (!type) return response;
@@ -738,10 +713,6 @@ export class DiscountService implements OnModuleInit {
         const current = records[index];
         const currentUsed = Math.max(Number(current?.usage_count ?? current?.usageCount ?? 0), 0);
         record.pch_used_order_ids = Array.isArray(current?.pch_used_order_ids) ? current.pch_used_order_ids : [];
-        if (current?.pch_used_applications_by_order
-          && typeof current.pch_used_applications_by_order === 'object') {
-          record.pch_used_applications_by_order = current.pch_used_applications_by_order;
-        }
         // Once a local snapshot exists, PCH is authoritative. A stale or
         // divergent WordPress count must not replace the PCH value.
         record.usage_count = currentUsed;
@@ -790,7 +761,6 @@ export class DiscountService implements OnModuleInit {
     }
     const payload: Record<string, Record<string, unknown>[]> = { auto: [], mix_match: [], multipack: [] };
     const localPayload = await this.readDiscountPayload(params.storeId);
-    const wordpressUsageByDiscount = new Map<string, number>();
     const seen = new Set<string>();
     let skippedCount = 0;
     let completed = false;
@@ -815,20 +785,12 @@ export class DiscountService implements OnModuleInit {
           seen.add(key);
           const localRecords = Array.isArray(localPayload[group]) ? localPayload[group] : [];
           const localRecord = localRecords.find((item: any) => this.discountMatchesId(item, String(discount.id)));
-          wordpressUsageByDiscount.set(
-            group + ':' + String(discount.id),
-            Math.max(Number(discount.usage_count ?? discount.usageCount ?? 0), 0),
-          );
           if (localRecord) {
             const localUsage = Math.max(Number(localRecord.usage_count ?? localRecord.usageCount ?? 0), 0);
             const remoteUsage = Math.max(Number(discount.usage_count ?? discount.usageCount ?? 0), 0);
             const usedOrderIds = Array.isArray(localRecord.pch_used_order_ids)
               ? localRecord.pch_used_order_ids.map(String)
               : [];
-            const applicationsByOrder = localRecord.pch_used_applications_by_order
-              && typeof localRecord.pch_used_applications_by_order === 'object'
-              ? localRecord.pch_used_applications_by_order
-              : undefined;
             let usageSynced = localRecord.pch_usage_sync_pending !== true && remoteUsage === localUsage;
             if (!usageSynced) {
               try {
@@ -846,7 +808,6 @@ export class DiscountService implements OnModuleInit {
             discount.usageCount = discount.usage_count;
             discount.pch_usage_sync_pending = !usageSynced;
             if (usedOrderIds.length) discount.pch_used_order_ids = usedOrderIds;
-            if (applicationsByOrder) discount.pch_used_applications_by_order = applicationsByOrder;
           }
           // Mirror all discounts from WooCommerce. A discount can reference products
           // that are not present in the local product snapshot; filtering those here
@@ -865,57 +826,8 @@ export class DiscountService implements OnModuleInit {
       }
     }
     if (!completed) throw new BadRequestException('Discount pagination limit reached; saved discounts were not replaced');
-    await this.merchants.requireDataSource().transaction(async manager => {
-      // The network sync above can take long enough for an order transaction to
-      // add usage. Re-read while holding the snapshot row lock so this refresh
-      // never replaces a newer PCH usage ledger with the earlier snapshot.
-      const [latestRow] = await manager.query(
-        `SELECT payload FROM public.store_discounts
-          WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
-        [params.storeId],
-      );
-      const latestPayload = latestRow?.payload ?? { auto: [], mix_match: [], multipack: [] };
-      for (const group of ['auto', 'mix_match', 'multipack']) {
-        for (const discount of payload[group]) {
-          const current = (Array.isArray(latestPayload[group]) ? latestPayload[group] : [])
-            .find((item: any) => this.discountMatchesId(item, String(discount.id)));
-          if (!current) continue;
-          const currentUsage = Math.max(Number(current.usage_count ?? current.usageCount ?? 0), 0);
-          discount.usage_count = currentUsage;
-          discount.usageCount = currentUsage;
-          if (Array.isArray(current.pch_used_order_ids)) {
-            discount.pch_used_order_ids = current.pch_used_order_ids.map(String);
-          }
-          if (current.pch_used_applications_by_order
-            && typeof current.pch_used_applications_by_order === 'object') {
-            discount.pch_used_applications_by_order = current.pch_used_applications_by_order;
-          }
-          const wordpressUsage = wordpressUsageByDiscount.get(group + ':' + String(discount.id));
-          discount.pch_usage_sync_pending = current.pch_usage_sync_pending === true
-            || (wordpressUsage !== undefined && wordpressUsage !== currentUsage);
-        }
-      }
-      // A WooCommerce refresh can omit a rule that still has a PCH order ledger.
-      // Preserve those locally applied discounts when replacing the full snapshot.
-      for (const group of ['auto', 'mix_match', 'multipack']) {
-        const incoming = payload[group];
-        const incomingIds = new Set(incoming.map((item: any) => String(item?.id ?? item?.discount_id ?? item?.wordpressId ?? '')));
-        for (const current of Array.isArray(latestPayload[group]) ? latestPayload[group] : []) {
-          const currentId = current?.id ?? current?.discount_id ?? current?.wordpressId;
-          if (currentId === undefined || currentId === null || incomingIds.has(String(currentId))) continue;
-          const used = Number(current.usage_count ?? current.usageCount ?? 0);
-          const orderIds = Array.isArray(current.pch_used_order_ids) ? current.pch_used_order_ids : [];
-          const applications = current.pch_used_applications_by_order;
-          if (!(Number.isFinite(used) && used > 0) && !orderIds.length
-            && !(applications && typeof applications === 'object' && Object.keys(applications).length)) continue;
-          const retained = this.canonicalizeWordPressRecord(current);
-          retained.usage_count = Math.max(Number.isFinite(used) ? Math.max(0, used) : 0, orderIds.length);
-          incoming.push(retained);
-          incomingIds.add(String(currentId));
-        }
-      }
-      await this.writeDiscountSnapshot(manager, params.storeId, payload);
-    });
+    await this.merchants.requireDataSource().transaction(manager =>
+      this.writeDiscountSnapshot(manager, params.storeId, payload));
     return {
       discountCount: Object.values(payload).reduce((sum, items) => sum + items.length, 0),
       skippedCount,

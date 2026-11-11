@@ -289,7 +289,17 @@ export class StorePosConfigurationsService {
     const taxesConfig = configByName.get('currency_taxes') ?? null;
     const cashConfig = configByName.get('cash_denominations') ?? null;
     const safeConfig = configByName.get('safe_and_safe_drop') ?? null;
+    const serviceChargeConfig = configByName.get('service_charges') ?? null;
     const registerConfig = configByName.get('cash_register_settings') ?? null;
+    const functionalityConfig = configByName.get('functionality_settings') ?? {};
+    const featureSettings = (functionalityConfig.features && typeof functionalityConfig.features === 'object')
+      ? functionalityConfig.features as Record<string, unknown>
+      : functionalityConfig;
+    const featureEnabled = (key: string) => Boolean(featureSettings[key]);
+    const configurationEnabled = (configuration: Record<string, unknown> | null | undefined, key: string) => {
+      const value = configuration?.[key];
+      return value === true || value === 1 || value === '1';
+    };
 
     const storeRows = await this.optionalRows(
       `SELECT store_website_url, store_name, address_line1, city, state, country, postal_code, phone
@@ -302,7 +312,9 @@ export class StorePosConfigurationsService {
 
     const taxes = this.taxList(taxesConfig);
     const currency = this.textOrNull(taxesConfig?.currency);
-    const currencySymbol = this.textOrNull(taxesConfig?.currencySymbol);
+    const currencySymbol = this.textOrNull(
+      taxesConfig?.currency_symbol ?? taxesConfig?.currencySymbol,
+    );
     const [notesDenom, coinDenom] = await this.cashDenominations(resolvedStoreId, cashConfig);
     const safe = await this.safeDrop(resolvedStoreId, safeConfig, currencySymbol);
     const roles = await this.storeRoles(resolvedStoreId);
@@ -335,6 +347,27 @@ export class StorePosConfigurationsService {
       vendors,
       vendor_payment_types: vendorPaymentTypes,
       employees,
+      custom_features: [
+        { name: 'payout', enabled: featureEnabled('payouts') },
+        { name: 'fast_keys', enabled: featureEnabled('fastKeys') },
+        { name: 'custom_item', enabled: featureEnabled('customItems') },
+        { name: 'card_payments', enabled: featureEnabled('cardPayments') },
+        { name: 'partial_payments', enabled: featureEnabled('partialPayments') },
+        { name: 'pay_later', enabled: featureEnabled('payLater') },
+        { name: 'ebt_payments', enabled: featureEnabled('ebtPayments') },
+        { name: 'full_refunds', enabled: featureEnabled('fullRefunds') },
+        { name: 'partial_refunds', enabled: featureEnabled('partialRefunds') },
+        { name: 'discounts', enabled: featureEnabled('discounts') },
+        { name: 'merchant_discount', enabled: featureEnabled('merchantDiscounts') },
+        { name: 'coupons', enabled: featureEnabled('coupons') },
+        { name: 'loyalty', enabled: featureEnabled('loyalty') },
+        { name: 'cashback', enabled: configurationEnabled(configByName.get('cashback_settings'), 'enabled') },
+        { name: 'safe', enabled: configurationEnabled(safeConfig, 'enabled') },
+        { name: 'safe_drop', enabled: configurationEnabled(safeConfig, 'dropEnabled') || configurationEnabled(safeConfig, 'dropenabled') },
+        { name: 'service_charge', enabled: configurationEnabled(serviceChargeConfig, 'enabled') },
+        { name: 'customer_display', enabled: featureEnabled('customerDisplay') },
+        { name: 'weighing_scale', enabled: featureEnabled('weighingScale') },
+      ],
       order_types: [
         { slug: 'rest-api', name: 'Shop Order' },
         { slug: 'doordash', name: 'Takeaway Order' },

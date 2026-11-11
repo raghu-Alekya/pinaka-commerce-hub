@@ -491,33 +491,28 @@ export class OrderRepository implements OnModuleInit {
     const normalizedPaymentStatus = String(paymentStatus).trim().toUpperCase();
     const normalizedOrderStatus = String(orderStatus).trim().toUpperCase();
     const normalizedSourceStatus = String(sourceOrderStatus ?? '').trim().toLowerCase();
-    const eligible = normalizedPaymentStatus === PaymentStatus.PAID
-      && !['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
-      && !['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus);
-    const couponCodes = eligible && Array.isArray(couponLines)
+    if (normalizedPaymentStatus !== PaymentStatus.PAID
+      || ['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
+      || ['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus)) return;
+    const couponCodes = Array.isArray(couponLines)
       ? couponLines.map((line: any) => String(line?.code ?? '').trim().toLowerCase())
       : [];
-    const metadataCodes = eligible && Array.isArray(metadata)
+    const metadataCodes = Array.isArray(metadata)
       ? metadata
         .filter((entry: any) => ['_pinaka_discount_code', 'pinaka_discount_code', 'discount_code', '_discount_code']
           .includes(String(entry?.key ?? '').trim().toLowerCase()))
         .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
       : [];
-    const ruleApplications = eligible && Array.isArray(lineItems)
-      ? lineItems.flatMap((line: any) => {
-        const entries = Array.isArray(line?.meta_data) ? line.meta_data : [];
-        const applicationCount = entries.find((entry: any) => [
-          '_pos_discount_application_count', 'pos_discount_application_count',
-          'discount_application_count', 'application_count',
-        ].includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
-        const explicitCount = Number(applicationCount);
-        const count = Number.isFinite(explicitCount) && explicitCount > 0 ? Math.floor(explicitCount) : 1;
-        return entries
-          .filter((entry: any) => String(entry?.key ?? '').trim().toLowerCase() === '_pos_discount_rule_id')
-          .map((entry: any) => ({ id: String(entry?.value ?? '').trim().toLowerCase(), count }));
-      })
+    const ruleIds = Array.isArray(lineItems)
+      ? lineItems.flatMap((line: any) => Array.isArray(line?.meta_data)
+        ? line.meta_data
+          .filter((entry: any) => String(entry?.key ?? '').trim() === '_pos_discount_rule_id')
+          .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
+        : [])
       : [];
-    const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
+    const codes = [...new Set([...couponCodes, ...metadataCodes].filter(Boolean))];
+    const ids = [...new Set(ruleIds.filter(Boolean))];
+    if (!codes.length && !ids.length) return;
     const rows = await manager.query(
       `SELECT payload FROM public.store_discounts
         WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
@@ -538,53 +533,27 @@ export class OrderRepository implements OnModuleInit {
           .filter((value: unknown) => value !== undefined && value !== null)
           .map((value: unknown) => String(value).trim().toLowerCase());
         const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
-        const matchingRuleApplications = ruleApplications
-          .filter(({ id }) => {
-            if (!id.startsWith(rulePrefix)) return false;
-            const suffix = id.slice(rulePrefix.length);
-            return recordIds.some(recordId => recordId === suffix || recordId === id || recordId.endsWith(`:${suffix}`));
-          })
-          .reduce((sum, application) => sum + application.count, 0);
-        // The POS rule marker is the per-application signal. Coupon codes are a
-        // fallback for coupon-based applications; don't count both representations
-        // of the same application when an order contains both. If rule markers
-        // are present, never let a same-named catalog record in another type
-        // consume the coupon fallback.
-        const applications = eligible
-          ? matchingRuleApplications || (!ruleApplications.length && code
-            ? codes.filter(appliedCode => appliedCode === code).length
-            : 0)
-          : 0;
+        const ruleIdMatches = ids.some(ruleId => {
+          if (!ruleId.startsWith(rulePrefix)) return false;
+          const suffix = ruleId.slice(rulePrefix.length);
+          return recordIds.includes(suffix);
+        });
+        if (!codes.includes(code) && !ruleIdMatches) continue;
         const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
-        const byOrder = record.pch_used_applications_by_order
-          && typeof record.pch_used_applications_by_order === 'object'
-          ? record.pch_used_applications_by_order as Record<string, number>
-          : {};
-        const hadOrder = Object.prototype.hasOwnProperty.call(byOrder, orderId);
-        // Backfill old snapshots conservatively: the old implementation counted
-        // each previously seen order once, so treat that as one prior application.
-        const previousApplications = hadOrder
-          ? Math.max(Number(byOrder[orderId]) || 0, 0)
-          : usedOrderIds.includes(orderId) ? 1 : 0;
-        if (applications === 0 && !usedOrderIds.includes(orderId) && !hadOrder) continue;
-        if (applications === previousApplications) continue;
+        if (usedOrderIds.includes(orderId)) continue;
         const usageCount = Math.max(Number(record.usage_count ?? record.usageCount ?? 0), 0);
         const usageLimitValue = record.usage_limit ?? record.usageLimit;
         const usageLimit = usageLimitValue === null || usageLimitValue === undefined || usageLimitValue === ''
           ? null
           : Number(usageLimitValue);
-        const nextUsage = Math.max(usageCount + applications - previousApplications, 0);
-        if (applications > previousApplications
-          && usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && nextUsage > usageLimit) {
+        if (usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && usageCount >= usageLimit) {
           throw new BadRequestException(`Discount '${code || record.code || record.id}' has reached its usage limit`);
         }
-        if (applications > 0 && !usedOrderIds.includes(orderId)) usedOrderIds.push(orderId);
-        if (applications > 0) byOrder[orderId] = applications;
-        else delete byOrder[orderId];
-        record.pch_used_order_ids = usedOrderIds.filter(id => id !== orderId || applications > 0);
-        record.pch_used_applications_by_order = byOrder;
-        record.usage_count = nextUsage;
-        record.usageCount = nextUsage;
+        usedOrderIds.push(orderId);
+        record.pch_used_order_ids = usedOrderIds;
+        const count = usageCount + 1;
+        record.usage_count = count;
+        record.usageCount = count;
         record.pch_usage_sync_pending = true;
         changed = true;
       }
@@ -1501,17 +1470,6 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const storeOrderRepository = manager.getRepository(StoreOrderEntity);
       const persisted = await storeOrderRepository.save(storeOrderRepository.create({ ...storeOrder }));
-      await this.recordCustomDiscountUsage(
-        manager,
-        persisted.storeId,
-        persisted.orderId,
-        persisted.paymentStatus as PaymentStatus,
-        persisted.orderStatus as OrderStatus,
-        persisted.status,
-        persisted.couponLines,
-        persisted.metaData,
-        persisted.lineItems,
-      );
       if (input.replaceItems) await this.saveLineItems(manager, input.order.id, input.items, true);
       if (input.history) {
         const history = storeOrder.statusHistory[storeOrder.statusHistory.length - 1] as OrderStatusHistoryEntity;
@@ -1672,17 +1630,6 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const repository = manager.getRepository(StoreOrderEntity);
       const persisted = await repository.save(repository.create(replacement));
-      await this.recordCustomDiscountUsage(
-        manager,
-        persisted.storeId,
-        persisted.orderId,
-        persisted.paymentStatus as PaymentStatus,
-        persisted.orderStatus as OrderStatus,
-        persisted.status,
-        persisted.couponLines,
-        persisted.metaData,
-        persisted.lineItems,
-      );
       await this.saveLineItems(manager, current.order.id, items, true);
       await manager.query(
         `DELETE FROM public.store_pos_payments
@@ -2729,9 +2676,8 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount, sale.tax_total,
-                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
-                  sale.line_items, sale.coupon_lines, sale.meta_data
+          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2807,17 +2753,6 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             createdAt: new Date().toISOString(),
           }])],
-        );
-        await this.recordCustomDiscountUsage(
-          manager,
-          order.store_id,
-          order.id,
-          PaymentStatus.REFUNDED,
-          OrderStatus.REFUNDED,
-          'refunded',
-          order.coupon_lines,
-          order.meta_data,
-          order.line_items,
         );
         await manager.query(
           `INSERT INTO public.order_status_history
@@ -2895,9 +2830,8 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount,
-                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
-                  sale.line_items, sale.coupon_lines, sale.meta_data
+          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
+                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -3034,19 +2968,6 @@ export class OrderRepository implements OnModuleInit {
             createdAt: new Date().toISOString(),
           }]), refundOrderStatus, refundStoreStatus],
         );
-        if (fullyRefunded) {
-          await this.recordCustomDiscountUsage(
-            manager,
-            order.store_id,
-            order.id,
-            PaymentStatus.REFUNDED,
-            OrderStatus.REFUNDED,
-            'refunded',
-            order.coupon_lines,
-            order.meta_data,
-            order.line_items,
-          );
-        }
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)

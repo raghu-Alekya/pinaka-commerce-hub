@@ -77,6 +77,20 @@ export class StoreVendorPaymentEntity {
        ORDER BY created_at DESC,id DESC`, scope);
   }
 
+  static async listStorePayments(db: DataSource, merchantId?: string, storeId?: string) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!merchantId || !uuid.test(merchantId)) throw new BadRequestException('merchant_id must be a UUID');
+    if (!storeId || !uuid.test(storeId)) throw new BadRequestException('store_id must be a UUID');
+    const scope = [merchantId.toLowerCase(), storeId.toLowerCase()];
+    const [store] = await db.query(
+      `SELECT id FROM public.stores WHERE id::text=$2 AND merchant_id::text=$1 AND COALESCE(is_deleted,false)=false`, scope);
+    if (!store) throw new NotFoundException('Store not found for this merchant');
+    return db.query(
+      `SELECT * FROM public.store_vendor_payments
+       WHERE merchant_id=$1::uuid AND store_id=$2::uuid AND is_deleted=false
+       ORDER BY created_at DESC,id DESC`, scope);
+  }
+
   static async changePayment(db: DataSource, id: string, patch: Record<string, unknown>, softDelete = false) {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuid.test(id)) throw new BadRequestException('payment id must be a UUID');

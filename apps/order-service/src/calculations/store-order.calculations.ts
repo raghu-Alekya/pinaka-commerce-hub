@@ -821,19 +821,26 @@ export function adminOrderCounts(input: { businessName: string; orders: Record<s
   const status = (value: unknown) => String(value || '').toLowerCase().replace(/^wc-/, '');
   const products = new Map(input.products.map(product => [String(product.id), product]));
   const categorySales = new Map<string, number>();
-  let totalAmount = 0, cancelled = 0, payouts = 0, voidItems = 0;
+  const saleStatuses = new Set(['completed', 'processing', 'paid', 'partially-refunded', 'partial-refund']);
+  let totalAmount = 0, cancelled = 0, payouts = 0, cashbacks = 0, voidItems = 0;
   for (const order of input.orders) {
-    totalAmount += Number(order.total || 0);
     const cancelledOrder = ['cancelled', 'canceled'].includes(status(order.status));
     if (cancelledOrder) cancelled++;
+    const saleOrder = saleStatuses.has(status(order.status));
+    if (saleOrder) totalAmount += Number(order.total || 0);
     for (const line of Array.isArray(order.line_items) ? order.line_items : []) {
       const meta = Array.isArray(line.meta_data) ? line.meta_data : [];
       const voidFlag = meta.find((item: any) => item.key === 'void')?.value;
       const isVoid = line.void === true || line.is_void === true || line.voided === true || String(line.status || '').toLowerCase() === 'void' || [true, 1, '1', 'true'].includes(voidFlag);
       if (isVoid) { voidItems++; continue; }
+      if (!saleOrder) continue;
       const amount = Number(line.total ?? line.total_price ?? 0) || 0;
       if (String(line.type || '').toLowerCase() === 'payout' || /^payout(?:$|[_\s-])/i.test(String(line.name || ''))) payouts += amount;
-      if (cancelledOrder) continue;
+      const lineName = String(line.name || '').trim().toLowerCase().replace(/[_\s-]+/g, ' ');
+      const cashbackPrincipal = ['cashback', 'cashback amount'].includes(lineName)
+        || String(line.type || '').toLowerCase() === 'cashback';
+      if (!cancelledOrder && cashbackPrincipal && !lineName.startsWith('cashback fee')) cashbacks += Math.abs(amount);
+      if (cashbackPrincipal || String(line.type || '').toLowerCase() === 'payout' || /^payout(?:$|[_\s-])/i.test(String(line.name || ''))) continue;
       const product = products.get(String(line.product_id ?? line.productId ?? ''));
       const categories = product?.categories ?? line.categories ?? (line.category_id != null ? [{ id: line.category_id }] : []);
       for (const id of new Set((Array.isArray(categories) ? categories : []).map((category: any) => String(category.id ?? category)))) {
@@ -842,15 +849,24 @@ export function adminOrderCounts(input: { businessName: string; orders: Record<s
     }
   }
   let cash = 0, card = 0, ebt = 0;
+  const collectedStatuses = new Set(['', 'completed', 'paid', 'processing', 'refunded', 'partially-refunded', 'partial-refund']);
   for (const payment of input.payments) {
     if (payment.is_void || String(payment.entry_type || 'payment').toLowerCase() !== 'payment' || payment.payment_type === 'vendor_payment') continue;
+    if (!collectedStatuses.has(status(payment.status))) continue;
     const tracking = payment.metadata?.daily_refund_tracking;
     if ([true, 1, 'true', '1'].includes(tracking)) continue;
     const method = String(payment.payment_method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
     const amount = Number(payment.amount || 0);
-    if (['cash', 'pos-cash'].includes(method)) cash += amount;
-    else if (['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'].includes(method)) card += amount;
-    else if (['ebt', 'pos-ebt', 'ebt-card'].includes(method)) ebt += amount;
+    const change = ['cash', 'pos-cash'].includes(method)
+      ? Math.max(0, Number(payment.change_amount ?? payment.metadata?.pos_change_returned ?? 0) || 0) : 0;
+    const collected = Math.max(0, amount - change);
+    const refund = status(payment.status) === 'refunded' ? collected : Math.max(0, Number(payment.refund_amount || 0));
+    const net = Math.max(0, collected - refund);
+    if (['cash', 'pos-cash'].includes(method)) {
+      cash += net;
+    }
+    else if (['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'].includes(method)) card += net;
+    else if (['ebt', 'pos-ebt', 'ebt-card'].includes(method)) ebt += net;
   }
   const categories = input.categories.map(category => {
     const totalSales = money(categorySales.get(String(category.id)) || 0);
@@ -859,7 +875,7 @@ export function adminOrderCounts(input: { businessName: string; orders: Record<s
   return { success: true, message: 'Order counts fetched successfully.', data: {
     business_name: input.businessName, total_orders: input.orders.length, total_orders_amount: money(totalAmount), cancelled_orders: cancelled,
     refunded_orders_amount: money(input.refunds.reduce((sum, row) => sum + Math.abs(Number(row.amount || 0)), 0)),
-    payouts: money(payouts), void_items: voidItems, cash: money(cash), card: money(card), ebt: money(ebt), categories,
+    payouts: money(payouts), cashbacks: money(cashbacks), void_items: voidItems, cash: money(cash), card: money(card), ebt: money(ebt), categories,
     category_subtotal: money(categories.reduce((sum, category) => sum + category.total_sales, 0)),
     category_percentage_total: money(categories.reduce((sum, category) => sum + category.sales_percentage, 0)),
   } };

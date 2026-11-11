@@ -421,11 +421,21 @@ export class AppController {
   ) {
     const connection = await this.requireWordPressConnection(storeId, request.user?.role);
     const count = await this.merchantRepository.syncStoreCategoriesFromWordPress(connection);
+    let categoryTaxCount = 0;
+    try {
+      categoryTaxCount = await this.merchantRepository.syncCategoryWithTax(connection);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `Synced ${count} categories, but category tax sync failed: ${message}`,
+      );
+    }
     return {
       success: true,
-      message: `Synced ${count} categories.`,
+      message: `Synced ${count} categories and ${categoryTaxCount} categories with tax.`,
       storeId: connection.storeId,
       categoryCount: count,
+      categoryTaxCount,
     };
   }
 
@@ -483,11 +493,22 @@ export class AppController {
     @Req() request: { user?: { id?: string; merchantId?: string; storeId?: string; role?: string } }) {
     if (!/^[1-9]\d*$/.test(productId)) throw new BadRequestException('productId must be a positive WooCommerce product ID');
     const { store, params } = await this.productCatalogConnection(merchantId, storeId, request.user);
-    const data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
-    let synced = true;
-    try { await this.merchantRepository.syncStoreProductsFromWordPress(params); } catch { synced = false; }
-    return { success: true, merchant_id: store.merchant_id, store_id: store.id, data, synced,
-      message: synced ? 'Product moved to WooCommerce trash and PCH catalog synced.' : 'Product moved to WooCommerce trash; PCH sync failed. Run product sync to refresh PCH.' };
+    // Remove the cached catalog entry first. This makes the local PCH catalog
+    // authoritative for the UI while WooCommerce processes the trash action.
+    await this.merchantRepository.removeStoreProductFromCatalog(store.id, productId);
+    let data: unknown;
+    try {
+      data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
+    } catch (error) {
+      // Return the upstream failure immediately. A background/full catalog
+      // restore must not make the delete request hang behind the proxy.
+      throw error;
+    }
+    // The local catalog was updated before the WooCommerce call. Do not wait
+    // for a full catalog sync here: it can be slow and causes the local proxy
+    // to return 504 after the delete itself has already succeeded.
+    return { success: true, merchant_id: store.merchant_id, store_id: store.id, data, synced: false,
+      message: 'Product deleted successfully.' };
   }
 
   @Post('pos/auth/catalog/products')
@@ -541,18 +562,20 @@ export class AppController {
       request.user?.storeId || '',
       request.user,
     );
-    const data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
-    let synced = true;
-    try { await this.merchantRepository.syncStoreProductsFromWordPress(params); } catch { synced = false; }
+    await this.merchantRepository.removeStoreProductFromCatalog(store.id, productId);
+    let data: unknown;
+    try {
+      data = await this.productWriteRequest(params, `products/${productId}?force=false`, 'DELETE');
+    } catch (error) {
+      throw error;
+    }
     return {
       success: true,
       merchant_id: store.merchant_id,
       store_id: store.id,
       data,
-      synced,
-      message: synced
-        ? 'Product moved to WooCommerce trash and PCH catalog synced.'
-        : 'Product moved to WooCommerce trash; PCH sync failed. Run product sync to refresh PCH.',
+      synced: false,
+      message: 'Product deleted successfully.',
     };
   }
 

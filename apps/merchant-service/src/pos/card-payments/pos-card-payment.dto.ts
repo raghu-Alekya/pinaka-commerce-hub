@@ -1,4 +1,4 @@
-import { IsIn, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
 
 export class SavePosCardPaymentDto {
   @IsIn(['Kickback', 'Payroc'])
@@ -24,4 +24,9 @@ export class SavePosCardPaymentDto {
   @IsString()
   @MaxLength(2048)
   webhookUrl!: string;
+
+  /** WordPress pinaka_payment_gateway_provider. Omitted values leave the saved selection unchanged. */
+  @IsOptional()
+  @IsIn(['kickback', 'payroc', 'payrock', 'default', 'offline'])
+  payment_gateway_provider?: string;
 }

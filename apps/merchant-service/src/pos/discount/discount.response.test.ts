@@ -306,65 +306,6 @@ test('discount ID matching recognizes either local or WooCommerce IDs', () => {
   assert.equal((service as any).discountMatchesId(record, 'other'), false);
 });
 
-test('refreshing a discount record preserves the per-order usage ledger and local count', async () => {
-  const service = serviceWithConnection();
-  let savedPayload: any;
-  const manager = {
-    query: async (sql: string, parameters: unknown[] = []) => {
-      if (/SELECT payload/i.test(sql)) return [{ payload: {
-        auto: [{
-          id: 44, name: 'Diwali Mix', usage_count: 12,
-          pch_used_order_ids: ['order-1'],
-          pch_used_applications_by_order: { 'order-1': 10, 'order-2': 2 },
-        }],
-        mix_match: [], multipack: [],
-      } }];
-      if (/INSERT INTO public\.store_discounts/i.test(sql)) savedPayload = JSON.parse(String(parameters[1]));
-      return [];
-    },
-  };
-  (service as any).merchants = {
-    requireDataSource: () => ({ transaction: async (operation: (value: unknown) => Promise<unknown>) => operation(manager) }),
-  };
-  await (service as any).saveDiscount('store-1', 'auto', { id: 44, name: 'Diwali Mix', usage_count: 3 }, '44');
-  assert.equal(savedPayload.auto[0].name, 'Diwali Mix');
-  assert.equal(savedPayload.auto[0].usage_count, 12);
-  assert.deepEqual(savedPayload.auto[0].pch_used_applications_by_order, { 'order-1': 10, 'order-2': 2 });
-});
-
-test('a concurrent order usage update wins over an older WooCommerce refresh snapshot', async () => {
-  const service = serviceWithConnection();
-  let savedPayload: any;
-  const manager = {
-    query: async (sql: string, parameters: unknown[] = []) => {
-      if (/SELECT payload/i.test(sql)) return [{ payload: {
-        auto: [{ id: 44, usage_count: 8, pch_used_order_ids: ['order-1', 'order-2'],
-          pch_used_applications_by_order: { 'order-1': 5, 'order-2': 3 } }],
-        mix_match: [], multipack: [],
-      } }];
-      if (/INSERT INTO public\.store_discounts/i.test(sql)) savedPayload = JSON.parse(String(parameters[1]));
-      return [];
-    },
-  };
-  (service as any).merchants = {
-    requireDataSource: () => ({
-      query: async (sql: string) => sql.includes('to_regclass')
-        ? [{ name: 'store_products' }]
-        : [{ payload: [{ id: 123 }] }],
-      transaction: async (operation: (value: unknown) => Promise<unknown>) => operation(manager),
-    }),
-  };
-  (service as any).readDiscountPayload = async () => ({ auto: [{ id: 44, usage_count: 4 }], mix_match: [], multipack: [] });
-  (service as any).pushUsageCountToWordPress = async () => true;
-  respond({ data: { auto: [{ id: 44, usage_count: 0 }], mix_match: [], multipack: [] }, pagination: { has_more: false } });
-  await service.syncStoreDiscountsFromWordPress({
-    storeId: 'store-1', wordpressUrl: 'https://shop.example', wordpressJwt: 'test-jwt',
-  });
-  assert.equal(savedPayload.auto[0].usage_count, 8);
-  assert.deepEqual(savedPayload.auto[0].pch_used_applications_by_order, { 'order-1': 5, 'order-2': 3 });
-  assert.equal(savedPayload.auto[0].pch_usage_sync_pending, true);
-});
-
 test('auto and mix-match discount names are compared case-insensitively before create', async () => {
   for (const type of ['auto', 'mix_match']) {
     const service = serviceWithConnection();

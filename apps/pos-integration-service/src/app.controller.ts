@@ -32,6 +32,12 @@ export class PosVendorPaymentController {
     return { success: true, merchant_id: merchantId, store_id: storeId, shift_id: shiftId?.trim(), count: payments.length, payments };
   }
 
+  @Get('by-store')
+  async listByStore(@Query('merchant_id') merchantId?: string, @Query('store_id') storeId?: string) {
+    const payments = await StoreVendorPaymentEntity.listStorePayments(this.shifts.requireDataSource(), merchantId, storeId);
+    return { success: true, merchant_id: merchantId, store_id: storeId, count: payments.length, payments };
+  }
+
   @Put(':id')
   async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return { success: true, message: 'Vendor payment updated',

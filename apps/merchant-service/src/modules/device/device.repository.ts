@@ -18,6 +18,7 @@ export class DeviceRepository {
     merchantId: string;
     merchantName?: string;
     serialNumber?: string | null;
+    activationCode?: string | null;
     notes?: string | null;
     status?: RecordStatus;
     createdBy: string;
@@ -34,16 +35,24 @@ export class DeviceRepository {
         `);
         const nextCode = Number(rows[0]?.maxCode ?? 0) + 1;
         const deviceCode = `DVC_${String(nextCode).padStart(5, '0')}`;
-        let deviceActiveCode = '';
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const candidate = `PK-${randomInt(100000, 1000000)}`;
+        let deviceActiveCode = data.activationCode?.trim() || '';
+        if (deviceActiveCode) {
           const existing = await manager.query(
             'SELECT 1 FROM public.devices WHERE device_active_code = $1 OR authorization_code = $1 LIMIT 1',
-            [candidate],
+            [deviceActiveCode],
           );
-          if (existing.length === 0) {
-            deviceActiveCode = candidate;
-            break;
+          if (existing.length > 0) throw new ConflictException('Activation key already exists');
+        } else {
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            const candidate = `PK-${randomInt(100000, 1000000)}`;
+            const existing = await manager.query(
+              'SELECT 1 FROM public.devices WHERE device_active_code = $1 OR authorization_code = $1 LIMIT 1',
+              [candidate],
+            );
+            if (existing.length === 0) {
+              deviceActiveCode = candidate;
+              break;
+            }
           }
         }
         if (!deviceActiveCode) {
