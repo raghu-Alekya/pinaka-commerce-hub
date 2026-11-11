@@ -36,6 +36,7 @@ import {
 export class OrderRepository implements OnModuleInit {
   private dataSource?: DataSource;
   private loyaltyPaymentVoid?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
+  private loyaltyOrderCompleted?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
   private storeOrderRepo?: Repository<StoreOrderEntity>;
   private itemRepo?: Repository<OrderItemEntity>;
   private historyRepo?: Repository<OrderStatusHistoryEntity>;
@@ -123,6 +124,32 @@ export class OrderRepository implements OnModuleInit {
     handler: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>,
   ): void {
     this.loyaltyPaymentVoid = handler;
+  }
+
+  registerLoyaltyOrderCompleted(
+    handler: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>,
+  ): void {
+    this.loyaltyOrderCompleted = handler;
+  }
+
+  private async notifyLoyaltyCompleted(
+    scope: { merchantId: string; storeId: string; orderId: string },
+    status: unknown,
+    orderStatus?: unknown,
+    paymentStatus?: unknown,
+  ): Promise<void> {
+    const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/_/g, '-');
+    const current = normalize(status);
+    const internal = normalize(orderStatus);
+    const closed = ['cancelled', 'canceled', 'refunded', 'failed'];
+    const earns = !closed.includes(current) && !closed.includes(internal)
+      && (current === 'completed' || internal === 'completed' || String(paymentStatus || '').trim().toUpperCase() === 'PAID');
+    if (!earns || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
+    try {
+      await this.loyaltyOrderCompleted(scope);
+    } catch (error) {
+      console.error('[Loyalty] Completed order credit failed', error);
+    }
   }
 
   async createOrder(orderData: any): Promise<{ order: OrderEntity; items: OrderItemEntity[]; storeOrder: StoreOrderEntity | null; duplicate: boolean }> {
@@ -283,12 +310,12 @@ export class OrderRepository implements OnModuleInit {
               `INSERT INTO public.store_pos_payments (
                  order_id, merchant_id, store_id, local_id, client_order_id, device_id,
                  shift_id, user_id, payment_type, payment_method, payment_method_title,
-                 amount, order_total, remaining, refund_amount,
+                 amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
                  currency, status, entry_type, provider,
                  provider_transaction_id, payment_at, metadata
                ) VALUES ${paymentRows.map((_, index) => {
-                 const offset = index * 22;
-                 return `(${Array.from({ length: 22 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
+                 const offset = index * 24;
+                 return `(${Array.from({ length: 24 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
                }).join(', ')}
                ON CONFLICT DO NOTHING`,
               paymentRows.flat(),
@@ -311,6 +338,11 @@ export class OrderRepository implements OnModuleInit {
       }
       const savedOrder = this.projectOrder(savedStoreOrder);
       await this.cacheOrder(savedOrder);
+      await this.notifyLoyaltyCompleted({
+        merchantId: savedStoreOrder.merchantId,
+        storeId: savedStoreOrder.storeId,
+        orderId: savedStoreOrder.orderId,
+      }, savedStoreOrder.status, savedStoreOrder.orderStatus, savedStoreOrder.paymentStatus);
       console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
       return { order: savedOrder, items, storeOrder: savedStoreOrder, duplicate: false };
     } else {
@@ -459,28 +491,33 @@ export class OrderRepository implements OnModuleInit {
     const normalizedPaymentStatus = String(paymentStatus).trim().toUpperCase();
     const normalizedOrderStatus = String(orderStatus).trim().toUpperCase();
     const normalizedSourceStatus = String(sourceOrderStatus ?? '').trim().toLowerCase();
-    if (normalizedPaymentStatus !== PaymentStatus.PAID
-      || ['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
-      || ['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus)) return;
-    const couponCodes = Array.isArray(couponLines)
+    const eligible = normalizedPaymentStatus === PaymentStatus.PAID
+      && !['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
+      && !['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus);
+    const couponCodes = eligible && Array.isArray(couponLines)
       ? couponLines.map((line: any) => String(line?.code ?? '').trim().toLowerCase())
       : [];
-    const metadataCodes = Array.isArray(metadata)
+    const metadataCodes = eligible && Array.isArray(metadata)
       ? metadata
         .filter((entry: any) => ['_pinaka_discount_code', 'pinaka_discount_code', 'discount_code', '_discount_code']
           .includes(String(entry?.key ?? '').trim().toLowerCase()))
         .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
       : [];
-    const ruleIds = Array.isArray(lineItems)
-      ? lineItems.flatMap((line: any) => Array.isArray(line?.meta_data)
-        ? line.meta_data
-          .filter((entry: any) => String(entry?.key ?? '').trim() === '_pos_discount_rule_id')
-          .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
-        : [])
+    const ruleApplications = eligible && Array.isArray(lineItems)
+      ? lineItems.flatMap((line: any) => {
+        const entries = Array.isArray(line?.meta_data) ? line.meta_data : [];
+        const applicationCount = entries.find((entry: any) => [
+          '_pos_discount_application_count', 'pos_discount_application_count',
+          'discount_application_count', 'application_count',
+        ].includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
+        const explicitCount = Number(applicationCount);
+        const count = Number.isFinite(explicitCount) && explicitCount > 0 ? Math.floor(explicitCount) : 1;
+        return entries
+          .filter((entry: any) => String(entry?.key ?? '').trim().toLowerCase() === '_pos_discount_rule_id')
+          .map((entry: any) => ({ id: String(entry?.value ?? '').trim().toLowerCase(), count }));
+      })
       : [];
-    const codes = [...new Set([...couponCodes, ...metadataCodes].filter(Boolean))];
-    const ids = [...new Set(ruleIds.filter(Boolean))];
-    if (!codes.length && !ids.length) return;
+    const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
     const rows = await manager.query(
       `SELECT payload FROM public.store_discounts
         WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
@@ -501,27 +538,53 @@ export class OrderRepository implements OnModuleInit {
           .filter((value: unknown) => value !== undefined && value !== null)
           .map((value: unknown) => String(value).trim().toLowerCase());
         const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
-        const ruleIdMatches = ids.some(ruleId => {
-          if (!ruleId.startsWith(rulePrefix)) return false;
-          const suffix = ruleId.slice(rulePrefix.length);
-          return recordIds.includes(suffix);
-        });
-        if (!codes.includes(code) && !ruleIdMatches) continue;
+        const matchingRuleApplications = ruleApplications
+          .filter(({ id }) => {
+            if (!id.startsWith(rulePrefix)) return false;
+            const suffix = id.slice(rulePrefix.length);
+            return recordIds.some(recordId => recordId === suffix || recordId === id || recordId.endsWith(`:${suffix}`));
+          })
+          .reduce((sum, application) => sum + application.count, 0);
+        // The POS rule marker is the per-application signal. Coupon codes are a
+        // fallback for coupon-based applications; don't count both representations
+        // of the same application when an order contains both. If rule markers
+        // are present, never let a same-named catalog record in another type
+        // consume the coupon fallback.
+        const applications = eligible
+          ? matchingRuleApplications || (!ruleApplications.length && code
+            ? codes.filter(appliedCode => appliedCode === code).length
+            : 0)
+          : 0;
         const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
-        if (usedOrderIds.includes(orderId)) continue;
+        const byOrder = record.pch_used_applications_by_order
+          && typeof record.pch_used_applications_by_order === 'object'
+          ? record.pch_used_applications_by_order as Record<string, number>
+          : {};
+        const hadOrder = Object.prototype.hasOwnProperty.call(byOrder, orderId);
+        // Backfill old snapshots conservatively: the old implementation counted
+        // each previously seen order once, so treat that as one prior application.
+        const previousApplications = hadOrder
+          ? Math.max(Number(byOrder[orderId]) || 0, 0)
+          : usedOrderIds.includes(orderId) ? 1 : 0;
+        if (applications === 0 && !usedOrderIds.includes(orderId) && !hadOrder) continue;
+        if (applications === previousApplications) continue;
         const usageCount = Math.max(Number(record.usage_count ?? record.usageCount ?? 0), 0);
         const usageLimitValue = record.usage_limit ?? record.usageLimit;
         const usageLimit = usageLimitValue === null || usageLimitValue === undefined || usageLimitValue === ''
           ? null
           : Number(usageLimitValue);
-        if (usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && usageCount >= usageLimit) {
+        const nextUsage = Math.max(usageCount + applications - previousApplications, 0);
+        if (applications > previousApplications
+          && usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && nextUsage > usageLimit) {
           throw new BadRequestException(`Discount '${code || record.code || record.id}' has reached its usage limit`);
         }
-        usedOrderIds.push(orderId);
-        record.pch_used_order_ids = usedOrderIds;
-        const count = usageCount + 1;
-        record.usage_count = count;
-        record.usageCount = count;
+        if (applications > 0 && !usedOrderIds.includes(orderId)) usedOrderIds.push(orderId);
+        if (applications > 0) byOrder[orderId] = applications;
+        else delete byOrder[orderId];
+        record.pch_used_order_ids = usedOrderIds.filter(id => id !== orderId || applications > 0);
+        record.pch_used_applications_by_order = byOrder;
+        record.usage_count = nextUsage;
+        record.usageCount = nextUsage;
         record.pch_usage_sync_pending = true;
         changed = true;
       }
@@ -595,6 +658,16 @@ export class OrderRepository implements OnModuleInit {
     const normalizedAmounts = payments.map((payment: any) => Number(
       payment?.amount ?? payment?.total ?? payment?.value ?? 0,
     ));
+    const totalTendered = normalizedAmounts.reduce((sum: number, amount: number, index: number) => {
+      const status = String(payments[index]?.status ?? 'completed').trim().toLowerCase();
+      if (status && !['completed', 'pending'].includes(status)) return sum;
+      return sum + (Number.isFinite(amount) ? Math.max(0, amount) : 0);
+    }, 0);
+    const orderStates = [sourcePayload?.status, order.orderStatus, storeOrder.status, orderData?.paymentStatus]
+      .map((value) => String(value || '').trim().toLowerCase());
+    const orderIsClosed = orderStates.some((status) =>
+      ['completed', 'cancelled', 'canceled', 'refunded'].includes(status),
+    );
     return payments.map((payment: any, index: number) => {
       const amount = normalizedAmounts[index];
       // A payout may be represented as a negative tender alongside a positive
@@ -621,9 +694,15 @@ export class OrderRepository implements OnModuleInit {
       const localId = suppliedLocalId ?? `generated:${index + 1}`;
       const deviceId = payment?.device_id ?? payment?.deviceId ?? orderData?.device_id ?? orderData?.deviceId
         ?? storeOrder.deviceId ?? null;
-      // `remaining` is the refundable balance of this payment row, not the
-      // outstanding total of the whole order.
-      const remaining = capturedAmount;
+      const sourceRemaining = payment?.remaining ?? payment?.balance_amount ?? payment?.balanceAmount;
+      const parsedRemaining = Number(sourceRemaining);
+      const remaining = orderIsClosed
+        ? 0
+        : sourceRemaining !== undefined && sourceRemaining !== null && Number.isFinite(parsedRemaining)
+          ? Math.max(0, parsedRemaining)
+          : Math.max(0, orderTotal - totalTendered);
+      const refundableRemaining = capturedAmount;
+      const changeAmount = index === lastCashIndex ? change.change : 0;
       const rawPayload = payment && typeof payment === 'object' ? payment : { value: payment };
       const metadata = {
         ...(payment?.metadata && typeof payment.metadata === 'object' ? payment.metadata : {}),
@@ -652,6 +731,8 @@ export class OrderRepository implements OnModuleInit {
         capturedAmount,
         orderTotal,
         remaining,
+        refundableRemaining,
+        changeAmount,
         0,
         String(payment?.currency ?? orderData?.currency ?? '').trim().toUpperCase() || null,
         String(payment?.status ?? (orderData?.paymentStatus === PaymentStatus.PENDING ? 'pending' : 'completed'))
@@ -1320,10 +1401,35 @@ export class OrderRepository implements OnModuleInit {
         createdAt: new Date(),
       }];
       const saved = await this.storeOrderRepo.save(storeOrder);
+      await this.dataSource?.query(
+        `UPDATE public.store_pos_payments AS payment
+            SET remaining = CASE
+              WHEN $2::varchar IN ('COMPLETED', 'CANCELLED', 'REFUNDED') THEN 0
+              ELSE GREATEST(0, payment.order_total - COALESCE((
+                SELECT SUM(captured.amount)
+                  FROM public.store_pos_payments AS captured
+                 WHERE captured.order_id = payment.order_id
+                   AND captured.entry_type = 'payment'
+                   AND captured.is_void = false
+                   AND captured.deleted_at IS NULL
+                   AND lower(COALESCE(captured.status, 'completed')) NOT IN ('failed', 'cancelled')
+              ), 0))
+            END,
+            updated_at = now()
+          WHERE payment.order_id = $1::uuid
+            AND payment.entry_type = 'payment'
+            AND payment.deleted_at IS NULL`,
+        [internalOrderId, normalizedStatus],
+      );
       const history = storeOrder.statusHistory[storeOrder.statusHistory.length - 1] as OrderStatusHistoryEntity;
       if (this.historyRepo) await this.historyRepo.save(this.historyRepo.create(history));
       const order = this.projectOrder(saved);
       await this.cacheOrder(order);
+      await this.notifyLoyaltyCompleted({
+        merchantId: saved.merchantId,
+        storeId: saved.storeId,
+        orderId: saved.orderId,
+      }, saved.status, saved.orderStatus, saved.paymentStatus);
       return order;
     }
     const graph = await this.getOrderByReference(orderId);
@@ -1339,6 +1445,11 @@ export class OrderRepository implements OnModuleInit {
       status: normalizedStatus.toLowerCase().replace(/_/g, '-'),
     };
     await this.cacheOrder(order);
+    await this.notifyLoyaltyCompleted({
+      merchantId: order.merchantId,
+      storeId: order.storeId,
+      orderId: order.id,
+    }, normalizedStatus);
     return order;
   }
 
@@ -1390,6 +1501,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const storeOrderRepository = manager.getRepository(StoreOrderEntity);
       const persisted = await storeOrderRepository.save(storeOrderRepository.create({ ...storeOrder }));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       if (input.replaceItems) await this.saveLineItems(manager, input.order.id, input.items, true);
       if (input.history) {
         const history = storeOrder.statusHistory[storeOrder.statusHistory.length - 1] as OrderStatusHistoryEntity;
@@ -1399,6 +1521,11 @@ export class OrderRepository implements OnModuleInit {
     });
     const order = this.projectOrder(saved);
     await this.cacheOrder(order);
+    await this.notifyLoyaltyCompleted({
+      merchantId: saved.merchantId,
+      storeId: saved.storeId,
+      orderId: saved.orderId,
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1545,6 +1672,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const repository = manager.getRepository(StoreOrderEntity);
       const persisted = await repository.save(repository.create(replacement));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       await this.saveLineItems(manager, current.order.id, items, true);
       await manager.query(
         `DELETE FROM public.store_pos_payments
@@ -1556,11 +1694,11 @@ export class OrderRepository implements OnModuleInit {
           `INSERT INTO public.store_pos_payments (
              order_id, merchant_id, store_id, local_id, client_order_id, device_id,
              shift_id, user_id, payment_type, payment_method, payment_method_title,
-             amount, order_total, remaining, refund_amount, currency, status, entry_type,
-             provider, provider_transaction_id, payment_at, metadata
+             amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
+             currency, status, entry_type, provider, provider_transaction_id, payment_at, metadata
            ) VALUES ${paymentRows.map((_, index) => {
-             const offset = index * 22;
-             return `(${Array.from({ length: 22 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
+             const offset = index * 24;
+             return `(${Array.from({ length: 24 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
            }).join(', ')}`,
           paymentRows.flat(),
         );
@@ -1584,6 +1722,11 @@ export class OrderRepository implements OnModuleInit {
         orderId: saved.orderId,
       });
     }
+    await this.notifyLoyaltyCompleted({
+      merchantId: saved.merchantId,
+      storeId: saved.storeId,
+      orderId: saved.orderId,
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1605,7 +1748,7 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.merchantId || null;
+    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
     const storeId = criteria.storeId || null;
     const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
     const effectiveStatus = `CASE
@@ -1719,7 +1862,7 @@ export class OrderRepository implements OnModuleInit {
          AND ($2::date IS NULL OR (created_at AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
       );
       const payments = await manager.query(
-        `SELECT payment_method,amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
+        `SELECT payment_method,amount,status,change_amount,refund_amount,entry_type,payment_type,is_void,metadata FROM public.store_pos_payments WHERE store_id::text=$1 AND deleted_at IS NULL
          AND ($2::date IS NULL OR (COALESCE(payment_at,created_at) AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date)`, params,
       );
       const refunds = await manager.query(
@@ -1776,7 +1919,7 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.merchantId || null;
+    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
     const storeId = criteria.storeId || null;
     const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
     const effectiveStatus = `CASE
@@ -2254,6 +2397,9 @@ export class OrderRepository implements OnModuleInit {
          payment.order_total,
          payment.remaining,
          payment.remaining AS balance_amount,
+         payment.refundable_remaining,
+         payment.change_amount,
+         payment.metadata->>'pos_change_returned' AS pos_change_returned,
          payment.refund_amount,
          payment.currency,
          payment.status,
@@ -2309,7 +2455,7 @@ export class OrderRepository implements OnModuleInit {
     if (!graph) return null;
 
     const payments = await this.dataSource.query(
-      `SELECT id::text AS id, payment_method, amount, refund_amount, remaining,
+      `SELECT id::text AS id, payment_method, amount, refund_amount, refundable_remaining,
               status, entry_type, is_void, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
@@ -2344,7 +2490,7 @@ export class OrderRepository implements OnModuleInit {
     const payments = await manager.query(
       `SELECT id::text AS id, order_id, merchant_id, store_id, local_id, client_order_id,
               device_id, shift_id, user_id, payment_type, payment_method,
-              payment_method_title, amount, order_total, remaining, refund_amount,
+              payment_method_title, amount, order_total, remaining, refundable_remaining, refund_amount,
               currency, status, entry_type, provider, provider_transaction_id,
               payment_at, metadata
          FROM public.store_pos_payments
@@ -2416,13 +2562,14 @@ export class OrderRepository implements OnModuleInit {
       const allocation = allocationCents / 100;
       if (!paymentMethod) paymentMethod = String(payment.payment_method || 'Cash');
       const historyEvent = { ...event, amount: allocation, payment_id: payment.id };
+      const refundCreatedAt = event['created_at'] as string | number | undefined;
       const dailyRefundStatus = allocationCents >= capacityCents
         ? 'refunded'
         : 'partially-refunded';
       await manager.query(
         `UPDATE public.store_pos_payments
             SET refund_amount = LEAST(amount, COALESCE(refund_amount, 0) + $2::numeric),
-                remaining = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
+                refundable_remaining = GREATEST(0, amount - (COALESCE(refund_amount, 0) + $2::numeric)),
                 status = CASE
                   WHEN COALESCE(refund_amount, 0) + $2::numeric >= amount THEN 'refunded'
                   ELSE 'partially-refunded'
@@ -2438,7 +2585,7 @@ export class OrderRepository implements OnModuleInit {
         [payment.id, allocation, JSON.stringify([historyEvent])],
       );
       if (payment.order_id && payment.merchant_id && payment.store_id) {
-        const refundDate = this.localDateKey(new Date(historyEvent.created_at || Date.now()), timeZone);
+        const refundDate = this.localDateKey(new Date(refundCreatedAt || Date.now()), timeZone);
         const updatedDailyRows = await manager.query(
           `UPDATE public.store_pos_payments
               SET amount = amount + $2::numeric,
@@ -2472,16 +2619,16 @@ export class OrderRepository implements OnModuleInit {
           ? updatedDailyRows[0]
           : updatedDailyRows;
         const createDailyRefundRow = returnedDailyRows.length === 0
-          && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(historyEvent.created_at || Date.now()));
+          && this.shouldCreateDailyRefundRow(payment, timeZone, new Date(refundCreatedAt || Date.now()));
         if (!createDailyRefundRow) continue;
         await manager.query(
           `INSERT INTO public.store_pos_payments
              (order_id, merchant_id, store_id, local_id, client_order_id, device_id,
               shift_id, user_id, payment_type, payment_method, payment_method_title,
-              amount, order_total, remaining, refund_amount, currency, status,
-              entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
+              amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
+              currency, status, entry_type, is_void, provider, provider_transaction_id, payment_at, metadata)
            VALUES ($1, $2, $3, LEFT(COALESCE($4, 'generated:' || $5::text), 120) || ':refund:' || $6,
-                   $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, $15, $16,
+                   $7, $8, $9, $10, $11, $12, $13, $15, $14, 0, 0, 0, $15, $16,
                    $20, 'refund', false, $17, $18, now(), $19::jsonb)`,
           [payment.order_id, payment.merchant_id, payment.store_id, payment.local_id,
             payment.id, refundDate, payment.client_order_id, payment.device_id,
@@ -2581,8 +2728,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount, sale.tax_total,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2658,6 +2806,17 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             createdAt: new Date().toISOString(),
           }])],
+        );
+        await this.recordCustomDiscountUsage(
+          manager,
+          order.store_id,
+          order.id,
+          PaymentStatus.REFUNDED,
+          OrderStatus.REFUNDED,
+          'refunded',
+          order.coupon_lines,
+          order.meta_data,
+          order.line_items,
         );
         await manager.query(
           `INSERT INTO public.order_status_history
@@ -2735,8 +2894,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2873,6 +3033,19 @@ export class OrderRepository implements OnModuleInit {
             createdAt: new Date().toISOString(),
           }]), refundOrderStatus, refundStoreStatus],
         );
+        if (fullyRefunded) {
+          await this.recordCustomDiscountUsage(
+            manager,
+            order.store_id,
+            order.id,
+            PaymentStatus.REFUNDED,
+            OrderStatus.REFUNDED,
+            'refunded',
+            order.coupon_lines,
+            order.meta_data,
+            order.line_items,
+          );
+        }
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
@@ -3039,8 +3212,36 @@ export class OrderRepository implements OnModuleInit {
       const code = error && typeof error === 'object'
         ? (error as { driverError?: { code?: string } }).driverError?.code
         : undefined;
-      if (code === '42P01') return;
-      throw error;
+      if (code !== '42P01') throw error;
+      rows = [];
+    }
+    // Older loyalty redemptions were written to the points ledger before
+    // redeem_points was mirrored into store_orders_meta. Keep total-orders
+    // consistent with the loyalty detail endpoint for those orders.
+    try {
+      const ledgerRows: Array<{ order_id: string; redeemed_points: unknown }> = await this.dataSource.query(
+        `SELECT order_id::text AS order_id, COALESCE(SUM(redeemed_points), 0) AS redeemed_points
+           FROM public.store_customer_loyalty_points
+          WHERE order_id = ANY($1::uuid[])
+          GROUP BY order_id`,
+        [ids],
+      );
+      const existing = new Map<string, number>();
+      rows.forEach((row) => {
+        if (row.meta_key !== 'redeem_points') return;
+        existing.set(row.order_id, Number(row.meta_value) || 0);
+      });
+      ledgerRows.forEach((row) => {
+        const points = Math.max(0, Math.trunc(Number(row.redeemed_points) || 0));
+        if (points > (existing.get(row.order_id) || 0)) {
+          rows.push({ order_id: row.order_id, meta_key: 'redeem_points', meta_value: points });
+        }
+      });
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code !== '42P01') throw error;
     }
     const byOrder = new Map<string, Array<{ key: string; value: unknown }>>();
     rows.forEach((row) => {
