@@ -5,9 +5,6 @@ import {
   flattenCatalog,
   liveRedemption,
   loyaltyUsername,
-  earnedOrderPoints,
-  orderEarnsLoyalty,
-  orderIsCompleted,
   partialRefundExpiredPoints,
   paymentIsVoid,
   presentSettings,
@@ -111,25 +108,6 @@ test('conflict rule blocks coupons, discounts, and special products only when di
   assert.equal(redemptionBlocked({
     conflictRule: 'enable', discountTotal: 5, couponCount: 1, hasPayout: true, hasDiscountProduct: true, hasCashback: true,
   }), false);
-});
-
-test('an order is completed from either status column', () => {
-  assert.equal(orderIsCompleted('processing', 'COMPLETED'), true);
-  assert.equal(orderIsCompleted('completed', 'CREATED'), true);
-  assert.equal(orderIsCompleted('processing', 'CREATED'), false);
-});
-
-test('a paid order earns points before its status becomes completed', () => {
-  assert.equal(orderEarnsLoyalty('processing', 'CREATED', 'PAID'), true);
-  assert.equal(orderEarnsLoyalty('completed', 'COMPLETED', 'PAID'), true);
-  assert.equal(orderEarnsLoyalty('cancelled', 'CANCELLED', 'PAID'), false);
-  assert.equal(orderEarnsLoyalty('processing', 'CREATED', 'PENDING'), false);
-});
-
-test('completed orders earn floor of spend divided by the dollar ratio', () => {
-  assert.equal(earnedOrderPoints(45.5, 10, 1), 4);
-  assert.equal(earnedOrderPoints(9.99, 10, 1), 0);
-  assert.equal(earnedOrderPoints(20, 0, 1), 0);
 });
 
 test('partial refund expiry follows item and order modes and caps at the balance', () => {

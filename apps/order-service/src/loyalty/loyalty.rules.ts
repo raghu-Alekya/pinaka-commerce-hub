@@ -4,8 +4,6 @@ export interface LoyaltySettings {
   ratioDollar: number;
   ratioPoint: number;
   newCustomerPoints: number;
-  defaultPoints: number;
-  loyaltyTag: string;
   redeemPoint: number;
   redeemAmount: number;
   expiryDays: number;
@@ -26,9 +24,6 @@ export interface LoyaltySettingsView {
   ratio_dollar: number;
   ratio_point: number;
   new_customer_points: number;
-  default_points: number;
-  loyalty_tag: string;
-  mode: LoyaltyMode;
   redeem_point: number;
   redeem_amt: number;
   expiry_days: number;
@@ -81,8 +76,6 @@ export function defaultLoyaltySettings(): LoyaltySettings {
     ratioDollar: 0,
     ratioPoint: 0,
     newCustomerPoints: 0,
-    defaultPoints: 0,
-    loyaltyTag: 'LoyaltyPoints',
     redeemPoint: 0,
     redeemAmount: 0,
     expiryDays: 365,
@@ -105,9 +98,6 @@ export function presentSettings(settings: LoyaltySettings): LoyaltySettingsView 
     ratio_dollar: settings.ratioDollar,
     ratio_point: settings.ratioPoint,
     new_customer_points: settings.newCustomerPoints,
-    default_points: settings.defaultPoints,
-    loyalty_tag: settings.loyaltyTag,
-    mode: settings.mode,
     redeem_point: settings.redeemPoint,
     redeem_amt: settings.redeemAmount,
     expiry_days: settings.expiryDays,
@@ -126,8 +116,6 @@ export function settingsFromStored(value: Record<string, unknown> | undefined): 
   settings.ratioDollar = numberOr(source.pinaka_loyalty_ratio_dollar, 0);
   settings.ratioPoint = numberOr(source.pinaka_loyalty_ratio_point, 0);
   settings.newCustomerPoints = numberOr(source.pinaka_new_customer_points, 0);
-  settings.defaultPoints = numberOr(source.pinaka_loyalty_default_points, settings.newCustomerPoints);
-  settings.loyaltyTag = String(source.pinaka_loyalty_tag || 'LoyaltyPoints');
   settings.redeemPoint = numberOr(source.pinaka_loyalty_redeem_point, 0);
   settings.redeemAmount = numberOr(source.pinaka_loyalty_redeem_amt, 0);
   settings.expiryDays = numberOr(source.pinaka_loyalty_expiry_days, 365);
@@ -151,9 +139,6 @@ export function storedSettingsPatch(settings: LoyaltySettings, previous: Record<
     pinaka_loyalty_ratio_dollar: settings.ratioDollar,
     pinaka_loyalty_ratio_point: settings.ratioPoint,
     pinaka_new_customer_points: settings.newCustomerPoints,
-    pinaka_loyalty_default_points: settings.defaultPoints,
-    pinaka_loyalty_tag: settings.loyaltyTag,
-    pinaka_loyalty_mode: settings.mode,
     pinaka_loyalty_redeem_point: settings.redeemPoint,
     pinaka_loyalty_redeem_amt: settings.redeemAmount,
     pinaka_loyalty_expiry_days: settings.expiryDays,
@@ -206,13 +191,7 @@ export function validateSettingsUpdate(body: Record<string, unknown>): { setting
       message: `Invalid points range: Minimum points (${values.pinaka_loyalty_min_points}) cannot be greater than Maximum points (${values.pinaka_loyalty_max_points}).`,
     };
   }
-  const defaultPoints = nonNegativeInteger(body.pinaka_loyalty_default_points ?? 0);
-  if (defaultPoints === undefined) return { code: 'invalid_integer_field', message: 'The field "pinaka_loyalty_default_points" must be an integer value.' };
-  const loyaltyTag = String(body.pinaka_loyalty_tag || 'LoyaltyPoints').trim();
-  if (!loyaltyTag) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_tag" cannot be empty.' };
-  const mode = body.pinaka_loyalty_mode === 'item' ? 'item' : body.pinaka_loyalty_mode === 'order' ? 'order' : undefined;
-  if (!mode) return { code: 'invalid_parameter', message: 'The field "pinaka_loyalty_mode" must be order or item.' };
-  const settings = settingsFromStored({ ...values, pinaka_loyalty_default_points: defaultPoints, pinaka_loyalty_tag: loyaltyTag, pinaka_loyalty_mode: mode, pinaka_loyalty_conflict_rule: conflict });
+  const settings = settingsFromStored({ ...values, pinaka_loyalty_conflict_rule: conflict });
   return { settings };
 }
 
@@ -232,21 +211,6 @@ export function loyaltyUsername(contact: string, email: boolean): string {
 export function loyaltyCustomerName(contact: string, email: boolean): string {
   if (email) return `Customer ${contact.split('@')[0] || 'customer'}`;
   return `Customer ${contact.slice(-4)}`;
-}
-
-export function orderIsCompleted(status: unknown, orderStatus: unknown): boolean {
-  const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
-  return normalize(status) === 'completed' || normalize(orderStatus) === 'completed';
-}
-
-export function orderEarnsLoyalty(status: unknown, orderStatus: unknown, paymentStatus: unknown): boolean {
-  const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^wc-/, '').replace(/_/g, '-');
-  const current = normalize(status);
-  const internal = normalize(orderStatus);
-  const closed = ['cancelled', 'canceled', 'refunded', 'failed'];
-  if (closed.includes(current) || closed.includes(internal)) return false;
-  if (current === 'completed' || internal === 'completed') return true;
-  return String(paymentStatus || '').trim().toUpperCase() === 'PAID';
 }
 
 export function closedOrderStatus(status: unknown): boolean {
@@ -325,8 +289,7 @@ export function welcomePoints(input: {
   return input.mode === 'item' ? configured + input.itemPoints : configured;
 }
 
-export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[], loyaltyTag = 'loyaltypoints'): number {
-  const requiredTag = String(loyaltyTag || 'loyaltypoints').trim().toLowerCase();
+export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[]): number {
   let total = 0;
   for (const line of lines) {
     const productId = String(line.product_id ?? line.productId ?? '').trim();
@@ -335,7 +298,7 @@ export function taggedItemPoints(lines: OrderLine[], products: CatalogProduct[],
     const parent = direct?.parentId
       ? products.find((product) => product.id === direct.parentId) || direct
       : direct;
-    if (!parent || !parent.tags.includes(requiredTag)) continue;
+    if (!parent || !parent.tags.includes('loyaltypoints')) continue;
     const quantity = Number(line.quantity ?? 1);
     const useVariation = Boolean(variationId) && variationId !== '0';
     const variation = useVariation ? products.find((product) => product.id === variationId) : undefined;
@@ -384,11 +347,6 @@ export function redemptionBlocked(input: {
 }): boolean {
   if (input.conflictRule !== 'disable') return false;
   return input.discountTotal > 0 || input.couponCount > 0 || input.hasPayout || input.hasDiscountProduct || input.hasCashback;
-}
-
-export function earnedOrderPoints(total: number, ratioDollar: number, ratioPoint: number): number {
-  if (!(total > 0) || !(ratioDollar > 0) || !(ratioPoint > 0)) return 0;
-  return Math.floor((total / ratioDollar) * ratioPoint);
 }
 
 export function partialRefundExpiredPoints(input: {

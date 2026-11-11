@@ -39,11 +39,6 @@ export class SavePosCurrencyTaxDto {
   @IsIn(POS_CURRENCIES)
   currency!: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(16)
-  currency_symbol?: string;
-
   @IsIn(POS_ROUNDING)
   rounding!: string;
 

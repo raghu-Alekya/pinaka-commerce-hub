@@ -33,9 +33,6 @@ export class MerchantEntity {
   @Column({ name: 'password', type: 'varchar', length: 255, nullable: true, select: false })
   password?: string | null;
 
-  @Column({ name: 'actual_password', type: 'varchar', length: 255, nullable: true, select: false })
-  actualPassword?: string | null;
-
   // =========================================================
   // IDENTITY
   // =========================================================

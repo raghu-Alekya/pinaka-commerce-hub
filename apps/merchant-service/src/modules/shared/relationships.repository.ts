@@ -990,8 +990,8 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
                f.name,
                f.description,
                f.status,
-               MAX(COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code')) AS "featureKey",
-               MAX(to_jsonb(f)->>'feature_type') AS "featureType",
+               COALESCE(to_jsonb(f)->>'feature_key', to_jsonb(f)->>'feature_code') AS "featureKey",
+               to_jsonb(f)->>'feature_type' AS "featureType",
                ARRAY_AGG(DISTINCT stf.store_type_id) AS "storeTypeIds"
              FROM public.store_type_features stf
              JOIN public.features f ON f.id = stf.feature_id

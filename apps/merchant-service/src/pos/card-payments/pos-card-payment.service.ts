@@ -22,12 +22,11 @@ export interface PosCardPaymentRecord {
 export class PosCardPaymentService {
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
-  async get(storeId: string): Promise<{ success: true; payment_gateway_provider: unknown; cardPayments: PosCardPaymentRecord[] }> {
+  async get(storeId: string): Promise<{ success: true; cardPayments: PosCardPaymentRecord[] }> {
     const store = await this.requireStore(storeId);
     const document = await this.findDocument(store.id);
     return {
       success: true,
-      payment_gateway_provider: document?.payment_gateway_provider ?? document?.pinaka_payment_gateway_provider ?? null,
       cardPayments: this.providers(document).map(record => this.present(record, document || { storeId: store.id, merchantId: store.merchantId })),
     };
   }
@@ -40,7 +39,7 @@ export class PosCardPaymentService {
     if (providers.some(item => item.provider === body.provider)) {
       throw new ConflictException(`Card payment settings already exist for ${body.provider}`);
     }
-    const saved = await this.write(store.id, store.merchantId, [...providers, { id: randomUUID(), ...this.fields(body) }], body.payment_gateway_provider);
+    const saved = await this.write(store.id, store.merchantId, [...providers, { id: randomUUID(), ...this.fields(body) }]);
     const created = this.providers(saved).find(item => item.provider === body.provider);
     return { success: true, cardPayment: this.present(created, saved) };
   }
@@ -53,7 +52,7 @@ export class PosCardPaymentService {
     const current = providers.find(item => item.provider === body.provider);
     if (!current) throw new NotFoundException(`Card payment settings are not configured for ${body.provider}`);
     const next = providers.map(item => item.provider === body.provider ? { ...item, ...this.fields(body) } : item);
-    const saved = await this.write(store.id, store.merchantId, next, body.payment_gateway_provider);
+    const saved = await this.write(store.id, store.merchantId, next);
     const updated = this.providers(saved).find(item => item.provider === body.provider);
     return { success: true, cardPayment: this.present(updated, saved) };
   }
@@ -78,29 +77,13 @@ export class PosCardPaymentService {
   }
 
   private providers(document: Record<string, any> | null): Array<Record<string, any>> {
-    if (Array.isArray(document?.cardPayments)) return document.cardPayments;
     return Array.isArray(document?.providers) ? document.providers : [];
   }
 
-  private async write(
-    storeId: string,
-    merchantId: string,
-    providers: Array<Record<string, any>>,
-    selector?: string,
-  ) {
-    const current = await this.findDocument(storeId);
-    const preserved = { ...(current || {}) };
-    delete preserved.id;
-    delete preserved.storeId;
-    delete preserved.createdAt;
-    delete preserved.updatedAt;
-    delete preserved.providers;
-    delete preserved.cardPayments;
+  private async write(storeId: string, merchantId: string, providers: Array<Record<string, any>>) {
     return savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'card_payment_settings', {
-      ...preserved,
       merchantId,
-      ...(selector !== undefined ? { payment_gateway_provider: selector === 'payrock' ? 'payroc' : selector } : {}),
-      cardPayments: providers,
+      providers,
     });
   }
 

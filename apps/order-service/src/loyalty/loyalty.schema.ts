@@ -46,10 +46,6 @@ export async function ensureLoyaltySchema(db: DataSource | EntityManager): Promi
     )
   `);
   await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS store_customer_meta_data_customer_key_uidx
-    ON public.store_customer_meta_data (customer_id, meta_key)
-  `);
-  await db.query(`
     CREATE INDEX IF NOT EXISTS store_customer_meta_data_customer_idx
     ON public.store_customer_meta_data (customer_id)
   `);
@@ -89,10 +85,5 @@ export async function ensureLoyaltySchema(db: DataSource | EntityManager): Promi
     CREATE UNIQUE INDEX IF NOT EXISTS store_customer_loyalty_points_refund_uidx
     ON public.store_customer_loyalty_points (customer_id, order_id, source_refund_id)
     WHERE source_refund_id IS NOT NULL
-  `);
-  await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS store_customer_loyalty_points_credit_uidx
-    ON public.store_customer_loyalty_points (customer_id, order_id)
-    WHERE source_refund_id IS NULL AND credited_points > 0
   `);
 }

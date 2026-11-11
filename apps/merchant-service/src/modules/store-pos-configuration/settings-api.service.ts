@@ -94,23 +94,21 @@ export class SettingsApiService {
 
   async cash(scope: SettingsScope) {
     const value = await this.repository.read(scope);
-    const configurations = await this.repository.readConfigurationFlags(scope);
     const cash = value.cash ?? {};
     const business = value.business ?? {};
-    const currencyTaxes = configurations.currency_taxes ?? {};
     return { success: true, data: {
       enable_safes: Boolean(cash.enable_safes),
       enable_safes_drop: Boolean(cash.enable_safes_drop),
-      currency_symbol: currencyTaxes.currency_symbol || cash.currency_symbol || this.currencySymbol(currencyTaxes.currency || cash.selected_currency),
+      currency_symbol: cash.currency_symbol || this.currencySymbol(cash.selected_currency),
       currencies: this.currencies(),
-      selected_currency: currencyTaxes.currency || cash.selected_currency || 'USD',
+      selected_currency: cash.selected_currency || 'USD',
       pinaka_pos_cashback_settings: { enabled: 0, max_cashback: '', tiers: [], ...(value.cashback ?? {}) },
       pinaka_pos_service_charge_settings: {
         enabled: 0, charge_type: 'fixed', apply_to: 'order', max_charge: '', tiers: [], ...(value.service_charge ?? {}),
       },
       pinaka_pos_enable_loyalty_points: value.enable_loyalty_points === 'yes',
       shop_info: business,
-      tax_enabled: currencyTaxes.taxEnabled !== undefined ? (currencyTaxes.taxEnabled ? 1 : 0) : (value.enable_taxes ? 1 : 0),
+      tax_enabled: value.enable_taxes ? 1 : 0,
       coupons_enabled: value.enable_coupons ? 1 : 0,
       calc_sequential_coupons: value.coupon_sequential ? 1 : 0,
     } };
@@ -155,18 +153,6 @@ export class SettingsApiService {
     };
     const target = targets[key];
     const configurations = target ? { [target[0]]: { [target[1]]: Boolean(enabled) } } : {};
-    if (key === 'enable_safes' && !enabled) {
-      configurations.safe_and_safe_drop = {
-        ...(configurations.safe_and_safe_drop ?? {}),
-        dropEnabled: false,
-      };
-    }
-    if (key === 'enable_safes_drop' && enabled) {
-      const currentFlags = await this.repository.readConfigurationFlags(scope);
-      if (!this.boolean(currentFlags.safe_and_safe_drop?.enabled)) {
-        throw new BadRequestException('Safe must be enabled before Safe Drop can be enabled.');
-      }
-    }
     if (key === 'enable_cashback' || key === 'enable_service_charge') {
       const configKey = key === 'enable_cashback' ? 'cashback' : 'service_charge';
       const current = (await this.repository.read(scope))[configKey] ?? {};

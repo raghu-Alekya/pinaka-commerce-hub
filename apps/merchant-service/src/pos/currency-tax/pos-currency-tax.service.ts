@@ -15,7 +15,6 @@ export interface PosCurrencyTaxRecord {
   storeId: string;
   merchantId: string;
   currency: string;
-  currency_symbol: string;
   rounding: string;
   decimalPlaces: number;
   taxEnabled: boolean;
@@ -86,7 +85,6 @@ export class PosCurrencyTaxService {
       ...(current || {}),
       merchantId,
       currency: body.currency,
-      currency_symbol: body.currency_symbol?.trim() || current?.currency_symbol || '',
       rounding: body.rounding,
       decimalPlaces: body.decimalPlaces,
       taxEnabled: body.taxEnabled,
@@ -108,7 +106,6 @@ export class PosCurrencyTaxService {
       storeId: record.storeId,
       merchantId: record.merchantId,
       currency: record.currency,
-      currency_symbol: String(record.currency_symbol || ''),
       rounding: record.rounding,
       decimalPlaces: Number(record.decimalPlaces),
       taxEnabled: record.taxEnabled !== false,
