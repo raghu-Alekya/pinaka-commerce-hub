@@ -10,6 +10,7 @@ import {
   representedCouponDiscount,
   sumLineTotals,
 } from '../calculations/store-order.calculations';
+import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../loyalty/loyalty-line';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
@@ -95,12 +96,14 @@ export class OrderListPresenter {
       feeLines: corrected.feeLines,
       taxLines: corrected.taxLines,
     });
+    const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
+    const loyaltyRedemption = this.loyaltyRedemption(order, storeOrder, request);
     const correctedStoredTotal = corrected.corrected
       ? sumLineTotals(corrected.lineItems as any[]) + effectiveFeeTotal(corrected.calculationFees as any[])
         + Number(request.shipping_total ?? request.shippingTotal ?? 0)
         + Number(storeOrder?.tipAmount ?? order.tipAmount ?? 0)
       : storeOrder?.total ?? order.totalAmount;
-    const total = this.money(listOrderTotal({
+    const calculatedTotal = Number(this.money(listOrderTotal({
       total: correctedStoredTotal,
       tax,
       taxLines: corrected.taxLines,
@@ -112,7 +115,8 @@ export class OrderListPresenter {
       feeLines: corrected.calculationFees,
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
-    }));
+    })));
+    const total = this.money(Math.max(0, calculatedTotal));
     const totalNumber = Number(total);
     const calculatedRefundTotal = this.refundTotal(row.refunds, status);
     const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
@@ -138,10 +142,13 @@ export class OrderListPresenter {
       date_created: this.listDate(order.createdAt, timeZone),
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
+      loyalty_amount: this.money(loyaltyAmount),
+      redeem_points: loyaltyRedemption.points,
+      redeem_amount: this.money(loyaltyRedemption.amount),
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
       total_tax: this.taxText(tax),
-      change_amount: this.money(this.metaValue(order, 'pos_change_returned')),
+      change_amount: this.money(this.metaValueFromPayloadOrOrder(request, order, 'pos_change_returned')),
       cash_received: this.money(this.metaValue(order, 'pos_cash_received')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
@@ -154,7 +161,7 @@ export class OrderListPresenter {
         || (request.date_paid ? String(request.date_paid) : paidAt),
       coupon_lines: coupons,
       line_items: lineItems,
-      fee_lines: corrected.feeLines,
+      fee_lines: withLoyaltyDiscountFee(corrected.feeLines, loyaltyAmount, calculatedTotal),
       tax_lines: corrected.taxLines,
       refund_order_total: totalNumber,
       refund_total: refundTotal,
@@ -437,6 +444,52 @@ export class OrderListPresenter {
     const metadata = Array.isArray(order.metadata) ? order.metadata : [];
     const value = metadata.find((entry) => entry?.key === key)?.value;
     return value === undefined || value === null ? '' : String(value);
+  }
+
+  private metaValueFromPayloadOrOrder(request: Record<string, unknown>, order: OrderEntity, key: string): string {
+    const entries = Array.isArray(request.meta_data) ? request.meta_data : [];
+    const payloadValue = entries.find((entry: any) => entry?.key === key)?.value;
+    return payloadValue !== undefined && payloadValue !== null && payloadValue !== ''
+      ? String(payloadValue)
+      : this.metaValue(order, key);
+  }
+
+  private loyaltyAmount(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): number {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    return loyaltyAmountFromMeta(metadata);
+  }
+
+  private loyaltyRedemption(
+    order: OrderEntity,
+    storeOrder: StoreOrderEntity | null,
+    request: Record<string, unknown>,
+  ): { points: number; amount: number } {
+    const metadata = [
+      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
+      ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
+      ...(Array.isArray(order.metadata) ? order.metadata : []),
+      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
+    ] as Array<{ key?: string; value?: unknown }>;
+    const pointsEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_points');
+    const amountEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_amount');
+    const points = Number(pointsEntry?.value ?? 0);
+    const storedAmount = Number(amountEntry?.value);
+    const amount = Number.isFinite(storedAmount) && storedAmount > 0
+      ? storedAmount
+      : loyaltyAmountFromMeta(metadata);
+    return {
+      points: Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0,
+      amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    };
   }
 
   private orderPlacedAt(

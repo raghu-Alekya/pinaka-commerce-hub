@@ -2013,6 +2013,7 @@ export class OrderRepository implements OnModuleInit {
     if (!ids.length) return { total, orders: [] };
     const storeOrders = await this.storeOrderRepo.find({ where: { orderId: In(ids) } });
     await this.applyStoredOrderMeta(storeOrders);
+    await this.applyLoyaltyAmountFallback(storeOrders);
     const refundRows: Array<{
       order_id: string;
       amount: unknown;
@@ -3253,6 +3254,41 @@ export class OrderRepository implements OnModuleInit {
       const stored = byOrder.get(storeOrder.orderId);
       if (stored?.length) this.upsertOrderMeta(storeOrder, stored);
     });
+  }
+
+  private async applyLoyaltyAmountFallback(storeOrders: StoreOrderEntity[]): Promise<void> {
+    if (!this.dataSource || !storeOrders.length) return;
+    const storeIds = [...new Set(storeOrders.map((order) => order.storeId).filter(Boolean))];
+    if (!storeIds.length) return;
+    try {
+      const rows: Array<{ store_id: string; configuration_value?: Record<string, unknown> }> = await this.dataSource.query(
+        `SELECT DISTINCT ON (store_id) store_id::text AS store_id, configuration_value
+           FROM public.store_pos_configurations
+          WHERE store_id = ANY($1::uuid[])
+            AND configuration_name = 'store_loyalty'
+          ORDER BY store_id, updated_at DESC NULLS LAST`,
+        [storeIds],
+      );
+      const settings = new Map(rows.map((row) => [row.store_id, row.configuration_value || {}]));
+      storeOrders.forEach((storeOrder) => {
+        const metadata = [
+          ...(Array.isArray(storeOrder.metadata) ? storeOrder.metadata : []),
+          ...(Array.isArray(storeOrder.metaData) ? storeOrder.metaData as Array<{ key?: string; value?: unknown }> : []),
+        ];
+        const points = Number([...metadata].reverse().find((entry) => entry?.key === 'redeem_points')?.value || 0);
+        const savedAmount = Number([...metadata].reverse().find((entry) => entry?.key === 'redeem_amount')?.value || 0);
+        if (!(points > 0) || savedAmount > 0) return;
+        const config = settings.get(storeOrder.storeId) || {};
+        const redeemPoint = Number(config.pinaka_loyalty_redeem_point ?? config.redeemPoint ?? 0);
+        const redeemAmount = Number(config.pinaka_loyalty_redeem_amt ?? config.redeemAmount ?? 0);
+        if (!(redeemAmount > 0)) return;
+        const amount = redeemPoint > 0 ? (points / redeemPoint) * redeemAmount : redeemAmount;
+        if (!(amount > 0)) return;
+        this.upsertOrderMeta(storeOrder, [{ key: 'redeem_amount', value: Math.round(amount * 100) / 100 }, { key: 'redeemed_value', value: Math.round(amount * 100) / 100 }]);
+      });
+    } catch (error: any) {
+      if (error?.driverError?.code !== '42P01') throw error;
+    }
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {
