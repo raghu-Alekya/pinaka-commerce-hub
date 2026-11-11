@@ -3702,9 +3702,25 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       if (postgresCode === '42P01' || postgresCode === '42703') return [];
       throw error;
     }
-    return rows
+    const products = rows
       .map((row) => row.product)
       .filter((product) => product !== undefined && product !== null);
+    if (products.length === 0) return [];
+    const records = products.flatMap((product) => {
+      const record = this.asRecord(product);
+      return record ? [record] : [];
+    });
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return products.map((product) => {
+      const record = this.asRecord(product);
+      if (!record) return product;
+      const tax = this.productTax(
+        record,
+        this.categoryForProductTax(record, categoriesById),
+        taxConfiguration,
+      );
+      return { ...record, tax_rate: tax.rate };
+    });
   }
 
   async searchStoreProducts(
@@ -3750,8 +3766,14 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     }
     const products = rows[0]?.products;
     if (!Array.isArray(products) || products.length === 0) return null;
-    return products.map((product) =>
-      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+    const records = products.map((product) => this.asRecord(product) ?? {});
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return records.map((product) =>
+      this.presentWooProduct(
+        product,
+        this.categoryForProductTax(product, categoriesById),
+        taxConfiguration,
+      ),
     );
   }
 
@@ -3921,6 +3943,93 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return products.map((product) =>
       this.presentWooProduct(this.asRecord(product) ?? {}, category, taxConfiguration),
     );
+  }
+
+  private async loadStoreProductTaxContext(
+    storeId: string,
+    products: Array<Record<string, unknown>>,
+  ): Promise<{
+    taxConfiguration: StoreProductTaxConfiguration | null;
+    categoriesById: Map<string, Record<string, unknown>>;
+  }> {
+    const [taxConfiguration, categoriesById] = await Promise.all([
+      this.getStoreProductTaxConfiguration(storeId),
+      this.loadStoreCategoriesById(storeId, this.collectProductCategoryIds(products)),
+    ]);
+    return { taxConfiguration, categoriesById };
+  }
+
+  private collectProductCategoryIds(products: Array<Record<string, unknown>>): string[] {
+    const ids = new Set<string>();
+    for (const product of products) {
+      const direct = this.textOrNull(product.categoryId);
+      if (direct && /^\d+$/.test(direct)) ids.add(direct);
+      if (!Array.isArray(product.categories)) continue;
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id && /^\d+$/.test(id)) ids.add(id);
+      }
+    }
+    return [...ids];
+  }
+
+  private categoryForProductTax(
+    product: Record<string, unknown>,
+    categoriesById: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown> | null {
+    const ids: string[] = [];
+    const direct = this.textOrNull(product.categoryId);
+    if (direct) ids.push(direct);
+    if (Array.isArray(product.categories)) {
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id) ids.push(id);
+      }
+    }
+    for (const id of ids) {
+      const category = categoriesById.get(id);
+      if (category) return category;
+    }
+    return null;
+  }
+
+  private async loadStoreCategoriesById(
+    storeId: string,
+    categoryIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const categoriesById = new Map<string, Record<string, unknown>>();
+    if (categoryIds.length === 0) return categoriesById;
+    let rows: Array<{ category?: unknown }> = [];
+    try {
+      rows = await this.dataSource.query(
+        `SELECT category
+         FROM public.store_categories AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+             ELSE '[]'::jsonb
+           END
+         ) AS category
+         WHERE catalog.store_id = $1::uuid
+           AND COALESCE(catalog.is_deleted, false) = false
+           AND category->>'id' = ANY($2::text[])`,
+        [storeId, categoryIds],
+      );
+    } catch (error: unknown) {
+      const code =
+        error && typeof error === 'object'
+          ? (error as { code?: string; driverError?: { code?: string } }).code
+            ?? (error as { driverError?: { code?: string } }).driverError?.code
+          : undefined;
+      if (code === '42P01' || code === '42703') return categoriesById;
+      throw error;
+    }
+    for (const row of rows) {
+      const category = this.asRecord(row.category);
+      const id = this.textOrNull(category?.id);
+      if (category && id) categoriesById.set(id, category);
+    }
+    return categoriesById;
   }
 
   private presentWooProduct(
