@@ -491,28 +491,33 @@ export class OrderRepository implements OnModuleInit {
     const normalizedPaymentStatus = String(paymentStatus).trim().toUpperCase();
     const normalizedOrderStatus = String(orderStatus).trim().toUpperCase();
     const normalizedSourceStatus = String(sourceOrderStatus ?? '').trim().toLowerCase();
-    if (normalizedPaymentStatus !== PaymentStatus.PAID
-      || ['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
-      || ['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus)) return;
-    const couponCodes = Array.isArray(couponLines)
+    const eligible = normalizedPaymentStatus === PaymentStatus.PAID
+      && !['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
+      && !['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus);
+    const couponCodes = eligible && Array.isArray(couponLines)
       ? couponLines.map((line: any) => String(line?.code ?? '').trim().toLowerCase())
       : [];
-    const metadataCodes = Array.isArray(metadata)
+    const metadataCodes = eligible && Array.isArray(metadata)
       ? metadata
         .filter((entry: any) => ['_pinaka_discount_code', 'pinaka_discount_code', 'discount_code', '_discount_code']
           .includes(String(entry?.key ?? '').trim().toLowerCase()))
         .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
       : [];
-    const ruleIds = Array.isArray(lineItems)
-      ? lineItems.flatMap((line: any) => Array.isArray(line?.meta_data)
-        ? line.meta_data
-          .filter((entry: any) => String(entry?.key ?? '').trim() === '_pos_discount_rule_id')
-          .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
-        : [])
+    const ruleApplications = eligible && Array.isArray(lineItems)
+      ? lineItems.flatMap((line: any) => {
+        const entries = Array.isArray(line?.meta_data) ? line.meta_data : [];
+        const applicationCount = entries.find((entry: any) => [
+          '_pos_discount_application_count', 'pos_discount_application_count',
+          'discount_application_count', 'application_count',
+        ].includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
+        const explicitCount = Number(applicationCount);
+        const count = Number.isFinite(explicitCount) && explicitCount > 0 ? Math.floor(explicitCount) : 1;
+        return entries
+          .filter((entry: any) => String(entry?.key ?? '').trim().toLowerCase() === '_pos_discount_rule_id')
+          .map((entry: any) => ({ id: String(entry?.value ?? '').trim().toLowerCase(), count }));
+      })
       : [];
-    const codes = [...new Set([...couponCodes, ...metadataCodes].filter(Boolean))];
-    const ids = [...new Set(ruleIds.filter(Boolean))];
-    if (!codes.length && !ids.length) return;
+    const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
     const rows = await manager.query(
       `SELECT payload FROM public.store_discounts
         WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
@@ -533,27 +538,53 @@ export class OrderRepository implements OnModuleInit {
           .filter((value: unknown) => value !== undefined && value !== null)
           .map((value: unknown) => String(value).trim().toLowerCase());
         const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
-        const ruleIdMatches = ids.some(ruleId => {
-          if (!ruleId.startsWith(rulePrefix)) return false;
-          const suffix = ruleId.slice(rulePrefix.length);
-          return recordIds.includes(suffix);
-        });
-        if (!codes.includes(code) && !ruleIdMatches) continue;
+        const matchingRuleApplications = ruleApplications
+          .filter(({ id }) => {
+            if (!id.startsWith(rulePrefix)) return false;
+            const suffix = id.slice(rulePrefix.length);
+            return recordIds.some(recordId => recordId === suffix || recordId === id || recordId.endsWith(`:${suffix}`));
+          })
+          .reduce((sum, application) => sum + application.count, 0);
+        // The POS rule marker is the per-application signal. Coupon codes are a
+        // fallback for coupon-based applications; don't count both representations
+        // of the same application when an order contains both. If rule markers
+        // are present, never let a same-named catalog record in another type
+        // consume the coupon fallback.
+        const applications = eligible
+          ? matchingRuleApplications || (!ruleApplications.length && code
+            ? codes.filter(appliedCode => appliedCode === code).length
+            : 0)
+          : 0;
         const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
-        if (usedOrderIds.includes(orderId)) continue;
+        const byOrder = record.pch_used_applications_by_order
+          && typeof record.pch_used_applications_by_order === 'object'
+          ? record.pch_used_applications_by_order as Record<string, number>
+          : {};
+        const hadOrder = Object.prototype.hasOwnProperty.call(byOrder, orderId);
+        // Backfill old snapshots conservatively: the old implementation counted
+        // each previously seen order once, so treat that as one prior application.
+        const previousApplications = hadOrder
+          ? Math.max(Number(byOrder[orderId]) || 0, 0)
+          : usedOrderIds.includes(orderId) ? 1 : 0;
+        if (applications === 0 && !usedOrderIds.includes(orderId) && !hadOrder) continue;
+        if (applications === previousApplications) continue;
         const usageCount = Math.max(Number(record.usage_count ?? record.usageCount ?? 0), 0);
         const usageLimitValue = record.usage_limit ?? record.usageLimit;
         const usageLimit = usageLimitValue === null || usageLimitValue === undefined || usageLimitValue === ''
           ? null
           : Number(usageLimitValue);
-        if (usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && usageCount >= usageLimit) {
+        const nextUsage = Math.max(usageCount + applications - previousApplications, 0);
+        if (applications > previousApplications
+          && usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && nextUsage > usageLimit) {
           throw new BadRequestException(`Discount '${code || record.code || record.id}' has reached its usage limit`);
         }
-        usedOrderIds.push(orderId);
-        record.pch_used_order_ids = usedOrderIds;
-        const count = usageCount + 1;
-        record.usage_count = count;
-        record.usageCount = count;
+        if (applications > 0 && !usedOrderIds.includes(orderId)) usedOrderIds.push(orderId);
+        if (applications > 0) byOrder[orderId] = applications;
+        else delete byOrder[orderId];
+        record.pch_used_order_ids = usedOrderIds.filter(id => id !== orderId || applications > 0);
+        record.pch_used_applications_by_order = byOrder;
+        record.usage_count = nextUsage;
+        record.usageCount = nextUsage;
         record.pch_usage_sync_pending = true;
         changed = true;
       }
@@ -1470,6 +1501,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const storeOrderRepository = manager.getRepository(StoreOrderEntity);
       const persisted = await storeOrderRepository.save(storeOrderRepository.create({ ...storeOrder }));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       if (input.replaceItems) await this.saveLineItems(manager, input.order.id, input.items, true);
       if (input.history) {
         const history = storeOrder.statusHistory[storeOrder.statusHistory.length - 1] as OrderStatusHistoryEntity;
@@ -1630,6 +1672,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const repository = manager.getRepository(StoreOrderEntity);
       const persisted = await repository.save(repository.create(replacement));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       await this.saveLineItems(manager, current.order.id, items, true);
       await manager.query(
         `DELETE FROM public.store_pos_payments
@@ -1960,7 +2013,6 @@ export class OrderRepository implements OnModuleInit {
     if (!ids.length) return { total, orders: [] };
     const storeOrders = await this.storeOrderRepo.find({ where: { orderId: In(ids) } });
     await this.applyStoredOrderMeta(storeOrders);
-    await this.applyLoyaltyAmountFallback(storeOrders);
     const refundRows: Array<{
       order_id: string;
       amount: unknown;
@@ -2676,8 +2728,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount, sale.tax_total,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2753,6 +2806,17 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             createdAt: new Date().toISOString(),
           }])],
+        );
+        await this.recordCustomDiscountUsage(
+          manager,
+          order.store_id,
+          order.id,
+          PaymentStatus.REFUNDED,
+          OrderStatus.REFUNDED,
+          'refunded',
+          order.coupon_lines,
+          order.meta_data,
+          order.line_items,
         );
         await manager.query(
           `INSERT INTO public.order_status_history
@@ -2830,8 +2894,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2968,6 +3033,19 @@ export class OrderRepository implements OnModuleInit {
             createdAt: new Date().toISOString(),
           }]), refundOrderStatus, refundStoreStatus],
         );
+        if (fullyRefunded) {
+          await this.recordCustomDiscountUsage(
+            manager,
+            order.store_id,
+            order.id,
+            PaymentStatus.REFUNDED,
+            OrderStatus.REFUNDED,
+            'refunded',
+            order.coupon_lines,
+            order.meta_data,
+            order.line_items,
+          );
+        }
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
@@ -3175,41 +3253,6 @@ export class OrderRepository implements OnModuleInit {
       const stored = byOrder.get(storeOrder.orderId);
       if (stored?.length) this.upsertOrderMeta(storeOrder, stored);
     });
-  }
-
-  private async applyLoyaltyAmountFallback(storeOrders: StoreOrderEntity[]): Promise<void> {
-    if (!this.dataSource || !storeOrders.length) return;
-    const storeIds = [...new Set(storeOrders.map((order) => order.storeId).filter(Boolean))];
-    if (!storeIds.length) return;
-    try {
-      const rows: Array<{ store_id: string; configuration_value?: Record<string, unknown> }> = await this.dataSource.query(
-        `SELECT DISTINCT ON (store_id) store_id::text AS store_id, configuration_value
-           FROM public.store_pos_configurations
-          WHERE store_id = ANY($1::uuid[])
-            AND configuration_name = 'store_loyalty'
-          ORDER BY store_id, updated_at DESC NULLS LAST`,
-        [storeIds],
-      );
-      const settings = new Map(rows.map((row) => [row.store_id, row.configuration_value || {}]));
-      storeOrders.forEach((storeOrder) => {
-        const metadata = [
-          ...(Array.isArray(storeOrder.metadata) ? storeOrder.metadata : []),
-          ...(Array.isArray(storeOrder.metaData) ? storeOrder.metaData as Array<{ key?: string; value?: unknown }> : []),
-        ];
-        const points = Number([...metadata].reverse().find((entry) => entry?.key === 'redeem_points')?.value || 0);
-        const savedAmount = Number([...metadata].reverse().find((entry) => entry?.key === 'redeem_amount')?.value || 0);
-        if (!(points > 0) || savedAmount > 0) return;
-        const config = settings.get(storeOrder.storeId) || {};
-        const redeemPoint = Number(config.pinaka_loyalty_redeem_point ?? config.redeemPoint ?? 0);
-        const redeemAmount = Number(config.pinaka_loyalty_redeem_amt ?? config.redeemAmount ?? 0);
-        if (!(redeemAmount > 0)) return;
-        const amount = redeemPoint > 0 ? (points / redeemPoint) * redeemAmount : redeemAmount;
-        if (!(amount > 0)) return;
-        this.upsertOrderMeta(storeOrder, [{ key: 'redeem_amount', value: Math.round(amount * 100) / 100 }, { key: 'redeemed_value', value: Math.round(amount * 100) / 100 }]);
-      });
-    } catch (error: any) {
-      if (error?.driverError?.code !== '42P01') throw error;
-    }
   }
 
   private projectOrder(store: StoreOrderEntity): OrderEntity {

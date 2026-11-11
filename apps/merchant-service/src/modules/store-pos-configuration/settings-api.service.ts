@@ -42,25 +42,48 @@ export class SettingsApiService {
     }
     const data = await this.repository.merge(scope, { general });
     const responseFields = [
-      'company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
-      'gstin', 'receipt_header', 'receipt_footer', 'device_id',
+      'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
+      'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
+      'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
+      'receipt_footer', 'device_id',
     ];
-    const responseData = Object.fromEntries(
-      responseFields.filter((key) => body[key] !== undefined && data.general[key] !== undefined
-        && data.general[key] !== false && !(typeof data.general[key] === 'string' && !data.general[key].trim()))
-        .map((key) => [key, data.general[key]]),
-    );
+    const responseData: Json = {};
+    for (const key of responseFields) {
+      if (body[key] === undefined) continue;
+      // business_name may also be stored as company_name for older clients.
+      const value = key === 'business_name'
+        ? data.general.business_name ?? data.general.company_name
+        : data.general[key];
+      if (value === undefined || value === null || value === false
+        || (typeof value === 'string' && !value.trim())) continue;
+      responseData[key] = value;
+    }
     return { success: true, message: 'Settings updated successfully', data: responseData };
   }
 
   async getGeneral(scope: SettingsScope) {
     const value = await this.repository.read(scope);
     const general = value.general ?? {};
-    const fields = ['company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
-      'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const fields = [
+      'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
+      'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
+      'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
+      'receipt_footer', 'device_id',
+    ];
     const data: Json = {};
     for (const key of fields) {
-      const raw = key === 'company_name' ? general.company_name ?? general.business_name : general[key];
+      const raw = key === 'business_name'
+        ? general.business_name ?? general.company_name
+        : key === 'company_name'
+          ? general.company_name ?? general.business_name
+          : general[key];
+      // Keep receipt fields present in the GET contract even before a receipt
+      // header or footer has been configured.
+      if ((key === 'receipt_header' || key === 'receipt_footer')
+        && (raw === null || raw === undefined)) {
+        data[key] = '';
+        continue;
+      }
       if (raw === null || raw === undefined || raw === false || (typeof raw === 'string' && !raw.trim())) continue;
       data[key] = raw;
     }
