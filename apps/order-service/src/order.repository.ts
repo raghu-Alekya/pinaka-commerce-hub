@@ -2373,6 +2373,25 @@ export class OrderRepository implements OnModuleInit {
     };
   }
 
+  async getOrderRefunds(orderId: string): Promise<Array<{ amount: unknown; metadata: Record<string, unknown> | null }>> {
+    if (!this.dataSource) return [];
+    return this.dataSource.query(
+      `SELECT refund_event->>'amount' AS amount, refund_event AS metadata
+         FROM public.store_pos_payments AS payment
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(payment.metadata->'refund_history', '[]'::jsonb)) AS refund_event
+        WHERE payment.order_id = $1::uuid AND payment.entry_type = 'payment'
+          AND payment.is_void = false AND payment.deleted_at IS NULL
+          AND lower(COALESCE(payment.status, 'completed')) NOT IN ('failed', 'cancelled')
+       UNION ALL
+       SELECT amount::text, metadata FROM public.store_pos_payments
+        WHERE order_id = $1::uuid AND entry_type = 'refund'
+          AND is_void = false AND deleted_at IS NULL
+          AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'`,
+      [orderId],
+    );
+  }
+
   private isUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   }
