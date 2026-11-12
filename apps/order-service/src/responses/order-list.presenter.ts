@@ -1,13 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
-  applyCouponDiscountToStoredLinesAndTax,
-  applyMerchantDiscountToStoredTax,
-  authoritativeCouponDiscount,
+  correctStoredDiscountTax,
   effectiveFeeTotal,
-  feeLinesForCalculation,
   listOrderTax,
   listOrderTotal,
-  representedCouponDiscount,
   sumLineTotals,
 } from '../calculations/store-order.calculations';
 import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../loyalty/loyalty-line';
@@ -82,7 +78,7 @@ export class OrderListPresenter {
       storeOrder,
       request,
     );
-    const corrected = this.correctStoredDiscountTax(
+    const corrected = correctStoredDiscountTax(
       Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : [],
       Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [],
       Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [],
@@ -165,67 +161,6 @@ export class OrderListPresenter {
       refund_order_total: totalNumber,
       refund_total: refundTotal,
       net_payment: this.round(Math.max(0, totalNumber - refundTotal)),
-    };
-  }
-
-  private correctStoredDiscountTax(
-    storedLines: unknown[],
-    storedFees: unknown[],
-    storedTaxLines: unknown[],
-    couponLines: unknown[],
-    storedTax: unknown,
-  ) {
-    const lineItems = storedLines.map((line: any) => ({
-      ...line,
-      taxes: Array.isArray(line?.taxes) ? line.taxes.map((tax: any) => ({ ...tax })) : line?.taxes,
-    }));
-    const feeLines = storedFees.map((fee: any) => ({ ...fee }));
-    const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
-    const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
-    const representedCoupon = representedCouponDiscount(lineItems as any[], feeLines as any[]);
-    const couponDiscount = authoritativeCouponDiscount(
-      couponLines as any[],
-      feeLines as any[],
-      2,
-      lineItems as any[],
-    );
-    const hasMerchantDiscount = calculationFees.some((fee: any) => {
-      const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-      return (name === 'merchant_discount' || name.startsWith('merchant_discount_'))
-        && Math.abs(Number(fee?.total || 0)) > 0;
-    });
-    const effectiveCoupons = couponDiscount > 0
-      ? [{ code: 'stored-coupon-discount', discount: couponDiscount.toFixed(2) }]
-      : couponLines as any[];
-    const hasReliableRates = lineItems.some((line: any) => Array.isArray(line?.taxes)
-      && line.taxes.some((tax: any) => {
-        const rate = Number(tax?.rate_percent ?? tax?.id);
-        return Number.isFinite(rate) && rate > 0 && rate <= 100;
-      }));
-    const orderTax = { total_tax: storedTax, tax_lines: taxLines };
-    if (hasReliableRates && (couponDiscount > 0 || hasMerchantDiscount)) {
-      if (couponDiscount > 0) {
-        applyCouponDiscountToStoredLinesAndTax(
-          lineItems,
-          effectiveCoupons,
-          orderTax,
-          2,
-          representedCoupon,
-        );
-      }
-      applyMerchantDiscountToStoredTax(lineItems, calculationFees as any[], orderTax);
-      feeLines.forEach((fee: any) => {
-        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-        if (name === 'coupon_discount') fee.total = (-couponDiscount).toFixed(2);
-      });
-    }
-    return {
-      lineItems,
-      feeLines,
-      calculationFees,
-      taxLines,
-      tax: orderTax.total_tax,
-      corrected: hasReliableRates && (couponDiscount > 0 || hasMerchantDiscount),
     };
   }
 

@@ -350,10 +350,17 @@ function exactTaxForAmounts(
       ?? (taxes[0] as { id?: unknown } | undefined)?.id);
     return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
   });
-  if (rates.some((rate) => !rate)) return null;
+  const missingRateOnTaxedLine = lines.some((line, index) => {
+    if (rates[index] > 0) return false;
+    const stored = Number((line as { total_tax?: unknown }).total_tax ?? 0);
+    return Number.isFinite(stored) && stored !== 0;
+  });
+  if (missingRateOnTaxedLine || rates.every((rate) => rate <= 0)) return null;
   const result = new Array(lines.length).fill(0);
   const groups = new Map<number, number[]>();
-  rates.forEach((rate, index) => groups.set(rate, [...(groups.get(rate) || []), index]));
+  rates.forEach((rate, index) => {
+    if (rate > 0) groups.set(rate, [...(groups.get(rate) || []), index]);
+  });
   groups.forEach((indexes, rate) => {
     const allocated = allocateRoundedTax(indexes.map((index) => taxUnitsForMinor(amounts[index], rate)));
     indexes.forEach((index, position) => { result[index] = allocated[position]; });
@@ -539,6 +546,48 @@ export function applyMerchantDiscountToStoredTax(
     const current = toMinor(taxLine.tax_total ?? 0, places);
     taxLine.tax_total = fromMinor(Math.round((current * basisNew) / basisOld), places).toFixed(places);
   });
+}
+
+/** Keep the tax saved at order creation. Coupon fee rows are aligned to the saved coupon amount for display. */
+export function correctStoredDiscountTax(
+  storedLines: unknown[],
+  storedFees: unknown[],
+  storedTaxLines: unknown[],
+  couponLines: unknown[],
+  storedTax: unknown,
+) {
+  const lineItems = storedLines.map((line: any) => ({
+    ...line,
+    taxes: Array.isArray(line?.taxes) ? line.taxes.map((tax: any) => ({ ...tax })) : line?.taxes,
+  }));
+  const feeLines = storedFees.map((fee: any) => ({ ...fee }));
+  const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
+  const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
+  const couponDiscount = authoritativeCouponDiscount(
+    couponLines as any[],
+    feeLines as any[],
+    2,
+    lineItems as any[],
+  );
+  const hasReliableRates = lineItems.some((line: any) => Array.isArray(line?.taxes)
+    && line.taxes.some((tax: any) => {
+      const rate = Number(tax?.rate_percent ?? tax?.id);
+      return Number.isFinite(rate) && rate > 0 && rate <= 100;
+    }));
+  if (hasReliableRates && couponDiscount > 0) {
+    feeLines.forEach((fee: any) => {
+      const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (name === 'coupon_discount') fee.total = (-couponDiscount).toFixed(2);
+    });
+  }
+  return {
+    lineItems,
+    feeLines,
+    calculationFees,
+    taxLines,
+    tax: storedTax,
+    corrected: false,
+  };
 }
 
 /**
