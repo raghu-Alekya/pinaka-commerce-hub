@@ -48,12 +48,13 @@ export class OrderListPresenter {
       refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>;
       effectiveStatus?: string;
     }>,
+    redemptionSettings: Map<string, { points: number; amount: number }> = new Map(),
   ) {
     return {
       order_total_count: total,
       page,
       per_page: perPage,
-      orders_data: rows.map((row) => this.orderRow(row)),
+      orders_data: rows.map((row) => this.orderRow(row, redemptionSettings.get(row.order.storeId))),
     };
   }
 
@@ -64,7 +65,7 @@ export class OrderListPresenter {
     products: Map<string, unknown>;
     refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>;
     effectiveStatus?: string;
-  }) {
+  }, redemptionSetting?: { points: number; amount: number }) {
     const { order, storeOrder } = row;
     const request = (order.requestPayload || {}) as Record<string, unknown>;
     const timeZone = storeOrder?.timezone || 'UTC';
@@ -94,6 +95,10 @@ export class OrderListPresenter {
     });
     const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
     const loyaltyRedemption = this.loyaltyRedemption(order, storeOrder, request);
+    if (loyaltyRedemption.points > 0 && loyaltyRedemption.amount === 0 && redemptionSetting && redemptionSetting.points > 0 && redemptionSetting.amount > 0) {
+      loyaltyRedemption.amount = Math.round(loyaltyRedemption.points / redemptionSetting.points * redemptionSetting.amount * 100) / 100;
+    }
+    const displayedLoyaltyAmount = loyaltyAmount > 0 ? loyaltyAmount : loyaltyRedemption.amount;
     const correctedStoredTotal = corrected.corrected
       ? sumLineTotals(corrected.lineItems as any[]) + effectiveFeeTotal(corrected.calculationFees as any[])
         + Number(request.shipping_total ?? request.shippingTotal ?? 0)
@@ -138,7 +143,7 @@ export class OrderListPresenter {
       date_created: this.listDate(order.createdAt, timeZone),
       date_modified: this.listDate(order.updatedAt, timeZone),
       total,
-      loyalty_amount: this.money(loyaltyAmount),
+      loyalty_amount: this.money(displayedLoyaltyAmount),
       redeem_points: loyaltyRedemption.points,
       redeem_amount: this.money(loyaltyRedemption.amount),
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
@@ -407,19 +412,28 @@ export class OrderListPresenter {
     storeOrder: StoreOrderEntity | null,
     request: Record<string, unknown>,
   ): { points: number; amount: number } {
+    // The request payload is the original order snapshot and can still contain
+    // zero redemption values after the loyalty service has updated the
+    // persisted order metadata. Prefer persisted values; use request metadata
+    // only as a fallback for older orders that have no saved redemption keys.
     const metadata = [
       ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
       ...(Array.isArray(order.metadata) ? order.metadata : []),
-      ...(Array.isArray(request.meta_data) ? request.meta_data : []),
     ] as Array<{ key?: string; value?: unknown }>;
-    const pointsEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_points');
-    const amountEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_amount');
+    const requestMetadata = Array.isArray(request.meta_data)
+      ? request.meta_data as Array<{ key?: string; value?: unknown }>
+      : [];
+    const pointsEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_points')
+      || [...requestMetadata].reverse().find((item) => item?.key === 'redeem_points');
+    const amountEntry = [...metadata].reverse().find((item) => item?.key === 'redeem_amount')
+      || [...requestMetadata].reverse().find((item) => item?.key === 'redeem_amount');
     const points = Number(pointsEntry?.value ?? 0);
     const storedAmount = Number(amountEntry?.value);
-    const amount = Number.isFinite(storedAmount) && storedAmount > 0
+    const persistedAmount = Number.isFinite(storedAmount) && storedAmount > 0
       ? storedAmount
       : loyaltyAmountFromMeta(metadata);
+    const amount = persistedAmount > 0 ? persistedAmount : loyaltyAmountFromMeta(requestMetadata);
     return {
       points: Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0,
       amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
