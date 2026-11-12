@@ -78,6 +78,18 @@ export class SettingsApiController {
     return this.settings.getGeneral(this.scope(request, merchantId, storeId));
   }
 
+  @Post('printer-settings') @HttpCode(HttpStatus.OK)
+  printerSettings(@Body() body: Record<string, any>, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.printerSettings(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Get('printer-settings')
+  getPrinterSettings(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.getPrinterSettings(this.scope(request, merchantId, storeId));
+  }
+
   @Get('promotional-images')
   getPromotionalImages(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string) {
