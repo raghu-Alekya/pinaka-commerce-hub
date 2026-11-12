@@ -19,4 +19,8 @@ export class OrderCancellationService {
       },
     };
   }
+
+  assertStatusChangeAllowed(graph: OrderGraph): void {
+    this.policy.assertStatusChangeAllowed(graph);
+  }
 }

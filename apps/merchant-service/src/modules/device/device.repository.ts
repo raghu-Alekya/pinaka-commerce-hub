@@ -18,6 +18,7 @@ export class DeviceRepository {
     merchantId: string;
     merchantName?: string;
     serialNumber?: string | null;
+    activationCode?: string | null;
     notes?: string | null;
     status?: RecordStatus;
     createdBy: string;
@@ -34,16 +35,24 @@ export class DeviceRepository {
         `);
         const nextCode = Number(rows[0]?.maxCode ?? 0) + 1;
         const deviceCode = `DVC_${String(nextCode).padStart(5, '0')}`;
-        let deviceActiveCode = '';
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const candidate = `PK-${randomInt(100000, 1000000)}`;
+        let deviceActiveCode = data.activationCode?.trim() || '';
+        if (deviceActiveCode) {
           const existing = await manager.query(
             'SELECT 1 FROM public.devices WHERE device_active_code = $1 OR authorization_code = $1 LIMIT 1',
-            [candidate],
+            [deviceActiveCode],
           );
-          if (existing.length === 0) {
-            deviceActiveCode = candidate;
-            break;
+          if (existing.length > 0) throw new ConflictException('Activation key already exists');
+        } else {
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            const candidate = `PK-${randomInt(100000, 1000000)}`;
+            const existing = await manager.query(
+              'SELECT 1 FROM public.devices WHERE device_active_code = $1 OR authorization_code = $1 LIMIT 1',
+              [candidate],
+            );
+            if (existing.length === 0) {
+              deviceActiveCode = candidate;
+              break;
+            }
           }
         }
         if (!deviceActiveCode) {
@@ -79,11 +88,12 @@ export class DeviceRepository {
       });
     } catch (error: any) {
       if ((error?.driverError?.code || error?.code) === '23505') {
-        throw new ConflictException('Device code, serial number, or activation code already exists');
+        throw new ConflictException('Device code or activation code already exists');
       }
       throw error;
     }
   }
+  //
 
   private repository() {
     return this.merchants.requireDataSource().getRepository(MerchantDeviceEntity);
@@ -93,7 +103,9 @@ export class DeviceRepository {
     const rows = await this.repository()
       .createQueryBuilder('mapping')
       .innerJoinAndSelect('mapping.device', 'device', 'device.isDeleted = false')
-      .where('mapping.merchantId = :merchantId', { merchantId })
+      // merchant_devices.merchant_id is varchar in databases created by the
+      // current schema bootstrap, so compare as text instead of uuid.
+      .where('mapping.merchant_id::text = CAST(:merchantId AS text)', { merchantId })
       .andWhere('mapping.isDeleted = false')
       .orderBy('mapping.createdAt', 'DESC')
       .getMany();
@@ -138,7 +150,7 @@ export class DeviceRepository {
           'mapping',
           'mapping.device_id = device.id AND mapping.is_deleted = false',
         )
-        .where('mapping.merchant_id = :merchantId', { merchantId: filters.merchantId })
+        .where('mapping.merchant_id::text = CAST(:merchantId AS text)', { merchantId: filters.merchantId })
         .andWhere('device.is_deleted = false');
 
       if (!withFilters) return query;

@@ -1,4 +1,5 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
+import { LoyaltyService } from './loyalty/loyalty.service';
 import { OrderRepository } from './order.repository';
 
 export interface PartialOrderRefundRequest {
@@ -10,7 +11,10 @@ export interface PartialOrderRefundRequest {
 
 @Injectable()
 export class PartialOrderRefundService {
-  constructor(@Inject(OrderRepository) private readonly orders: OrderRepository) {}
+  constructor(
+    @Inject(OrderRepository) private readonly orders: OrderRepository,
+    @Optional() @Inject(LoyaltyService) private readonly loyalty?: LoyaltyService,
+  ) {}
 
   async refund(body: PartialOrderRefundRequest, scope: { merchantId: string; storeId: string; performedBy: string }) {
     const clientOrderId = String(body?.order_id ?? '').trim();
@@ -41,6 +45,18 @@ export class PartialOrderRefundService {
     }
     if (result.kind === 'invalid_amount') throw this.error('invalid_amount', 'Refund amount must be greater than zero');
     if (result.kind === 'exceeds_remaining') throw this.error('exceeds_remaining', 'Refund amount exceeds remaining refundable amount');
+    if (result.kind === 'created' && result.orderStatus === 'partial-refund') {
+      await this.loyalty?.expirePartialRefund({
+        merchantId: scope.merchantId,
+        storeId: scope.storeId,
+        orderId: result.orderId,
+        refundId: result.refundId,
+        refundTotal: result.refundedAmount,
+        items: items.map((item) => ({ orderItemId: item.orderItemId })),
+      }).catch((error: unknown) => {
+        console.error('[Loyalty] Partial refund point expiry failed', error);
+      });
+    }
     const numericOrderNumber = Number(result.orderNumber.replace(/\D/g, ''));
     return {
       success: true,
