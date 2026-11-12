@@ -302,7 +302,10 @@ export class AppController {
     }
     const data = await this.orderRepository.getOrderDetails(id, storeHeader || storeId || storeIdSnake);
     if (!data) throw new NotFoundException(`Order '${id}' not found`);
-    return this.orderDetails.present(data);
+    const response = this.orderDetails.present(data);
+    if (!String(data.storeOrder?.status || data.order.orderStatus || '').toLowerCase().includes('partial')) return response;
+    const refunds = await this.orderRepository.getOrderRefunds(data.order.id);
+    return { ...response, refunds };
   }
 
   // --- 4. Update Order Status (State Machine Transition) ---
