@@ -1891,6 +1891,30 @@ export class OrderRepository implements OnModuleInit {
     });
   }
 
+  async loyaltyRedemptionSettings(storeIds: string[]): Promise<Map<string, { points: number; amount: number }>> {
+    if (!this.dataSource || !storeIds.length) return new Map();
+    let rows: Array<{ store_id: string; configuration_value: Record<string, unknown> }>;
+    try {
+      rows = await this.dataSource.query(
+      `SELECT DISTINCT ON (store_id) store_id::text AS store_id, configuration_value
+         FROM public.store_pos_configurations
+        WHERE store_id = ANY($1::uuid[]) AND configuration_name = 'store_loyalty'
+        ORDER BY store_id, updated_at DESC NULLS LAST`,
+      [storeIds],
+      );
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code === '42P01') return new Map();
+      throw error;
+    }
+    return new Map(rows.map((row) => [row.store_id, {
+      points: Number(row.configuration_value?.pinaka_loyalty_redeem_point) || 0,
+      amount: Number(row.configuration_value?.pinaka_loyalty_redeem_amt) || 0,
+    }]));
+  }
+
   async listOrders(criteria: {
     merchantId?: string;
     storeId?: string;

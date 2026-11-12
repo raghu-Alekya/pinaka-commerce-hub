@@ -164,7 +164,9 @@ export class AppController {
     });
     const listed = await this.orderRepository.listOrders(criteria);
     await this.hydrateCouponLines(listed.orders);
-    return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
+    const storeIds = [...new Set(listed.orders.map((row) => row.order.storeId).filter(Boolean))];
+    const redemptionSettings = await this.orderRepository.loyaltyRedemptionSettings(storeIds);
+    return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders, redemptionSettings);
   }
 
   @Get('website-sync')
