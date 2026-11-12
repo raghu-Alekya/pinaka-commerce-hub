@@ -90,6 +90,18 @@ export class SettingsApiService {
     return { success: true, data };
   }
 
+  async printerSettings(body: Json, scope: SettingsScope) {
+    const data = await this.repository.readConfiguration(scope, 'printer_settings');
+    const merged = { ...data, ...body };
+    await this.repository.merge(scope, {}, { printer_settings: body });
+    return { success: true, message: 'Printer settings updated successfully', data: merged };
+  }
+
+  async getPrinterSettings(scope: SettingsScope) {
+    const data = await this.repository.readConfiguration(scope, 'printer_settings');
+    return { success: true, data };
+  }
+
   async device(body: Json, scope: SettingsScope) {
     const keys = ['device_id', 'kot_printer', 'receipt_printer', 'paper_size', 'connection_type', 'kitchen_printer', 'bar_printer'];
     const settings: Json = { ...((await this.repository.read(scope)).device ?? {}) };
