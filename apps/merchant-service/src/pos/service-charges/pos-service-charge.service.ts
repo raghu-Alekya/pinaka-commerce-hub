@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosServiceChargeEntity } from './pos-service-charge.entity';
-import { PosServiceChargeTierEntity } from './pos-service-charge-tier.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { SavePosServiceChargeDto } from './pos-service-charge.dto';
 
 export interface PosServiceChargeRecord {
@@ -38,7 +38,7 @@ export class PosServiceChargeService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Service charge settings are not configured for this store');
-    return { success: true, serviceCharge: await this.withTiers(record) };
+    return { success: true, serviceCharge: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosServiceChargeDto) {
@@ -72,76 +72,50 @@ export class PosServiceChargeService {
     if (incomplete) throw new BadRequestException('Each service charge tier needs a from, to, and fee');
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosServiceChargeEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.repo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'service_charges');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosServiceChargeDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosServiceChargeRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosServiceChargeEntity);
-      const tiers = manager.getRepository(PosServiceChargeTierEntity);
-      const fields = {
-        storeId,
-        merchantId,
-        enabled: body.enabled,
-        applyTo: body.applyTo,
-        defaultType: body.defaultType,
-        maxLimit: String(body.maxLimit),
-      };
-      const row = existingId
-        ? await settings.save({ id: existingId, ...fields })
-        : await settings.save(settings.create(fields));
-
-      await tiers.delete({ serviceChargeId: row.id });
-      const complete = (body.tiers || []).filter(item => item.from?.trim() && item.to?.trim() && item.fee?.trim());
-      const savedTiers = complete.length
-        ? await tiers.save(complete.map((item, index) => tiers.create({
-            serviceChargeId: row.id,
-            fromAmount: item.from.trim(),
-            toAmount: item.to.trim(),
-            fee: item.fee.trim(),
-            feeType: item.feeType,
-            appliesTo: item.appliesTo,
-            sortOrder: index,
-          })))
-        : [];
-
-      return this.present(row, savedTiers);
+    const complete = (body.tiers || []).filter(item => item.from?.trim() && item.to?.trim() && item.fee?.trim());
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'service_charges', {
+      merchantId,
+      enabled: body.enabled,
+      applyTo: body.applyTo,
+      defaultType: body.defaultType,
+      maxLimit: Number(body.maxLimit),
+      tiers: complete.map(item => ({
+        id: randomUUID(),
+        from: item.from.trim(),
+        to: item.to.trim(),
+        fee: item.fee.trim(),
+        feeType: item.feeType,
+        appliesTo: item.appliesTo,
+      })),
     });
+    return this.present(saved);
   }
 
-  private async withTiers(record: PosServiceChargeEntity): Promise<PosServiceChargeRecord> {
-    const tiers = await this.merchants.requireDataSource().getRepository(PosServiceChargeTierEntity).find({
-      where: { serviceChargeId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, tiers);
-  }
-
-  private present(record: PosServiceChargeEntity, tiers: PosServiceChargeTierEntity[]): PosServiceChargeRecord {
+  private present(record: Record<string, any>): PosServiceChargeRecord {
+    const tiers = Array.isArray(record.tiers) ? record.tiers : [];
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      enabled: record.enabled,
+      enabled: Boolean(record.enabled),
       applyTo: record.applyTo,
       defaultType: record.defaultType,
       maxLimit: Number(record.maxLimit),
-      tiers: tiers.map(item => ({
-        id: item.id,
-        from: item.fromAmount,
-        to: item.toAmount,
-        fee: item.fee,
+      tiers: tiers.map((item: Record<string, any>) => ({
+        id: String(item.id),
+        from: String(item.from ?? item.fromAmount),
+        to: String(item.to ?? item.toAmount),
+        fee: String(item.fee),
         feeType: item.feeType,
         appliesTo: item.appliesTo,
       })),

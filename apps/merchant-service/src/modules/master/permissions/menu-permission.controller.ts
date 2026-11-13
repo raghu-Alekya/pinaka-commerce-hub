@@ -28,6 +28,7 @@ export class MenuPermissionController {
       principalRole?: string;
       roleTemplateId?: string | null;
       menuKeys?: string[];
+      grants?: { menuKey: string; actions: string[] }[];
     },
   ) {
     return this.service.save(body);

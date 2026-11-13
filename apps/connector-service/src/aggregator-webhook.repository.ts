@@ -4,6 +4,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import {
@@ -19,14 +20,24 @@ export class AggregatorWebhookRepository
 {
   private dataSource?: DataSource;
   private repository?: Repository<AggregatorWebhookEntity>;
+  private readonly inMemoryWebhooks: AggregatorWebhookEntity[] = [];
 
   async onModuleInit(): Promise<void> {
-    this.dataSource = await connectPostgres('Aggregator webhooks', [
-      AggregatorWebhookEntity,
-    ]);
-    await this.ensureTableExists();
-    this.repository = this.dataSource.getRepository(AggregatorWebhookEntity);
-    console.log('[PostgreSQL] aggregator_webhooks persistence is ready');
+    try {
+      this.dataSource = await connectPostgres('Aggregator webhooks', [
+        AggregatorWebhookEntity,
+      ]);
+      await this.ensureTableExists();
+      this.repository = this.dataSource.getRepository(AggregatorWebhookEntity);
+      console.log('[PostgreSQL] aggregator_webhooks persistence is ready');
+    } catch (error) {
+      if (this.dataSource?.isInitialized) await this.dataSource.destroy();
+      this.dataSource = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[Aggregator Webhooks DB] Offline (${message}). Using in-memory fallback; webhook records will not survive restart.`,
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -34,12 +45,6 @@ export class AggregatorWebhookRepository
   }
 
   async save(payload: unknown): Promise<AggregatorWebhookEntity> {
-    if (!this.repository) {
-      throw new ServiceUnavailableException(
-        'Webhook persistence database is unavailable',
-      );
-    }
-
     if (!this.isObject(payload)) {
       throw new ServiceUnavailableException(
         'Webhook payload cannot be persisted as a JSON object',
@@ -54,7 +59,7 @@ export class AggregatorWebhookRepository
       : this.isObject(nestedPayload?.destination)
         ? nestedPayload.destination
         : undefined;
-    const entity = this.repository.create({
+    const values = {
       payload,
       storeId: this.optionalIdentifier(
         destination?.storeId ?? destination?.store_id,
@@ -64,9 +69,20 @@ export class AggregatorWebhookRepository
       ),
       status: 'RECEIVED',
       errorMessage: null,
-    });
+    } as const;
 
-    return this.repository.save(entity);
+    if (this.repository) {
+      return this.repository.save(this.repository.create(values));
+    }
+
+    const now = new Date();
+    const entity = Object.assign(new AggregatorWebhookEntity(), values, {
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+    });
+    this.inMemoryWebhooks.push(entity);
+    return entity;
   }
 
   async updateStatus(
@@ -74,7 +90,15 @@ export class AggregatorWebhookRepository
     status: AggregatorWebhookStatus,
     errorMessage: string | null = null,
   ): Promise<void> {
-    if (!this.repository) return;
+    if (!this.repository) {
+      const webhook = this.inMemoryWebhooks.find((item) => item.id === id);
+      if (webhook) {
+        webhook.status = status;
+        webhook.errorMessage = errorMessage;
+        webhook.updatedAt = new Date();
+      }
+      return;
+    }
 
     await this.repository.update(id, {
       status,

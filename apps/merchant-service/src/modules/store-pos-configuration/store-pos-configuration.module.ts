@@ -7,6 +7,7 @@ import { DeviceMappingsModule } from './device-mappings/device-mappings.module';
 import { VendorMappingsModule } from './vendor-mappings/vendor-mappings.module';
 import { SettingsApiController } from './settings-api.controller';
 import { SettingsApiService } from './settings-api.service';
+import { PosConfigurationImageService } from './pos-configuration-image.service';
 import { SettingsApiRepository } from './settings-api.repository';
 
 /**
@@ -16,7 +17,7 @@ import { SettingsApiRepository } from './settings-api.repository';
 @Module({
   imports: [MerchantModule, DeviceMappingsModule, VendorMappingsModule],
   controllers: [StorePosConfigurationController, SettingsApiController],
-  providers: [StorePosConfigurationsService, SettingsApiRepository, SettingsApiService],
-  exports: [StorePosConfigurationsService],
+  providers: [StorePosConfigurationsService, PosConfigurationImageService, SettingsApiRepository, SettingsApiService],
+  exports: [StorePosConfigurationsService, PosConfigurationImageService],
 })
 export class StorePosConfigurationModule {}

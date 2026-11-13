@@ -30,7 +30,16 @@ export class PosSafeTransactionsService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const db = this.merchants.requireDataSource();
+    let db;
+    try {
+      db = this.merchants.requireDataSource();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[POS safe transactions] Database unavailable during startup (${message}); safe transaction endpoints will require PostgreSQL.`,
+      );
+      return;
+    }
     await db.query(`
       CREATE TABLE IF NOT EXISTS public.pos_safe_transactions (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), store_id uuid NOT NULL,
@@ -163,6 +172,7 @@ export class PosSafeTransactionsService implements OnModuleInit {
   }
 
   async createSafe(storeId: string, body: CreateSafeDto, actor: Actor) {
+    console.log(`[shift-debug] request ${JSON.stringify({ action: 'POST safes/create-safe', shift_id: body.shift_id, total_amount: body.total_amount, denom_count: body.safe_denom?.length ?? 0, saved_to: ['pos_safe_transactions'], not_saved_to: ['pos_shifts', 'pos_shift_meta', 'pos_shift_transactions'] })}`);
     const { store, actorId } = await this.requireScope(storeId, actor);
     const safeData = body.safe_denom
       .filter((item) => Number(item.denom) > 0)
@@ -215,6 +225,7 @@ export class PosSafeTransactionsService implements OnModuleInit {
   }
 
   async createSafeDrop(storeId: string, body: CreateSafeDropDto, actor: Actor) {
+    console.log(`[shift-debug] request ${JSON.stringify({ action: 'POST safe-drops/create-safe-drop', shift_id: body.shift_id, total_cash: body.total_cash, total_notes: body.total_notes, denom_count: body.safe_drop_denom?.length ?? 0 })}`);
     const { store, actorId } = await this.requireScope(storeId, actor);
     const safeDropData = body.safe_drop_denom
       .filter((item) => Number(item.denom) > 0 && Number(item.denom_count) > 0)
@@ -227,7 +238,9 @@ export class PosSafeTransactionsService implements OnModuleInit {
       throw new BadRequestException(
         'At least one positive safe drop denomination and count are required',
       );
-    const saved = await this.merchants
+    let saved: { id: string; created_at: string };
+    try {
+      saved = await this.merchants
       .requireDataSource()
       .transaction(async (manager) => {
         const shift = await this.requireShift(
@@ -256,20 +269,17 @@ export class PosSafeTransactionsService implements OnModuleInit {
             actorId,
           ],
         );
-        await manager.query(
-          `UPDATE public.pos_shifts SET total_safe_drops = COALESCE(total_safe_drops, 0) + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-          [body.total_cash, shift.id],
-        );
         const [relation] = await manager.query(
           `SELECT to_regclass('public.pos_shift_transactions') AS name`,
         );
         if (relation?.name) {
+          const transactionId = randomUUID();
           await manager.query(
             `INSERT INTO public.pos_shift_transactions
                (id, shift_id, transaction_type, total_sum, json_payload, status, created_by, updated_by)
              VALUES ($1, $2, 'SAFE_DROP', $3, $4::jsonb, 'ACTIVE', $5, $5)`,
             [
-              randomUUID(),
+              transactionId,
               shift.id,
               Number(body.total_cash),
               JSON.stringify({
@@ -283,9 +293,17 @@ export class PosSafeTransactionsService implements OnModuleInit {
               actorId,
             ],
           );
+          console.log(`[shift-debug] db ${JSON.stringify({ table: 'pos_shift_transactions', op: 'insert', shift_id: shift.id, id: transactionId, transaction_type: 'SAFE_DROP', total_sum: Number(body.total_cash), safe_drop_id: result[0].id })}`);
+        } else {
+          console.log(`[shift-debug] db-skip ${JSON.stringify({ action: 'createSafeDrop', shift_id: shift.id, safe_drop_id: result[0].id, reason: 'pos_safe_drop_transactions saved, but pos_shift_transactions table is missing' })}`);
         }
         return result[0];
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`[shift-debug] error ${JSON.stringify({ action: 'POST safe-drops/create-safe-drop', shift_id: body.shift_id, message })}`);
+      throw error;
+    }
     const creator = await this.employeeName(actorId);
     return {
       message: 'Safe Drop created successfully',
@@ -399,7 +417,7 @@ export class PosSafeTransactionsService implements OnModuleInit {
               SELECT 1
                 FROM public.users u
                WHERE u.id::text = $3
-                 AND u."accountId"::text = $2
+                 AND u.account_id::text = $2
                  AND (
                    lower(u.email) = lower(m.email)
                    OR COALESCE(to_jsonb(u)->>'merchantId', to_jsonb(u)->>'merchant_id') = ANY(ARRAY[

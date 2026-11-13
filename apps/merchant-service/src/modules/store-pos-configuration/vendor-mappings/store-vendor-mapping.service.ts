@@ -21,7 +21,7 @@ export class StoreVendorMappingService {
     const store = await this.merchants.getStoreById(dto.store_id);
     if (!store) throw new NotFoundException('Store not found');
     const [vendor] = await this.merchants.requireDataSource().query(
-      `SELECT id FROM public.vendors WHERE id = $1::uuid AND is_deleted = false AND status = 'ACTIVE' LIMIT 1`,
+      `SELECT id FROM public.vendors WHERE id = $1::uuid AND deleted_at IS NULL AND status = 'ACTIVE' LIMIT 1`,
       [dto.vendor_id],
     );
     if (!vendor) throw new NotFoundException('Active vendor not found');

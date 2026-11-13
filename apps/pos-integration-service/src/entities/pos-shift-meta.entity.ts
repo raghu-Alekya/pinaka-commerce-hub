@@ -1,6 +1,7 @@
-import { Column, Entity, PrimaryColumn } from 'typeorm';
+import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 
 @Entity('pos_shift_meta')
+@Index('pos_shift_meta_shift_name_uq', ['shift_id', 'meta_name'], { unique: true })
 export class PosShiftMetaEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;

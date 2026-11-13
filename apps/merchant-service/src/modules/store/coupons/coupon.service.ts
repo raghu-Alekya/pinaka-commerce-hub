@@ -5,7 +5,7 @@ import { postgresConnectionOptions } from '@pinaka-delivery-hub/database';
 import { CouponInputDto } from './coupon.dto';
 import { CouponSyncStatus, StoreCouponEntity } from './store-coupon.entity';
 
-type WooCoupon = Record<string, any> & { id: number; code: string };
+type WooCoupon = Record<string, any> & { id: number; code: string; status?: string };
 type Connection = { merchantId: string; storeId: string; storeUrl: string; consumerKey?: string; consumerSecret?: string; bearerToken?: string; webhookSecret?: string };
 
 @Injectable()
@@ -18,6 +18,25 @@ export class CouponService implements OnModuleInit {
     try {
       this.dataSource = new DataSource({ ...postgresConnectionOptions([StoreCouponEntity]), synchronize: true });
       await this.dataSource.initialize();
+      await this.dataSource.query(`
+        DO $$
+        DECLARE constraint_kind "char";
+        BEGIN
+          SELECT c.contype INTO constraint_kind
+            FROM pg_constraint c
+           WHERE c.conrelid = 'public.store_coupons'::regclass
+             AND c.conname = 'uq_store_coupons_store_code';
+
+          IF constraint_kind = 'u' THEN
+            ALTER TABLE public.store_coupons DROP CONSTRAINT uq_store_coupons_store_code;
+          END IF;
+        END $$;
+      `);
+      await this.dataSource.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_store_coupons_store_code
+        ON public.store_coupons (store_id, code)
+        WHERE deleted_at IS NULL
+      `);
       this.repo = this.dataSource.getRepository(StoreCouponEntity);
     } catch (error: any) {
       console.error(`[Merchant Service Coupons] Database initialization failed: ${error.message}`);
@@ -28,7 +47,12 @@ export class CouponService implements OnModuleInit {
     const repo = this.repository();
     await this.validateOwner(input.merchantId, input.storeId);
     await this.validateProductReferences(input.storeId, input.productIds, input.excludedProductIds, input.requiredProductIds);
-    if (await repo.findOne({ where: { storeId: input.storeId, code: this.code(input.code) } })) {
+    // Deleted coupons remain in the local table as sync/audit history. They
+    // should not reserve a code after WooCommerce has moved them to trash.
+    if (await repo.createQueryBuilder('coupon')
+      .where('coupon.store_id = :storeId AND LOWER(TRIM(coupon.code)) = :code', { storeId: input.storeId, code: this.code(input.code) })
+      .andWhere('coupon.deleted_at IS NULL')
+      .getOne()) {
       throw new ConflictException('Coupon code already exists for this store');
     }
     const coupon = repo.create({ ...this.fromInput(input), syncStatus: CouponSyncStatus.PENDING, source: 'PCH' });
@@ -49,7 +73,10 @@ export class CouponService implements OnModuleInit {
       throw new BadRequestException('A coupon cannot be moved to another merchant or store');
     }
     await this.validateProductReferences(input.storeId, input.productIds, input.excludedProductIds, input.requiredProductIds);
-    const duplicate = await this.repository().findOne({ where: { storeId: input.storeId, code: this.code(input.code) } });
+    const duplicate = await this.repository().createQueryBuilder('coupon')
+      .where('coupon.store_id = :storeId AND LOWER(TRIM(coupon.code)) = :code', { storeId: input.storeId, code: this.code(input.code) })
+      .andWhere('coupon.deleted_at IS NULL')
+      .getOne();
     if (duplicate && duplicate.id !== id) throw new ConflictException('Coupon code already exists for this store');
     Object.assign(coupon, this.fromInput(input), { syncStatus: CouponSyncStatus.PENDING, syncError: null, source: 'PCH', deletedAt: null });
     if (input.requiredProductIds !== undefined) {
@@ -86,7 +113,11 @@ export class CouponService implements OnModuleInit {
     coupon.syncStatus = CouponSyncStatus.PENDING;
     await this.repository().save(coupon);
     try {
-      if (coupon.woocommerceCouponId) await this.request(coupon.storeId, `coupons/${coupon.woocommerceCouponId}?force=true`, 'DELETE');
+      if (coupon.woocommerceCouponId) {
+        // Omit `force`: WordPress/WooCommerce interprets DELETE without it as
+        // a trash operation. `force=true` permanently deletes the coupon.
+        await this.request(coupon.storeId, `coupons/${coupon.woocommerceCouponId}`, 'DELETE');
+      }
       return this.markDeleted(coupon);
     } catch (error: any) {
       if (error.wooStatus === 404) return this.markDeleted(coupon);
@@ -99,7 +130,9 @@ export class CouponService implements OnModuleInit {
     if (coupon.syncStatus !== CouponSyncStatus.FAILED) throw new BadRequestException('Only failed synchronizations can be retried');
     if (coupon.deletedAt) {
       try {
-        if (coupon.woocommerceCouponId) await this.request(coupon.storeId, `coupons/${coupon.woocommerceCouponId}?force=true`, 'DELETE');
+        if (coupon.woocommerceCouponId) {
+          await this.request(coupon.storeId, `coupons/${coupon.woocommerceCouponId}`, 'DELETE');
+        }
         return this.markDeleted(coupon);
       } catch (error: any) {
         if (error.wooStatus === 404) return this.markDeleted(coupon);
@@ -113,15 +146,25 @@ export class CouponService implements OnModuleInit {
     const connection = await this.connection(storeId);
     if (merchantId && merchantId !== connection.merchantId) throw new BadRequestException('Store does not belong to the supplied merchant');
     const summary = { created: 0, updated: 0, skipped: 0, failed: 0 };
-    for (let page = 1; ; page++) {
-      const batch = await this.request(storeId, `coupons?per_page=100&page=${page}`, 'GET') as WooCoupon[];
-      for (const remote of batch) {
-        try {
-          const result = await this.upsertRemote(connection.merchantId, storeId, remote, true);
-          summary[result]++;
-        } catch { summary.failed++; }
+    // WooCommerce defaults to published coupons. Reconcile all statuses,
+    // including Trash, so existing coupons are visible locally.
+    for (const status of ['publish', 'draft', 'pending', 'private', 'trash']) {
+      for (let page = 1; ; page++) {
+        const batch = await this.request(storeId, `coupons?status=${status}&per_page=100&page=${page}`, 'GET') as WooCoupon[];
+        for (const remote of batch) {
+          try {
+            if (String(remote.status || '').toLowerCase() === 'trash') {
+              const coupon = await this.byWooId(storeId, remote.id);
+              if (coupon) await this.markDeleted(coupon, 'WOOCOMMERCE');
+              else summary.skipped++;
+              continue;
+            }
+            const result = await this.upsertRemote(connection.merchantId, storeId, remote, true);
+            summary[result]++;
+          } catch { summary.failed++; }
+        }
+        if (batch.length < 100) break;
       }
-      if (batch.length < 100) break;
     }
     return { storeId, merchantId: connection.merchantId, ...summary, synchronizedAt: new Date().toISOString() };
   }
@@ -135,9 +178,20 @@ export class CouponService implements OnModuleInit {
     const event = String(topic || '').toLowerCase();
     if (event === 'coupon.deleted') {
       const coupon = await this.byWooId(storeId, remote.id);
-      return coupon ? this.markDeleted(coupon, 'WOOCOMMERCE') : { skipped: true };
+      if (!coupon) return { skipped: true };
+      coupon.deletedAt ||= new Date();
+      const deleted = await this.markDeleted(coupon, 'WOOCOMMERCE');
+      // WooCommerce's REST DELETE without force moves a coupon to Trash. Treat
+      // that lifecycle event as a deletion locally so its code can be reused.
+      return deleted;
     }
     if (!['coupon.created', 'coupon.updated'].includes(event)) return { skipped: true };
+    // WordPress can report a trashed post as a coupon.updated webhook with
+    // status "trash" rather than emitting coupon.deleted.
+    if (String(remote.status || '').toLowerCase() === 'trash') {
+      const coupon = await this.byWooId(storeId, remote.id);
+      return coupon ? this.markDeleted(coupon, 'WOOCOMMERCE') : { skipped: true };
+    }
     return this.upsertRemote(connection.merchantId, storeId, remote);
   }
 
@@ -233,6 +287,9 @@ export class CouponService implements OnModuleInit {
   private async upsertRemote(merchantId: string, storeId: string, remote: WooCoupon, force = false): Promise<'created' | 'updated' | 'skipped'> {
     let coupon = await this.byWooId(storeId, remote.id);
     if (!coupon) coupon = await this.repository().findOne({ where: { storeId, code: this.code(remote.code) } });
+    // A delayed create/update webhook must not resurrect a coupon after the
+    // user deleted it from PCH or WooCommerce moved it to Trash.
+    if (coupon?.deletedAt || coupon?.syncStatus === CouponSyncStatus.DELETED) return 'skipped';
     const modified = this.remoteDate(remote.date_modified_gmt || remote.date_modified);
     if (coupon?.woocommerceDateModified && modified && modified <= coupon.woocommerceDateModified) {
       // Webhooks must never overwrite newer state. Reconciliation may refresh a
@@ -279,8 +336,9 @@ export class CouponService implements OnModuleInit {
     let rows: Connection[] = [];
     try {
       rows = await this.repository().manager.query(
-        `SELECT "merchantId", "storeId", "storeUrl", "consumerKey", "consumerSecret", "webhookSecret"
-           FROM public.woocommerce_connections WHERE "storeId" = $1 AND "syncStatus" = 'ACTIVE' LIMIT 1`, [storeId]);
+        `SELECT merchant_id AS "merchantId", store_id AS "storeId", store_url AS "storeUrl",
+                consumer_key AS "consumerKey", consumer_secret AS "consumerSecret", webhook_secret AS "webhookSecret"
+           FROM public.woocommerce_connections WHERE store_id = $1 AND sync_status = 'ACTIVE' LIMIT 1`, [storeId]);
     } catch (error: any) {
       if (error?.driverError?.code !== '42P01' && error?.code !== '42P01') throw error;
     }
@@ -290,8 +348,8 @@ export class CouponService implements OnModuleInit {
     }
 
     const websiteRows = await this.repository().manager.query(
-      `SELECT "merchantId", "storeId", "wordpressUrl", "encryptedJwt", status
-         FROM public.website_connections WHERE "storeId" = $1 AND status = 'CONNECTED' LIMIT 1`, [storeId]);
+      `SELECT merchant_id AS "merchantId", store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt", status
+         FROM public.website_connections WHERE store_id = $1 AND status = 'CONNECTED' LIMIT 1`, [storeId]);
     if (!websiteRows.length) throw new NotFoundException(`No active WooCommerce or WordPress connection for store '${storeId}'`);
     return {
       merchantId: websiteRows[0].merchantId,
