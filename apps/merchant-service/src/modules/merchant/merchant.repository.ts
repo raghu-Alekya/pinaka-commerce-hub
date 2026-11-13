@@ -4220,8 +4220,10 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       return [];
     }
 
+    const taxConfiguration = await this.getStoreProductTaxConfiguration(storeId);
+
     return products.map((product) =>
-      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+      this.presentWooProduct(this.asRecord(product) ?? {}, null, taxConfiguration),
     );
   }
 
