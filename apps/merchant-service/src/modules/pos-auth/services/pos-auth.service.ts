@@ -113,6 +113,49 @@ export class PosAuthService {
     }
   }
 
+  private async assertSubscriptionNotExpired(dataSource: any, merchantId: string) {
+    if (!merchantId) return;
+    const [subscription] = await dataSource.query(
+      `SELECT selected.status, selected.expires_on AS "expiresOn",
+              (selected.status = 'EXPIRED' OR (
+                selected.expires_on ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                AND selected.expires_on::date < CURRENT_DATE
+              )) AS expired
+         FROM (
+           SELECT upper(COALESCE(to_jsonb(s)->>'status', '')) AS status,
+                  COALESCE(
+                    NULLIF(to_jsonb(s)->>'renewal_date', ''),
+                    NULLIF(to_jsonb(s)->>'renewalDate', ''),
+                    NULLIF(to_jsonb(s)->>'current_period_end', ''),
+                    NULLIF(to_jsonb(s)->>'currentPeriodEnd', ''),
+                    NULLIF(to_jsonb(s)->>'trial_end_date', ''),
+                    NULLIF(to_jsonb(s)->>'trialEndDate', '')
+                  ) AS expires_on
+             FROM public.subscriptions s
+            WHERE COALESCE(
+                    NULLIF(to_jsonb(s)->>'merchant_id', ''),
+                    NULLIF(to_jsonb(s)->>'merchant_uuid', '')
+                  ) = $1
+            ORDER BY CASE WHEN upper(COALESCE(to_jsonb(s)->>'status', ''))
+                               IN ('ACTIVE', 'TRIAL', 'TRIALING') THEN 0 ELSE 1 END,
+                     COALESCE(to_jsonb(s)->>'updated_at', to_jsonb(s)->>'created_at') DESC NULLS LAST
+            LIMIT 1
+         ) selected`,
+      [merchantId],
+    );
+    if (subscription?.expired) {
+      const expiresOn = subscription.expiresOn || null;
+      throw new ForbiddenException({
+        success: false,
+        code: 'SUBSCRIPTION_EXPIRED',
+        message: expiresOn
+          ? `Your subscription expired on ${expiresOn}. Please contact your administrator to renew the plan.`
+          : 'Your subscription has expired. Please contact your administrator to renew the plan.',
+        expiredOn: expiresOn,
+      });
+    }
+  }
+
   /**
    * API 1: Merchant & Store Login / Information Lookup Service
    * Public auth route - No Bearer token required in request
@@ -166,6 +209,7 @@ export class PosAuthService {
     if (merchant.status && (String(merchant.status).toUpperCase() === 'INACTIVE' || String(merchant.status).toUpperCase() === 'SUSPENDED')) {
       throw new ForbiddenException('Merchant account is inactive or suspended');
     }
+    await this.assertSubscriptionNotExpired(dataSource, String(merchant.id));
 
     const stores: any[] = await dataSource.query(
       `SELECT s.id,
@@ -351,6 +395,19 @@ export class PosAuthService {
       if (!store?.id) {
         throw new NotFoundException('Store not found for this merchant');
       }
+
+      if (String(store.status || '').trim().toUpperCase() === 'INACTIVE') {
+        throw new ForbiddenException({
+          success: false,
+          code: 'STORE_INACTIVE',
+          message: 'This store is inactive. Please contact your merchant administrator.',
+        });
+      }
+
+      await this.assertSubscriptionNotExpired(
+        dataSource,
+        String(merchant?.id || store.merchantId || targetMerchantId || ''),
+      );
 
       // 3. Match the PIN against this store's employee_stores and employees tables
       const queryParams: any[] = [String(store.id)];
