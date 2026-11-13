@@ -117,7 +117,16 @@ export class OrderListPresenter {
       shippingTotal: request.shipping_total ?? request.shippingTotal,
       tip: storeOrder?.tipAmount ?? order.tipAmount,
     })));
-    const total = this.money(Math.max(0, calculatedTotal));
+    const loyaltyAlreadyApplied = [...corrected.lineItems, ...corrected.calculationFees].some((line: any) => {
+      const name = String(line?.name || line?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      return (name === 'loyalty' || name === 'loyalty_discount') && Number(line?.total ?? 0) < 0;
+    });
+    const savedNetPayable = Number(this.metaValue(order, 'new_net_pay_amt'));
+    const totalAlreadyNet = Number.isFinite(savedNetPayable) && savedNetPayable > 0
+      && Math.abs(calculatedTotal - savedNetPayable) < 0.01;
+    const redemptionDeduction = loyaltyRedemption.points > 0 && !loyaltyAlreadyApplied && !totalAlreadyNet
+      ? loyaltyRedemption.amount : 0;
+    const total = this.money(Math.max(0, calculatedTotal - redemptionDeduction));
     const totalNumber = Number(total);
     const calculatedRefundTotal = this.refundTotal(row.refunds, status);
     const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
