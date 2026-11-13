@@ -8,6 +8,7 @@ import { MerchantResponseRelationsInterceptor } from './merchant-response-relati
 import { OnboardingController } from './onboarding.controller';
 import { ReferenceDataController } from './reference-data.controller';
 import { SessionAuthGuard } from '../shared/session-auth.guard';
+import { ConsoleAccessService } from '../shared/console-access.service';
 import { PlatformHealthSourceController } from './platform-health-source.controller';
 import { PlatformHealthSourceService } from './platform-health-source.service';
 
@@ -21,6 +22,7 @@ import { PlatformHealthSourceService } from './platform-health-source.service';
   ],
   providers: [
     MerchantRepository,
+    ConsoleAccessService,
     MerchantCrudService,
     PlatformHealthSourceService,
     SessionAuthGuard,
@@ -33,6 +35,6 @@ import { PlatformHealthSourceService } from './platform-health-source.service';
       useClass: MerchantResponseRelationsInterceptor,
     },
   ],
-  exports: [MerchantRepository],
+  exports: [MerchantRepository, ConsoleAccessService],
 })
 export class MerchantModule {}

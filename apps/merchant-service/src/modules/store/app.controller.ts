@@ -1355,9 +1355,15 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string) {
-    const resolvedMerchantId = merchantId ? await this.merchantRepository.resolveMerchantId(merchantId) : undefined;
-    if (merchantId && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { user?: { accountType?: string; merchantId?: string } }) {
+    const consoleMerchant = request?.user?.accountType ? request.user.merchantId : undefined;
+    const requestedMerchant = consoleMerchant ? (merchantId || consoleMerchant) : merchantId;
+    const resolvedMerchantId = !requestedMerchant
+      ? undefined
+      : consoleMerchant
+        ? await this.merchantRepository.resolveMerchantUuid(requestedMerchant)
+        : await this.merchantRepository.resolveMerchantId(requestedMerchant);
+    if (requestedMerchant && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
     const [stores, merchants] = await Promise.all([
       this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
@@ -1368,7 +1374,10 @@ export class AppController {
       names.set(merchant.id, label);
       if (merchant.merchantId) names.set(merchant.merchantId, label);
     }
-    if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
+    if (resolvedMerchantId && !names.has(resolvedMerchantId)) {
+      if (consoleMerchant) names.set(resolvedMerchantId, resolvedMerchantId);
+      else throw new NotFoundException('Merchant not found');
+    }
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
       ...this.toStoreResponse(s),

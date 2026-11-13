@@ -1,5 +1,5 @@
 import { BadRequestException, Controller, Get, Headers, Inject, Query } from '@nestjs/common';
-import { extractBearerToken, verifyAccessToken } from '@pch/auth';
+import { assertConsoleMerchant, extractBearerToken, verifyAccessToken } from '@pch/auth';
 import { SalesReportsService } from './sales-reports';
 
 @Controller('api/v1/reports-new')
@@ -13,7 +13,8 @@ export class SalesReportsController {
     @Headers('x-merchant-id') merchantId?: string,
     @Query('type') type?: string,
   ) {
-    verifyAccessToken(extractBearerToken(authorization));
+    const token = verifyAccessToken(extractBearerToken(authorization));
+    assertConsoleMerchant(token, merchantId);
     if (!storeId?.trim() || !merchantId?.trim()) {
       throw new BadRequestException('X-Store-Id and X-Merchant-Id headers are required');
     }
@@ -27,7 +28,8 @@ export class SalesReportsController {
     @Headers('x-merchant-id') merchantId?: string,
     @Query('date') date?: string,
   ) {
-    verifyAccessToken(extractBearerToken(authorization));
+    const shiftToken = verifyAccessToken(extractBearerToken(authorization));
+    assertConsoleMerchant(shiftToken, merchantId);
     if (!storeId?.trim() || !merchantId?.trim()) {
       throw new BadRequestException('X-Store-Id and X-Merchant-Id headers are required');
     }

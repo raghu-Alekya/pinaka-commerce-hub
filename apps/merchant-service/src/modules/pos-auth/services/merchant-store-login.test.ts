@@ -22,7 +22,7 @@ function service(rows: { merchants?: any[]; stores?: any[] }) {
   };
   return {
     queries,
-    auth: new PosAuthService({} as any, {} as any, repository as any),
+    auth: new PosAuthService({} as any, {} as any, repository as any, {} as any, {} as any),
   };
 }
 

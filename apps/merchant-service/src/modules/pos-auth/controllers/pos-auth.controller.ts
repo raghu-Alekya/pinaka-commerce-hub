@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Headers, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject, Req } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
-import { PosAuthService, DeviceContext } from '../services/pos-auth.service';
+import { RequireAuth } from '../../shared/session-auth.guard';
+import { PosAuthService, type DeviceContext } from '../services/pos-auth.service';
 import { MerchantStoreLoginDto } from '../dto/merchant-store-login.dto';
 import { PosLoginDto } from '../dto/pos-login.dto';
 
@@ -29,6 +30,26 @@ export class PosAuthController {
   @HttpCode(HttpStatus.OK)
   merchantPasswordLogin(@Body() body: { email?: string; password?: string }) {
     return this.posAuthService.merchantPasswordLogin(body);
+  }
+
+  @Public()
+  @Post('employee-console-login')
+  @HttpCode(HttpStatus.OK)
+  employeePasswordLogin(@Body() body: { email?: string; password?: string }) {
+    return this.posAuthService.employeePasswordLogin(body);
+  }
+
+  @RequireAuth()
+  @Get('console/me')
+  consoleProfile(@Req() request: { user?: { accountType?: string; merchantId?: string; employeeId?: string; id?: string; email?: string } }) {
+    return this.posAuthService.consoleProfile(request.user || {});
+  }
+
+  @RequireAuth()
+  @Post('console/logout')
+  @HttpCode(HttpStatus.OK)
+  consoleLogout(@Req() request: { user?: { sessionId?: string } }) {
+    return this.posAuthService.consoleLogout(request.user?.sessionId);
   }
 
   /**

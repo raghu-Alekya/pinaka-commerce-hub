@@ -4,7 +4,9 @@ import { RelationshipsRepository } from './relationships.repository';
 import { filterMasterList } from '../master/common/master-list';
 import { StoreTypeRepository } from '../master/store-setup/store-type.repository';
 
-export type RelationshipRequest = { user?: { id?: string } };
+export type RelationshipRequest = {
+  user?: { id?: string; role?: string; accountType?: string; merchantId?: string; employeeId?: string };
+};
 export function relationshipUserId(request: RelationshipRequest): string {
   const userId = request.user?.id;
   if (!userId) throw new UnauthorizedException('Authenticated user id is required');
@@ -18,6 +20,8 @@ export class RelationshipOwnerGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     if (process.env.SKIP_AUTH === 'true') return true;
     const request = context.switchToHttp().getRequest();
+    const accountType = request.user?.accountType;
+    if (accountType === 'merchant' || accountType === 'employee') return true;
     if (request.method !== 'GET' && request.user && !['OWNER', 'ADMIN', 'SUPER_ADMIN', 'ADMINISTRATOR'].includes(String(request.user?.role).toUpperCase())) { throw new ForbiddenException('Only owners and administrators may manage master-data relationships'); }
     return true;
   }

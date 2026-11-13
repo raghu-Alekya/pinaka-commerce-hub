@@ -15,6 +15,8 @@ import { PinService } from './pin.service';
 import { PosSessionService } from './pos-session.service';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { ProductOptionsService } from '../../store/product-options.service';
+import { ConsoleAccessService } from '../../shared/console-access.service';
+import { merchantGrants } from '../../shared/console-access';
 
 export interface DeviceContext {
   deviceId: string;
@@ -31,6 +33,7 @@ export class PosAuthService {
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
     @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
     @Inject(ProductOptionsService) private readonly productOptionsService: ProductOptionsService,
+    @Inject(ConsoleAccessService) private readonly consoleAccess: ConsoleAccessService,
   ) {}
 
   async merchantPasswordLogin(input: { email?: string; password?: string }) {
@@ -39,14 +42,15 @@ export class PosAuthService {
     }
     const db = this.merchantRepository.requireDataSource();
     const rows = await db.query(
-      `SELECT id,merchant_code AS "merchantCode",email,business_display_name AS "businessDisplayName",status,
+      `SELECT id,merchant_code AS "merchantCode",email,business_display_name AS "businessDisplayName",
+              first_name AS "firstName",last_name AS "lastName",status,
               to_jsonb(m)->>'password' AS password
        FROM public.merchants m WHERE lower(email)=lower($1) AND COALESCE(is_deleted,false)=false LIMIT 2`,
       [input.email.trim()],
     );
     const merchant = rows.length === 1 ? rows[0] : undefined;
     if (!merchant || !(await this.passwordMatches(merchant.password, input.password))) {
-      throw new UnauthorizedException('Invalid merchant email or password');
+      throw new UnauthorizedException('Invalid email or password');
     }
     if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
     const users = await db.query(
@@ -55,28 +59,189 @@ export class PosAuthService {
          AND (merchant_id::text=$2 OR merchant_id::text=$3 OR NULLIF(merchant_id::text,'') IS NULL)
        LIMIT 2`, [merchant.email, merchant.id, merchant.merchantCode],
     );
-    if (users.length !== 1) throw new UnauthorizedException('An active linked PCH user account is required for merchant API access');
-    const user = users[0];
+    if (users.length > 1) throw new UnauthorizedException('Invalid email or password');
+    const linked = users[0];
     const stores = await db.query(
       `SELECT id,store_code AS "storeCode",store_name AS "storeName",status
        FROM public.stores WHERE merchant_id::text=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
       [merchant.id],
     );
+    const permissions = merchantGrants();
+    const sessionUser = {
+      id: linked?.id || merchant.id,
+      email: merchant.email,
+      firstName: merchant.firstName || null,
+      lastName: merchant.lastName || null,
+      businessDisplayName: merchant.businessDisplayName || null,
+      role: 'Merchant',
+      accountType: 'merchant',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      permissions,
+      stores,
+    };
+    const accessToken = await this.saveConsoleSession(db, {
+      sub: sessionUser.id,
+      accountId: linked?.accountId ?? null,
+      email: merchant.email,
+      role: 'OWNER',
+      accountType: 'merchant',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+    }, 30 * 24 * 60 * 60);
+    const { password: _password, ...details } = merchant;
+    return {
+      success: true,
+      accessToken,
+      merchantToken: accessToken,
+      tokenType: 'Bearer',
+      expiresIn: 30 * 24 * 60 * 60,
+      merchant: details,
+      user: sessionUser,
+      permissions,
+      count: stores.length,
+      stores,
+    };
+  }
+
+  async employeePasswordLogin(input: { email?: string; password?: string }) {
+    if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
+      throw new BadRequestException('email and password are required (password maximum 128 characters)');
+    }
+    const db = this.merchantRepository.requireDataSource();
+    const employees = await db.query(
+      `SELECT e.id, e.email, e.first_name AS "firstName", e.last_name AS "lastName",
+              e.merchant_id AS "merchantId", e.user_id AS "userId", e.status::text AS status,
+              e.employee_code AS "employeeCode", e.password_hash AS "passwordHash"
+         FROM public.employees e
+        WHERE lower(e.email) = lower($1)
+          AND COALESCE(e.is_deleted, false) = false
+        LIMIT 2`,
+      [input.email.trim()],
+    );
+    if (employees.length !== 1) throw new UnauthorizedException('Invalid email or password');
+    const employee = employees[0];
+    const users = await db.query(
+      `SELECT id, password_hash AS "passwordHash", status, account_id AS "accountId"
+         FROM public.users
+        WHERE id = $1::uuid OR employee_id = $2::uuid
+        LIMIT 2`,
+      [employee.userId || '00000000-0000-0000-0000-000000000000', employee.id],
+    );
+    const user = users.find((row: { id: string }) => row.id === employee.userId) || users[0];
+    const passwordOk = await this.passwordMatches(employee.passwordHash, input.password)
+      || await this.passwordMatches(user?.passwordHash, input.password);
+    if (!passwordOk) throw new UnauthorizedException('Invalid email or password');
+    if (String(employee.status || '').toUpperCase() !== 'ACTIVE') {
+      throw new ForbiddenException('Employee account is inactive');
+    }
+    if (user && String(user.status || '').toUpperCase() === 'DISABLED') {
+      throw new ForbiddenException('Employee account is inactive');
+    }
+    const merchants = await db.query(
+      `SELECT id, merchant_code AS "merchantCode", status::text AS status
+         FROM public.merchants
+        WHERE id = $1::uuid AND COALESCE(is_deleted, false) = false
+        LIMIT 1`,
+      [employee.merchantId],
+    );
+    const merchant = merchants[0];
+    if (!merchant || merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const stores = await db.query(
+      `SELECT s.id, s.store_code AS "storeCode", s.store_name AS "storeName", s.status::text AS status,
+              es.is_primary AS "isPrimary"
+         FROM public.employee_stores es
+         JOIN public.stores s ON s.id = es.store_id
+        WHERE es.employee_id = $1
+          AND es.merchant_id = $2
+          AND COALESCE(s.is_deleted, false) = false
+          AND UPPER(COALESCE(es.status::text, 'ACTIVE')) = 'ACTIVE'
+        ORDER BY es.is_primary DESC NULLS LAST, s.store_name`,
+      [employee.id, merchant.id],
+    );
+    const roles = await db.query(
+      `SELECT r.id, r.role_code AS code, r.name
+         FROM public.employee_stores es
+         JOIN public.employee_store_roles esr ON esr.employee_store_id = es.id
+         JOIN public.roles r ON r.id = esr.role_id
+        WHERE es.employee_id = $1
+          AND es.merchant_id = $2
+          AND UPPER(COALESCE(es.status::text, 'ACTIVE')) = 'ACTIVE'
+          AND UPPER(COALESCE(esr.status::text, 'ACTIVE')) = 'ACTIVE'
+          AND UPPER(COALESCE(r.status::text, 'ACTIVE')) = 'ACTIVE'
+        ORDER BY es.is_primary DESC NULLS LAST, r.name
+        LIMIT 1`,
+      [employee.id, merchant.id],
+    );
+    const role = roles[0];
+    const permissions = this.consoleAccess
+      ? await this.consoleAccess.employeeGrants(employee.id, merchant.id)
+      : [{ menuKey: 'dashboard', actions: ['view'] }];
+    const sessionUser = {
+      id: employee.id,
+      email: employee.email,
+      firstName: employee.firstName,
+      lastName: employee.lastName,
+      role: role?.name || 'Employee',
+      accountType: 'employee',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      employeeId: employee.id,
+      employeeCode: employee.employeeCode,
+      roleId: role?.id || null,
+      permissions,
+      stores,
+    };
+    const expiresIn = 12 * 60 * 60;
+    const accessToken = await this.saveConsoleSession(db, {
+      sub: employee.userId || employee.id,
+      accountId: user?.accountId ?? null,
+      email: employee.email,
+      role: 'EMPLOYEE',
+      sessionRole: 'USER',
+      accountType: 'employee',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      employeeId: employee.id,
+      storeId: stores[0]?.id || null,
+      roleId: role?.id || null,
+      roleCode: role?.code || null,
+      roleName: role?.name || null,
+    }, expiresIn);
+    return { success: true, accessToken, tokenType: 'Bearer', expiresIn, user: sessionUser, permissions, stores };
+  }
+
+  consoleProfile(user: { accountType?: string; merchantId?: string; employeeId?: string; id?: string; email?: string }) {
+    return this.consoleAccess.profile(user);
+  }
+
+  async consoleLogout(sessionId?: string) {
+    if (!sessionId) throw new UnauthorizedException('Bearer token is required');
+    await this.merchantRepository.requireDataSource().getRepository(SessionEntity).update(sessionId, { revokedAt: new Date() });
+    return { success: true };
+  }
+
+  private async saveConsoleSession(db: { getRepository: (entity: typeof SessionEntity) => { save: (row: object) => Promise<unknown> } }, claims: Record<string, unknown>, expiresIn: number) {
     const now = Math.floor(Date.now() / 1000);
-    const expiresIn = 30 * 24 * 60 * 60;
     const sessionId = randomUUID();
-    const payload = { sub: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role, merchantId: merchant.id, type: 'access', jti: sessionId, iat: now, exp: now + expiresIn };
+    const sessionRole = String(claims.sessionRole || claims.role || 'USER').slice(0, 20);
+    const tokenClaims = { ...claims };
+    delete tokenClaims.sessionRole;
+    const payload: Record<string, unknown> = { ...tokenClaims, type: 'access', jti: sessionId, iat: now, exp: now + expiresIn };
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
     const accessToken = header + '.' + body + '.' + signature;
     await db.getRepository(SessionEntity).save({
-      id: sessionId, userId: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role,
+      id: sessionId,
+      userId: payload.sub,
+      accountId: payload.accountId ?? null,
+      email: payload.email,
+      role: sessionRole,
       accessTokenHash: createHash('sha256').update(accessToken).digest('hex'),
-      expiresAt: new Date(payload.exp * 1000),
+      expiresAt: new Date(Number(payload.exp) * 1000),
     });
-    const { password: _password, ...details } = merchant;
-    return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
+    return accessToken;
   }
 
   private async passwordMatches(stored: unknown, password: string): Promise<boolean> {

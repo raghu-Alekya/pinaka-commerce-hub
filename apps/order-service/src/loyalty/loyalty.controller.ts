@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Query } from '@nestjs/common';
-import { extractBearerToken, verifyAccessToken } from '@pch/auth';
+import { assertConsoleMerchant, extractBearerToken, verifyAccessToken } from '@pch/auth';
 import { LoyaltyService } from './loyalty.service';
 
 @Controller([
@@ -86,6 +86,7 @@ export class LoyaltyController {
   private scope(authorization: string | undefined, merchantId: string | undefined, storeId: string | undefined) {
     const token = verifyAccessToken(extractBearerToken(authorization));
     const merchant = String(merchantId || '').trim();
+    assertConsoleMerchant(token, merchant);
     const store = String(storeId || '').trim();
     if (!merchant) throw new BadRequestException('x-merchant-id header is required');
     if (!store) throw new BadRequestException('x-store-id header is required');

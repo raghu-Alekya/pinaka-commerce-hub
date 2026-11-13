@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { RelationshipOwnerGuard, RelationshipRequest, relationshipUserId } from '../shared/relationships.controller';
+import { RelationshipOwnerGuard, type RelationshipRequest, relationshipUserId } from '../shared/relationships.controller';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employee.dto';
 
@@ -30,15 +30,16 @@ export class EmployeeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   @Get()
-  async list(@Query('status') status?: string) {
-    const employees = await this.repository.listEmployees(undefined, status);
-    const statistics = await this.repository.employeeStatistics(undefined);
+  async list(@Query('status') status?: string, @Req() request?: RelationshipRequest) {
+    const merchantId = this.scopedMerchantId(request);
+    const employees = await this.repository.listEmployees(merchantId, status);
+    const statistics = await this.repository.employeeStatistics(merchantId);
     return { success: true, count: employees.length, statistics, employees };
   }
 
   @Get(':idOrCode')
-  async get(@Param('idOrCode') idOrCode: string) {
-    const employee = await this.repository.getEmployeeDetails(undefined, idOrCode);
+  async get(@Param('idOrCode') idOrCode: string, @Req() request?: RelationshipRequest) {
+    const employee = await this.repository.getEmployeeDetails(this.scopedMerchantId(request), idOrCode);
     if (!employee) throw new NotFoundException(`Employee '${idOrCode}' not found`);
     return { success: true, employee };
   }
@@ -49,6 +50,8 @@ export class EmployeeController {
     let imageUrl: string | undefined;
     let saved = false;
     try {
+      const scopedMerchant = this.scopedMerchantId(request);
+      if (scopedMerchant) body.merchantId = scopedMerchant;
       if (!body.merchantId) throw new BadRequestException('merchantId is required');
       const merchantUuid = await this.requireMerchantId(body.merchantId);
       body.merchantId = merchantUuid;
@@ -72,10 +75,11 @@ export class EmployeeController {
     try {
 
       body.updatedBy = relationshipUserId(request);
-      const current = await this.repository.getEmployeeDetails(undefined, idOrCode);
+      const scope = this.scopedMerchantId(request);
+      const current = await this.repository.getEmployeeDetails(scope, idOrCode);
       if (!current) throw new NotFoundException(`Employee '${idOrCode}' not found`);
       if (file) { imageUrl = await this.saveImage(file); body.profileImageUrl = imageUrl; }
-      const updated = await this.repository.updateEmployee(undefined, idOrCode, body as UpdateEmployeeDto);
+      const updated = await this.repository.updateEmployee(scope, idOrCode, body as UpdateEmployeeDto);
       if (!updated) throw new NotFoundException(`Employee '${idOrCode}' not found`);
       saved = true;
       if (body.profileImageUrl !== undefined && body.profileImageUrl !== current.profileImageUrl) await this.removeLocalImage(current.profileImageUrl);
@@ -102,9 +106,13 @@ export class EmployeeController {
 
   @Delete(':idOrCode')
   async delete(@Param('idOrCode') idOrCode: string, @Req() request: RelationshipRequest) {
-    const deleted = await this.repository.deleteEmployee(undefined, idOrCode, relationshipUserId(request));
+    const deleted = await this.repository.deleteEmployee(this.scopedMerchantId(request), idOrCode, relationshipUserId(request));
     if (!deleted) throw new NotFoundException(`Employee '${idOrCode}' not found`);
     return { success: true, message: 'Employee record soft-deleted successfully' };
+  }
+
+  private scopedMerchantId(request?: RelationshipRequest): string | undefined {
+    return request?.user?.accountType && request.user.merchantId ? request.user.merchantId : undefined;
   }
 
   private async requireMerchantId(identifier: string): Promise<string> {
