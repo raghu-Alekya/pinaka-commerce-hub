@@ -302,23 +302,23 @@ export class OrderUpdateService {
         storeOrder.feeTotal = moneyAmount(draft.totals.feeTotal);
         storeOrder.taxTotal = moneyAmount(draft.totals.taxTotal);
         storeOrder.total = moneyAmount(inclusiveTotal ?? draft.totals.total + tipAmount);
+        const lineItems = (Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems : []) as PosLineItem[];
+        const couponLines = (Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines : []) as PosCouponLine[];
+        const feeLines = (Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines : []) as PosFeeLine[];
+        const taxLines = (Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines : []) as PosTaxLine[];
+        storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+        const payloadForTotals = (storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>;
+        storeOrder.grandTotal = listOrderTotal({
+          total: storeOrder.total,
+          tax: storeOrder.taxTotal,
+          taxLines,
+          couponDiscount: sumCouponDiscounts(couponLines),
+          lineItems,
+          feeLines,
+          shippingTotal: payloadForTotals.shipping_total ?? payloadForTotals.shippingTotal,
+          tip: storeOrder.tipAmount,
+        });
       }
-      const lineItems = (Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems : []) as PosLineItem[];
-      const couponLines = (Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines : []) as PosCouponLine[];
-      const feeLines = (Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines : []) as PosFeeLine[];
-      const taxLines = (Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines : []) as PosTaxLine[];
-      storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
-      const payloadForTotals = (storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>;
-      storeOrder.grandTotal = listOrderTotal({
-        total: storeOrder.total,
-        tax: storeOrder.taxTotal,
-        taxLines,
-        couponDiscount: sumCouponDiscounts(couponLines),
-        lineItems,
-        feeLines,
-        shippingTotal: payloadForTotals.shipping_total ?? payloadForTotals.shippingTotal,
-        tip: storeOrder.tipAmount,
-      });
       if (draft.storeStatus) storeOrder.status = draft.storeStatus;
       const requestPayload = { ...((storeOrder.requestPayload || order.requestPayload || {}) as Record<string, unknown>) };
       if (draft.lineItems) requestPayload.line_items = storeOrder.lineItems;
