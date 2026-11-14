@@ -9,6 +9,5 @@ export {
   extractBearerToken,
   jwtSecret,
   verifyAccessToken,
-  assertConsoleMerchant,
   type AccessTokenPayload,
 } from './jwt';

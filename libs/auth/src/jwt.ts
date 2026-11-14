@@ -1,20 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 
 export interface AccessTokenPayload {
   sub: string;
   accountId?: string | null;
   email?: string;
   role?: string;
-  accountType?: string;
-  merchantId?: string;
-  merchantCode?: string;
-  employeeId?: string;
-  storeId?: string;
-  deviceId?: string;
-  roleId?: string;
-  roleCode?: string;
-  roleName?: string;
   type?: string;
   jti?: string;
   iat?: number;
@@ -57,13 +48,5 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
   } catch (error: unknown) {
     if (error instanceof UnauthorizedException) throw error;
     throw new UnauthorizedException('Invalid access token');
-  }
-}
-
-export function assertConsoleMerchant(payload: AccessTokenPayload, merchantId?: string | null): void {
-  if (payload.accountType !== 'merchant' && payload.accountType !== 'employee') return;
-  const requested = String(merchantId || '').trim();
-  if (requested && requested !== payload.merchantId) {
-    throw new ForbiddenException('You can only access your own merchant records');
   }
 }

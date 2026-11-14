@@ -29,15 +29,6 @@ const MENU_KEYS = [
   'synchronization',
   'reconciliation',
   'notifications',
-  'products',
-  'discounts',
-  'coupons',
-  'customers',
-  'payments',
-  'vendor-payments',
-  'safe-drops',
-  'fastkeys',
-  'access-permissions',
 ] as const;
 
 const MENU_KEY_SET = new Set<string>(MENU_KEYS);
@@ -56,20 +47,6 @@ const CRUD_KEYS = new Set([
   'employees',
   'devices',
   'pos-configuration',
-  'orders',
-  'shifts',
-  'attendance',
-  'cash-management',
-  'subscriptions',
-  'products',
-  'discounts',
-  'coupons',
-  'customers',
-  'payments',
-  'vendor-payments',
-  'safe-drops',
-  'fastkeys',
-  'access-permissions',
 ]);
 
 const PLATFORM_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'MERCHANT']);
@@ -85,16 +62,6 @@ const MERCHANT_DEFAULTS = [
   'devices',
   'shifts',
   'attendance',
-  'products',
-  'discounts',
-  'coupons',
-  'customers',
-  'vendors',
-  'fastkeys',
-  'payments',
-  'vendor-payments',
-  'safe-drops',
-  'access-permissions',
 ];
 
 const UUID_PATTERN =

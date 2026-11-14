@@ -13,7 +13,6 @@ function serviceWith(
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
   );
   (service as any).authorizeStoreCatalog = async () => ({
     employeeId: sessionEmployeeId,

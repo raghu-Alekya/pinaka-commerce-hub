@@ -10,7 +10,6 @@ import {
 import { Reflector } from '@nestjs/core';
 import { extractBearerToken, IS_PUBLIC_ROUTE, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from '../merchant/merchant.repository';
-import { ConsoleAccessService } from './console-access.service';
 
 export const REQUIRE_AUTH_ROUTE = 'requireAuthRoute';
 export const RequireAuth = () => SetMetadata(REQUIRE_AUTH_ROUTE, true);
@@ -20,7 +19,6 @@ export class SessionAuthGuard implements CanActivate {
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
     @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
-    @Inject(ConsoleAccessService) private readonly consoleAccess: ConsoleAccessService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -63,23 +61,25 @@ export class SessionAuthGuard implements CanActivate {
     const payload = verifyAccessToken(token);
     const session = await this.merchants.touchSession(payload.jti!, token);
     if (!session) throw new UnauthorizedException('Session is not active. Please log in again.');
+    const scopedPayload = payload as typeof payload & {
+      merchantId?: string;
+      storeId?: string;
+    };
     request.user = {
       id: payload.sub,
       accountId: payload.accountId ?? session.accountId,
       email: payload.email ?? session.email,
-      role: payload.roleName ?? payload.roleCode ?? payload.role ?? session.role,
-      merchantId: payload.merchantId ?? session.merchantId,
-      storeId: payload.storeId ?? session.storeId,
+      role: (payload as typeof payload & { roleCode?: string; roleName?: string }).roleName
+        ?? (payload as typeof payload & { roleCode?: string }).roleCode
+        ?? payload.role
+        ?? session.role,
+      merchantId: payload.merchantId,
+      storeId: payload.storeId,
       deviceId: payload.deviceId,
       sessionId: session.id,
-      accountType: payload.accountType,
-      employeeId: payload.employeeId,
-      merchantCode: payload.merchantCode,
-      roleId: payload.roleId,
+      merchantId: scopedPayload.merchantId ?? session.merchantId,
+      storeId: scopedPayload.storeId ?? session.storeId,
     };
-    if (payload.accountType === 'merchant' || payload.accountType === 'employee') {
-      await this.consoleAccess.assert(request as Parameters<ConsoleAccessService['assert']>[0]);
-    }
     return true;
   }
 }

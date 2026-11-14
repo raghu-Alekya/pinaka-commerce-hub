@@ -1,5 +1,5 @@
 import { Controller, Get, Headers, Inject, Query } from '@nestjs/common';
-import { assertConsoleMerchant, extractBearerToken, verifyAccessToken } from '@pch/auth';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 import { OrderRepository } from './order.repository';
 import { CompletedOrderPresenter } from './responses/completed-order.presenter';
 
@@ -27,8 +27,7 @@ export class CompletedOrdersController {
     @Query('before') before?: string,
     @Query('created_via') createdVia?: string,
   ) {
-    const token = verifyAccessToken(extractBearerToken(authorization));
-    assertConsoleMerchant(token, merchantHeader);
+    verifyAccessToken(extractBearerToken(authorization));
     const criteria = this.presenter.criteria({
       page,
       perPage,

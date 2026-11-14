@@ -1,6 +1,5 @@
-import { Body, Controller, ForbiddenException, Get, Inject, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Put, Query } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
-import { RequireAuth } from '../../shared/session-auth.guard';
 import { MenuPermissionService } from './menu-permission.service';
 
 @Public()
@@ -22,7 +21,6 @@ export class MenuPermissionController {
     return this.service.get(principalRole, roleTemplateId);
   }
 
-  @RequireAuth()
   @Put()
   save(
     @Body()
@@ -32,11 +30,7 @@ export class MenuPermissionController {
       menuKeys?: string[];
       grants?: { menuKey: string; actions: string[] }[];
     },
-    @Req() request: { user?: { accountType?: string } },
   ) {
-    if (request.user?.accountType === 'merchant' || request.user?.accountType === 'employee') {
-      throw new ForbiddenException('Use Access & Permissions to change a merchant role');
-    }
     return this.service.save(body);
   }
 }

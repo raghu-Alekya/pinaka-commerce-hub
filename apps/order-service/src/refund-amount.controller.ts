@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Headers, HttpCode, HttpStatus, Inject, Post } from '@nestjs/common';
-import { assertConsoleMerchant, extractBearerToken, verifyAccessToken } from '@pch/auth';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 import { RefundAmountService, type RefundAmountRequest } from './refund-amount.service';
 
 @Controller([
@@ -19,9 +19,8 @@ export class RefundAmountController {
     @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string,
   ) {
-    const token = verifyAccessToken(extractBearerToken(authorization));
+    verifyAccessToken(extractBearerToken(authorization));
     const merchant = String(merchantId || '').trim();
-    assertConsoleMerchant(token, merchant);
     const store = String(storeId || '').trim();
     if (!merchant) throw new BadRequestException('x-merchant-id header is required');
     if (!store) throw new BadRequestException('x-store-id header is required');

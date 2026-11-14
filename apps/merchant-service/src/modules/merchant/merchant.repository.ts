@@ -6226,16 +6226,6 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   async deleteRole(merchantId: string, idOrCode: string): Promise<boolean> {
     const existing = await this.getRoleByIdOrCode(merchantId, idOrCode);
     if (!existing) return false;
-    const assigned = await this.dataSource.query(
-      `SELECT 1 FROM public.employee_store_roles
-        WHERE role_id = $1
-          AND UPPER(COALESCE(status::text, 'ACTIVE')) NOT IN ('INACTIVE', 'DISABLED')
-        LIMIT 1`,
-      [existing.id],
-    );
-    if (assigned.length) {
-      throw new ConflictException('This role is assigned to employees. Reassign them before deleting it.');
-    }
     existing.status = RoleStatus.INACTIVE;
     existing.updatedAt = new Date();
     await this.roleRepo.save(existing);
@@ -7202,7 +7192,6 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
            WHERE m.id=$1::uuid LIMIT 1`,
           [dto.merchantId],
         );
-        const passwordHash = this.hashUserPassword(dto.temporaryPassword);
         const [user] = await manager.query(
           `INSERT INTO public.users(account_id,first_name,last_name,email,phone_number,role,notification_enabled,status,password_hash,username,merchant_id,employee_id)
            VALUES($1,$2,$3,$4,$5,'USER',true,$6,$7,$8,$9,$10) RETURNING id`,
@@ -7213,15 +7202,14 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
             email,
             employee.phone || '',
             employee.status === EmployeeStatus.ACTIVE ? 'ACTIVE' : 'DISABLED',
-            passwordHash,
+            this.hashUserPassword(dto.temporaryPassword),
             username,
             dto.merchantId,
             employee.id,
           ],
         );
         employee.userId = user.id;
-        employee.passwordHash = passwordHash;
-        await manager.query('UPDATE public.employees SET user_id=$2, password_hash=$3 WHERE id=$1', [employee.id, user.id, passwordHash]);
+        await manager.query('UPDATE public.employees SET user_id=$2 WHERE id=$1', [employee.id, user.id]);
         if (dto.storeAssignments) {
           await this.syncEmployeeAssignmentsWithManager(
             manager,
@@ -7283,7 +7271,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
         : null;
     if (dto.loginPin !== undefined)
       existing.loginPin = dto.loginPin || null;
-    if (dto.temporaryPassword !== undefined) existing.passwordHash = this.hashUserPassword(dto.temporaryPassword);
+    if (dto.temporaryPassword !== undefined) existing.passwordHash = null;
     if (dto.sendCredentials !== undefined)
       existing.sendCredentials = dto.sendCredentials;
     if (dto.status !== undefined) {
@@ -7317,7 +7305,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           updates.push(`username=$${values.length}`);
         }
         if (dto.temporaryPassword !== undefined) {
-          values.push(saved.passwordHash);
+          values.push(this.hashUserPassword(dto.temporaryPassword));
           updates.push(`password_hash=$${values.length}`);
         }
         await manager.query(
