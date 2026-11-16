@@ -1469,22 +1469,6 @@ export class OrderRepository implements OnModuleInit {
     storeOrder.taxTotal = input.order.taxAmount;
     storeOrder.tipAmount = input.order.tipAmount;
     storeOrder.total = input.order.totalAmount;
-    const lineItems = Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems as any[] : [];
-    const couponLines = Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines as any[] : [];
-    const feeLines = Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines as any[] : [];
-    const taxLines = Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines as any[] : [];
-    const payload = (storeOrder.requestPayload || input.order.requestPayload || {}) as Record<string, unknown>;
-    storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
-    storeOrder.grandTotal = listOrderTotal({
-      total: storeOrder.total,
-      tax: storeOrder.taxTotal,
-      taxLines,
-      couponDiscount: sumCouponDiscounts(couponLines),
-      lineItems,
-      feeLines,
-      shippingTotal: payload.shipping_total ?? payload.shippingTotal,
-      tip: storeOrder.tipAmount,
-    });
     storeOrder.paymentStatus = input.order.paymentStatus;
     storeOrder.updatedAt = new Date();
     if (input.history) {
@@ -1527,6 +1511,74 @@ export class OrderRepository implements OnModuleInit {
       orderId: saved.orderId,
     }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
+  }
+
+  /**
+   * A full snapshot that resends the same line, fee, coupon, tax, and total
+   * values is a non-financial edit. Customer and note changes keep the saved
+   * transaction amounts and do not run tax or total calculations.
+   */
+  private financialSnapshotMatches(store: StoreOrderEntity, payload: Record<string, unknown>): boolean {
+    const incomingLines = Array.isArray(payload.line_items) ? payload.line_items : payload.items;
+    if (!Array.isArray(incomingLines) || !incomingLines.length) return false;
+    if (this.lineMoneySignature(store.lineItems) !== this.lineMoneySignature(incomingLines)) return false;
+    if (payload.fee_lines !== undefined && this.namedMoneySignature(store.feeLines, 'name', 'fee_name') !== this.namedMoneySignature(payload.fee_lines, 'name', 'fee_name')) {
+      return false;
+    }
+    if (payload.coupon_lines !== undefined && this.namedMoneySignature(store.couponLines, 'code') !== this.namedMoneySignature(payload.coupon_lines, 'code')) {
+      return false;
+    }
+    if (payload.tax_lines !== undefined && this.taxMoneySignature(store.taxLines) !== this.taxMoneySignature(payload.tax_lines)) {
+      return false;
+    }
+    if (payload.total !== undefined && this.moneyKey(payload.total) !== this.moneyKey(store.total)) return false;
+    if (payload.total_tax !== undefined && this.moneyKey(payload.total_tax) !== this.moneyKey(store.taxTotal)) return false;
+    const incomingTip = payload.tipAmount ?? payload.tip_amount;
+    if (incomingTip !== undefined && this.moneyKey(incomingTip) !== this.moneyKey(store.tipAmount)) return false;
+    const storedPayload = (store.requestPayload || {}) as Record<string, unknown>;
+    const incomingShipping = payload.shipping_total ?? payload.shippingTotal;
+    if (incomingShipping !== undefined) {
+      const storedShipping = storedPayload.shipping_total ?? storedPayload.shippingTotal ?? 0;
+      if (this.moneyKey(incomingShipping) !== this.moneyKey(storedShipping)) return false;
+    }
+    return true;
+  }
+
+  private moneyKey(value: unknown): string {
+    const amount = Number(value ?? 0);
+    return Number.isFinite(amount) ? amount.toFixed(2) : '';
+  }
+
+  private lineMoneySignature(lines: unknown): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      return [
+        line.product_id ?? line.productId ?? '',
+        this.moneyKey(line.quantity),
+        this.moneyKey(line.subtotal ?? line.total),
+        this.moneyKey(line.total ?? line.subtotal),
+        this.moneyKey(line.subtotal_tax),
+        this.moneyKey(line.total_tax),
+      ].join(':');
+    }).join('|');
+  }
+
+  private namedMoneySignature(lines: unknown, ...nameKeys: string[]): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      const name = nameKeys.map((key) => line[key]).find((value) => value !== undefined && value !== null) ?? '';
+      return `${String(name).trim().toLowerCase()}:${this.moneyKey(line.discount ?? line.total ?? line.amount)}`;
+    }).join('|');
+  }
+
+  private taxMoneySignature(lines: unknown): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      return `${this.moneyKey(line.rate_percent)}:${this.moneyKey(line.tax_total)}:${this.moneyKey(line.shipping_tax_total)}`;
+    }).join('|');
   }
 
   async replaceOrderSnapshot(
@@ -1609,18 +1661,42 @@ export class OrderRepository implements OnModuleInit {
       timezone: current.storeOrder.timezone,
       payments: Array.isArray(payload.payments) ? payload.payments : [],
     };
-    await this.enrichWooCommerceCreateOrder(orderData, payload);
-    items = (orderData.items || []).map((item: any, index: number) => ({
-      id: String(sourceItems[index]?.id || `ITEM-${current.order.id}-${index + 1}`),
-      orderId: current.order.id,
-      productId: String(item.productId ?? ''),
-      productName: String(item.productName || 'Sales Item'),
-      quantity: Number(item.quantity || 1),
-      unitPrice: Number(item.unitPrice || 0),
-      totalPrice: Number(item.totalPrice || 0),
-      modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
-    }));
-    const replacement = this.buildStoreOrder(current.order.id, orderData, payload);
+    const preserveFinancials = this.financialSnapshotMatches(current.storeOrder, payload);
+    let replacement: StoreOrderEntity;
+    if (preserveFinancials) {
+      items = this.itemsFromStore(current.storeOrder);
+      replacement = {
+        ...current.storeOrder,
+        customerName: orderData.customerName,
+        customerPhone: orderData.customerPhone,
+        orderType: orderData.orderType,
+        paymentMethodCode: orderData.paymentMethod,
+        paymentStatus: orderData.paymentStatus,
+        metadata,
+        requestPayload: payload,
+        orderStatus,
+        paymentMethod: payload.payment_method ? String(payload.payment_method) : current.storeOrder.paymentMethod,
+        paymentMethodTitle: payload.payment_method_title
+          ? String(payload.payment_method_title)
+          : current.storeOrder.paymentMethodTitle,
+        status: requestedStatus,
+        metaData: metadata,
+        updatedAt: new Date(),
+      };
+    } else {
+      await this.enrichWooCommerceCreateOrder(orderData, payload);
+      items = (orderData.items || []).map((item: any, index: number) => ({
+        id: String(sourceItems[index]?.id || `ITEM-${current.order.id}-${index + 1}`),
+        orderId: current.order.id,
+        productId: String(item.productId ?? ''),
+        productName: String(item.productName || 'Sales Item'),
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || 0),
+        totalPrice: Number(item.totalPrice || 0),
+        modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+      }));
+      replacement = this.buildStoreOrder(current.order.id, orderData, payload);
+    }
     replacement.id = current.storeOrder.id;
     replacement.orderNumber = current.storeOrder.orderNumber;
     replacement.createdAt = current.storeOrder.createdAt;
@@ -2079,124 +2155,8 @@ export class OrderRepository implements OnModuleInit {
           .map(({ amount, metadata }) => ({ amount, metadata })),
       }];
     });
-    await this.enrichCustomItemTaxesForListing(rows);
     const products = await this.catalogProducts(rows);
     return { total, orders: rows.map((row) => ({ ...row, products })) };
-  }
-
-  /**
-   * Older/external POS orders can persist custom lines without WooCommerce tax
-   * fields. Enrich only the total-orders read model from the line's category;
-   * never rewrite the historical order or alter catalog-product taxation.
-   */
-  private async enrichCustomItemTaxesForListing(
-    rows: Array<{ order: OrderEntity; storeOrder: StoreOrderEntity | null; items: OrderItemEntity[] }>,
-  ): Promise<void> {
-    if (!this.dataSource) return;
-    const storeIds = [...new Set(rows.map((row) => row.order.storeId).filter(Boolean))];
-    if (!storeIds.length) return;
-
-    const categories: Array<{ store_id?: string; category?: Record<string, unknown> }> = await this.dataSource.query(
-      `SELECT catalog.store_id::text AS store_id, category
-         FROM public.store_categories AS catalog
-         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(catalog.payload, '[]'::jsonb)) AS category
-        WHERE catalog.store_id = ANY($1::uuid[])
-          AND COALESCE(catalog.is_deleted, false) = false`,
-      [storeIds],
-    );
-    const rates = new Map<string, number>();
-    categories.forEach((row) => {
-      const category = row.category || {};
-      const rate = Number(category.pos_tax_percent ?? category.posTaxPercent ?? category.rate);
-      if (!row.store_id || !Number.isFinite(rate)) return;
-      [category.id, category.wordpressId, category.wordpress_id, category.slug, category.name]
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter(Boolean)
-        .forEach((key) => rates.set(`${row.store_id}:${key}`, rate));
-    });
-
-    rows.forEach(({ order, storeOrder }) => {
-      if (!storeOrder || !Array.isArray(storeOrder.lineItems)) return;
-      let enriched = false;
-      let addedLineSubtotal = 0;
-      let addedLineTotal = 0;
-      const taxDeltaByRate = new Map<number, number>();
-      storeOrder.lineItems.forEach((rawLine) => {
-        const line = rawLine as any;
-        if (String(line?.type || '').trim().toLowerCase() !== 'custom') return;
-        const previousSubtotal = Number(line.subtotal ?? line.total ?? 0);
-        const previousTotal = Number(line.total ?? line.subtotal ?? 0);
-        const existingTax = Number(line?.total_tax ?? 0);
-        this.normalizeCustomItemQuantity(line, 2);
-
-        const categoryReference = line.category_id
-          ?? line.categoryId
-          ?? line.category?.id
-          ?? line.categories?.[0]?.id
-          ?? line.category_slug
-          ?? line.categorySlug
-          ?? line.category?.slug
-          ?? line.category_name
-          ?? line.categoryName
-          ?? line.category?.name
-          ?? line.tax_class
-          ?? 'custom-product';
-        const categoryKey = String(categoryReference).trim().toLowerCase();
-        const rate = rates.get(`${order.storeId}:${categoryKey}`)
-          ?? rates.get(`${order.storeId}:custom-product`);
-        if (rate === undefined) return;
-
-        const subtotal = Number(line.subtotal ?? line.total ?? 0);
-        const total = Number(line.total ?? line.subtotal ?? 0);
-        if (!Number.isFinite(subtotal) || !Number.isFinite(total)) return;
-        const subtotalTax = Math.round(subtotal * rate) / 100;
-        const totalTax = Math.round(total * rate) / 100;
-        line.subtotal_tax = subtotalTax.toFixed(2);
-        line.total_tax = totalTax.toFixed(2);
-        line.taxes = [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }];
-        addedLineSubtotal += subtotal - (Number.isFinite(previousSubtotal) ? previousSubtotal : 0);
-        addedLineTotal += total - (Number.isFinite(previousTotal) ? previousTotal : 0);
-        taxDeltaByRate.set(
-          rate,
-          (taxDeltaByRate.get(rate) || 0) + totalTax - (Number.isFinite(existingTax) ? existingTax : 0),
-        );
-        enriched = true;
-      });
-      if (!enriched) return;
-      const existingTaxLines = Array.isArray(storeOrder.taxLines)
-        ? storeOrder.taxLines.map((line) => ({ ...(line as Record<string, unknown>) }))
-        : [];
-      taxDeltaByRate.forEach((amount, rate) => {
-        const matchingLine = existingTaxLines.find(
-          (line) => Number(line.rate_percent) === rate,
-        );
-        if (matchingLine) {
-          const currentAmount = Number(matchingLine.tax_total ?? 0);
-          matchingLine.tax_total = ((Number.isFinite(currentAmount) ? currentAmount : 0) + amount).toFixed(2);
-          return;
-        }
-        const id = existingTaxLines.length + 1;
-        existingTaxLines.push({
-          id,
-          rate_code: `POS-TAX-${id}`,
-          rate_id: id,
-          label: 'Tax',
-          compound: false,
-          tax_total: amount.toFixed(2),
-          shipping_tax_total: '0.00',
-          rate_percent: rate,
-          meta_data: [],
-        });
-      });
-      const storedTaxTotal = Number(storeOrder.taxTotal ?? 0);
-      const addedTaxTotal = [...taxDeltaByRate.values()].reduce((sum, amount) => sum + amount, 0);
-      storeOrder.taxTotal = (Number.isFinite(storedTaxTotal) ? storedTaxTotal : 0) + addedTaxTotal;
-      const storedSubtotal = Number(storeOrder.subtotal ?? 0);
-      storeOrder.subtotal = (Number.isFinite(storedSubtotal) ? storedSubtotal : 0) + addedLineSubtotal;
-      const storedOrderTotal = Number(storeOrder.total ?? 0);
-      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal;
-      storeOrder.taxLines = existingTaxLines;
-    });
   }
 
   private normalizeCustomItemQuantity(

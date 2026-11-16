@@ -113,6 +113,9 @@ export class DiscountService implements OnModuleInit {
       per_page: '100',
       ...wordpressQuery,
     });
+    // An empty PHP list is JSON `[]`. Group lookups on that array miss every
+    // local discount, so a response can report a total while `data` stays empty.
+    this.ensureDiscountGroups(response);
     for (const group of ['auto', 'mix_match', 'multipack']) {
       const records = response?.data?.[group];
       if (!Array.isArray(records)) continue;
@@ -169,6 +172,7 @@ export class DiscountService implements OnModuleInit {
         remoteIds.add(String(localId));
       }
     }
+    this.reconcileDiscountPagination(response);
     if (!type) return response;
     const group = this.discountGroup(type);
     return {
@@ -687,6 +691,34 @@ export class DiscountService implements OnModuleInit {
     const refreshed = await this.fetchWordPressDiscount(connection, group, discountId);
     const persistedCount = Number(refreshed?.usage_count ?? refreshed?.usageCount);
     return Number.isFinite(persistedCount) && persistedCount === usageCount;
+  }
+
+  private ensureDiscountGroups(response: any) {
+    if (!response || typeof response !== 'object') return;
+    const groups = ['auto', 'mix_match', 'multipack'];
+    const data = response.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      response.data = { auto: [], mix_match: [], multipack: [] };
+      return;
+    }
+    for (const group of groups) {
+      if (!Array.isArray(data[group])) data[group] = [];
+    }
+  }
+
+  private reconcileDiscountPagination(response: any) {
+    const pagination = response?.pagination;
+    if (!pagination || typeof pagination !== 'object' || !response?.data || Array.isArray(response.data)) return;
+    const count = ['auto', 'mix_match', 'multipack'].reduce(
+      (sum, group) => sum + (Array.isArray(response.data[group]) ? response.data[group].length : 0),
+      0,
+    );
+    const total = Number(pagination.total);
+    if (!Number.isFinite(total) || total >= count) return;
+    pagination.total = count;
+    const perPage = Number(pagination.per_page) || count || 1;
+    pagination.total_pages = Math.max(Number(pagination.total_pages) || 0, Math.max(1, Math.ceil(count / perPage)));
+    pagination.has_more = Number(pagination.page || 1) < Number(pagination.total_pages);
   }
 
   private async wordpressRequest(connection: { wordpressUrl: string; wordpressJwt: string }, path: string, method: string, body?: any, query: Record<string, string> = {}) {

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { OrderListPresenter } from './order-list.presenter';
+import { OrderResponsePresenter } from './order-response.presenter';
+import { OrderUpdatePresenter } from '../modules/order-updates/order-update.presenter';
 
 function row(status: string) {
   return {
@@ -38,6 +40,75 @@ function row(status: string) {
   } as any;
 }
 
+test('total-orders and order details tax the discounted taxable item only', () => {
+  const lines = [
+    {
+      id: 'ITEM-1', name: 'Lucas Gummies Spicy Watermelon', product_id: 81185, quantity: 1,
+      subtotal: '4.00', total: '4.00', subtotal_tax: '0.32', total_tax: '0.32', tax_class: '',
+      taxes: [{ id: 9.1, total: '0.32', subtotal: '0.32' }],
+    },
+    {
+      id: 'ITEM-2', name: 'Vitacoco Pressed Coconut 16 9', product_id: 79361, quantity: 1,
+      subtotal: '2.99', total: '2.99', subtotal_tax: '0.00', total_tax: '0.00', tax_class: 'zero',
+      taxes: [],
+    },
+  ];
+  const fees = [{ name: 'merchant_discount', total: '-0.70', tax_status: 'none' }];
+  const taxLines = [{ id: 1, rate_code: 'POS-TAX-1', rate_id: 1, label: 'Tax', compound: false, tax_total: '0.32', shipping_tax_total: '0.00', rate_percent: 9.1, meta_data: [] }];
+  const listed = row('pending');
+  listed.order.clientOrderId = '263151655';
+  listed.order.orderNumber = '5508';
+  listed.order.totalAmount = 6.61;
+  listed.order.discountAmount = 0.7;
+  listed.order.taxAmount = 0.32;
+  listed.order.paymentStatus = 'PENDING';
+  listed.storeOrder.total = 6.61;
+  listed.storeOrder.discountTotal = 0.7;
+  listed.storeOrder.taxTotal = 0.32;
+  listed.storeOrder.lineItems = lines;
+  listed.storeOrder.feeLines = fees;
+  listed.storeOrder.taxLines = taxLines;
+  listed.storeOrder.couponLines = [];
+  listed.refunds = [];
+  const listOrder = new OrderListPresenter().present(1, 10, 1, [listed]).orders_data[0];
+  const detail = new OrderUpdatePresenter(new OrderResponsePresenter()).present({
+    order: {
+      ...listed.order,
+      id: '767fafa9-eec3-421a-9c54-f8b7e3739ef7',
+      createdAt: listed.order.createdAt,
+      updatedAt: listed.order.updatedAt,
+      requestPayload: { created_via: 'rest-api', currency: 'USD', prices_include_tax: false },
+      metadata: [],
+    },
+    items: lines.map((line) => ({
+      id: line.id,
+      productName: line.name,
+      productId: String(line.product_id),
+      quantity: line.quantity,
+      totalPrice: Number(line.total),
+      unitPrice: Number(line.total),
+      modifiers: [],
+    })),
+    storeOrder: {
+      ...listed.storeOrder,
+      currency: 'USD',
+      timezone: 'UTC',
+      grandTotal: 6.61,
+      metadata: [],
+    },
+  } as never) as { total_tax: string; cart_tax: string; total: string; line_items: Array<{ total_tax: string; tax_class: string }> };
+  assert.equal(listOrder.total_tax, '0.32');
+  assert.equal(listOrder.line_items[0].total_tax, '0.32');
+  assert.equal(listOrder.line_items[1].total_tax, '0.00');
+  assert.equal(listOrder.total, '6.61');
+  assert.equal(detail.total_tax, '0.32');
+  assert.equal(detail.cart_tax, '0.32');
+  assert.equal(detail.line_items[0].total_tax, '0.32');
+  assert.equal(detail.line_items[1].total_tax, '0.00');
+  assert.equal(detail.line_items[1].tax_class, 'zero');
+  assert.equal(detail.total, '6.61');
+});
+
 test('total-orders preserves the saved item-rounded tax for order 262976097', () => {
   const sample = row('completed');
   sample.order.clientOrderId = '262976097';
@@ -74,9 +145,9 @@ test('total-orders rounds merchant-only tax once for order 263027404', () => {
     }));
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
-  assert.equal(order.total_tax, '4.5');
-  assert.equal(order.total, '53.99');
-  assert.equal(order.net_payment, 53.99);
+  assert.equal(order.total_tax, '4.49');
+  assert.equal(order.total, '53.98');
+  assert.equal(order.net_payment, 53.98);
 });
 
 test('total-orders calculates merchant-discount tax on the combined base for Woo order 3290', () => {
@@ -102,9 +173,9 @@ test('total-orders calculates merchant-discount tax on the combined base for Woo
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
   assert.equal(order.woo_order_id, 3290);
-  assert.equal(order.total_tax, '2.29');
-  assert.equal(order.total, '27.45');
-  assert.equal(order.net_payment, 27.45);
+  assert.equal(order.total_tax, '2.27');
+  assert.equal(order.total, '27.43');
+  assert.equal(order.net_payment, 27.43);
 });
 
 test('total-orders applies the coupon before tax for Woo order 6226', () => {
@@ -128,9 +199,9 @@ test('total-orders applies the coupon before tax for Woo order 6226', () => {
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
   assert.equal(order.woo_order_id, 6226);
-  assert.equal(order.total_tax, '4.09');
-  assert.equal(order.total, '49.04');
-  assert.equal(order.net_payment, 49.04);
+  assert.equal(order.total_tax, '4.55');
+  assert.equal(order.total, '44.50');
+  assert.equal(order.net_payment, 44.5);
 });
 
 test('total-orders uses coupon fee when coupon line omits its amount', () => {
@@ -154,8 +225,8 @@ test('total-orders uses coupon fee when coupon line omits its amount', () => {
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
   assert.equal(order.total_tax, '1.64');
-  assert.equal(order.total, '19.61');
-  assert.equal(order.net_payment, 19.61);
+  assert.equal(order.total, '16.61');
+  assert.equal(order.net_payment, 16.61);
 });
 
 test('total-orders uses the actual coupon amount for order 263028812', () => {
@@ -181,9 +252,9 @@ test('total-orders uses the actual coupon amount for order 263028812', () => {
   }];
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
-  assert.equal(order.total_tax, '6.78');
-  assert.equal(order.total, '81.24');
-  assert.equal(order.net_payment, 81.24);
+  assert.equal(order.total_tax, '6.43');
+  assert.equal(order.total, '77.06');
+  assert.equal(order.net_payment, 77.06);
   assert.equal(order.fee_lines[1].total, '-5.00');
 });
 
@@ -248,9 +319,9 @@ test('total-orders does not deduct a represented merchant discount twice for Woo
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
   assert.equal(order.woo_order_id, 4134);
-  assert.equal(order.total_tax, '4.04');
-  assert.equal(order.total, '68.48');
-  assert.equal(order.net_payment, 68.48);
+  assert.equal(order.total_tax, '4');
+  assert.equal(order.total, '67.95');
+  assert.equal(order.net_payment, 67.95);
   assert.equal(order.fee_lines[1].total, '-5.00');
 });
 
@@ -276,9 +347,9 @@ test('total-orders corrects stored discount tax for order 263025690', () => {
   }];
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
-  assert.equal(order.total_tax, '2.58');
-  assert.equal(order.total, '30.92');
-  assert.equal(order.net_payment, 30.92);
+  assert.equal(order.total_tax, '3.03');
+  assert.equal(order.total, '22.67');
+  assert.equal(order.net_payment, 22.67);
   assert.equal(order.fee_lines[1].total, '-5.00');
 });
 
@@ -304,9 +375,9 @@ test('total-orders uses coupon_lines for order 263022351', () => {
   }];
   sample.refunds = [];
   const order = new OrderListPresenter().present(1, 10, 1, [sample]).orders_data[0];
-  assert.equal(order.total_tax, '10.34');
-  assert.equal(order.total, '124.01');
-  assert.equal(order.net_payment, 124.01);
+  assert.equal(order.total_tax, '10.8');
+  assert.equal(order.total, '116.28');
+  assert.equal(order.net_payment, 116.28);
   assert.equal(order.fee_lines[1].total, '-5.00');
 });
 
