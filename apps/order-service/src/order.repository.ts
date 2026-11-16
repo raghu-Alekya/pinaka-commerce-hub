@@ -301,7 +301,7 @@ export class OrderRepository implements OnModuleInit {
             orderData.status,
             storeOrder.couponLines,
             storeOrder.metaData,
-            sourcePayload?.line_items,
+            storeOrder.lineItems,
           );
           await this.saveLineItems(manager, id, items, true);
           await this.saveStatusHistory(manager, storeOrder.statusHistory[0] as OrderStatusHistoryEntity);
@@ -503,20 +503,44 @@ export class OrderRepository implements OnModuleInit {
           .includes(String(entry?.key ?? '').trim().toLowerCase()))
         .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
       : [];
-    const ruleApplications = eligible && Array.isArray(lineItems)
-      ? lineItems.flatMap((line: any) => {
-        const entries = Array.isArray(line?.meta_data) ? line.meta_data : [];
-        const applicationCount = entries.find((entry: any) => [
+    const metaEntries = (line: any) => {
+      const raw = line?.meta_data ?? line?.metaData ?? line?.modifiers;
+      return Array.isArray(raw) ? raw : [];
+    };
+    const metaValue = (entries: any[], keys: string[]) => entries.find((entry: any) =>
+      keys.includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
+    const ruleApplications: Array<{ id: string; count: number }> = [];
+    const productApplications: Array<{ group: string; productId: string; count: number; amount: number }> = [];
+    if (eligible && Array.isArray(lineItems)) {
+      for (const line of lineItems as any[]) {
+        const entries = metaEntries(line);
+        const explicitCount = Number(metaValue(entries, [
           '_pos_discount_application_count', 'pos_discount_application_count',
           'discount_application_count', 'application_count',
-        ].includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
-        const explicitCount = Number(applicationCount);
+        ]));
         const count = Number.isFinite(explicitCount) && explicitCount > 0 ? Math.floor(explicitCount) : 1;
-        return entries
-          .filter((entry: any) => String(entry?.key ?? '').trim().toLowerCase() === '_pos_discount_rule_id')
-          .map((entry: any) => ({ id: String(entry?.value ?? '').trim().toLowerCase(), count }));
-      })
-      : [];
+        const ruleId = String(metaValue(entries, [
+          '_pos_discount_rule_id', 'pos_discount_rule_id', 'discount_rule_id',
+        ]) ?? '').trim().toLowerCase();
+        if (ruleId) {
+          ruleApplications.push({ id: ruleId, count });
+          continue;
+        }
+        const discountType = String(metaValue(entries, [
+          '_pos_discount_type', 'pos_discount_type',
+        ]) ?? '').trim().toLowerCase();
+        const autoAmount = Number(metaValue(entries, ['_pos_auto_discount', 'pos_auto_discount']));
+        const group = discountType === 'mixmatch' || discountType === 'mix_match' ? 'mix_match'
+          : discountType === 'multipack' ? 'multipack'
+            : discountType === 'auto' || discountType === 'auto discount'
+              || (Number.isFinite(autoAmount) && autoAmount > 0) ? 'auto'
+              : '';
+        if (group !== 'auto' || !(Number.isFinite(autoAmount) && autoAmount > 0)) continue;
+        const productId = String(line?.product_id ?? line?.productId ?? '').trim();
+        if (!productId) continue;
+        productApplications.push({ group, productId, count, amount: autoAmount });
+      }
+    }
     const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
     const rows = await manager.query(
       `SELECT payload FROM public.store_discounts
@@ -529,6 +553,22 @@ export class OrderRepository implements OnModuleInit {
     });
     const payload = rows[0]?.payload;
     if (!payload) return;
+    const productUsage = new Map<string, number>();
+    const sameAmount = (left: unknown, right: number) => {
+      const value = Number(left);
+      return Number.isFinite(value) && Math.abs(value - right) < 0.001;
+    };
+    for (const application of productApplications) {
+      const records = Array.isArray(payload[application.group]) ? payload[application.group] : [];
+      const candidates = records.filter((record: any) => [record?.product_id, record?.main_product_id]
+        .some((value: unknown) => value !== undefined && value !== null && String(value).trim() === application.productId));
+      const amountMatches = candidates.filter((record: any) =>
+        sameAmount(record?.coupon_amount ?? record?.amount ?? record?.discount, application.amount));
+      const chosen = (amountMatches.length ? amountMatches : candidates)[0];
+      if (!chosen) continue;
+      const key = `${application.group}:${String(chosen.id ?? chosen.wordpressId ?? chosen.pchId ?? '')}`;
+      productUsage.set(key, (productUsage.get(key) || 0) + application.count);
+    }
     let changed = false;
     for (const group of ['auto', 'mix_match', 'multipack']) {
       const records = Array.isArray(payload[group]) ? payload[group] : [];
@@ -550,8 +590,9 @@ export class OrderRepository implements OnModuleInit {
         // of the same application when an order contains both. If rule markers
         // are present, never let a same-named catalog record in another type
         // consume the coupon fallback.
+        const productCount = productUsage.get(`${group}:${String(record.id ?? record.wordpressId ?? record.pchId ?? '')}`) || 0;
         const applications = eligible
-          ? matchingRuleApplications || (!ruleApplications.length && code
+          ? matchingRuleApplications || productCount || (!ruleApplications.length && !productApplications.length && code
             ? codes.filter(appliedCode => appliedCode === code).length
             : 0)
           : 0;
