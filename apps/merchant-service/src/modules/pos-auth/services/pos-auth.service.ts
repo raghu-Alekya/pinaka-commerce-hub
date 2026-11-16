@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { jwtSecret, SessionEntity } from '@pinaka-delivery-hub/auth';
+import { jwtSecret, SessionEntity, verifyAccessToken } from '@pinaka-delivery-hub/auth';
+import { IsNull } from 'typeorm';
 import {
   Injectable,
   UnauthorizedException,
@@ -77,6 +78,25 @@ export class PosAuthService {
     });
     const { password: _password, ...details } = merchant;
     return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
+  }
+
+  async merchantLogout(authorization?: string) {
+    const token = this.extractBearerToken(authorization);
+    const payload = verifyAccessToken(token) as ReturnType<typeof verifyAccessToken> & { merchantId?: string };
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+    if (!payload.merchantId || !uuid.test(payload.jti ?? '') || !uuid.test(payload.sub)) {
+      throw new UnauthorizedException('A merchant login token is required');
+    }
+
+    const sessions = this.merchantRepository.requireDataSource().getRepository(SessionEntity);
+    const result = await sessions.update({
+      id: payload.jti,
+      userId: payload.sub,
+      accessTokenHash: createHash('sha256').update(token).digest('hex'),
+      revokedAt: IsNull(),
+    }, { revokedAt: new Date() });
+    if (!result.affected) throw new UnauthorizedException('Merchant session is not active');
+    return { success: true, message: 'Merchant logged out successfully' };
   }
 
   private async passwordMatches(stored: unknown, password: string): Promise<boolean> {
