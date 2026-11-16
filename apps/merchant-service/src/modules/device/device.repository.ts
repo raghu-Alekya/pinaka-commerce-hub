@@ -146,7 +146,7 @@ export class DeviceRepository {
     const buildQuery = (withFilters: boolean) => {
       const query = repository.createQueryBuilder('device')
         .innerJoin(
-          'public.merchant_devices',
+          MerchantDeviceEntity,
           'mapping',
           'mapping.device_id = device.id AND mapping.is_deleted = false',
         )
