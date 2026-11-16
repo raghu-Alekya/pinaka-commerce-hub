@@ -26,47 +26,40 @@ function respond(body: unknown, status = 200) {
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test('list returns the WordPress grouped data and pagination wrapper unchanged', async () => {
-  const wordpressResponse = {
-    data: {
-      auto: [{ id: 1, code: 'AUTO', discount_type: 'percent', coupon_amount: '10', type: 'auto' }],
-      mix_match: [{ id: 2, code: 'MIX', discount_type: 'fixed_item', coupon_amount: '5', type: 'mix_match' }],
-      multipack: [{ id: 3, code: 'PACK-3', coupon_amount: 2, qty: '3', type: 'multipack' }],
-    },
-    pagination: { page: 2, per_page: 10, total: 12, total_pages: 2, has_more: false },
-  };
-  respond(wordpressResponse);
-  const result = await serviceWithConnection().list('store-1', 'OWNER', { page: '2', per_page: '10', search: 'sale' });
-  assert.deepEqual(result, wordpressResponse);
-});
-
-test('list supports a type query while preserving the source list pagination', async () => {
-  const source = {
-    data: { auto: [{ id: 1 }], mix_match: [{ id: 2 }], multipack: [{ id: 3 }] },
-    pagination: { page: 1, per_page: 10, total: 3, total_pages: 1, has_more: false },
+test('list returns the saved PCH snapshot without reading WooCommerce', async () => {
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    throw new Error('List must not request WooCommerce');
   };
   const service = serviceWithConnection();
-  (service as any).wordpressRequest = async () => source;
-  (service as any).saveDiscount = async () => undefined;
-  assert.deepEqual(await service.list('store-1', 'OWNER', { type: 'mix_match' }), {
-    data: source.data.mix_match,
-    pagination: source.pagination,
+  const stored = {
+    auto: [{ id: 1, code: 'AUTO', type: 'auto' }],
+    mix_match: [{ id: 2, code: 'MIX', type: 'mix_match' }],
+    multipack: [{ id: 3, code: 'PACK-3', type: 'multipack' }],
+  };
+  (service as any).readDiscountPayload = async () => stored;
+
+  assert.deepEqual(await service.list('store-1', 'OWNER'), {
+    data: stored,
+    pagination: { page: 1, per_page: 100, total: 3, total_pages: 1, has_more: false },
   });
+  assert.equal(fetchCount, 0);
 });
 
-test('list requests 100 records by default and allows explicit pagination overrides', async () => {
+test('list supports a type query against the saved PCH snapshot', async () => {
   const service = serviceWithConnection();
-  const queries: Record<string, string>[] = [];
-  (service as any).wordpressRequest = async (_connection: unknown, _path: string, _method: string, _body: unknown, query: Record<string, string>) => {
-    queries.push(query);
-    return { data: {} };
+  const stored = {
+    auto: [{ id: 1 }],
+    mix_match: [{ id: 2 }],
+    multipack: [{ id: 3 }],
   };
-  await service.list('store-1', 'OWNER');
-  await service.list('store-1', 'OWNER', { page: '2', per_page: '25' });
-  assert.deepEqual(queries, [
-    { page: '1', per_page: '100' },
-    { page: '2', per_page: '25' },
-  ]);
+  (service as any).readDiscountPayload = async () => stored;
+
+  assert.deepEqual(await service.list('store-1', 'OWNER', { type: 'mix_match' }), {
+    data: stored.mix_match,
+    pagination: { page: 1, per_page: 100, total: 3, total_pages: 1, has_more: false },
+  });
 });
 
 test('get by ID reads only the requested type from the existing store_discounts payload', async () => {

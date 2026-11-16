@@ -40,7 +40,9 @@ export class SettingsApiService {
         continue;
       }
       const imageUrl = this.sanitizeUrl(body[key]);
-      if (!imageUrl) throw new BadRequestException(`${key} must be an http(s) URL or /uploads path`);
+      if (!imageUrl || !imageUrl.startsWith('/uploads/')) {
+        throw new BadRequestException(`${key} must be an uploaded image path under /uploads`);
+      }
       general[key] = imageUrl;
     }
     const printerSettings: Json = {};
@@ -76,24 +78,12 @@ export class SettingsApiService {
     for (const key of ['receipt_header', 'receipt_footer', 'address']) {
       if (printer[key] !== undefined && printer[key] !== null) general[key] = printer[key];
     }
-    const hasPrinterLogo = ['logo_url', 'logo', 'image_url'].some((key) =>
-      Object.prototype.hasOwnProperty.call(printer, key));
-    if (hasPrinterLogo) {
-      const printerLogo = printer.logo_url || printer.logo || printer.image_url;
-      if (typeof printerLogo === 'string' && printerLogo.trim()) {
-        general.logo_url = printerLogo;
-        general.image_url = printerLogo;
-      } else {
-        delete general.logo_url;
-        delete general.image_url;
-      }
-    } else {
-      const savedLogo = general.logo_url || general.image_url;
-      if (savedLogo) {
-        general.logo_url = savedLogo;
-        general.image_url = savedLogo;
-      }
-    }
+    // Keep the general image and receipt logo independent. Older code copied
+    // one printer logo value into both keys, hiding distinct uploaded images.
+    const printerImage = printer.image_url;
+    const printerLogo = printer.logo_url || printer.logo;
+    if (typeof printerImage === 'string' && printerImage.trim()) general.image_url = printerImage;
+    if (typeof printerLogo === 'string' && printerLogo.trim()) general.logo_url = printerLogo;
     const fields = [
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
       'address', 'currency', 'timezone', 'email_notification', 'sound_notification',

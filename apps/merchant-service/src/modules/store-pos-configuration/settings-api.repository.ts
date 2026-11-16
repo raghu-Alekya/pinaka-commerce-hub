@@ -17,6 +17,13 @@ export class SettingsApiRepository {
 
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
+  async storeFileLocation(scope: SettingsScope) {
+    const { storeId } = await this.resolveScope(scope);
+    const location = await this.merchants.storeFileLocation(storeId);
+    if (!location) throw new NotFoundException('Store not found');
+    return location;
+  }
+
   async read(scope: SettingsScope): Promise<SettingsJson> {
     const { db, storeId } = await this.resolveScope(scope);
     const rows = await db.query(
