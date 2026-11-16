@@ -88,11 +88,12 @@ export class DeviceRepository {
       });
     } catch (error: any) {
       if ((error?.driverError?.code || error?.code) === '23505') {
-        throw new ConflictException('Device code, serial number, or activation code already exists');
+        throw new ConflictException('Device code or activation code already exists');
       }
       throw error;
     }
   }
+  //
 
   private repository() {
     return this.merchants.requireDataSource().getRepository(MerchantDeviceEntity);
@@ -145,7 +146,7 @@ export class DeviceRepository {
     const buildQuery = (withFilters: boolean) => {
       const query = repository.createQueryBuilder('device')
         .innerJoin(
-          'public.merchant_devices',
+          MerchantDeviceEntity,
           'mapping',
           'mapping.device_id = device.id AND mapping.is_deleted = false',
         )

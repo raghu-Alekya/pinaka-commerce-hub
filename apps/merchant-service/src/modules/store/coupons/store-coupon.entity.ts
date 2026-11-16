@@ -1,10 +1,10 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm';
 
 export enum CouponSyncStatus { PENDING = 'PENDING', SYNCED = 'SYNCED', FAILED = 'FAILED', DELETED = 'DELETED' }
 
 @Entity('store_coupons')
 @Unique('uq_store_coupons_store_wc_id', ['storeId', 'woocommerceCouponId'])
-@Unique('uq_store_coupons_store_code', ['storeId', 'code'])
+@Index('uq_store_coupons_store_code', ['storeId', 'code'], { unique: true, where: 'deleted_at IS NULL' })
 export class StoreCouponEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'merchant_id', type: 'uuid' }) merchantId!: string;

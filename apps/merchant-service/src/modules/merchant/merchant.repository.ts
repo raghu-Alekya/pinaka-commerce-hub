@@ -226,6 +226,7 @@ function formatDataSyncProduct(product: DataSyncRow, configuration: DataSyncRow 
     },
   };
 }
+//
 
 async function ensurePosDataSyncSchema(db: DataSource): Promise<void> {
   await db.transaction(async manager => {
@@ -978,6 +979,9 @@ export class MerchantRepository implements OnModuleInit {
         StoreEmployeeFastkeyEntity,
       ],
       { synchronize: false, legacyQueryColumns: true },
+      );
+      await this.dataSource.query(
+        'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
       );
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
@@ -1850,7 +1854,7 @@ export class MerchantRepository implements OnModuleInit {
       const code = error.driverError?.code || error.code;
       if (code === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -1889,7 +1893,7 @@ export class MerchantRepository implements OnModuleInit {
       if (error instanceof NotFoundException) throw error;
       if ((error.driverError?.code || error.code) === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -3453,6 +3457,15 @@ async getProductDataChanges(deviceId: string | undefined, merchantId: string | u
         "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='currency_taxes'",
         [context.storeId],
       );
+      const [promotionalSettings] = await manager.query(
+        "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='promotional_images'",
+        [context.storeId],
+      );
+      const promotionalValue = promotionalSettings?.configuration_value ?? {};
+      const promotionalImages = {
+        enabled: promotionalValue.enabled === true,
+        images: Array.isArray(promotionalValue.images) ? promotionalValue.images : [],
+      };
       const rawProducts = this.productDataSyncProducts(saved.payload);
       const formatted = [...rawProducts.values()]
         .filter(product => product.type !== 'variation' && !(Number(product.parent_id) > 0))
@@ -3488,7 +3501,7 @@ async getProductDataChanges(deviceId: string | undefined, merchantId: string | u
       if (!Number.isSafeInteger(lastVersion)) throw new ConflictException('Sync version exceeds supported integer range');
       const delivered = changes.length ? changes[changes.length-1].event_version : lastVersion;
       await manager.query('UPDATE public.pos_data_sync_devices SET delivered_version=GREATEST(delivered_version,$3::bigint) WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,delivered]);
-      return { status: true, device_id: context.label, last_sync_version: lastVersion, changes };
+      return { status: true, device_id: context.label, last_sync_version: lastVersion, changes, promotional_images: promotionalImages };
     });
   }
 
@@ -3501,7 +3514,21 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       if (!device) throw new BadRequestException('Call get-data-changes before acknowledging');
       if (version! < Number(device.last_sync_version) || version! > Number(device.delivered_version)) throw new BadRequestException('Version must be between the acknowledged and delivered versions');
       await manager.query('UPDATE public.pos_data_sync_devices SET last_sync_version=$3::bigint WHERE store_id=$1::uuid AND device_id=$2::uuid', [context.storeId,context.deviceId,version]);
-      return { status: true, message: 'Sync version updated successfully', device_id: context.label, last_sync_version: version };
+      const [promotionalSettings] = await manager.query(
+        "SELECT configuration_value FROM public.store_pos_configurations WHERE store_id=$1::uuid AND configuration_name='promotional_images'",
+        [context.storeId],
+      );
+      const promotionalValue = promotionalSettings?.configuration_value ?? {};
+      return {
+        status: true,
+        message: 'Sync version updated successfully',
+        device_id: context.label,
+        last_sync_version: version,
+        promotional_images: {
+          enabled: promotionalValue.enabled === true,
+          images: Array.isArray(promotionalValue.images) ? promotionalValue.images : [],
+        },
+      };
     });
   }
 
@@ -3570,6 +3597,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   async upsertStoreProductRecords(
     storeId: string,
     records: unknown[],
+    deletedVariationId?: string,
   ): Promise<void> {
     const incoming = records.filter(
       (value): value is Record<string, unknown> =>
@@ -3594,6 +3622,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       }
     }
     for (const record of incoming) byId.set(String(record.id), record);
+    if (deletedVariationId) byId.delete(deletedVariationId);
     await this.saveStoreProductPayload(storeId, [...byId.values()]);
   }
 
@@ -4021,9 +4050,25 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       if (postgresCode === '42P01' || postgresCode === '42703') return [];
       throw error;
     }
-    return rows
+    const products = rows
       .map((row) => row.product)
       .filter((product) => product !== undefined && product !== null);
+    if (products.length === 0) return [];
+    const records = products.flatMap((product) => {
+      const record = this.asRecord(product);
+      return record ? [record] : [];
+    });
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return products.map((product) => {
+      const record = this.asRecord(product);
+      if (!record) return product;
+      const tax = this.productTax(
+        record,
+        this.categoryForProductTax(record, categoriesById),
+        taxConfiguration,
+      );
+      return { ...record, tax_rate: tax.rate };
+    });
   }
 
   async searchStoreProducts(
@@ -4069,8 +4114,14 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     }
     const products = rows[0]?.products;
     if (!Array.isArray(products) || products.length === 0) return null;
-    return products.map((product) =>
-      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+    const records = products.map((product) => this.asRecord(product) ?? {});
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return records.map((product) =>
+      this.presentWooProduct(
+        product,
+        this.categoryForProductTax(product, categoriesById),
+        taxConfiguration,
+      ),
     );
   }
 
@@ -4169,8 +4220,10 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       return [];
     }
 
+    const taxConfiguration = await this.getStoreProductTaxConfiguration(storeId);
+
     return products.map((product) =>
-      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+      this.presentWooProduct(this.asRecord(product) ?? {}, null, taxConfiguration),
     );
   }
 
@@ -4240,6 +4293,93 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return products.map((product) =>
       this.presentWooProduct(this.asRecord(product) ?? {}, category, taxConfiguration),
     );
+  }
+
+  private async loadStoreProductTaxContext(
+    storeId: string,
+    products: Array<Record<string, unknown>>,
+  ): Promise<{
+    taxConfiguration: StoreProductTaxConfiguration | null;
+    categoriesById: Map<string, Record<string, unknown>>;
+  }> {
+    const [taxConfiguration, categoriesById] = await Promise.all([
+      this.getStoreProductTaxConfiguration(storeId),
+      this.loadStoreCategoriesById(storeId, this.collectProductCategoryIds(products)),
+    ]);
+    return { taxConfiguration, categoriesById };
+  }
+
+  private collectProductCategoryIds(products: Array<Record<string, unknown>>): string[] {
+    const ids = new Set<string>();
+    for (const product of products) {
+      const direct = this.textOrNull(product.categoryId);
+      if (direct && /^\d+$/.test(direct)) ids.add(direct);
+      if (!Array.isArray(product.categories)) continue;
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id && /^\d+$/.test(id)) ids.add(id);
+      }
+    }
+    return [...ids];
+  }
+
+  private categoryForProductTax(
+    product: Record<string, unknown>,
+    categoriesById: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown> | null {
+    const ids: string[] = [];
+    const direct = this.textOrNull(product.categoryId);
+    if (direct) ids.push(direct);
+    if (Array.isArray(product.categories)) {
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id) ids.push(id);
+      }
+    }
+    for (const id of ids) {
+      const category = categoriesById.get(id);
+      if (category) return category;
+    }
+    return null;
+  }
+
+  private async loadStoreCategoriesById(
+    storeId: string,
+    categoryIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const categoriesById = new Map<string, Record<string, unknown>>();
+    if (categoryIds.length === 0) return categoriesById;
+    let rows: Array<{ category?: unknown }> = [];
+    try {
+      rows = await this.dataSource.query(
+        `SELECT category
+         FROM public.store_categories AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+             ELSE '[]'::jsonb
+           END
+         ) AS category
+         WHERE catalog.store_id = $1::uuid
+           AND COALESCE(catalog.is_deleted, false) = false
+           AND category->>'id' = ANY($2::text[])`,
+        [storeId, categoryIds],
+      );
+    } catch (error: unknown) {
+      const code =
+        error && typeof error === 'object'
+          ? (error as { code?: string; driverError?: { code?: string } }).code
+            ?? (error as { driverError?: { code?: string } }).driverError?.code
+          : undefined;
+      if (code === '42P01' || code === '42703') return categoriesById;
+      throw error;
+    }
+    for (const row of rows) {
+      const category = this.asRecord(row.category);
+      const id = this.textOrNull(category?.id);
+      if (category && id) categoriesById.set(id, category);
+    }
+    return categoriesById;
   }
 
   private presentWooProduct(

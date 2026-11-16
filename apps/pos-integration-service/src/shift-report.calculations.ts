@@ -569,7 +569,7 @@ export function prepareShiftData(input: ShiftReportInput): { report: Record<stri
   const cashNet = cashIn - cashRefund;
   const cardNet = cardIn - cardRefund;
   const payoutAmount = recognizedOrderPayout + paidOut + payoutTransactions;
-  const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount - payoutAmount;
+  const totalSaleAmount = cashNet + cardNet + cashbackFeeAmount + payoutAmount;
   const tillAmount = Number(input.openingBalance || 0)
     + cashIn
     - cashRefund

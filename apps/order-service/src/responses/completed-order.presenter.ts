@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { isMerchandiseLine, listOrderTax, listOrderTotal } from '../calculations/store-order.calculations';
+import { isMerchandiseLine } from '../calculations/store-order.calculations';
 import type { OrderEntity } from '../entities/order.entity';
 import type { OrderItemEntity } from '../entities/order-item.entity';
 import type { StoreOrderEntity } from '../entities/store-order.entity';
@@ -71,23 +71,10 @@ export class CompletedOrderPresenter {
       : (Array.isArray(request.payments) ? request.payments : []);
     const id = this.orderId(order);
     const clientOrderId = this.clientOrderId(order, storeOrder) ?? id;
-    const originalItemsTax = this.decimal(listOrderTax({
-      tax: storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount,
-      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
-      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
-      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
-    }));
+    const originalItemsTax = this.decimal(storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount);
     const coupons = Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines : [];
-    const originalGrossTotal = listOrderTotal({
-      total: storeOrder?.total ?? order.totalAmount,
-      tax: originalItemsTax,
-      taxLines: Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : undefined,
-      couponDiscount: coupons.reduce((sum, line: any) => sum + Number(line?.discount || 0), 0),
-      lineItems: Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : undefined,
-      feeLines: Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : undefined,
-      shippingTotal: request.shipping_total ?? request.shippingTotal,
-      tip: storeOrder?.tipAmount ?? order.tipAmount,
-    });
+    const storedTotal = Number(storeOrder?.total ?? order.totalAmount ?? 0);
+    const originalGrossTotal = Number.isFinite(storedTotal) ? storedTotal : 0;
     const itemsTax = this.money(effectiveStatus === 'partial-refund'
       ? Math.max(0, Number(originalItemsTax) - this.refundedItemsTax(storeOrder?.lineItems, items, refunds))
       : originalItemsTax);
@@ -331,37 +318,16 @@ export class CompletedOrderPresenter {
     }));
   }
 
-  private taxAfterDiscount(line: any, discountedSubtotal: number): number {
-    const taxes = Array.isArray(line?.taxes) ? line.taxes : [];
-    const rates = taxes.map((tax: any) => Number(tax?.rate_percent ?? tax?.id))
-      .filter((rate: number) => Number.isFinite(rate) && rate > 0 && rate <= 100);
-    if (!rates.length) return this.cents(line?.total_tax);
-    return rates.reduce((sum: number, rate: number) => (
-      sum + Math.round(discountedSubtotal * rate / 100)
-    ), 0);
+  private taxAfterDiscount(line: any, _discountedSubtotal: number): number {
+    return this.cents(line?.total_tax);
   }
 
-  private taxBeforeDiscount(line: any, originalSubtotal: number): number {
-    const taxes = Array.isArray(line?.taxes) ? line.taxes : [];
-    const rates = taxes.map((tax: any) => Number(tax?.rate_percent ?? tax?.id))
-      .filter((rate: number) => Number.isFinite(rate) && rate > 0 && rate <= 100);
-    if (!rates.length) return this.cents(line?.subtotal_tax);
-    return rates.reduce((sum: number, rate: number) => (
-      sum + Math.round(originalSubtotal * rate / 100)
-    ), 0);
+  private taxBeforeDiscount(line: any, _originalSubtotal: number): number {
+    return this.cents(line?.subtotal_tax);
   }
 
-  private taxesAfterDiscount(taxes: unknown, originalSubtotal: number, discountedSubtotal: number): unknown {
-    if (!Array.isArray(taxes)) return taxes ?? { total: {}, subtotal: {} };
-    return taxes.map((tax: any) => {
-      const rate = Number(tax?.rate_percent ?? tax?.id);
-      if (!Number.isFinite(rate) || rate <= 0 || rate > 100) return tax;
-      return {
-        ...tax,
-        subtotal: (Math.round(originalSubtotal * rate / 100) / 100).toFixed(2),
-        total: (Math.round(discountedSubtotal * rate / 100) / 100).toFixed(2),
-      };
-    });
+  private taxesAfterDiscount(taxes: unknown, _originalSubtotal: number, _discountedSubtotal: number): unknown {
+    return taxes ?? { total: {}, subtotal: {} };
   }
 
   private allocateCents(weights: number[], requestedCents: number): number[] {

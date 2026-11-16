@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS devices (
   authorization_code  varchar(100),
   merchant_id         varchar(100) NOT NULL,
   merchant_name       varchar(255) NOT NULL,
-  serial_number       varchar(100) UNIQUE,
+  serial_number       varchar(100),
   notes               text,
   device_type         varchar(100) NOT NULL,
   status              varchar(20)  NOT NULL DEFAULT 'Active',

@@ -46,6 +46,10 @@ export async function ensureLoyaltySchema(db: DataSource | EntityManager): Promi
     )
   `);
   await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS store_customer_meta_data_customer_key_uidx
+    ON public.store_customer_meta_data (customer_id, meta_key)
+  `);
+  await db.query(`
     CREATE INDEX IF NOT EXISTS store_customer_meta_data_customer_idx
     ON public.store_customer_meta_data (customer_id)
   `);

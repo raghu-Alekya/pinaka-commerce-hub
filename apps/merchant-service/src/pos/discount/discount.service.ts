@@ -9,7 +9,6 @@ import { WordPressResponseException } from './wordpress-response.exception';
 
 @Injectable()
 export class DiscountService implements OnModuleInit {
-  private polling = false;
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
   async onModuleInit(): Promise<void> {
@@ -19,7 +18,7 @@ export class DiscountService implements OnModuleInit {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
-        `[Discount sync] Database unavailable during startup (${message}); scheduled sync is disabled until PostgreSQL is available.`,
+        `[Discount sync] Database unavailable during initialization (${message}).`,
       );
       return;
     }
@@ -44,52 +43,25 @@ export class DiscountService implements OnModuleInit {
     } finally {
       await source.destroy();
     }
-    setTimeout(() => void this.pollConnectedStores(), 30_000);
-    setInterval(() => void this.pollConnectedStores(), 5 * 60_000);
-  }
-
-  private async pollConnectedStores() {
-    if (this.polling) return;
-    this.polling = true;
-    try {
-      const rows = await this.merchants.requireDataSource().query(
-        `SELECT store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt" FROM public.website_connections WHERE status='CONNECTED'`,
-      );
-      for (const row of rows) {
-        try {
-          if (!row.wordpressUrl || !row.encryptedJwt) continue;
-          await this.syncStoreDiscountsFromWordPress({
-            storeId: row.storeId,
-            wordpressUrl: row.wordpressUrl,
-            wordpressJwt: this.decryptConnectorSecret(row.encryptedJwt),
-          });
-        } catch (error: any) {
-          // The next scheduled poll retries transient failures; never log connection secrets.
-          console.warn(`[Discount sync] Store ${row.storeId} pull failed: ${error?.message ?? 'unknown error'}`);
-        }
-      }
-    } catch (error: any) {
-      console.warn(`[Discount sync] Polling failed: ${error?.message ?? 'unknown error'}`);
-    } finally {
-      this.polling = false;
-    }
   }
 
   async sync(storeId: string, role?: string) {
+    // Keep WooCommerce imports explicit: this is invoked by the sync POST only.
     const connection = await this.requireWordPressConnection(storeId, role);
     const result = await this.syncStoreDiscountsFromWordPress(connection);
     return { success: true, storeId: connection.storeId, ...result };
   }
 
   async list(storeId: string, role?: string, query: Record<string, string> = {}) {
-    const connection = await this.requireWordPressConnection(storeId, role);
-    return this.listFromConnection(storeId, connection, query);
+    await this.requireWordPressConnection(storeId, role);
+    // Page refreshes must never import remote changes; only sync() refreshes this snapshot.
+    return this.listStoredDiscounts(storeId, query, query.type);
   }
 
   async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
     const store = await this.resolveMerchantStore(storeId, actor);
-    const connection = await this.resolveWordPressConnection(store.id);
-    return this.listFromConnection(store.id, connection, query);
+    await this.resolveWordPressConnection(store.id);
+    return this.listStoredDiscounts(store.id, query, query.type);
   }
 
   async resolveMerchantStore(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined) {
@@ -104,52 +76,6 @@ export class DiscountService implements OnModuleInit {
       throw new ForbiddenException('Store is currently inactive');
     }
     return { id: store.id };
-  }
-
-  private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
-    const { type, ...wordpressQuery } = query;
-    const response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
-      page: '1',
-      per_page: '100',
-      ...wordpressQuery,
-    });
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      const records = response?.data?.[group];
-      if (!Array.isArray(records)) continue;
-      for (const record of records) {
-        if (record?.id === undefined || record?.id === null) continue;
-        await this.persistWithoutChangingResponse(
-          () => this.saveDiscount(storeId, group, this.canonicalizeWordPressRecord(record), String(record.id)),
-          storeId,
-        );
-      }
-    }
-    // Usage is recorded by PCH when the discount is applied to an order. Overlay
-    // the locally tracked total because the WordPress list can lag behind PCH.
-    let localPayload: any = {};
-    try {
-      localPayload = await this.readDiscountPayload(storeId);
-    } catch {
-      // A WordPress list response remains available when the local snapshot DB
-      // is temporarily unavailable; the next poll retries the local write.
-    }
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      const remoteRecords = response?.data?.[group];
-      const localRecords = localPayload[group];
-      if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
-      for (const remote of remoteRecords) {
-        const local = localRecords.find((item: any) => this.discountMatchesId(item, String(remote?.id)));
-        if (!local) continue;
-        const used = Number(local.usage_count ?? local.usageCount ?? 0);
-        if (Number.isFinite(used)) remote.usage_count = Math.max(0, used);
-      }
-    }
-    if (!type) return response;
-    const group = this.discountGroup(type);
-    return {
-      data: Array.isArray(response?.data?.[group]) ? response.data[group] : [],
-      ...(response?.pagination ? { pagination: response.pagination } : {}),
-    };
   }
 
   async listByType(storeId: string, type: string, role?: string, query: Record<string, string> = {}) {
@@ -664,6 +590,29 @@ export class DiscountService implements OnModuleInit {
     return Number.isFinite(persistedCount) && persistedCount === usageCount;
   }
 
+  private async listStoredDiscounts(storeId: string, query: Record<string, string>, type?: string) {
+    const payload = await this.readDiscountPayload(storeId);
+    const grouped = {
+      auto: Array.isArray(payload?.auto) ? payload.auto : [],
+      mix_match: Array.isArray(payload?.mix_match) ? payload.mix_match : [],
+      multipack: Array.isArray(payload?.multipack) ? payload.multipack : [],
+    };
+    const page = Math.max(1, Number(query.page) || 1);
+    const perPage = Math.max(1, Number(query.per_page) || 100);
+    const total = grouped.auto.length + grouped.mix_match.length + grouped.multipack.length;
+    const data = page === 1 ? grouped : { auto: [], mix_match: [], multipack: [] };
+    const pagination = {
+      page,
+      per_page: perPage,
+      total,
+      total_pages: total > 0 ? 1 : 0,
+      has_more: false,
+    };
+    if (!type) return { data, pagination };
+    const group = this.discountGroup(type);
+    return { data: data[group], pagination };
+  }
+
   private async wordpressRequest(connection: { wordpressUrl: string; wordpressJwt: string }, path: string, method: string, body?: any, query: Record<string, string> = {}) {
     const url = new URL(`${connection.wordpressUrl.replace(/\/+$/, '')}/wp-json/pinaka-pos/v1/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, value);
@@ -692,7 +641,7 @@ export class DiscountService implements OnModuleInit {
       await operation();
     } catch (error: any) {
       // The WooCommerce operation already succeeded. Keep its public response intact;
-      // the scheduled pull can rebuild the mapping. Do not include connection credentials in logs.
+      // a later explicit discount sync can rebuild the mapping. Do not include connection credentials in logs.
       console.error(`[Discount sync] Local mapping write failed for store ${storeId}: ${error?.message ?? 'unknown error'}`);
     }
   }
@@ -713,6 +662,10 @@ export class DiscountService implements OnModuleInit {
         const current = records[index];
         const currentUsed = Math.max(Number(current?.usage_count ?? current?.usageCount ?? 0), 0);
         record.pch_used_order_ids = Array.isArray(current?.pch_used_order_ids) ? current.pch_used_order_ids : [];
+        if (current?.pch_used_applications_by_order
+          && typeof current.pch_used_applications_by_order === 'object') {
+          record.pch_used_applications_by_order = current.pch_used_applications_by_order;
+        }
         // Once a local snapshot exists, PCH is authoritative. A stale or
         // divergent WordPress count must not replace the PCH value.
         record.usage_count = currentUsed;
@@ -761,6 +714,7 @@ export class DiscountService implements OnModuleInit {
     }
     const payload: Record<string, Record<string, unknown>[]> = { auto: [], mix_match: [], multipack: [] };
     const localPayload = await this.readDiscountPayload(params.storeId);
+    const wordpressUsageByDiscount = new Map<string, number>();
     const seen = new Set<string>();
     let skippedCount = 0;
     let completed = false;
@@ -785,12 +739,20 @@ export class DiscountService implements OnModuleInit {
           seen.add(key);
           const localRecords = Array.isArray(localPayload[group]) ? localPayload[group] : [];
           const localRecord = localRecords.find((item: any) => this.discountMatchesId(item, String(discount.id)));
+          wordpressUsageByDiscount.set(
+            group + ':' + String(discount.id),
+            Math.max(Number(discount.usage_count ?? discount.usageCount ?? 0), 0),
+          );
           if (localRecord) {
             const localUsage = Math.max(Number(localRecord.usage_count ?? localRecord.usageCount ?? 0), 0);
             const remoteUsage = Math.max(Number(discount.usage_count ?? discount.usageCount ?? 0), 0);
             const usedOrderIds = Array.isArray(localRecord.pch_used_order_ids)
               ? localRecord.pch_used_order_ids.map(String)
               : [];
+            const applicationsByOrder = localRecord.pch_used_applications_by_order
+              && typeof localRecord.pch_used_applications_by_order === 'object'
+              ? localRecord.pch_used_applications_by_order
+              : undefined;
             let usageSynced = localRecord.pch_usage_sync_pending !== true && remoteUsage === localUsage;
             if (!usageSynced) {
               try {
@@ -808,6 +770,7 @@ export class DiscountService implements OnModuleInit {
             discount.usageCount = discount.usage_count;
             discount.pch_usage_sync_pending = !usageSynced;
             if (usedOrderIds.length) discount.pch_used_order_ids = usedOrderIds;
+            if (applicationsByOrder) discount.pch_used_applications_by_order = applicationsByOrder;
           }
           // Mirror all discounts from WooCommerce. A discount can reference products
           // that are not present in the local product snapshot; filtering those here
@@ -826,8 +789,57 @@ export class DiscountService implements OnModuleInit {
       }
     }
     if (!completed) throw new BadRequestException('Discount pagination limit reached; saved discounts were not replaced');
-    await this.merchants.requireDataSource().transaction(manager =>
-      this.writeDiscountSnapshot(manager, params.storeId, payload));
+    await this.merchants.requireDataSource().transaction(async manager => {
+      // The network sync above can take long enough for an order transaction to
+      // add usage. Re-read while holding the snapshot row lock so this refresh
+      // never replaces a newer PCH usage ledger with the earlier snapshot.
+      const [latestRow] = await manager.query(
+        `SELECT payload FROM public.store_discounts
+          WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
+        [params.storeId],
+      );
+      const latestPayload = latestRow?.payload ?? { auto: [], mix_match: [], multipack: [] };
+      for (const group of ['auto', 'mix_match', 'multipack']) {
+        for (const discount of payload[group]) {
+          const current = (Array.isArray(latestPayload[group]) ? latestPayload[group] : [])
+            .find((item: any) => this.discountMatchesId(item, String(discount.id)));
+          if (!current) continue;
+          const currentUsage = Math.max(Number(current.usage_count ?? current.usageCount ?? 0), 0);
+          discount.usage_count = currentUsage;
+          discount.usageCount = currentUsage;
+          if (Array.isArray(current.pch_used_order_ids)) {
+            discount.pch_used_order_ids = current.pch_used_order_ids.map(String);
+          }
+          if (current.pch_used_applications_by_order
+            && typeof current.pch_used_applications_by_order === 'object') {
+            discount.pch_used_applications_by_order = current.pch_used_applications_by_order;
+          }
+          const wordpressUsage = wordpressUsageByDiscount.get(group + ':' + String(discount.id));
+          discount.pch_usage_sync_pending = current.pch_usage_sync_pending === true
+            || (wordpressUsage !== undefined && wordpressUsage !== currentUsage);
+        }
+      }
+      // A WooCommerce refresh can omit a rule that still has a PCH order ledger.
+      // Preserve those locally applied discounts when replacing the full snapshot.
+      for (const group of ['auto', 'mix_match', 'multipack']) {
+        const incoming = payload[group];
+        const incomingIds = new Set(incoming.map((item: any) => String(item?.id ?? item?.discount_id ?? item?.wordpressId ?? '')));
+        for (const current of Array.isArray(latestPayload[group]) ? latestPayload[group] : []) {
+          const currentId = current?.id ?? current?.discount_id ?? current?.wordpressId;
+          if (currentId === undefined || currentId === null || incomingIds.has(String(currentId))) continue;
+          const used = Number(current.usage_count ?? current.usageCount ?? 0);
+          const orderIds = Array.isArray(current.pch_used_order_ids) ? current.pch_used_order_ids : [];
+          const applications = current.pch_used_applications_by_order;
+          if (!(Number.isFinite(used) && used > 0) && !orderIds.length
+            && !(applications && typeof applications === 'object' && Object.keys(applications).length)) continue;
+          const retained = this.canonicalizeWordPressRecord(current);
+          retained.usage_count = Math.max(Number.isFinite(used) ? Math.max(0, used) : 0, orderIds.length);
+          incoming.push(retained);
+          incomingIds.add(String(currentId));
+        }
+      }
+      await this.writeDiscountSnapshot(manager, params.storeId, payload);
+    });
     return {
       discountCount: Object.values(payload).reduce((sum, items) => sum + items.length, 0),
       skippedCount,

@@ -17,6 +17,13 @@ export class SettingsApiRepository {
 
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
+  async storeFileLocation(scope: SettingsScope) {
+    const { storeId } = await this.resolveScope(scope);
+    const location = await this.merchants.storeFileLocation(storeId);
+    if (!location) throw new NotFoundException('Store not found');
+    return location;
+  }
+
   async read(scope: SettingsScope): Promise<SettingsJson> {
     const { db, storeId } = await this.resolveScope(scope);
     const rows = await db.query(
@@ -26,6 +33,19 @@ export class SettingsApiRepository {
        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
        LIMIT 1`,
       [storeId, this.configurationName],
+    );
+    return rows[0]?.configuration_value ?? {};
+  }
+
+  async readConfiguration(scope: SettingsScope, configurationName: string): Promise<SettingsJson> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT configuration_value
+       FROM public.store_pos_configurations
+       WHERE store_id = $1::uuid AND configuration_name = $2
+       ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+       LIMIT 1`,
+      [storeId, configurationName],
     );
     return rows[0]?.configuration_value ?? {};
   }

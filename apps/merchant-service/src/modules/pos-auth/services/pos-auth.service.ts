@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { jwtSecret, SessionEntity } from '@pinaka-delivery-hub/auth';
+import { jwtSecret, SessionEntity, verifyAccessToken } from '@pinaka-delivery-hub/auth';
+import { IsNull } from 'typeorm';
 import {
   Injectable,
   UnauthorizedException,
@@ -79,6 +80,25 @@ export class PosAuthService {
     return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
   }
 
+  async merchantLogout(authorization?: string) {
+    const token = this.extractBearerToken(authorization);
+    const payload = verifyAccessToken(token) as ReturnType<typeof verifyAccessToken> & { merchantId?: string };
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+    if (!payload.merchantId || !uuid.test(payload.jti ?? '') || !uuid.test(payload.sub)) {
+      throw new UnauthorizedException('A merchant login token is required');
+    }
+
+    const sessions = this.merchantRepository.requireDataSource().getRepository(SessionEntity);
+    const result = await sessions.update({
+      id: payload.jti,
+      userId: payload.sub,
+      accessTokenHash: createHash('sha256').update(token).digest('hex'),
+      revokedAt: IsNull(),
+    }, { revokedAt: new Date() });
+    if (!result.affected) throw new UnauthorizedException('Merchant session is not active');
+    return { success: true, message: 'Merchant logged out successfully' };
+  }
+
   private async passwordMatches(stored: unknown, password: string): Promise<boolean> {
     const saved = String(stored || '').trim();
     if (!saved) return false;
@@ -110,6 +130,49 @@ export class PosAuthService {
       return expected.length === actual.length && timingSafeEqual(expected, actual);
     } catch {
       return false;
+    }
+  }
+
+  private async assertSubscriptionNotExpired(dataSource: any, merchantId: string) {
+    if (!merchantId) return;
+    const [subscription] = await dataSource.query(
+      `SELECT selected.status, selected.expires_on AS "expiresOn",
+              (selected.status = 'EXPIRED' OR (
+                selected.expires_on ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                AND selected.expires_on::date < CURRENT_DATE
+              )) AS expired
+         FROM (
+           SELECT upper(COALESCE(to_jsonb(s)->>'status', '')) AS status,
+                  COALESCE(
+                    NULLIF(to_jsonb(s)->>'renewal_date', ''),
+                    NULLIF(to_jsonb(s)->>'renewalDate', ''),
+                    NULLIF(to_jsonb(s)->>'current_period_end', ''),
+                    NULLIF(to_jsonb(s)->>'currentPeriodEnd', ''),
+                    NULLIF(to_jsonb(s)->>'trial_end_date', ''),
+                    NULLIF(to_jsonb(s)->>'trialEndDate', '')
+                  ) AS expires_on
+             FROM public.subscriptions s
+            WHERE COALESCE(
+                    NULLIF(to_jsonb(s)->>'merchant_id', ''),
+                    NULLIF(to_jsonb(s)->>'merchant_uuid', '')
+                  ) = $1
+            ORDER BY CASE WHEN upper(COALESCE(to_jsonb(s)->>'status', ''))
+                               IN ('ACTIVE', 'TRIAL', 'TRIALING') THEN 0 ELSE 1 END,
+                     COALESCE(to_jsonb(s)->>'updated_at', to_jsonb(s)->>'created_at') DESC NULLS LAST
+            LIMIT 1
+         ) selected`,
+      [merchantId],
+    );
+    if (subscription?.expired) {
+      const expiresOn = subscription.expiresOn || null;
+      throw new ForbiddenException({
+        success: false,
+        code: 'SUBSCRIPTION_EXPIRED',
+        message: expiresOn
+          ? `Your subscription expired on ${expiresOn}. Please contact your administrator to renew the plan.`
+          : 'Your subscription has expired. Please contact your administrator to renew the plan.',
+        expiredOn: expiresOn,
+      });
     }
   }
 
@@ -166,6 +229,7 @@ export class PosAuthService {
     if (merchant.status && (String(merchant.status).toUpperCase() === 'INACTIVE' || String(merchant.status).toUpperCase() === 'SUSPENDED')) {
       throw new ForbiddenException('Merchant account is inactive or suspended');
     }
+    await this.assertSubscriptionNotExpired(dataSource, String(merchant.id));
 
     const stores: any[] = await dataSource.query(
       `SELECT s.id,
@@ -351,6 +415,19 @@ export class PosAuthService {
       if (!store?.id) {
         throw new NotFoundException('Store not found for this merchant');
       }
+
+      if (String(store.status || '').trim().toUpperCase() === 'INACTIVE') {
+        throw new ForbiddenException({
+          success: false,
+          code: 'STORE_INACTIVE',
+          message: 'This store is inactive. Please contact your merchant administrator.',
+        });
+      }
+
+      await this.assertSubscriptionNotExpired(
+        dataSource,
+        String(merchant?.id || store.merchantId || targetMerchantId || ''),
+      );
 
       // 3. Match the PIN against this store's employee_stores and employees tables
       const queryParams: any[] = [String(store.id)];

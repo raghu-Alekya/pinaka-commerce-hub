@@ -136,10 +136,15 @@ export class OrderRepository implements OnModuleInit {
     scope: { merchantId: string; storeId: string; orderId: string },
     status: unknown,
     orderStatus?: unknown,
+    paymentStatus?: unknown,
   ): Promise<void> {
     const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/_/g, '-');
-    if ((normalize(status) !== 'completed' && normalize(orderStatus) !== 'completed')
-      || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
+    const current = normalize(status);
+    const internal = normalize(orderStatus);
+    const closed = ['cancelled', 'canceled', 'refunded', 'failed'];
+    const earns = !closed.includes(current) && !closed.includes(internal)
+      && (current === 'completed' || internal === 'completed' || String(paymentStatus || '').trim().toUpperCase() === 'PAID');
+    if (!earns || !this.loyaltyOrderCompleted || !scope.merchantId || !scope.storeId || !scope.orderId) return;
     try {
       await this.loyaltyOrderCompleted(scope);
     } catch (error) {
@@ -296,7 +301,7 @@ export class OrderRepository implements OnModuleInit {
             orderData.status,
             storeOrder.couponLines,
             storeOrder.metaData,
-            sourcePayload?.line_items,
+            storeOrder.lineItems,
           );
           await this.saveLineItems(manager, id, items, true);
           await this.saveStatusHistory(manager, storeOrder.statusHistory[0] as OrderStatusHistoryEntity);
@@ -337,7 +342,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: savedStoreOrder.merchantId,
         storeId: savedStoreOrder.storeId,
         orderId: savedStoreOrder.orderId,
-      }, savedStoreOrder.status, savedStoreOrder.orderStatus);
+      }, savedStoreOrder.status, savedStoreOrder.orderStatus, savedStoreOrder.paymentStatus);
       console.log(`🛍️ [Order Created] Order ${savedOrder.orderNumber} ($${savedOrder.totalAmount}) created for Store ${savedOrder.storeId}`);
       return { order: savedOrder, items, storeOrder: savedStoreOrder, duplicate: false };
     } else {
@@ -486,28 +491,54 @@ export class OrderRepository implements OnModuleInit {
     const normalizedPaymentStatus = String(paymentStatus).trim().toUpperCase();
     const normalizedOrderStatus = String(orderStatus).trim().toUpperCase();
     const normalizedSourceStatus = String(sourceOrderStatus ?? '').trim().toLowerCase();
-    if (normalizedPaymentStatus !== PaymentStatus.PAID
-      || ['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
-      || ['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus)) return;
-    const couponCodes = Array.isArray(couponLines)
+    const eligible = normalizedPaymentStatus === PaymentStatus.PAID
+      && !['CANCELLED', 'CANCELED', 'REFUNDED', 'FAILED'].includes(normalizedOrderStatus)
+      && !['cancelled', 'canceled', 'refunded', 'failed'].includes(normalizedSourceStatus);
+    const couponCodes = eligible && Array.isArray(couponLines)
       ? couponLines.map((line: any) => String(line?.code ?? '').trim().toLowerCase())
       : [];
-    const metadataCodes = Array.isArray(metadata)
+    const metadataCodes = eligible && Array.isArray(metadata)
       ? metadata
         .filter((entry: any) => ['_pinaka_discount_code', 'pinaka_discount_code', 'discount_code', '_discount_code']
           .includes(String(entry?.key ?? '').trim().toLowerCase()))
         .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
       : [];
-    const ruleIds = Array.isArray(lineItems)
-      ? lineItems.flatMap((line: any) => Array.isArray(line?.meta_data)
-        ? line.meta_data
-          .filter((entry: any) => String(entry?.key ?? '').trim() === '_pos_discount_rule_id')
-          .map((entry: any) => String(entry?.value ?? '').trim().toLowerCase())
-        : [])
-      : [];
-    const codes = [...new Set([...couponCodes, ...metadataCodes].filter(Boolean))];
-    const ids = [...new Set(ruleIds.filter(Boolean))];
-    if (!codes.length && !ids.length) return;
+    const metaEntries = (line: any) => {
+      const raw = line?.meta_data ?? line?.metaData ?? line?.modifiers;
+      return Array.isArray(raw) ? raw : [];
+    };
+    const metaValue = (entries: any[], keys: string[]) => entries.find((entry: any) =>
+      keys.includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
+    const ruleApplications: Array<{ id: string; count: number }> = [];
+    const productApplications: Array<{ group: string; productId: string; count: number; amount: number; ruleId: string }> = [];
+    if (eligible && Array.isArray(lineItems)) {
+      for (const line of lineItems as any[]) {
+        const entries = metaEntries(line);
+        const explicitCount = Number(metaValue(entries, [
+          '_pos_discount_application_count', 'pos_discount_application_count',
+          'discount_application_count', 'application_count',
+        ]));
+        const count = Number.isFinite(explicitCount) && explicitCount > 0 ? Math.floor(explicitCount) : 1;
+        const ruleId = String(metaValue(entries, [
+          '_pos_discount_rule_id', 'pos_discount_rule_id', 'discount_rule_id',
+        ]) ?? '').trim().toLowerCase();
+        if (ruleId) ruleApplications.push({ id: ruleId, count });
+        const discountType = String(metaValue(entries, [
+          '_pos_discount_type', 'pos_discount_type',
+        ]) ?? '').trim().toLowerCase();
+        const autoAmount = Number(metaValue(entries, ['_pos_auto_discount', 'pos_auto_discount']));
+        const group = discountType === 'mixmatch' || discountType === 'mix_match' ? 'mix_match'
+          : discountType === 'multipack' ? 'multipack'
+            : discountType === 'auto' || discountType === 'auto discount'
+              || (Number.isFinite(autoAmount) && autoAmount > 0) ? 'auto'
+              : '';
+        if (group !== 'auto' || !(Number.isFinite(autoAmount) && autoAmount > 0)) continue;
+        const productId = String(line?.product_id ?? line?.productId ?? '').trim();
+        if (!productId) continue;
+        productApplications.push({ group, productId, count, amount: autoAmount, ruleId });
+      }
+    }
+    const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
     const rows = await manager.query(
       `SELECT payload FROM public.store_discounts
         WHERE store_id=$1::uuid AND COALESCE(is_deleted,false)=false FOR UPDATE`,
@@ -519,36 +550,89 @@ export class OrderRepository implements OnModuleInit {
     });
     const payload = rows[0]?.payload;
     if (!payload) return;
+    const ruleMatchesRecord = (ruleId: string, record: any, group: string) => {
+      const recordIds = [record.id, record.pchId, record.wordpressId]
+        .filter((value: unknown) => value !== undefined && value !== null)
+        .map((value: unknown) => String(value).trim().toLowerCase());
+      const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
+      if (!ruleId.startsWith(rulePrefix)) return false;
+      const suffix = ruleId.slice(rulePrefix.length);
+      return recordIds.some(recordId => recordId === suffix || recordId === ruleId || recordId.endsWith(`:${suffix}`));
+    };
+    const matchedRuleIds = new Set<string>();
+    for (const group of ['auto', 'mix_match', 'multipack']) {
+      for (const record of Array.isArray(payload[group]) ? payload[group] : []) {
+        for (const application of ruleApplications) {
+          if (ruleMatchesRecord(application.id, record, group)) matchedRuleIds.add(application.id);
+        }
+      }
+    }
+    const productUsage = new Map<string, number>();
+    const sameAmount = (left: unknown, right: number) => {
+      const value = Number(left);
+      return Number.isFinite(value) && Math.abs(value - right) < 0.001;
+    };
+    for (const application of productApplications) {
+      if (application.ruleId && matchedRuleIds.has(application.ruleId)) continue;
+      const records = Array.isArray(payload[application.group]) ? payload[application.group] : [];
+      const candidates = records.filter((record: any) => [record?.product_id, record?.main_product_id]
+        .some((value: unknown) => value !== undefined && value !== null && String(value).trim() === application.productId));
+      const amountMatches = candidates.filter((record: any) =>
+        sameAmount(record?.coupon_amount ?? record?.amount ?? record?.discount, application.amount));
+      const chosen = (amountMatches.length ? amountMatches : candidates)[0];
+      if (!chosen) continue;
+      const key = `${application.group}:${String(chosen.id ?? chosen.wordpressId ?? chosen.pchId ?? '')}`;
+      productUsage.set(key, (productUsage.get(key) || 0) + application.count);
+    }
     let changed = false;
     for (const group of ['auto', 'mix_match', 'multipack']) {
       const records = Array.isArray(payload[group]) ? payload[group] : [];
       for (const record of records) {
         const code = String(record.code ?? record.discount_code ?? record.name ?? '').trim().toLowerCase();
-        const recordIds = [record.id, record.pchId, record.wordpressId]
-          .filter((value: unknown) => value !== undefined && value !== null)
-          .map((value: unknown) => String(value).trim().toLowerCase());
-        const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
-        const ruleIdMatches = ids.some(ruleId => {
-          if (!ruleId.startsWith(rulePrefix)) return false;
-          const suffix = ruleId.slice(rulePrefix.length);
-          return recordIds.includes(suffix);
-        });
-        if (!codes.includes(code) && !ruleIdMatches) continue;
+        const matchingRuleApplications = ruleApplications
+          .filter(({ id }) => ruleMatchesRecord(id, record, group))
+          .reduce((sum, application) => sum + application.count, 0);
+        // The POS rule marker is the per-application signal. Coupon codes are a
+        // fallback for coupon-based applications; don't count both representations
+        // of the same application when an order contains both. If rule markers
+        // are present, never let a same-named catalog record in another type
+        // consume the coupon fallback.
+        const productCount = productUsage.get(`${group}:${String(record.id ?? record.wordpressId ?? record.pchId ?? '')}`) || 0;
+        const applications = eligible
+          ? matchingRuleApplications || productCount || (!ruleApplications.length && !productApplications.length && code
+            ? codes.filter(appliedCode => appliedCode === code).length
+            : 0)
+          : 0;
         const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
-        if (usedOrderIds.includes(orderId)) continue;
+        const byOrder = record.pch_used_applications_by_order
+          && typeof record.pch_used_applications_by_order === 'object'
+          ? record.pch_used_applications_by_order as Record<string, number>
+          : {};
+        const hadOrder = Object.prototype.hasOwnProperty.call(byOrder, orderId);
+        // Backfill old snapshots conservatively: the old implementation counted
+        // each previously seen order once, so treat that as one prior application.
+        const previousApplications = hadOrder
+          ? Math.max(Number(byOrder[orderId]) || 0, 0)
+          : usedOrderIds.includes(orderId) ? 1 : 0;
+        if (applications === 0 && !usedOrderIds.includes(orderId) && !hadOrder) continue;
+        if (applications === previousApplications) continue;
         const usageCount = Math.max(Number(record.usage_count ?? record.usageCount ?? 0), 0);
         const usageLimitValue = record.usage_limit ?? record.usageLimit;
         const usageLimit = usageLimitValue === null || usageLimitValue === undefined || usageLimitValue === ''
           ? null
           : Number(usageLimitValue);
-        if (usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && usageCount >= usageLimit) {
+        const nextUsage = Math.max(usageCount + applications - previousApplications, 0);
+        if (applications > previousApplications
+          && usageLimit !== null && Number.isFinite(usageLimit) && usageLimit > 0 && nextUsage > usageLimit) {
           throw new BadRequestException(`Discount '${code || record.code || record.id}' has reached its usage limit`);
         }
-        usedOrderIds.push(orderId);
-        record.pch_used_order_ids = usedOrderIds;
-        const count = usageCount + 1;
-        record.usage_count = count;
-        record.usageCount = count;
+        if (applications > 0 && !usedOrderIds.includes(orderId)) usedOrderIds.push(orderId);
+        if (applications > 0) byOrder[orderId] = applications;
+        else delete byOrder[orderId];
+        record.pch_used_order_ids = usedOrderIds.filter(id => id !== orderId || applications > 0);
+        record.pch_used_applications_by_order = byOrder;
+        record.usage_count = nextUsage;
+        record.usageCount = nextUsage;
         record.pch_usage_sync_pending = true;
         changed = true;
       }
@@ -1393,7 +1477,7 @@ export class OrderRepository implements OnModuleInit {
         merchantId: saved.merchantId,
         storeId: saved.storeId,
         orderId: saved.orderId,
-      }, saved.status, saved.orderStatus);
+      }, saved.status, saved.orderStatus, saved.paymentStatus);
       return order;
     }
     const graph = await this.getOrderByReference(orderId);
@@ -1433,22 +1517,6 @@ export class OrderRepository implements OnModuleInit {
     storeOrder.taxTotal = input.order.taxAmount;
     storeOrder.tipAmount = input.order.tipAmount;
     storeOrder.total = input.order.totalAmount;
-    const lineItems = Array.isArray(storeOrder.lineItems) ? storeOrder.lineItems as any[] : [];
-    const couponLines = Array.isArray(storeOrder.couponLines) ? storeOrder.couponLines as any[] : [];
-    const feeLines = Array.isArray(storeOrder.feeLines) ? storeOrder.feeLines as any[] : [];
-    const taxLines = Array.isArray(storeOrder.taxLines) ? storeOrder.taxLines as any[] : [];
-    const payload = (storeOrder.requestPayload || input.order.requestPayload || {}) as Record<string, unknown>;
-    storeOrder.discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
-    storeOrder.grandTotal = listOrderTotal({
-      total: storeOrder.total,
-      tax: storeOrder.taxTotal,
-      taxLines,
-      couponDiscount: sumCouponDiscounts(couponLines),
-      lineItems,
-      feeLines,
-      shippingTotal: payload.shipping_total ?? payload.shippingTotal,
-      tip: storeOrder.tipAmount,
-    });
     storeOrder.paymentStatus = input.order.paymentStatus;
     storeOrder.updatedAt = new Date();
     if (input.history) {
@@ -1465,6 +1533,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const storeOrderRepository = manager.getRepository(StoreOrderEntity);
       const persisted = await storeOrderRepository.save(storeOrderRepository.create({ ...storeOrder }));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       if (input.replaceItems) await this.saveLineItems(manager, input.order.id, input.items, true);
       if (input.history) {
         const history = storeOrder.statusHistory[storeOrder.statusHistory.length - 1] as OrderStatusHistoryEntity;
@@ -1478,8 +1557,76 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status, saved.orderStatus);
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
+  }
+
+  /**
+   * A full snapshot that resends the same line, fee, coupon, tax, and total
+   * values is a non-financial edit. Customer and note changes keep the saved
+   * transaction amounts and do not run tax or total calculations.
+   */
+  private financialSnapshotMatches(store: StoreOrderEntity, payload: Record<string, unknown>): boolean {
+    const incomingLines = Array.isArray(payload.line_items) ? payload.line_items : payload.items;
+    if (!Array.isArray(incomingLines) || !incomingLines.length) return false;
+    if (this.lineMoneySignature(store.lineItems) !== this.lineMoneySignature(incomingLines)) return false;
+    if (payload.fee_lines !== undefined && this.namedMoneySignature(store.feeLines, 'name', 'fee_name') !== this.namedMoneySignature(payload.fee_lines, 'name', 'fee_name')) {
+      return false;
+    }
+    if (payload.coupon_lines !== undefined && this.namedMoneySignature(store.couponLines, 'code') !== this.namedMoneySignature(payload.coupon_lines, 'code')) {
+      return false;
+    }
+    if (payload.tax_lines !== undefined && this.taxMoneySignature(store.taxLines) !== this.taxMoneySignature(payload.tax_lines)) {
+      return false;
+    }
+    if (payload.total !== undefined && this.moneyKey(payload.total) !== this.moneyKey(store.total)) return false;
+    if (payload.total_tax !== undefined && this.moneyKey(payload.total_tax) !== this.moneyKey(store.taxTotal)) return false;
+    const incomingTip = payload.tipAmount ?? payload.tip_amount;
+    if (incomingTip !== undefined && this.moneyKey(incomingTip) !== this.moneyKey(store.tipAmount)) return false;
+    const storedPayload = (store.requestPayload || {}) as Record<string, unknown>;
+    const incomingShipping = payload.shipping_total ?? payload.shippingTotal;
+    if (incomingShipping !== undefined) {
+      const storedShipping = storedPayload.shipping_total ?? storedPayload.shippingTotal ?? 0;
+      if (this.moneyKey(incomingShipping) !== this.moneyKey(storedShipping)) return false;
+    }
+    return true;
+  }
+
+  private moneyKey(value: unknown): string {
+    const amount = Number(value ?? 0);
+    return Number.isFinite(amount) ? amount.toFixed(2) : '';
+  }
+
+  private lineMoneySignature(lines: unknown): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      return [
+        line.product_id ?? line.productId ?? '',
+        this.moneyKey(line.quantity),
+        this.moneyKey(line.subtotal ?? line.total),
+        this.moneyKey(line.total ?? line.subtotal),
+        this.moneyKey(line.subtotal_tax),
+        this.moneyKey(line.total_tax),
+      ].join(':');
+    }).join('|');
+  }
+
+  private namedMoneySignature(lines: unknown, ...nameKeys: string[]): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      const name = nameKeys.map((key) => line[key]).find((value) => value !== undefined && value !== null) ?? '';
+      return `${String(name).trim().toLowerCase()}:${this.moneyKey(line.discount ?? line.total ?? line.amount)}`;
+    }).join('|');
+  }
+
+  private taxMoneySignature(lines: unknown): string {
+    if (!Array.isArray(lines)) return '';
+    return lines.map((raw) => {
+      const line = raw as Record<string, unknown>;
+      return `${this.moneyKey(line.rate_percent)}:${this.moneyKey(line.tax_total)}:${this.moneyKey(line.shipping_tax_total)}`;
+    }).join('|');
   }
 
   async replaceOrderSnapshot(
@@ -1562,18 +1709,42 @@ export class OrderRepository implements OnModuleInit {
       timezone: current.storeOrder.timezone,
       payments: Array.isArray(payload.payments) ? payload.payments : [],
     };
-    await this.enrichWooCommerceCreateOrder(orderData, payload);
-    items = (orderData.items || []).map((item: any, index: number) => ({
-      id: String(sourceItems[index]?.id || `ITEM-${current.order.id}-${index + 1}`),
-      orderId: current.order.id,
-      productId: String(item.productId ?? ''),
-      productName: String(item.productName || 'Sales Item'),
-      quantity: Number(item.quantity || 1),
-      unitPrice: Number(item.unitPrice || 0),
-      totalPrice: Number(item.totalPrice || 0),
-      modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
-    }));
-    const replacement = this.buildStoreOrder(current.order.id, orderData, payload);
+    const preserveFinancials = this.financialSnapshotMatches(current.storeOrder, payload);
+    let replacement: StoreOrderEntity;
+    if (preserveFinancials) {
+      items = this.itemsFromStore(current.storeOrder);
+      replacement = {
+        ...current.storeOrder,
+        customerName: orderData.customerName,
+        customerPhone: orderData.customerPhone,
+        orderType: orderData.orderType,
+        paymentMethodCode: orderData.paymentMethod,
+        paymentStatus: orderData.paymentStatus,
+        metadata,
+        requestPayload: payload,
+        orderStatus,
+        paymentMethod: payload.payment_method ? String(payload.payment_method) : current.storeOrder.paymentMethod,
+        paymentMethodTitle: payload.payment_method_title
+          ? String(payload.payment_method_title)
+          : current.storeOrder.paymentMethodTitle,
+        status: requestedStatus,
+        metaData: metadata,
+        updatedAt: new Date(),
+      };
+    } else {
+      await this.enrichWooCommerceCreateOrder(orderData, payload);
+      items = (orderData.items || []).map((item: any, index: number) => ({
+        id: String(sourceItems[index]?.id || `ITEM-${current.order.id}-${index + 1}`),
+        orderId: current.order.id,
+        productId: String(item.productId ?? ''),
+        productName: String(item.productName || 'Sales Item'),
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || 0),
+        totalPrice: Number(item.totalPrice || 0),
+        modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+      }));
+      replacement = this.buildStoreOrder(current.order.id, orderData, payload);
+    }
     replacement.id = current.storeOrder.id;
     replacement.orderNumber = current.storeOrder.orderNumber;
     replacement.createdAt = current.storeOrder.createdAt;
@@ -1625,6 +1796,17 @@ export class OrderRepository implements OnModuleInit {
     const saved = await this.dataSource.transaction(async manager => {
       const repository = manager.getRepository(StoreOrderEntity);
       const persisted = await repository.save(repository.create(replacement));
+      await this.recordCustomDiscountUsage(
+        manager,
+        persisted.storeId,
+        persisted.orderId,
+        persisted.paymentStatus as PaymentStatus,
+        persisted.orderStatus as OrderStatus,
+        persisted.status,
+        persisted.couponLines,
+        persisted.metaData,
+        persisted.lineItems,
+      );
       await this.saveLineItems(manager, current.order.id, items, true);
       await manager.query(
         `DELETE FROM public.store_pos_payments
@@ -1668,7 +1850,7 @@ export class OrderRepository implements OnModuleInit {
       merchantId: saved.merchantId,
       storeId: saved.storeId,
       orderId: saved.orderId,
-    }, saved.status, saved.orderStatus);
+    }, saved.status, saved.orderStatus, saved.paymentStatus);
     return { order, items: this.itemsFromStore(saved), storeOrder: saved };
   }
 
@@ -1831,6 +2013,30 @@ export class OrderRepository implements OnModuleInit {
       ) : [];
       return adminOrderCounts({ businessName: store.store_name, orders, payments, refunds, categories: categories.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []), products: products.flatMap((row: any) => Array.isArray(row.payload) ? row.payload : []) });
     });
+  }
+
+  async loyaltyRedemptionSettings(storeIds: string[]): Promise<Map<string, { points: number; amount: number }>> {
+    if (!this.dataSource || !storeIds.length) return new Map();
+    let rows: Array<{ store_id: string; configuration_value: Record<string, unknown> }>;
+    try {
+      rows = await this.dataSource.query(
+      `SELECT DISTINCT ON (store_id) store_id::text AS store_id, configuration_value
+         FROM public.store_pos_configurations
+        WHERE store_id = ANY($1::uuid[]) AND configuration_name = 'store_loyalty'
+        ORDER BY store_id, updated_at DESC NULLS LAST`,
+      [storeIds],
+      );
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code === '42P01') return new Map();
+      throw error;
+    }
+    return new Map(rows.map((row) => [row.store_id, {
+      points: Number(row.configuration_value?.pinaka_loyalty_redeem_point) || 0,
+      amount: Number(row.configuration_value?.pinaka_loyalty_redeem_amt) || 0,
+    }]));
   }
 
   async listOrders(criteria: {
@@ -1997,124 +2203,8 @@ export class OrderRepository implements OnModuleInit {
           .map(({ amount, metadata }) => ({ amount, metadata })),
       }];
     });
-    await this.enrichCustomItemTaxesForListing(rows);
     const products = await this.catalogProducts(rows);
     return { total, orders: rows.map((row) => ({ ...row, products })) };
-  }
-
-  /**
-   * Older/external POS orders can persist custom lines without WooCommerce tax
-   * fields. Enrich only the total-orders read model from the line's category;
-   * never rewrite the historical order or alter catalog-product taxation.
-   */
-  private async enrichCustomItemTaxesForListing(
-    rows: Array<{ order: OrderEntity; storeOrder: StoreOrderEntity | null; items: OrderItemEntity[] }>,
-  ): Promise<void> {
-    if (!this.dataSource) return;
-    const storeIds = [...new Set(rows.map((row) => row.order.storeId).filter(Boolean))];
-    if (!storeIds.length) return;
-
-    const categories: Array<{ store_id?: string; category?: Record<string, unknown> }> = await this.dataSource.query(
-      `SELECT catalog.store_id::text AS store_id, category
-         FROM public.store_categories AS catalog
-         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(catalog.payload, '[]'::jsonb)) AS category
-        WHERE catalog.store_id = ANY($1::uuid[])
-          AND COALESCE(catalog.is_deleted, false) = false`,
-      [storeIds],
-    );
-    const rates = new Map<string, number>();
-    categories.forEach((row) => {
-      const category = row.category || {};
-      const rate = Number(category.pos_tax_percent ?? category.posTaxPercent ?? category.rate);
-      if (!row.store_id || !Number.isFinite(rate)) return;
-      [category.id, category.wordpressId, category.wordpress_id, category.slug, category.name]
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter(Boolean)
-        .forEach((key) => rates.set(`${row.store_id}:${key}`, rate));
-    });
-
-    rows.forEach(({ order, storeOrder }) => {
-      if (!storeOrder || !Array.isArray(storeOrder.lineItems)) return;
-      let enriched = false;
-      let addedLineSubtotal = 0;
-      let addedLineTotal = 0;
-      const taxDeltaByRate = new Map<number, number>();
-      storeOrder.lineItems.forEach((rawLine) => {
-        const line = rawLine as any;
-        if (String(line?.type || '').trim().toLowerCase() !== 'custom') return;
-        const previousSubtotal = Number(line.subtotal ?? line.total ?? 0);
-        const previousTotal = Number(line.total ?? line.subtotal ?? 0);
-        const existingTax = Number(line?.total_tax ?? 0);
-        this.normalizeCustomItemQuantity(line, 2);
-
-        const categoryReference = line.category_id
-          ?? line.categoryId
-          ?? line.category?.id
-          ?? line.categories?.[0]?.id
-          ?? line.category_slug
-          ?? line.categorySlug
-          ?? line.category?.slug
-          ?? line.category_name
-          ?? line.categoryName
-          ?? line.category?.name
-          ?? line.tax_class
-          ?? 'custom-product';
-        const categoryKey = String(categoryReference).trim().toLowerCase();
-        const rate = rates.get(`${order.storeId}:${categoryKey}`)
-          ?? rates.get(`${order.storeId}:custom-product`);
-        if (rate === undefined) return;
-
-        const subtotal = Number(line.subtotal ?? line.total ?? 0);
-        const total = Number(line.total ?? line.subtotal ?? 0);
-        if (!Number.isFinite(subtotal) || !Number.isFinite(total)) return;
-        const subtotalTax = Math.round(subtotal * rate) / 100;
-        const totalTax = Math.round(total * rate) / 100;
-        line.subtotal_tax = subtotalTax.toFixed(2);
-        line.total_tax = totalTax.toFixed(2);
-        line.taxes = [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }];
-        addedLineSubtotal += subtotal - (Number.isFinite(previousSubtotal) ? previousSubtotal : 0);
-        addedLineTotal += total - (Number.isFinite(previousTotal) ? previousTotal : 0);
-        taxDeltaByRate.set(
-          rate,
-          (taxDeltaByRate.get(rate) || 0) + totalTax - (Number.isFinite(existingTax) ? existingTax : 0),
-        );
-        enriched = true;
-      });
-      if (!enriched) return;
-      const existingTaxLines = Array.isArray(storeOrder.taxLines)
-        ? storeOrder.taxLines.map((line) => ({ ...(line as Record<string, unknown>) }))
-        : [];
-      taxDeltaByRate.forEach((amount, rate) => {
-        const matchingLine = existingTaxLines.find(
-          (line) => Number(line.rate_percent) === rate,
-        );
-        if (matchingLine) {
-          const currentAmount = Number(matchingLine.tax_total ?? 0);
-          matchingLine.tax_total = ((Number.isFinite(currentAmount) ? currentAmount : 0) + amount).toFixed(2);
-          return;
-        }
-        const id = existingTaxLines.length + 1;
-        existingTaxLines.push({
-          id,
-          rate_code: `POS-TAX-${id}`,
-          rate_id: id,
-          label: 'Tax',
-          compound: false,
-          tax_total: amount.toFixed(2),
-          shipping_tax_total: '0.00',
-          rate_percent: rate,
-          meta_data: [],
-        });
-      });
-      const storedTaxTotal = Number(storeOrder.taxTotal ?? 0);
-      const addedTaxTotal = [...taxDeltaByRate.values()].reduce((sum, amount) => sum + amount, 0);
-      storeOrder.taxTotal = (Number.isFinite(storedTaxTotal) ? storedTaxTotal : 0) + addedTaxTotal;
-      const storedSubtotal = Number(storeOrder.subtotal ?? 0);
-      storeOrder.subtotal = (Number.isFinite(storedSubtotal) ? storedSubtotal : 0) + addedLineSubtotal;
-      const storedOrderTotal = Number(storeOrder.total ?? 0);
-      storeOrder.total = (Number.isFinite(storedOrderTotal) ? storedOrderTotal : 0) + addedLineTotal;
-      storeOrder.taxLines = existingTaxLines;
-    });
   }
 
   private normalizeCustomItemQuantity(
@@ -2289,6 +2379,25 @@ export class OrderRepository implements OnModuleInit {
       items: this.itemsFromStore(match),
       storeOrder: match,
     };
+  }
+
+  async getOrderRefunds(orderId: string): Promise<Array<{ amount: unknown; metadata: Record<string, unknown> | null }>> {
+    if (!this.dataSource) return [];
+    return this.dataSource.query(
+      `SELECT refund_event->>'amount' AS amount, refund_event AS metadata
+         FROM public.store_pos_payments AS payment
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(payment.metadata->'refund_history', '[]'::jsonb)) AS refund_event
+        WHERE payment.order_id = $1::uuid AND payment.entry_type = 'payment'
+          AND payment.is_void = false AND payment.deleted_at IS NULL
+          AND lower(COALESCE(payment.status, 'completed')) NOT IN ('failed', 'cancelled')
+       UNION ALL
+       SELECT amount::text, metadata FROM public.store_pos_payments
+        WHERE order_id = $1::uuid AND entry_type = 'refund'
+          AND is_void = false AND deleted_at IS NULL
+          AND lower(COALESCE(status, 'completed')) NOT IN ('failed', 'cancelled', 'migrated')
+          AND COALESCE(metadata->>'daily_refund_tracking', 'false') <> 'true'`,
+      [orderId],
+    );
   }
 
   private isUuid(value: string): boolean {
@@ -2670,8 +2779,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.tax_total, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount, sale.tax_total,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2747,6 +2857,17 @@ export class OrderRepository implements OnModuleInit {
             reason: input.reason,
             createdAt: new Date().toISOString(),
           }])],
+        );
+        await this.recordCustomDiscountUsage(
+          manager,
+          order.store_id,
+          order.id,
+          PaymentStatus.REFUNDED,
+          OrderStatus.REFUNDED,
+          'refunded',
+          order.coupon_lines,
+          order.meta_data,
+          order.line_items,
         );
         await manager.query(
           `INSERT INTO public.order_status_history
@@ -2824,8 +2945,9 @@ export class OrderRepository implements OnModuleInit {
     try {
       return await this.dataSource.transaction(async manager => {
         const rows = await manager.query(
-          `SELECT sale.order_id AS id, sale.order_number, sale.total AS total_amount, sale.order_status,
-                  sale.payment_method, sale.currency, sale.timezone, sale.line_items
+          `SELECT sale.order_id AS id, sale.store_id, sale.order_number, sale.total AS total_amount,
+                  sale.order_status, sale.payment_status, sale.payment_method, sale.currency, sale.timezone,
+                  sale.line_items, sale.coupon_lines, sale.meta_data
              FROM public.store_orders AS sale
             WHERE sale.merchant_id = $1::uuid
               AND sale.store_id = $2::uuid
@@ -2962,6 +3084,19 @@ export class OrderRepository implements OnModuleInit {
             createdAt: new Date().toISOString(),
           }]), refundOrderStatus, refundStoreStatus],
         );
+        if (fullyRefunded) {
+          await this.recordCustomDiscountUsage(
+            manager,
+            order.store_id,
+            order.id,
+            PaymentStatus.REFUNDED,
+            OrderStatus.REFUNDED,
+            'refunded',
+            order.coupon_lines,
+            order.meta_data,
+            order.line_items,
+          );
+        }
         await manager.query(
           `INSERT INTO public.order_status_history
              (id, order_id, from_status, to_status, changed_by, reason, created_at)
@@ -3128,8 +3263,36 @@ export class OrderRepository implements OnModuleInit {
       const code = error && typeof error === 'object'
         ? (error as { driverError?: { code?: string } }).driverError?.code
         : undefined;
-      if (code === '42P01') return;
-      throw error;
+      if (code !== '42P01') throw error;
+      rows = [];
+    }
+    // Older loyalty redemptions were written to the points ledger before
+    // redeem_points was mirrored into store_orders_meta. Keep total-orders
+    // consistent with the loyalty detail endpoint for those orders.
+    try {
+      const ledgerRows: Array<{ order_id: string; redeemed_points: unknown }> = await this.dataSource.query(
+        `SELECT order_id::text AS order_id, COALESCE(SUM(redeemed_points), 0) AS redeemed_points
+           FROM public.store_customer_loyalty_points
+          WHERE order_id = ANY($1::uuid[])
+          GROUP BY order_id`,
+        [ids],
+      );
+      const existing = new Map<string, number>();
+      rows.forEach((row) => {
+        if (row.meta_key !== 'redeem_points') return;
+        existing.set(row.order_id, Number(row.meta_value) || 0);
+      });
+      ledgerRows.forEach((row) => {
+        const points = Math.max(0, Math.trunc(Number(row.redeemed_points) || 0));
+        if (points > (existing.get(row.order_id) || 0)) {
+          rows.push({ order_id: row.order_id, meta_key: 'redeem_points', meta_value: points });
+        }
+      });
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code !== '42P01') throw error;
     }
     const byOrder = new Map<string, Array<{ key: string; value: unknown }>>();
     rows.forEach((row) => {

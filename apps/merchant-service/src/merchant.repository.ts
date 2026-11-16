@@ -1661,7 +1661,7 @@ export class MerchantRepository implements OnModuleInit {
       const code = error.driverError?.code || error.code;
       if (code === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -1700,7 +1700,7 @@ export class MerchantRepository implements OnModuleInit {
       if (error instanceof NotFoundException) throw error;
       if ((error.driverError?.code || error.code) === '23505') {
         throw new ConflictException(
-          'Device code or serial number already exists',
+          'Device code or activation code already exists',
         );
       }
       throw error;
@@ -1730,6 +1730,7 @@ export class MerchantRepository implements OnModuleInit {
         (!filters.from || device.createdAt >= filters.from) && (!filters.to || device.createdAt < filters.to));
       const devices = filtered.slice((filters.page - 1) * filters.limit, filters.page * filters.limit);
       return { devices, total: filtered.length, summary: {} };
+      //
     }
     const query = this.deviceRepo.createQueryBuilder('device').where('device.is_deleted = false');
     if (filters.search) query.andWhere(`(device.device_name ILIKE :search OR device.device_code ILIKE :search OR device.serial_number ILIKE :search)`, { search: `%${filters.search}%` });
@@ -3671,6 +3672,78 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return rows[0]?.payload ?? null;
   }
 
+  async getStoreCategoriesWithTax(storeId: string): Promise<{
+    status: 'success';
+    categories: Array<{
+      id: number | null;
+      name: string;
+      slug: string;
+      parent: number;
+      description: string;
+      count: number;
+      image: string | null;
+      pos_tax_class: string;
+      pos_tax_percent: string;
+    }>;
+  }> {
+    await this.ensureStoreCategoriesTable();
+    const rows = await this.dataSource.query(
+      `SELECT categories_with_tax
+       FROM public.store_categories
+       WHERE store_id = $1::uuid
+         AND COALESCE(is_deleted, false) = false
+       LIMIT 1`,
+      [storeId],
+    );
+    return this.presentCategoriesWithTax(rows[0]?.categories_with_tax);
+  }
+
+  private presentCategoriesWithTax(value: unknown) {
+    const source = this.categoryTaxList(value);
+    return {
+      status: 'success' as const,
+      categories: source.map(item => this.presentCategoryWithTax(item)),
+    };
+  }
+
+  private categoryTaxList(value: unknown): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    for (const key of ['categories', 'category', 'data'] as const) {
+      if (Array.isArray(record[key])) return record[key];
+    }
+    return [];
+  }
+
+  private presentCategoryWithTax(value: unknown) {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const image = record.image;
+    const imageSrc = image && typeof image === 'object'
+      ? (image as { src?: unknown }).src
+      : undefined;
+    const imageUrl = typeof image === 'string'
+      ? image.trim()
+      : typeof imageSrc === 'string'
+        ? imageSrc.trim()
+        : '';
+    const id = Number(record.id);
+    const parent = Number(record.parent ?? 0);
+    const count = Number(record.count ?? 0);
+    const taxPercent = record.pos_tax_percent ?? record.posTaxPercent;
+    return {
+      id: Number.isFinite(id) ? id : null,
+      name: String(record.name ?? ''),
+      slug: String(record.slug ?? ''),
+      parent: Number.isFinite(parent) ? parent : 0,
+      description: String(record.description ?? ''),
+      count: Number.isFinite(count) ? count : 0,
+      image: imageUrl || null,
+      pos_tax_class: String(record.pos_tax_class ?? record.posTaxClass ?? ''),
+      pos_tax_percent: taxPercent == null ? '' : String(taxPercent),
+    };
+  }
+
   async getStoreCatalogTaxonomiesByStoreId(storeId: string) {
     await this.ensureStoreCategoriesTable();
     const rows = await this.dataSource.query(
@@ -3723,9 +3796,25 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       if (postgresCode === '42P01' || postgresCode === '42703') return [];
       throw error;
     }
-    return rows
+    const products = rows
       .map((row) => row.product)
       .filter((product) => product !== undefined && product !== null);
+    if (products.length === 0) return [];
+    const records = products.flatMap((product) => {
+      const record = this.asRecord(product);
+      return record ? [record] : [];
+    });
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return products.map((product) => {
+      const record = this.asRecord(product);
+      if (!record) return product;
+      const tax = this.productTax(
+        record,
+        this.categoryForProductTax(record, categoriesById),
+        taxConfiguration,
+      );
+      return { ...record, tax_rate: tax.rate };
+    });
   }
 
   async searchStoreProducts(
@@ -3771,8 +3860,14 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     }
     const products = rows[0]?.products;
     if (!Array.isArray(products) || products.length === 0) return null;
-    return products.map((product) =>
-      this.presentWooProduct(this.asRecord(product) ?? {}, null),
+    const records = products.map((product) => this.asRecord(product) ?? {});
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return records.map((product) =>
+      this.presentWooProduct(
+        product,
+        this.categoryForProductTax(product, categoriesById),
+        taxConfiguration,
+      ),
     );
   }
 
@@ -3942,6 +4037,93 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return products.map((product) =>
       this.presentWooProduct(this.asRecord(product) ?? {}, category, taxConfiguration),
     );
+  }
+
+  private async loadStoreProductTaxContext(
+    storeId: string,
+    products: Array<Record<string, unknown>>,
+  ): Promise<{
+    taxConfiguration: StoreProductTaxConfiguration | null;
+    categoriesById: Map<string, Record<string, unknown>>;
+  }> {
+    const [taxConfiguration, categoriesById] = await Promise.all([
+      this.getStoreProductTaxConfiguration(storeId),
+      this.loadStoreCategoriesById(storeId, this.collectProductCategoryIds(products)),
+    ]);
+    return { taxConfiguration, categoriesById };
+  }
+
+  private collectProductCategoryIds(products: Array<Record<string, unknown>>): string[] {
+    const ids = new Set<string>();
+    for (const product of products) {
+      const direct = this.textOrNull(product.categoryId);
+      if (direct && /^\d+$/.test(direct)) ids.add(direct);
+      if (!Array.isArray(product.categories)) continue;
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id && /^\d+$/.test(id)) ids.add(id);
+      }
+    }
+    return [...ids];
+  }
+
+  private categoryForProductTax(
+    product: Record<string, unknown>,
+    categoriesById: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown> | null {
+    const ids: string[] = [];
+    const direct = this.textOrNull(product.categoryId);
+    if (direct) ids.push(direct);
+    if (Array.isArray(product.categories)) {
+      for (const item of product.categories) {
+        const id = this.textOrNull(this.asRecord(item)?.id);
+        if (id) ids.push(id);
+      }
+    }
+    for (const id of ids) {
+      const category = categoriesById.get(id);
+      if (category) return category;
+    }
+    return null;
+  }
+
+  private async loadStoreCategoriesById(
+    storeId: string,
+    categoryIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const categoriesById = new Map<string, Record<string, unknown>>();
+    if (categoryIds.length === 0) return categoriesById;
+    let rows: Array<{ category?: unknown }> = [];
+    try {
+      rows = await this.dataSource.query(
+        `SELECT category
+         FROM public.store_categories AS catalog
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+             ELSE '[]'::jsonb
+           END
+         ) AS category
+         WHERE catalog.store_id = $1::uuid
+           AND COALESCE(catalog.is_deleted, false) = false
+           AND category->>'id' = ANY($2::text[])`,
+        [storeId, categoryIds],
+      );
+    } catch (error: unknown) {
+      const code =
+        error && typeof error === 'object'
+          ? (error as { code?: string; driverError?: { code?: string } }).code
+            ?? (error as { driverError?: { code?: string } }).driverError?.code
+          : undefined;
+      if (code === '42P01' || code === '42703') return categoriesById;
+      throw error;
+    }
+    for (const row of rows) {
+      const category = this.asRecord(row.category);
+      const id = this.textOrNull(category?.id);
+      if (category && id) categoriesById.set(id, category);
+    }
+    return categoriesById;
   }
 
   private presentWooProduct(
@@ -4329,7 +4511,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
 
   async getStoreCatalog(
     storeId: string,
-  ): Promise<{ categories: unknown[]; products: unknown[] }> {
+  ): Promise<{ categories: unknown[]; products: unknown[]; categoriesWithTax: unknown }> {
     const taxonomy = await this.getStoreCatalogTaxonomiesByStoreId(storeId);
     let catalogRows: Array<{ payload?: unknown }> = [];
     try {
@@ -4366,7 +4548,11 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           };
         })
       : [];
-    return { categories: taxonomy.categories, products };
+    return {
+      categories: taxonomy.categories,
+      products,
+      categoriesWithTax: taxonomy.categoriesWithTax,
+    };
   }
 
   private async fetchWordPressCategoryCatalog(

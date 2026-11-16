@@ -164,7 +164,9 @@ export class AppController {
     });
     const listed = await this.orderRepository.listOrders(criteria);
     await this.hydrateCouponLines(listed.orders);
-    return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders);
+    const storeIds = [...new Set(listed.orders.map((row) => row.order.storeId).filter(Boolean))];
+    const redemptionSettings = await this.orderRepository.loyaltyRedemptionSettings(storeIds);
+    return this.orderLists.present(criteria.page, criteria.perPage, listed.total, listed.orders, redemptionSettings);
   }
 
   @Get('website-sync')
@@ -300,7 +302,10 @@ export class AppController {
     }
     const data = await this.orderRepository.getOrderDetails(id, storeHeader || storeId || storeIdSnake);
     if (!data) throw new NotFoundException(`Order '${id}' not found`);
-    return this.orderDetails.present(data);
+    const response = this.orderDetails.present(data);
+    if (!String(data.storeOrder?.status || data.order.orderStatus || '').toLowerCase().includes('partial')) return response;
+    const refunds = await this.orderRepository.getOrderRefunds(data.order.id);
+    return { ...response, refunds };
   }
 
   // --- 4. Update Order Status (State Machine Transition) ---
@@ -357,7 +362,11 @@ export class AppController {
     const paymentsCompleted = Array.isArray(declaredPayments) && declaredPayments.length > 0
       && declaredPayments.every((payment: any) => String(payment?.status || '').trim().toLowerCase() === 'completed');
     const normalizedStatus = completedFinancialMovement && paymentsCompleted ? 'completed' : body?.status;
-    const status = String(normalizedStatus || '').toUpperCase();
+    // OrderStatus values are lowercase (for example `completed`). Keep the
+    // canonical value when normalizing WooCommerce/POS status input so a
+    // completed create request is persisted as completed and can trigger the
+    // loyalty completion hook.
+    const status = String(normalizedStatus || '').trim().toLowerCase().replace(/^wc-/, '').replace(/-/g, '_');
     const requestPayload = completedFinancialMovement && paymentsCompleted
       ? { ...body, status: normalizedStatus }
       : body;

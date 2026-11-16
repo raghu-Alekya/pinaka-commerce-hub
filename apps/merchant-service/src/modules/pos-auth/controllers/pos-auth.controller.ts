@@ -31,6 +31,12 @@ export class PosAuthController {
     return this.posAuthService.merchantPasswordLogin(body);
   }
 
+  @Post('merchant-logout')
+  @HttpCode(HttpStatus.OK)
+  merchantLogout(@Headers('authorization') authorization?: string) {
+    return this.posAuthService.merchantLogout(authorization);
+  }
+
   /**
    * API 1: Merchant & Store Login / Information Lookup
    * POST /api/v1/pos/auth/merchant-store-login

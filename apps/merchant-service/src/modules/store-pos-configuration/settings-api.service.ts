@@ -32,38 +32,107 @@ export class SettingsApiService {
     }
     if (body.email_notification !== undefined) general.email_notification = this.phpNotEmpty(body.email_notification) ? 1 : 0;
     if (body.sound_notification !== undefined) general.sound_notification = this.phpNotEmpty(body.sound_notification) ? 1 : 0;
-    if (this.phpNotEmpty(body.image_url)) {
-      const imageUrl = this.sanitizeUrl(body.image_url);
-      if (imageUrl) general.image_url = imageUrl;
+    for (const key of ['image_url', 'logo_url']) {
+      if (body[key] === undefined) continue;
+      const rawUrl = this.text(body[key]);
+      if (!rawUrl) {
+        delete general[key];
+        continue;
+      }
+      const imageUrl = this.sanitizeUrl(body[key]);
+      if (!imageUrl || !imageUrl.startsWith('/uploads/')) {
+        throw new BadRequestException(`${key} must be an uploaded image path under /uploads`);
+      }
+      general[key] = imageUrl;
     }
-    if (this.phpNotEmpty(body.logo_url)) {
-      const logoUrl = this.sanitizeUrl(body.logo_url);
-      if (logoUrl) general.logo_url = logoUrl;
+    const printerSettings: Json = {};
+    for (const key of ['receipt_header', 'receipt_footer', 'address', 'logo_url', 'image_url']) {
+      if (body[key] !== undefined) printerSettings[key] = general[key] ?? '';
     }
-    const data = await this.repository.merge(scope, { general });
+    const data = await this.repository.merge(scope, { general },
+      Object.keys(printerSettings).length ? { printer_settings: printerSettings } : {});
     const responseFields = [
-      'company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
-      'gstin', 'receipt_header', 'receipt_footer', 'device_id',
+      'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
+      'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
+      'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
+      'receipt_footer', 'device_id',
     ];
-    const responseData = Object.fromEntries(
-      responseFields.filter((key) => body[key] !== undefined && data.general[key] !== undefined
-        && data.general[key] !== false && !(typeof data.general[key] === 'string' && !data.general[key].trim()))
-        .map((key) => [key, data.general[key]]),
-    );
+    const responseData: Json = {};
+    for (const key of responseFields) {
+      if (body[key] === undefined) continue;
+      // business_name may also be stored as company_name for older clients.
+      const value = key === 'business_name'
+        ? data.general.business_name ?? data.general.company_name
+        : data.general[key];
+      if (value === undefined || value === null || value === false
+        || (typeof value === 'string' && !value.trim())) continue;
+      responseData[key] = value;
+    }
     return { success: true, message: 'Settings updated successfully', data: responseData };
   }
 
   async getGeneral(scope: SettingsScope) {
     const value = await this.repository.read(scope);
-    const general = value.general ?? {};
-    const fields = ['company_name', 'nav_bar_location', 'pos_theme', 'version', 'image_url', 'logo_url',
-      'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const general: Json = { ...(value.general ?? {}) };
+    const printer = await this.repository.readConfiguration(scope, 'printer_settings');
+    for (const key of ['receipt_header', 'receipt_footer', 'address']) {
+      if (printer[key] !== undefined && printer[key] !== null) general[key] = printer[key];
+    }
+    // Keep the general image and receipt logo independent. Older code copied
+    // one printer logo value into both keys, hiding distinct uploaded images.
+    const printerImage = printer.image_url;
+    const printerLogo = printer.logo_url || printer.logo;
+    if (typeof printerImage === 'string' && printerImage.trim()) general.image_url = printerImage;
+    if (typeof printerLogo === 'string' && printerLogo.trim()) general.logo_url = printerLogo;
+    const fields = [
+      'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
+      'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
+      'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
+      'receipt_footer', 'device_id',
+    ];
     const data: Json = {};
     for (const key of fields) {
-      const raw = key === 'company_name' ? general.company_name ?? general.business_name : general[key];
+      const raw = key === 'business_name'
+        ? general.business_name ?? general.company_name
+        : key === 'company_name'
+          ? general.company_name ?? general.business_name
+          : general[key];
+      // Keep receipt fields present in the GET contract even before a receipt
+      // header or footer has been configured.
+      if ((key === 'receipt_header' || key === 'receipt_footer')
+        && (raw === null || raw === undefined)) {
+        data[key] = '';
+        continue;
+      }
+      if (key === 'logo_url' && (raw === null || raw === undefined || raw === '')) {
+        data[key] = '';
+        continue;
+      }
       if (raw === null || raw === undefined || raw === false || (typeof raw === 'string' && !raw.trim())) continue;
       data[key] = raw;
     }
+    return { success: true, data };
+  }
+
+  async printerSettings(body: Json, scope: SettingsScope) {
+    const data = await this.repository.readConfiguration(scope, 'printer_settings');
+    const merged = { ...data, ...body };
+    await this.repository.merge(scope, {}, { printer_settings: body });
+    return { success: true, message: 'Printer settings updated successfully', data: merged };
+  }
+
+  async getPrinterSettings(scope: SettingsScope) {
+    const [settings, printer] = await Promise.all([
+      this.repository.read(scope),
+      this.repository.readConfiguration(scope, 'printer_settings'),
+    ]);
+    const general = settings.general ?? {};
+    const data: Json = { ...general, ...printer };
+    // Older PCH saves kept receipt branding in the general-settings record,
+    // while the printer screen reads the dedicated printer-settings record.
+    // Expose the saved image using the names consumed by the printer screen.
+    data.logo_url = printer.logo_url || printer.logo || general.logo_url || general.image_url || '';
+    if (!data.image_url && general.image_url) data.image_url = general.image_url;
     return { success: true, data };
   }
 
@@ -155,6 +224,18 @@ export class SettingsApiService {
     };
     const target = targets[key];
     const configurations = target ? { [target[0]]: { [target[1]]: Boolean(enabled) } } : {};
+    if (key === 'enable_safes' && !enabled) {
+      configurations.safe_and_safe_drop = {
+        ...(configurations.safe_and_safe_drop ?? {}),
+        dropEnabled: false,
+      };
+    }
+    if (key === 'enable_safes_drop' && enabled) {
+      const currentFlags = await this.repository.readConfigurationFlags(scope);
+      if (!this.boolean(currentFlags.safe_and_safe_drop?.enabled)) {
+        throw new BadRequestException('Safe must be enabled before Safe Drop can be enabled.');
+      }
+    }
     if (key === 'enable_cashback' || key === 'enable_service_charge') {
       const configKey = key === 'enable_cashback' ? 'cashback' : 'service_charge';
       const current = (await this.repository.read(scope))[configKey] ?? {};
@@ -236,8 +317,10 @@ export class SettingsApiService {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
   }
   private sanitizeUrl(value: unknown): string {
+    const raw = this.text(value);
+    if (raw.startsWith('/uploads/') && !raw.includes('..')) return raw;
     try {
-      const url = new URL(this.text(value));
+      const url = new URL(raw);
       return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : '';
     } catch {
       return '';

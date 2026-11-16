@@ -6,6 +6,7 @@ import {
   liveRedemption,
   loyaltyUsername,
   earnedOrderPoints,
+  orderEarnsLoyalty,
   orderIsCompleted,
   partialRefundExpiredPoints,
   paymentIsVoid,
@@ -116,6 +117,13 @@ test('an order is completed from either status column', () => {
   assert.equal(orderIsCompleted('processing', 'COMPLETED'), true);
   assert.equal(orderIsCompleted('completed', 'CREATED'), true);
   assert.equal(orderIsCompleted('processing', 'CREATED'), false);
+});
+
+test('a paid order earns points before its status becomes completed', () => {
+  assert.equal(orderEarnsLoyalty('processing', 'CREATED', 'PAID'), true);
+  assert.equal(orderEarnsLoyalty('completed', 'COMPLETED', 'PAID'), true);
+  assert.equal(orderEarnsLoyalty('cancelled', 'CANCELLED', 'PAID'), false);
+  assert.equal(orderEarnsLoyalty('processing', 'CREATED', 'PENDING'), false);
 });
 
 test('completed orders earn floor of spend divided by the dollar ratio', () => {

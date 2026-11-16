@@ -228,6 +228,46 @@ test('a payout is excluded from tax and does not reduce the merchandise base', (
   assert.equal(inclusive[0].tax_total, '1.96');
 });
 
+test('merchant discount tax uses only the discounted taxable amount when another line is non-taxable', () => {
+  const lines = [
+    { name: 'Lucas Gummies', total: '4.00', subtotal: '4.00', total_tax: '0.36', subtotal_tax: '0.36', taxes: [{ id: 9.1, total: '0.36', subtotal: '0.36' }] },
+    { name: 'Vitacoco', total: '2.99', subtotal: '2.99', tax_class: 'zero', total_tax: '0.00', subtotal_tax: '0.00', taxes: [] },
+  ];
+  const order = { total_tax: '0.36', cart_tax: '0.36', tax_lines: [{ tax_total: '0.36' }] };
+  const fees = [{ name: 'merchant_discount', total: '-0.70' }];
+  applyMerchantDiscountToStoredTax(lines, fees, order);
+  assert.equal(lines[0].total_tax, '0.33');
+  assert.equal(lines[1].total_tax, '0.00');
+  assert.equal(order.total_tax, '0.33');
+  applyMerchantDiscountToStoredTax(lines, fees, order);
+  assert.equal(lines[0].total_tax, '0.33');
+  assert.equal(order.total_tax, '0.33');
+});
+
+test('merchant discount does not create tax for non-taxable lines', () => {
+  const lines = [
+    { name: 'Water', total: '4.00', total_tax: '0.00', taxes: [] },
+    { name: 'Coconut', total: '2.99', tax_class: 'zero', total_tax: '0.00', taxes: [] },
+  ];
+  const order = { total_tax: '0.00', tax_lines: [{ tax_total: '0.00' }] };
+  applyMerchantDiscountToStoredTax(lines, [{ name: 'merchant_discount', total: '-0.70' }], order);
+  assert.equal(lines[0].total_tax, '0.00');
+  assert.equal(lines[1].total_tax, '0.00');
+  assert.equal(order.total_tax, '0.00');
+});
+
+test('merchant discount keeps separate tax rates on their own discounted amounts', () => {
+  const lines = [
+    { name: 'Standard', total: '10.00', total_tax: '0.91', subtotal_tax: '0.91', taxes: [{ id: 9.1, total: '0.91', subtotal: '0.91' }] },
+    { name: 'Reduced', total: '10.00', total_tax: '0.50', subtotal_tax: '0.50', taxes: [{ id: 5, total: '0.50', subtotal: '0.50' }] },
+  ];
+  const order = { total_tax: '1.41', tax_lines: [{ tax_total: '1.41' }] };
+  applyMerchantDiscountToStoredTax(lines, [{ name: 'merchant_discount', total: '-2.00' }], order);
+  assert.equal(lines[0].total_tax, '0.82');
+  assert.equal(lines[1].total_tax, '0.45');
+  assert.equal(order.total_tax, '1.27');
+});
+
 test('stored tax is scaled to the total after merchant_discount', () => {
   const lines = [
     { name: 'Tama Tarrro', total: '9.98', total_tax: '0.72', subtotal_tax: '0.72', taxes: [{ total: '0.72', subtotal: '0.72' }] },
