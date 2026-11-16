@@ -108,11 +108,22 @@ export class DiscountService implements OnModuleInit {
 
   private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
     const { type, ...wordpressQuery } = query;
-    const response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
-      page: '1',
-      per_page: '100',
-      ...wordpressQuery,
-    });
+    let response: any;
+    try {
+      response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
+        page: '1',
+        per_page: '100',
+        ...wordpressQuery,
+      });
+    } catch (error) {
+      // WordPress can be down (for example its database is unreachable) while the
+      // store_discounts snapshot already has the records the Discounts page needs.
+      try {
+        return await this.listStoredDiscounts(storeId, wordpressQuery, type);
+      } catch {
+        throw error;
+      }
+    }
     // An empty PHP list is JSON `[]`. Group lookups on that array miss every
     // local discount, so a response can report a total while `data` stays empty.
     this.ensureDiscountGroups(response);
@@ -691,6 +702,29 @@ export class DiscountService implements OnModuleInit {
     const refreshed = await this.fetchWordPressDiscount(connection, group, discountId);
     const persistedCount = Number(refreshed?.usage_count ?? refreshed?.usageCount);
     return Number.isFinite(persistedCount) && persistedCount === usageCount;
+  }
+
+  private async listStoredDiscounts(storeId: string, query: Record<string, string>, type?: string) {
+    const payload = await this.readDiscountPayload(storeId);
+    const grouped = {
+      auto: Array.isArray(payload?.auto) ? payload.auto : [],
+      mix_match: Array.isArray(payload?.mix_match) ? payload.mix_match : [],
+      multipack: Array.isArray(payload?.multipack) ? payload.multipack : [],
+    };
+    const page = Math.max(1, Number(query.page) || 1);
+    const perPage = Math.max(1, Number(query.per_page) || 100);
+    const total = grouped.auto.length + grouped.mix_match.length + grouped.multipack.length;
+    const data = page === 1 ? grouped : { auto: [], mix_match: [], multipack: [] };
+    const pagination = {
+      page,
+      per_page: perPage,
+      total,
+      total_pages: total > 0 ? 1 : 0,
+      has_more: false,
+    };
+    if (!type) return { data, pagination };
+    const group = this.discountGroup(type);
+    return { data: data[group], pagination };
   }
 
   private ensureDiscountGroups(response: any) {
