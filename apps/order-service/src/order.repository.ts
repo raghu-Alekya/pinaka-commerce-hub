@@ -510,7 +510,7 @@ export class OrderRepository implements OnModuleInit {
     const metaValue = (entries: any[], keys: string[]) => entries.find((entry: any) =>
       keys.includes(String(entry?.key ?? '').trim().toLowerCase()))?.value;
     const ruleApplications: Array<{ id: string; count: number }> = [];
-    const productApplications: Array<{ group: string; productId: string; count: number; amount: number }> = [];
+    const productApplications: Array<{ group: string; productId: string; count: number; amount: number; ruleId: string }> = [];
     if (eligible && Array.isArray(lineItems)) {
       for (const line of lineItems as any[]) {
         const entries = metaEntries(line);
@@ -522,10 +522,7 @@ export class OrderRepository implements OnModuleInit {
         const ruleId = String(metaValue(entries, [
           '_pos_discount_rule_id', 'pos_discount_rule_id', 'discount_rule_id',
         ]) ?? '').trim().toLowerCase();
-        if (ruleId) {
-          ruleApplications.push({ id: ruleId, count });
-          continue;
-        }
+        if (ruleId) ruleApplications.push({ id: ruleId, count });
         const discountType = String(metaValue(entries, [
           '_pos_discount_type', 'pos_discount_type',
         ]) ?? '').trim().toLowerCase();
@@ -538,7 +535,7 @@ export class OrderRepository implements OnModuleInit {
         if (group !== 'auto' || !(Number.isFinite(autoAmount) && autoAmount > 0)) continue;
         const productId = String(line?.product_id ?? line?.productId ?? '').trim();
         if (!productId) continue;
-        productApplications.push({ group, productId, count, amount: autoAmount });
+        productApplications.push({ group, productId, count, amount: autoAmount, ruleId });
       }
     }
     const codes = (couponCodes.length ? couponCodes : metadataCodes).filter(Boolean);
@@ -553,12 +550,30 @@ export class OrderRepository implements OnModuleInit {
     });
     const payload = rows[0]?.payload;
     if (!payload) return;
+    const ruleMatchesRecord = (ruleId: string, record: any, group: string) => {
+      const recordIds = [record.id, record.pchId, record.wordpressId]
+        .filter((value: unknown) => value !== undefined && value !== null)
+        .map((value: unknown) => String(value).trim().toLowerCase());
+      const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
+      if (!ruleId.startsWith(rulePrefix)) return false;
+      const suffix = ruleId.slice(rulePrefix.length);
+      return recordIds.some(recordId => recordId === suffix || recordId === ruleId || recordId.endsWith(`:${suffix}`));
+    };
+    const matchedRuleIds = new Set<string>();
+    for (const group of ['auto', 'mix_match', 'multipack']) {
+      for (const record of Array.isArray(payload[group]) ? payload[group] : []) {
+        for (const application of ruleApplications) {
+          if (ruleMatchesRecord(application.id, record, group)) matchedRuleIds.add(application.id);
+        }
+      }
+    }
     const productUsage = new Map<string, number>();
     const sameAmount = (left: unknown, right: number) => {
       const value = Number(left);
       return Number.isFinite(value) && Math.abs(value - right) < 0.001;
     };
     for (const application of productApplications) {
+      if (application.ruleId && matchedRuleIds.has(application.ruleId)) continue;
       const records = Array.isArray(payload[application.group]) ? payload[application.group] : [];
       const candidates = records.filter((record: any) => [record?.product_id, record?.main_product_id]
         .some((value: unknown) => value !== undefined && value !== null && String(value).trim() === application.productId));
@@ -574,16 +589,8 @@ export class OrderRepository implements OnModuleInit {
       const records = Array.isArray(payload[group]) ? payload[group] : [];
       for (const record of records) {
         const code = String(record.code ?? record.discount_code ?? record.name ?? '').trim().toLowerCase();
-        const recordIds = [record.id, record.pchId, record.wordpressId]
-          .filter((value: unknown) => value !== undefined && value !== null)
-          .map((value: unknown) => String(value).trim().toLowerCase());
-        const rulePrefix = group === 'auto' ? 'auto_' : group === 'mix_match' ? 'mm_' : 'mp_';
         const matchingRuleApplications = ruleApplications
-          .filter(({ id }) => {
-            if (!id.startsWith(rulePrefix)) return false;
-            const suffix = id.slice(rulePrefix.length);
-            return recordIds.some(recordId => recordId === suffix || recordId === id || recordId.endsWith(`:${suffix}`));
-          })
+          .filter(({ id }) => ruleMatchesRecord(id, record, group))
           .reduce((sum, application) => sum + application.count, 0);
         // The POS rule marker is the per-application signal. Coupon codes are a
         // fallback for coupon-based applications; don't count both representations
