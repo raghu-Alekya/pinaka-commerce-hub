@@ -440,6 +440,24 @@ export function allocateRoundedTax(units: number[]): number[] {
   return shares.map((share) => share.minor);
 }
 
+/**
+ * A cart merchant discount belongs to every real item, including a zero-tax item.
+ * Cashback and payout rows stay outside this base.
+ */
+function reducedMerchandiseAmounts<T extends PosLineItem>(
+  lines: readonly T[],
+  feeLines: PosFeeLine[] | undefined,
+  places: number,
+): { line: T; amount: number; reduced: number }[] {
+  const priced = lines
+    .filter((line) => isMerchandiseLine(line))
+    .map((line) => ({ line, amount: Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)) }));
+  const base = priced.reduce((sum, entry) => sum + entry.amount, 0);
+  const discount = Math.min(merchantDiscountMinor(feeLines, places), base);
+  const reduced = amountsAfterDiscount(priced.map((entry) => entry.amount), discount);
+  return priced.map((entry, index) => ({ ...entry, reduced: reduced[index] }));
+}
+
 /** Returns [] when no rate is supplied or the computed tax is zero. */
 export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   const places = input.decimalPlaces ?? 2;
@@ -447,11 +465,10 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   if (rate <= 0) return [];
 
   const pricesIncludeTax = Boolean(input.pricesIncludeTax);
-  const taxableLines = (input.lineItems || []).filter((line) => isTaxableSaleLine(line));
-  const rawLineAmounts = taxableLines.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
-  const lineBase = rawLineAmounts.reduce((sum, amount) => sum + amount, 0);
-  const merchantDiscount = Math.min(merchantDiscountMinor(input.feeLines, places), lineBase);
-  const lineAmounts = amountsAfterDiscount(rawLineAmounts, merchantDiscount);
+  const merchandise = reducedMerchandiseAmounts(input.lineItems || [], input.feeLines, places);
+  const taxableMinor = merchandise.reduce((sum, entry) => (
+    isTaxableSaleLine(entry.line) ? sum + entry.reduced : sum
+  ), 0);
   const feeAmounts = (input.feeLines || [])
     .filter((fee) => !isMerchantDiscountFee(fee)
       && !isPayoutFee(fee)
@@ -461,7 +478,7 @@ export function calculateTaxLines(input: TaxCalculationInput): PosTaxLine[] {
   // POS and Flutter both calculate on the final combined taxable balance and
   // round once. Never sum independently rounded item taxes.
   const taxMinor = taxOn(
-    Math.max(0, [...lineAmounts, ...feeAmounts].reduce((sum, amount) => sum + amount, 0)),
+    Math.max(0, taxableMinor + feeAmounts.reduce((sum, amount) => sum + amount, 0)),
     rate,
     pricesIncludeTax,
   );
@@ -489,8 +506,9 @@ export function listOrderTax(input: {
 }
 
 /**
- * A merchant_discount fee is not part of the line total. Scale tax that was
- * calculated on the pre-discount price down to the post-discount price.
+ * A merchant_discount fee is not part of the line total. Calculate tax on each
+ * taxable item after its own share of that cart discount. A zero-tax item still
+ * keeps its share, so the full discount is not moved onto the taxable item.
  */
 export function applyMerchantDiscountToStoredTax(
   lines: Array<PosLineItem & { total_tax?: unknown; subtotal_tax?: unknown; taxes?: unknown }>,
@@ -498,24 +516,27 @@ export function applyMerchantDiscountToStoredTax(
   orderTax: { total_tax?: unknown; cart_tax?: unknown; tax_lines?: Array<{ tax_total?: unknown }> },
   places = 2,
 ): void {
-  const taxable = lines.filter((line) => isTaxableSaleLine(line));
-  const amounts = taxable.map((line) => Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places)));
-  const base = amounts.reduce((sum, amount) => sum + amount, 0);
+  const merchandise = reducedMerchandiseAmounts(lines, feeLines, places);
+  const base = merchandise.reduce((sum, entry) => sum + entry.amount, 0);
   const discount = Math.min(merchantDiscountMinor(feeLines, places), base);
   if (!base) return;
 
-  const reduced = amountsAfterDiscount(amounts, discount);
+  const taxable = merchandise.filter((entry) => isTaxableSaleLine(entry.line));
   let oldLineTax = 0;
-  const exactTax = exactTaxForAmounts(taxable, reduced);
+  const exactTax = exactTaxForAmounts(
+    taxable.map((entry) => entry.line),
+    taxable.map((entry) => entry.reduced),
+  );
   if (!discount && !exactTax) return;
-  const nextTax = taxable.map((line, index) => {
-    const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
+  const nextTax = taxable.map((entry, index) => {
+    const oldMinor = Math.max(0, toMinor(entry.line.total_tax ?? 0, places));
     const nextMinor = exactTax?.[index]
-      ?? (amounts[index] > 0 ? Math.round((oldMinor * reduced[index]) / amounts[index]) : 0);
+      ?? (entry.amount > 0 ? Math.round((oldMinor * entry.reduced) / entry.amount) : 0);
     oldLineTax += oldMinor;
     return nextMinor;
   });
-  taxable.forEach((line, index) => {
+  taxable.forEach((entry, index) => {
+    const line = entry.line;
     const oldMinor = Math.max(0, toMinor(line.total_tax ?? 0, places));
     if (!oldMinor && !exactTax) return;
     const next = fromMinor(nextTax[index], places).toFixed(places);
