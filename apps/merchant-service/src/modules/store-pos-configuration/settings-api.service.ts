@@ -12,7 +12,7 @@ export class SettingsApiService {
     const general: Json = Object.fromEntries(Object.entries(current).filter(([, value]) =>
       value !== null && value !== undefined && value !== false && !(typeof value === 'string' && !value.trim()),
     ));
-    const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer'];
     for (const key of textFields) {
       if (body[key] === undefined) continue;
       const value = this.sanitizeText(body[key]);
@@ -55,7 +55,7 @@ export class SettingsApiService {
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
       'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
       'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
-      'receipt_footer', 'device_id',
+      'receipt_footer',
     ];
     const responseData: Json = {};
     for (const key of responseFields) {
@@ -72,8 +72,12 @@ export class SettingsApiService {
   }
 
   async getGeneral(scope: SettingsScope) {
-    const value = await this.repository.read(scope);
+    const [value, storeEmail] = await Promise.all([
+      this.repository.read(scope),
+      this.repository.storeEmail(scope),
+    ]);
     const general: Json = { ...(value.general ?? {}) };
+    if (storeEmail) general.email = storeEmail;
     const printer = await this.repository.readConfiguration(scope, 'printer_settings');
     for (const key of ['receipt_header', 'receipt_footer', 'address']) {
       if (printer[key] !== undefined && printer[key] !== null) general[key] = printer[key];
@@ -88,7 +92,7 @@ export class SettingsApiService {
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
       'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
       'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
-      'receipt_footer', 'device_id',
+      'receipt_footer',
     ];
     const data: Json = {};
     for (const key of fields) {

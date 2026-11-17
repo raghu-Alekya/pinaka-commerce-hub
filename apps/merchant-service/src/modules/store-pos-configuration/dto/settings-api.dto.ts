@@ -33,7 +33,6 @@ export class GeneralSettingsDto {
   @IsOptional() gstin?: unknown;
   @IsOptional() receipt_header?: unknown;
   @IsOptional() receipt_footer?: unknown;
-  @IsOptional() @IsString() @MaxLength(255) device_id?: string;
 }
 
 export class DeviceSettingsDto {
