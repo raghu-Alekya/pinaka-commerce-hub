@@ -1,3 +1,4 @@
+import { customCategoryIds, isCustomStoreProduct } from './custom-store-products';
 import { fetchPosTaxConfiguration } from '../store-pos-configuration/pos-tax-sync';
 import { StoreVendorPaymentEntity } from '../../entities/store-vendor-payment.entity';
 import { groupFeaturesByCategory } from '../master/common/master-list';
@@ -4292,6 +4293,64 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     const category = this.asRecord(categoryRows[0]?.category);
     return products.map((product) =>
       this.presentWooProduct(this.asRecord(product) ?? {}, category, taxConfiguration),
+    );
+  }
+
+  async getStoreCustomProducts(storeId: string): Promise<unknown[]> {
+    let productRows: Array<{ products?: unknown }> = [];
+    let categoryRows: Array<{ categories?: unknown }> = [];
+    try {
+      [productRows, categoryRows] = await Promise.all([
+        this.dataSource.query(
+          `SELECT COALESCE(jsonb_agg(product ORDER BY product->>'name', product->>'id'), '[]'::jsonb) AS products
+           FROM public.store_products AS catalog
+           CROSS JOIN LATERAL jsonb_array_elements(
+             CASE
+               WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+               ELSE '[]'::jsonb
+             END
+           ) AS product
+           WHERE catalog.store_id = $1::uuid
+             AND COALESCE(catalog.is_deleted, false) = false`,
+          [storeId],
+        ),
+        this.dataSource.query(
+          `SELECT COALESCE(jsonb_agg(category), '[]'::jsonb) AS categories
+           FROM public.store_categories AS catalog
+           CROSS JOIN LATERAL jsonb_array_elements(
+             CASE
+               WHEN jsonb_typeof(catalog.payload) = 'array' THEN catalog.payload
+               ELSE '[]'::jsonb
+             END
+           ) AS category
+           WHERE catalog.store_id = $1::uuid
+             AND COALESCE(catalog.is_deleted, false) = false`,
+          [storeId],
+        ),
+      ]);
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { code?: string; driverError?: { code?: string } }).code
+          ?? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code === '42P01' || code === '42703') return [];
+      throw error;
+    }
+    const categories = Array.isArray(categoryRows[0]?.categories) ? categoryRows[0].categories : [];
+    const customIds = new Set(customCategoryIds(categories));
+    const products = Array.isArray(productRows[0]?.products) ? productRows[0].products : [];
+    const records = products.flatMap((product) => {
+      const record = this.asRecord(product);
+      return record && isCustomStoreProduct(record, customIds) ? [record] : [];
+    });
+    if (records.length === 0) return [];
+    const { taxConfiguration, categoriesById } = await this.loadStoreProductTaxContext(storeId, records);
+    return records.map((product) =>
+      this.presentWooProduct(
+        product,
+        this.categoryForProductTax(product, categoriesById),
+        taxConfiguration,
+      ),
     );
   }
 
