@@ -1141,6 +1141,27 @@ export class AppController {
     return payload;
   }
 
+  @Get('store/:storeId/store-categories/:categoryId/sub-categories')
+  async getStoreSubCategories(
+    @Param('storeId') storeId: string,
+    @Param('categoryId') categoryId: string,
+  ) {
+    if (!/^[1-9]\d*$/.test(categoryId) || !Number.isSafeInteger(Number(categoryId))) {
+      throw new BadRequestException('categoryId must be a positive integer');
+    }
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
+    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) {
+      throw new BadRequestException('Connect and validate the WordPress site first');
+    }
+    return this.merchantRepository.getWordPressSubCategories({
+      wordpressUrl: connector.wordpressUrl,
+      wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt),
+      parentId: Number(categoryId),
+    });
+  }
+
   @Get('stores/:storeId/catalog/get-categories-with-tax')
   async getCategoriesWithTax(@Param('storeId') storeId: string) {
     const store = await this.merchantRepository.getStoreById(storeId);
