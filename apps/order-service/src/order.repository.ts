@@ -923,8 +923,10 @@ export class OrderRepository implements OnModuleInit {
         line.taxes = [];
         return;
       }
-      const taxable = String(product.tax_status || '').toLowerCase() === 'taxable';
-      const taxClass = taxClassKey(product.tax_class);
+      const requestedTaxClass = taxClassKey(line.tax_class);
+      const customTaxOverride = String(line?.type || '').trim().toLowerCase() === 'custom' && Boolean(requestedTaxClass);
+      const taxable = customTaxOverride || String(product.tax_status || '').toLowerCase() === 'taxable';
+      const taxClass = customTaxOverride ? requestedTaxClass : taxClassKey(product.tax_class);
       const rate = taxable ? (taxClass ? (classRates.get(taxClass) ?? defaultRate) : defaultRate) : 0;
       const taxableMinor = Math.round(Number(line.total || 0) * factor);
       if (!(rate > 0) || !taxableMinor) {
