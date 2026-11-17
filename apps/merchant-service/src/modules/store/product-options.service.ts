@@ -47,21 +47,8 @@ export class ProductOptionsService {
       this.collect(params, 'taxes/classes'),
       this.collect(params, 'products/attributes'),
     ]);
-    const attributeOrder = ['color', 'packs', 'size', 'weight'];
-    const attributeKey = (attribute: any) => {
-      const name = String(attribute.name ?? '').trim().toLowerCase();
-      const slug = String(attribute.slug ?? '').trim().toLowerCase().replace(/^pa_/, '');
-      return attributeOrder.includes(name) ? name : slug;
-    };
-    const selectedAttributes = attributes
-      .filter((attribute) => attributeOrder.includes(attributeKey(attribute)))
-      .sort(
-        (a, b) =>
-          attributeOrder.indexOf(attributeKey(a)) -
-          attributeOrder.indexOf(attributeKey(b)),
-      );
     const withTerms: Record<string, unknown>[] = [];
-    for (const attribute of selectedAttributes) {
+    for (const attribute of attributes) {
       withTerms.push({
         ...attribute,
         terms: await this.collect(
