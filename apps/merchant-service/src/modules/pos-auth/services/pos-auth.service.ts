@@ -889,6 +889,66 @@ export class PosAuthService {
     return { success: true, message: 'User verified successfully' };
   }
 
+  async validateCashDrawerPin(employeePin: unknown, authorization?: string) {
+    const pin = typeof employeePin === 'string' ? employeePin.trim() : '';
+    if (!/^\d{6}$/.test(pin)) {
+      throw cashDrawerPinError('invalid_pin_format', 'PIN must be exactly 6 digits.');
+    }
+    if (!authorization) {
+      throw cashDrawerPinError('jwt_auth_no_auth_header', 'Authorization header is missing.');
+    }
+    const token = authorization.match(/^Bearer\s+(\S+)$/i)?.[1];
+    if (!token) {
+      throw cashDrawerPinError('jwt_auth_bad_auth_header', 'Authorization header must use Bearer token.');
+    }
+    let payload: ReturnType<PosSessionService['verifyAccessToken']>;
+    try {
+      payload = this.posSessionService.verifyAccessToken(token);
+    } catch {
+      throw cashDrawerPinError('invalid_token', 'Invalid or expired token.');
+    }
+    const dataSource = this.merchantRepository.requireDataSource();
+    const [session] = await dataSource.query(
+      `SELECT employee_id::text AS "employeeId", merchant_id::text AS "merchantId", store_id::text AS "storeId"
+       FROM public.employee_sessions
+       WHERE access_token = $1 AND lower(COALESCE(status, '')) = 'active'
+       ORDER BY session_created_at DESC NULLS LAST LIMIT 1`,
+      [token],
+    );
+    if (!session || session.employeeId !== payload.sub ||
+      (payload.merchantId && session.merchantId !== payload.merchantId) ||
+      (payload.storeId && session.storeId !== payload.storeId)) {
+      throw cashDrawerPinError('jwt_auth_obsolete_token', 'This token has been invalidated. Please login again.', true);
+    }
+    const candidates = await dataSource.query(
+      `SELECT e.id::text AS id,
+              COALESCE(es.login_pin_hash, e.login_pin_hash) AS "pinHash",
+              COALESCE(es.login_pin, e.login_pin) AS pin
+       FROM public.employee_stores AS es
+       JOIN public.employees AS e ON e.id = es.employee_id
+       WHERE es.store_id = $1::uuid
+         AND (e.merchant_id = $2::uuid OR es.merchant_id = $2::uuid)
+         AND (e.status IS NULL OR upper(e.status::text) <> 'INACTIVE')
+         AND (es.status IS NULL OR upper(es.status::text) <> 'INACTIVE')
+         AND (es.login_pin_hash IS NOT NULL OR e.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL OR e.login_pin IS NOT NULL)`,
+      [session.storeId, session.merchantId],
+    );
+    let matchedEmployeeId: string | undefined;
+    for (const candidate of candidates) {
+      if (String(candidate.pin || '') === pin || await this.pinService.verify(pin, candidate.pinHash)) {
+        matchedEmployeeId = String(candidate.id);
+        break;
+      }
+    }
+    if (!matchedEmployeeId) {
+      throw cashDrawerPinError('invalid_pin', 'Invalid PIN or user not found.');
+    }
+    if (matchedEmployeeId !== payload.sub) {
+      throw cashDrawerPinError('pin_user_mismatch', 'The provided PIN does not match the logged-in user.');
+    }
+    return { success: true, statusCode: 200, code: 'valid_login_pin', message: 'Valid login PIN.', data: [] };
+  }
+
   
 
   /**
@@ -1340,4 +1400,16 @@ interface CatalogCategory {
   posTaxClass: string;
   posTaxPercent: string;
   payload: unknown;
+}
+
+function cashDrawerPinError(code: string, message: string, includeStatusCode = false): ForbiddenException {
+  const error = new ForbiddenException({
+    success: false,
+    ...(includeStatusCode ? { statusCode: 403 } : {}),
+    code,
+    message,
+    data: [],
+  });
+  (error as ForbiddenException & { preserveResponseBody?: boolean }).preserveResponseBody = true;
+  return error;
 }
