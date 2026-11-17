@@ -2213,25 +2213,20 @@ export class OrderRepository implements OnModuleInit {
     line: any,
     places: number,
   ): { applied: boolean; quantity: number } {
+    const quantity = Number(line?.quantity || 1);
+    const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
     if (String(line?.type || '').trim().toLowerCase() !== 'custom') {
-      return { applied: false, quantity: 1 };
+      return { applied: false, quantity: safeQuantity };
     }
-    const quantity = Number(line.quantity || 1);
-    if (!Number.isFinite(quantity) || quantity <= 1 || line._pch_quantity_applied === true) {
-      return { applied: false, quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1 };
+    // The POS sends subtotal and total as the full line amount (unit price × quantity),
+    // the same way a normal product line does. Multiplying by quantity again turns 30 into 90.
+    if (line.unit_price === undefined && line.unitPrice === undefined && line.price === undefined) {
+      const lineSubtotal = Number(line.subtotal ?? line.total ?? 0);
+      if (Number.isFinite(lineSubtotal)) {
+        line.unit_price = (lineSubtotal / safeQuantity).toFixed(places);
+      }
     }
-    // Persist WooCommerce-compatible line totals while retaining the original unit
-    // price and a marker that prevents total-orders from multiplying them again.
-    const unitSubtotal = Number(line.subtotal ?? line.total ?? line.unit_price ?? line.unitPrice ?? 0);
-    const unitTotal = Number(line.total ?? line.subtotal ?? line.unit_price ?? line.unitPrice ?? 0);
-    if (!Number.isFinite(unitSubtotal) || !Number.isFinite(unitTotal)) {
-      return { applied: false, quantity };
-    }
-    line.unit_price = Number(line.unit_price ?? line.unitPrice ?? unitSubtotal).toFixed(places);
-    line.subtotal = (unitSubtotal * quantity).toFixed(places);
-    line.total = (unitTotal * quantity).toFixed(places);
-    line._pch_quantity_applied = true;
-    return { applied: true, quantity };
+    return { applied: false, quantity: safeQuantity };
   }
 
   private async catalogProducts(
