@@ -1170,6 +1170,20 @@ export class AppController {
     return this.merchantRepository.searchStoreProducts(store.id, search ?? '');
   }
 
+
+  @Get('store/:storeId/products')
+  async getStoreCustomProducts(
+    @Param('storeId') storeId: string,
+    @Query('custom_products') customProducts?: string,
+  ) {
+    if (customProducts !== 'true') {
+      throw new BadRequestException('custom_products=true is required');
+    }
+    const store = await this.merchantRepository.getStoreById(storeId);
+    if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    return this.merchantRepository.getStoreCustomProducts(store.id);
+  }
+
   @Get('store/:storeId/products/:productId/variations')
   async getStoreProductVariations(
     @Param('storeId') storeId: string,
