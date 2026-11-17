@@ -3643,6 +3643,19 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return categories.length;
   }
 
+  async getWordPressSubCategories(params: {
+    wordpressUrl: string;
+    wordpressJwt: string;
+    parentId: number;
+  }): Promise<unknown[]> {
+    return this.fetchWooCollection(
+      params.wordpressUrl,
+      params.wordpressJwt,
+      '/wp-json/wc/v3/products/categories',
+      { per_page: '100', hide_empty: 'true', parent: String(params.parentId) },
+    );
+  }
+
   async syncStoreAttributesFromWordPress(params: {
     storeId: string;
     wordpressUrl: string;
