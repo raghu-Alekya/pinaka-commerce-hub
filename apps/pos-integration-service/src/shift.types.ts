@@ -79,6 +79,7 @@ export interface ShiftView {
   closed_by: string | null;
   status: ShiftStatus;
   opening_balance: number;
+  opening_safe_cash: number;
   closing_balance: number | null;
   over_short: number | null;
   declared_cash: number | null;
@@ -138,6 +139,7 @@ export function expectedCashInDrawer(
   openingBalance: number,
   transactions: ShiftAmountRow[],
   orderCash = 0,
+  orderPayout = 0,
 ): number {
   const active = transactions.filter((row) => row.status !== 'INACTIVE');
   const sum = (type: string) => active
@@ -147,7 +149,11 @@ export function expectedCashInDrawer(
     ? sum('CASH_SALE')
     : orderCash;
   const cashIn = cashSales + [...DRAWER_IN].filter((type) => type !== 'CASH_SALE').reduce((total, type) => total + sum(type), 0);
-  const cashOut = [...DRAWER_OUT].reduce((total, type) => total + sum(type), 0);
+  // PAYOUT and PAID_OUT rows already leave the drawer. Order payouts are added
+  // only when neither row exists, so the same payout is not removed twice.
+  const recordedPayout = sum('PAYOUT') + sum('PAID_OUT');
+  const payoutOut = Math.abs(recordedPayout) >= 0.005 ? 0 : orderPayout;
+  const cashOut = [...DRAWER_OUT].reduce((total, type) => total + sum(type), 0) + payoutOut;
   return roundMoney(openingBalance + cashIn - cashOut);
 }
 
@@ -156,8 +162,10 @@ export function toShiftView(
   meta: ShiftMetaView[],
   transactions: ShiftTransactionView[],
   orderSales: { cash: number; card: number } = { cash: 0, card: 0 },
+  orderPayout = 0,
 ): ShiftView {
   const opening = asMoney(shift.opening_balance) ?? 0;
+  const openingSafeShift = metaNumber({ meta } as ShiftView, 'opening_safe_cash') ?? 0;  
   return {
     id: shift.id,
     merchant_id: shift.merchant_id,
@@ -170,11 +178,12 @@ export function toShiftView(
     closed_by: shift.closed_by ?? null,
     status: shift.status,
     opening_balance: opening,
+    opening_safe_cash: openingSafeShift,
     closing_balance: asMoney(shift.closing_balance),
     over_short: asMoney(shift.over_short),
     declared_cash: asMoney(shift.declared_cash),
     discrepancy: asMoney(shift.discrepancy),
-    expected_cash_in_drawer: expectedCashInDrawer(opening, transactions, orderSales.cash),
+    expected_cash_in_drawer: expectedCashInDrawer(opening, transactions, orderSales.cash, orderPayout),
     opened_at: shift.opened_at,
     closed_at: shift.closed_at ?? null,
     created_at: shift.created_at,
@@ -190,5 +199,69 @@ export function toShiftView(
       created_by: row.created_by ?? null,
       updated_by: row.updated_by ?? null,
     })),
+  };
+}
+
+function activeMeta(view: ShiftView, name: string): unknown {
+  const row = view.meta.find((item) => item.meta_name === name && item.status !== 'INACTIVE');
+  return row ? row.meta_value : undefined;
+}
+
+function activeSum(view: ShiftView, type: string): number | null {
+  const rows = view.transactions.filter((item) => item.transaction_type === type && item.status !== 'INACTIVE');
+  if (!rows.length) return null;
+  return roundMoney(rows.reduce((total, item) => total + item.total_sum, 0));
+}
+
+function metaNumber(view: ShiftView, name: string): number | null {
+  const value = activeMeta(view, name);
+  if (typeof value === 'number' || typeof value === 'string') return asMoney(value);
+  return null;
+}
+
+function metaText(view: ShiftView, name: string): string | null {
+  const value = activeMeta(view, name);
+  if (value == null || value === '') return null;
+  return typeof value === 'string' ? value : null;
+}
+
+/** Flat fields the store shift list and detail pages already render. */
+export function withStoreShiftFields<T extends ShiftView>(view: T): T & Record<string, unknown> {
+  const cashSales = activeSum(view, 'CASH_SALE');
+  const cardSales = activeSum(view, 'CARD_SALE');
+  const paidOut = activeSum(view, 'PAID_OUT');
+  const payout = activeSum(view, 'PAYOUT');
+  const vendor = activeSum(view, 'VENDOR_PAYMENT');
+  const payoutParts = [payout, paidOut, vendor].filter((value): value is number => value != null);
+  return {
+    ...view,
+    openedAt: view.opened_at,
+    closedAt: view.closed_at,
+    openedByEmployeeId: view.created_by,
+    closedByEmployeeId: view.closed_by,
+    cashierName: metaText(view, 'cashier_name'),
+    openingDeviceId: view.opening_device_id || view.device_id,
+    closingDeviceId: view.closing_device_id,
+    closed_by_device_id: view.closing_device_id,
+    terminalId: view.device_id,
+    registerId: metaText(view, 'register_id'),
+    openingCash: view.opening_balance,
+    openingSafeCash: view.opening_safe_cash,
+    closingCashActual: view.closing_balance,
+    expectedCashInDrawer: view.expected_cash_in_drawer,
+    cashDifference: view.over_short ?? view.discrepancy,
+    totalCashSales: cashSales ?? view.order_sales.cash,
+    totalCardSales: cardSales ?? view.order_sales.card,
+    totalSafeDrops: activeSum(view, 'SAFE_DROP'),
+    totalPaidOuts: paidOut,
+    total_payouts: payoutParts.length ? roundMoney(payoutParts.reduce((total, value) => total + value, 0)) : null,
+    total_cashback: activeSum(view, 'CASHBACK'),
+    total_refunds: activeSum(view, 'REFUND'),
+    total_ebt_sales: activeSum(view, 'EBT_SALE'),
+    total_pay_later: activeSum(view, 'PAY_LATER'),
+    total_orders: metaNumber(view, 'total_orders'),
+    total_order_sale_amount: metaNumber(view, 'total_order_sale_amount'),
+    total_void_items: metaNumber(view, 'total_void_items'),
+    total_cancelled_orders: metaNumber(view, 'total_cancelled_orders'),
   };
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Inject, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, Inject, Param, Patch, Post, Put } from '@nestjs/common';
 import { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto, UpdateOrderDto } from './dto/order-update.dto';
 import { OrderUpdateService } from './services/order-update.service';
 
@@ -9,16 +9,18 @@ export class OrderUpdatesController {
   @Put(':id')
   @HttpCode(200)
   update(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: UpdateOrderDto,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('x-store-id') storeId?: string,
+    @Headers('x-merchant-id') merchantId?: string,
   ) {
-    return this.updates.update(id, body);
+    return this.updates.replace(id, body, { storeId, merchantId });
   }
 
   @Patch(':id')
   @HttpCode(200)
   updatePartial(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: UpdateOrderDto,
   ) {
     return this.updates.update(id, body);
@@ -27,7 +29,7 @@ export class OrderUpdatesController {
   @Post(':id')
   @HttpCode(200)
   updateByPost(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: UpdateOrderDto,
   ) {
     return this.updates.update(id, body);
@@ -36,7 +38,7 @@ export class OrderUpdatesController {
   @Post(':id/coupons')
   @HttpCode(200)
   applyCoupon(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: ApplyCouponDto,
   ) {
     return this.updates.applyCoupon(id, body);
@@ -45,7 +47,7 @@ export class OrderUpdatesController {
   @Post(':id/discounts')
   @HttpCode(200)
   applyDiscount(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: ApplyDiscountDto,
   ) {
     return this.updates.applyDiscount(id, body);
@@ -54,7 +56,7 @@ export class OrderUpdatesController {
   @Post(':id/items')
   @HttpCode(200)
   addItems(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: AddOrderItemsDto,
   ) {
     return this.updates.addItems(id, body);
@@ -63,7 +65,7 @@ export class OrderUpdatesController {
   @Post(':id/cancel')
   @HttpCode(200)
   cancel(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() body: CancelOrderDto,
   ) {
     return this.updates.cancel(id, body);

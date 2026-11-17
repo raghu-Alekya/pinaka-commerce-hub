@@ -1,6 +1,5 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { Audited, AuditColumns, RecordStatus } from './commerce-enums';
-import { StoreTypeEntity } from './store-type.entity';
 
 export { RecordStatus as TendorStatus } from './commerce-enums';
 
@@ -15,13 +14,6 @@ export class TendorEntity extends AuditColumns {
 
   @Column({ name: 'tendor_name', type: 'varchar', length: 150 })
   tendorName!: string;
-
-  @Column({ name: 'store_type_id', type: 'uuid', nullable: true })
-  storeTypeId?: string | null;
-
-  @ManyToOne(() => StoreTypeEntity, { nullable: true })
-  @JoinColumn({ name: 'store_type_id' })
-  storeType?: StoreTypeEntity;
 
   @Column({
     name: 'status',

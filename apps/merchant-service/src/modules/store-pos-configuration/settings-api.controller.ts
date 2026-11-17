@@ -1,5 +1,5 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Put, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { unlink, writeFile } from 'node:fs/promises';
@@ -11,7 +11,9 @@ import {
   EnableServiceChargeDto, EnableTaxesDto, GeneralSettingsDto, SequentialCouponsDto,
 } from './dto/settings-api.dto';
 import { SettingsScope } from './settings-api.repository';
+import { SettingsApiRepository } from './settings-api.repository';
 import { SettingsApiService } from './settings-api.service';
+import { FileStorageService } from '../file-storage/file-storage.service';
 
 type AuthenticatedRequest = {
   user?: { id?: string; merchantId?: string; storeId?: string };
@@ -20,11 +22,21 @@ type AuthenticatedRequest = {
   get(name: string): string | undefined;
 };
 type UploadedSettingsImage = { buffer: Buffer; mimetype: string };
+type UploadedPromotionalImage = UploadedSettingsImage & { originalname: string };
 type SettingsImageFiles = { image_upload?: UploadedSettingsImage[]; logo_upload?: UploadedSettingsImage[] };
-
-const settingsImageDirectory = join(process.cwd(), 'uploads', 'settings');
-mkdirSync(settingsImageDirectory, { recursive: true });
 const { memoryStorage } = require('multer');
+const promotionalImageDirectory = join(process.cwd(), 'uploads', 'customer-display-promotions');
+mkdirSync(promotionalImageDirectory, { recursive: true });
+const promotionalImagesUpload = FilesInterceptor('files', 20, {
+  storage: memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 20 },
+  fileFilter: (_request: unknown, file: UploadedPromotionalImage,
+    callback: (error: Error | null, accept: boolean) => void) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.mimetype);
+    callback(allowed ? null : new BadRequestException('Promotional images must be JPG, PNG, WebP, or GIF'), allowed);
+  },
+});
+
 const settingsImageUpload = FileFieldsInterceptor([
   { name: 'image_upload', maxCount: 1 },
   { name: 'logo_upload', maxCount: 1 },
@@ -33,7 +45,7 @@ const settingsImageUpload = FileFieldsInterceptor([
   limits: { fileSize: 5 * 1024 * 1024, files: 2 },
   fileFilter: (_request: unknown, file: UploadedSettingsImage,
     callback: (error: Error | null, accept: boolean) => void) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.mimetype);
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
     callback(allowed ? null : new BadRequestException('Settings images must be JPG, PNG, WebP, or GIF'), allowed);
   },
 });
@@ -41,7 +53,11 @@ const settingsImageUpload = FileFieldsInterceptor([
 @RequireAuth()
 @Controller(['api/v1/settings', 'connector/api/v1/settings', 'pinaka-pos/v1/settings', 'wp-json/pinaka-pos/v1/settings'])
 export class SettingsApiController {
-  constructor(@Inject(SettingsApiService) private readonly settings: SettingsApiService) {}
+  constructor(
+    @Inject(SettingsApiService) private readonly settings: SettingsApiService,
+    @Inject(SettingsApiRepository) private readonly settingsRepository: SettingsApiRepository,
+    @Inject(FileStorageService) private readonly fileStorage: FileStorageService,
+  ) {}
 
   @Post('general-settings') @HttpCode(HttpStatus.OK) @UseInterceptors(settingsImageUpload)
   async general(@Body() body: GeneralSettingsDto, @Req() request: AuthenticatedRequest,
@@ -51,9 +67,11 @@ export class SettingsApiController {
     try {
       const image = files?.image_upload?.[0];
       const logo = files?.logo_upload?.[0];
-      if (image) body.image_url = await this.saveImage(image, request, savedPaths);
-      if (logo) body.logo_url = await this.saveImage(logo, request, savedPaths);
-      return await this.settings.general(body, this.scope(request, merchantId, storeId));
+      const scope = this.scope(request, merchantId, storeId);
+      const location = (image || logo) ? await this.settingsRepository.storeFileLocation(scope) : undefined;
+      if (image) body.image_url = await this.saveImage(image, location!, savedPaths);
+      if (logo) body.logo_url = await this.saveImage(logo, location!, savedPaths);
+      return await this.settings.general(body, scope);
     } catch (error) {
       await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
       throw error;
@@ -66,10 +84,78 @@ export class SettingsApiController {
     return this.settings.getGeneral(this.scope(request, merchantId, storeId));
   }
 
+  @Post('printer-settings') @HttpCode(HttpStatus.OK)
+  printerSettings(@Body() body: Record<string, any>, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.printerSettings(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Get('printer-settings')
+  getPrinterSettings(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.getPrinterSettings(this.scope(request, merchantId, storeId));
+  }
+
+  @Get('promotional-images')
+  getPromotionalImages(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.getPromotionalImages(this.scope(request, merchantId, storeId));
+  }
+
+  @Put('promotional-images') @HttpCode(HttpStatus.OK) @UseInterceptors(promotionalImagesUpload)
+  async savePromotionalImages(@Body() body: Record<string, any>, @Req() request: AuthenticatedRequest,
+    @UploadedFiles() files: UploadedPromotionalImage[] = [], @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    const savedPaths: string[] = [];
+    try {
+      const enabled = body.enabled === true || body.enabled === 'true';
+      if (body.enabled !== true && body.enabled !== false && body.enabled !== 'true' && body.enabled !== 'false') {
+        throw new BadRequestException('enabled must be true or false');
+      }
+      let images = body.images ?? [];
+      if (typeof images === 'string') {
+        try { images = JSON.parse(images); } catch { throw new BadRequestException('images must be valid JSON'); }
+      }
+      if (!Array.isArray(images)) throw new BadRequestException('images must be an array');
+      let removeIds = body.removeIds ?? [];
+      if (typeof removeIds === 'string') {
+        try { removeIds = JSON.parse(removeIds); } catch { throw new BadRequestException('removeIds must be valid JSON'); }
+      }
+      if (!Array.isArray(removeIds) || removeIds.some((id: unknown) => typeof id !== 'string')) {
+        throw new BadRequestException('removeIds must be an array of image IDs');
+      }
+      for (const file of files) {
+        const extension = file.mimetype === 'image/png' ? '.png'
+          : file.mimetype === 'image/webp' ? '.webp' : file.mimetype === 'image/gif' ? '.gif' : '.jpg';
+        const filename = `${randomUUID()}${extension}`;
+        const diskPath = join(promotionalImageDirectory, filename);
+        await writeFile(diskPath, file.buffer);
+        savedPaths.push(diskPath);
+        images.push({ name: file.originalname, url: `${this.requestOrigin(request)}/uploads/customer-display-promotions/${filename}` });
+      }
+      return await this.settings.savePromotionalImages({ enabled, images, removeIds }, this.scope(request, merchantId, storeId));
+    } catch (error) {
+      await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
+      throw error;
+    }
+  }
+
   @Post('device-settings') @HttpCode(HttpStatus.OK)
   device(@Body() body: DeviceSettingsDto, @Req() request: AuthenticatedRequest,
     @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
     return this.settings.device(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Get('device-settings')
+  getDevice(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.getDevice(this.scope(request, merchantId, storeId));
+  }
+
+  @Get('configuration-flags')
+  configurationFlags(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.configurationFlags(this.scope(request, merchantId, storeId));
   }
 
   @Get('cash-settings')
@@ -143,14 +229,15 @@ export class SettingsApiController {
     return { user: request.user, merchantHeader, storeHeader };
   }
 
-  private async saveImage(file: UploadedSettingsImage, request: AuthenticatedRequest, savedPaths: string[]): Promise<string> {
+  private async saveImage(file: UploadedSettingsImage, location: { merchantLabel: string; storeName: string }, savedPaths: string[]): Promise<string> {
     const extension = file.mimetype === 'image/png' ? '.png'
-      : file.mimetype === 'image/webp' ? '.webp' : file.mimetype === 'image/gif' ? '.gif' : '.jpg';
+      : file.mimetype === 'image/webp' ? '.webp' : '.jpg';
     const filename = `${randomUUID()}${extension}`;
-    const diskPath = join(settingsImageDirectory, filename);
+    const publicPath = this.fileStorage.storeImagePublicPath(location.merchantLabel, location.storeName, filename);
+    const diskPath = join(await this.fileStorage.ensureStoreImagesFolder(location.merchantLabel, location.storeName), filename);
     await writeFile(diskPath, file.buffer);
     savedPaths.push(diskPath);
-    return `${this.requestOrigin(request)}/uploads/settings/${filename}`;
+    return publicPath;
   }
 
   private requestOrigin(request: AuthenticatedRequest): string {

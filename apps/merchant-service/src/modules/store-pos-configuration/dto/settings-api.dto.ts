@@ -27,9 +27,16 @@ export class GeneralSettingsDto {
   @IsOptional() version?: unknown;
   @IsOptional() image_url?: unknown;
   @IsOptional() logo_url?: unknown;
+  // Business and receipt fields are stored with the existing general settings
+  // JSON document; personal employee details remain in the employee API.
+  @IsOptional() company_name?: unknown;
+  @IsOptional() gstin?: unknown;
+  @IsOptional() receipt_header?: unknown;
+  @IsOptional() receipt_footer?: unknown;
 }
 
 export class DeviceSettingsDto {
+  @IsOptional() @IsString() @MaxLength(255) device_id?: string;
   @IsOptional() @IsString() @MaxLength(255) kot_printer?: string;
   @IsOptional() @IsString() @MaxLength(255) receipt_printer?: string;
   @IsOptional() @IsString() @MaxLength(50) paper_size?: string;

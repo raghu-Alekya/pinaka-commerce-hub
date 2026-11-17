@@ -8,6 +8,7 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -25,8 +26,8 @@ export class PosCashDenominationItemDto {
   @MaxLength(255)
   imageName!: string;
 
+  @ValidateIf((item: PosCashDenominationItemDto) => !item.image)
   @IsString()
-  @MaxLength(1_500_000)
   imageData!: string;
 }
 

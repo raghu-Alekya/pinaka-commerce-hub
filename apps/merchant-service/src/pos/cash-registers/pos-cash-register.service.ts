@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosCashRegisterSettingsEntity } from './pos-cash-register-settings.entity';
-import { PosCashRegisterEntity } from './pos-cash-register.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { PosCashRegisterDto, SavePosCashRegisterDto } from './pos-cash-register.dto';
 
 export interface PosCashRegisterItem {
@@ -36,7 +36,7 @@ export class PosCashRegisterService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Cash register settings are not configured for this store');
-    return { success: true, cashRegister: await this.withRegisters(record) };
+    return { success: true, cashRegister: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosCashRegisterDto) {
@@ -77,64 +77,42 @@ export class PosCashRegisterService {
     }
   }
 
-  private settingsRepo() {
-    return this.merchants.requireDataSource().getRepository(PosCashRegisterSettingsEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.settingsRepo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'cash_register_settings');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosCashRegisterDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosCashRegisterRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosCashRegisterSettingsEntity);
-      const registers = manager.getRepository(PosCashRegisterEntity);
-      const row = existingId
-        ? await settings.save({ id: existingId, storeId, merchantId })
-        : await settings.save(settings.create({ storeId, merchantId }));
-
-      await registers.delete({ registerSettingsId: row.id });
-      const saved = (body.registers || []).length
-        ? await registers.save((body.registers || []).map((item, index) => registers.create({
-            ...(item.id ? { id: item.id } : {}),
-            registerSettingsId: row.id,
-            name: item.name.trim(),
-            pos: item.pos.trim(),
-            maxCash: String(item.maxCash),
-            safeDrop: item.safeDrop,
-            status: item.status,
-            sortOrder: index,
-          })))
-        : [];
-      return this.present(row, saved);
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'cash_register_settings', {
+      merchantId,
+      registers: (body.registers || []).map(item => ({
+        id: item.id || randomUUID(),
+        name: item.name.trim(),
+        pos: item.pos.trim(),
+        maxCash: Number(item.maxCash),
+        safeDrop: item.safeDrop,
+        status: item.status,
+      })),
     });
+    return this.present(saved);
   }
 
-  private async withRegisters(record: PosCashRegisterSettingsEntity): Promise<PosCashRegisterRecord> {
-    const registers = await this.merchants.requireDataSource().getRepository(PosCashRegisterEntity).find({
-      where: { registerSettingsId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, registers);
-  }
-
-  private present(record: PosCashRegisterSettingsEntity, registers: PosCashRegisterEntity[]): PosCashRegisterRecord {
+  private present(record: Record<string, any>): PosCashRegisterRecord {
+    const registers = Array.isArray(record.registers) ? record.registers : [];
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      registers: registers.map(item => ({
-        id: item.id,
+      registers: registers.map((item: Record<string, any>) => ({
+        id: String(item.id),
         name: item.name,
         pos: item.pos,
         maxCash: Number(item.maxCash),
-        safeDrop: item.safeDrop,
+        safeDrop: Boolean(item.safeDrop),
         status: item.status,
       })),
       createdAt: record.createdAt,

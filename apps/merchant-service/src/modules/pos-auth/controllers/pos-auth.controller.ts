@@ -24,6 +24,13 @@ export class PosAuthController {
     @Inject(PosAuthService) private readonly posAuthService: PosAuthService,
   ) {}
 
+  @Public()
+  @Post('merchant-login')
+  @HttpCode(HttpStatus.OK)
+  merchantPasswordLogin(@Body() body: { email?: string; password?: string }) {
+    return this.posAuthService.merchantPasswordLogin(body);
+  }
+
   /**
    * API 1: Merchant & Store Login / Information Lookup
    * POST /api/v1/pos/auth/merchant-store-login
@@ -72,10 +79,41 @@ export class PosAuthController {
   }
 
   /**
+   * WooCommerce product options for POS product entry.
+   * GET /api/v1/pos/auth/catalog/product-options
+   * Requires an active employee PIN session token plus x-merchant-id and x-store-id.
+   */
+  @Get('catalog/product-options')
+  @HttpCode(HttpStatus.OK)
+  async getStoreProductOptions(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreProductOptions(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
    * Store products.
    * GET /api/v1/pos/auth/catalog/products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get('merchant/catalog/products')
+  @HttpCode(HttpStatus.OK)
+  async getMerchantStoreProducts(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getMerchantStoreProducts(
+      headerValue(authorization), headerValue(merchantId), headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/products', 'products', 'store-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProducts(
@@ -95,6 +133,20 @@ export class PosAuthController {
    * GET /api/v1/pos/auth/catalog/get-categories-products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get(['catalog/get-categories-with-tax', 'get-categories-with-tax'])
+  @HttpCode(HttpStatus.OK)
+  async getCategoriesWithTax(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCategoriesWithTax(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/get-categories-products', 'get-categories-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProductsAndCategories(

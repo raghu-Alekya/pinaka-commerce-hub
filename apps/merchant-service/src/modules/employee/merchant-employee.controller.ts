@@ -1,5 +1,5 @@
 import { EmployeeValidationPipe, EmployeeResponseInterceptor } from './workforce-validation.pipe';
-import { BadRequestException, Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Inject, Injectable, NotFoundException, Param, Patch, Post, Put, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -118,5 +118,57 @@ export class MerchantEmployeeController {
   private async removeLocalImage(value: unknown): Promise<void> {
     if (typeof value !== 'string' || !value.startsWith('/uploads/employees/')) return;
     await unlink(join(employeeImageDirectory, basename(value))).catch(() => undefined);
+  }
+}
+
+type MerchantTokenRequest = { user?: { id?: string; merchantId?: string } };
+
+@Injectable()
+export class MerchantEmployeeTokenGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    if (process.env.SKIP_AUTH === 'true') return true;
+    const request = context.switchToHttp().getRequest<MerchantTokenRequest>();
+    if (!request.user?.merchantId) throw new ForbiddenException('A merchant-scoped access token is required');
+    return true;
+  }
+}
+
+/** Employee writes for merchant-scoped tokens, separate from admin-only employee routes. */
+@UseGuards(MerchantEmployeeTokenGuard)
+@UseInterceptors(EmployeeResponseInterceptor)
+@Controller(['connector/api/v1/merchant/employees', 'api/v1/merchant/employees'])
+export class MerchantTokenEmployeeController {
+  constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
+
+
+
+  @Put(':idOrCode')
+  @Patch(':idOrCode')
+  async update(
+    @Param('idOrCode') idOrCode: string,
+    @Body(new EmployeeValidationPipe({ expectedType: UpdateEmployeeDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateEmployeeDto,
+    @Req() request: MerchantTokenRequest,
+    @Query() query: Record<string, string>,
+  ) {
+    const merchantId = await this.merchantId(request);
+    const storeId = query.storeId || query.store_id;
+    if (!await this.repository.getEmployeeDetails(merchantId, idOrCode)) throw new NotFoundException(`Employee '${idOrCode}' not found`);
+    body.updatedBy = request.user?.id;
+    const loginPin = body.loginPin;
+    delete body.loginPin;
+    if (loginPin !== undefined && !storeId) throw new BadRequestException('storeId query parameter is required when setting loginPin');
+    const updated = await this.repository.updateEmployee(merchantId, idOrCode, body);
+    if (!updated) throw new NotFoundException(`Employee '${idOrCode}' not found`);
+    if (loginPin !== undefined && !await this.repository.setEmployeeStorePin(merchantId, idOrCode, storeId!, loginPin)) throw new NotFoundException(`Employee '${idOrCode}' not found`);
+    const employee = await this.repository.getEmployeeDetails(merchantId, updated.id);
+    return { success: true, message: 'Employee record updated successfully', employee };
+  }
+
+
+
+  private async merchantId(request: MerchantTokenRequest): Promise<string> {
+    const merchantId = await this.repository.resolveMerchantUuid(request.user!.merchantId!);
+    if (!merchantId) throw new NotFoundException('Token merchant was not found');
+    return merchantId;
   }
 }

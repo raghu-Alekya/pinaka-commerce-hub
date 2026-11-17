@@ -5,9 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
-import { PosCashbackEntity } from './pos-cashback.entity';
-import { PosCashbackTierEntity } from './pos-cashback-tier.entity';
+import { readPosConfigDocument, savePosConfigDocument } from '../../modules/store-pos-configuration/store-pos-config-document';
 import { SavePosCashbackDto } from './pos-cashback.dto';
 
 export interface PosCashbackRecord {
@@ -29,7 +29,7 @@ export class PosCashbackService {
     const store = await this.requireStore(storeId);
     const record = await this.findByStore(store.id);
     if (!record) throw new NotFoundException('Cashback settings are not configured for this store');
-    return { success: true, cashback: await this.withTiers(record) };
+    return { success: true, cashback: this.present(record) };
   }
 
   async create(storeId: string, body: SavePosCashbackDto) {
@@ -66,71 +66,45 @@ export class PosCashbackService {
     if (incomplete) throw new BadRequestException('Each cashback tier needs a from, to, and fee');
   }
 
-  private repo() {
-    return this.merchants.requireDataSource().getRepository(PosCashbackEntity);
-  }
-
   private async findByStore(storeId: string) {
-    return this.repo().findOne({ where: { storeId } });
+    return readPosConfigDocument(this.merchants.requireDataSource(), storeId, 'cashback_settings');
   }
 
   private async write(
     storeId: string,
     merchantId: string,
     body: SavePosCashbackDto,
-    existingId: string | null,
+    _existingId: string | null,
   ): Promise<PosCashbackRecord> {
-    const db = this.merchants.requireDataSource();
-    return db.transaction(async manager => {
-      const settings = manager.getRepository(PosCashbackEntity);
-      const tiers = manager.getRepository(PosCashbackTierEntity);
-      const fields = {
-        storeId,
-        merchantId,
-        enabled: body.enabled,
-        maxCashback: body.maxCashback === undefined || body.maxCashback === null ? null : String(body.maxCashback),
-      };
-      const row = existingId
-        ? await settings.save({ id: existingId, ...fields })
-        : await settings.save(settings.create(fields));
-
-      await tiers.delete({ cashbackId: row.id });
-      const complete = (body.tiers || []).filter(item =>
-        item.from !== undefined && item.to !== undefined && item.fee !== undefined &&
-        !Number.isNaN(Number(item.from)) && !Number.isNaN(Number(item.to)) && !Number.isNaN(Number(item.fee)));
-      const savedTiers = complete.length
-        ? await tiers.save(complete.map((item, index) => tiers.create({
-            cashbackId: row.id,
-            fromAmount: String(item.from),
-            toAmount: String(item.to),
-            fee: String(item.fee),
-            sortOrder: index,
-          })))
-        : [];
-
-      return this.present(row, savedTiers);
+    const complete = (body.tiers || []).filter(item =>
+      item.from !== undefined && item.to !== undefined && item.fee !== undefined &&
+      !Number.isNaN(Number(item.from)) && !Number.isNaN(Number(item.to)) && !Number.isNaN(Number(item.fee)));
+    const saved = await savePosConfigDocument(this.merchants.requireDataSource(), storeId, 'cashback_settings', {
+      merchantId,
+      enabled: body.enabled,
+      maxCashback: body.maxCashback === undefined || body.maxCashback === null ? null : Number(body.maxCashback),
+      tiers: complete.map(item => ({
+        id: randomUUID(),
+        from: Number(item.from),
+        to: Number(item.to),
+        fee: Number(item.fee),
+      })),
     });
+    return this.present(saved);
   }
 
-  private async withTiers(record: PosCashbackEntity): Promise<PosCashbackRecord> {
-    const tiers = await this.merchants.requireDataSource().getRepository(PosCashbackTierEntity).find({
-      where: { cashbackId: record.id },
-      order: { sortOrder: 'ASC' },
-    });
-    return this.present(record, tiers);
-  }
-
-  private present(record: PosCashbackEntity, tiers: PosCashbackTierEntity[]): PosCashbackRecord {
+  private present(record: Record<string, any>): PosCashbackRecord {
+    const tiers = Array.isArray(record.tiers) ? record.tiers : [];
     return {
       id: record.id,
       storeId: record.storeId,
       merchantId: record.merchantId,
-      enabled: record.enabled,
+      enabled: Boolean(record.enabled),
       maxCashback: record.maxCashback === null || record.maxCashback === undefined ? null : Number(record.maxCashback),
-      tiers: tiers.map(item => ({
-        id: item.id,
-        from: Number(item.fromAmount),
-        to: Number(item.toAmount),
+      tiers: tiers.map((item: Record<string, any>) => ({
+        id: String(item.id),
+        from: Number(item.from ?? item.fromAmount),
+        to: Number(item.to ?? item.toAmount),
         fee: Number(item.fee),
       })),
       createdAt: record.createdAt,

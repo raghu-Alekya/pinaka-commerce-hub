@@ -32,6 +32,22 @@ const MENU_KEYS = [
 ] as const;
 
 const MENU_KEY_SET = new Set<string>(MENU_KEYS);
+const ACTIONS = ['view', 'create', 'update', 'delete'] as const;
+const CRUD_KEYS = new Set([
+  'merchants',
+  'stores',
+  'subscriptions',
+  'vendors',
+  'store-types',
+  'features',
+  'feature-permissions',
+  'role-templates',
+  'plans',
+  'tenders',
+  'employees',
+  'devices',
+  'pos-configuration',
+]);
 
 const PLATFORM_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'MERCHANT']);
 
@@ -52,6 +68,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type MenuRow = { menu_key: string };
+type Grant = { menuKey: string; actions: string[] };
 
 @Injectable()
 export class MenuPermissionService {
@@ -74,16 +91,19 @@ export class MenuPermissionService {
       [scope.principalRole, scope.roleTemplateId],
     ) as MenuRow[];
 
-    const stored = rows
-      .map((row) => row.menu_key)
-      .filter((key) => MENU_KEY_SET.has(key));
+    const grants = scope.principalRole === 'SUPER_ADMIN'
+      ? this.defaultGrants('SUPER_ADMIN')
+      : rows.length
+        ? this.grantsFromStored(rows.map((row) => row.menu_key))
+        : this.defaultGrants(scope.principalRole);
 
     return {
       success: true,
       principalRole: scope.principalRole,
       roleTemplateId: scope.roleTemplateId,
-      configured: stored.length > 0,
-      menuKeys: stored.length > 0 ? this.normalize(scope.principalRole, stored) : this.defaults(scope.principalRole),
+      configured: rows.length > 0,
+      grants,
+      menuKeys: grants.filter((grant) => grant.actions.includes('view')).map((grant) => grant.menuKey),
     };
   }
 
@@ -91,9 +111,18 @@ export class MenuPermissionService {
     principalRole?: string;
     roleTemplateId?: string | null;
     menuKeys?: string[];
+    grants?: Grant[];
   }) {
     const scope = this.scope(body?.principalRole, body?.roleTemplateId || undefined);
-    const menuKeys = this.normalize(scope.principalRole, body?.menuKeys || []);
+    const grants = this.normalizeGrants(
+      scope.principalRole,
+      Array.isArray(body?.grants)
+        ? body.grants
+        : (body?.menuKeys || []).map((menuKey) => ({
+            menuKey,
+            actions: this.actionsFor(menuKey),
+          })),
+    );
     await this.ensureTable();
 
     const dataSource = this.merchants.requireDataSource();
@@ -105,13 +134,15 @@ export class MenuPermissionService {
         [scope.principalRole, scope.roleTemplateId],
       );
 
-      for (const menuKey of menuKeys) {
-        await manager.query(
-          `INSERT INTO public.console_menu_permissions
-             (principal_role, role_template_id, menu_key, allowed)
-           VALUES ($1, $2, $3, true)`,
-          [scope.principalRole, scope.roleTemplateId, menuKey],
-        );
+      for (const grant of grants) {
+        for (const action of grant.actions) {
+          await manager.query(
+            `INSERT INTO public.console_menu_permissions
+               (principal_role, role_template_id, menu_key, allowed)
+             VALUES ($1, $2, $3, true)`,
+            [scope.principalRole, scope.roleTemplateId, `${grant.menuKey}.${action}`],
+          );
+        }
       }
     });
 
@@ -121,7 +152,8 @@ export class MenuPermissionService {
       principalRole: scope.principalRole,
       roleTemplateId: scope.roleTemplateId,
       configured: true,
-      menuKeys,
+      grants,
+      menuKeys: grants.filter((grant) => grant.actions.includes('view')).map((grant) => grant.menuKey),
     };
   }
 
@@ -144,17 +176,62 @@ export class MenuPermissionService {
     return { principalRole: role, roleTemplateId: null };
   }
 
-  private defaults(principalRole: string) {
+  private actionsFor(menuKey: string) {
+    if (CRUD_KEYS.has(menuKey)) return [...ACTIONS];
+    return ['view'];
+  }
+
+  private defaultMenuKeys(principalRole: string) {
     if (principalRole === 'MERCHANT') return [...MERCHANT_DEFAULTS];
     if (principalRole === 'MERCHANT_EMPLOYEE') return ['dashboard'];
     return [...MENU_KEYS];
   }
 
-  private normalize(principalRole: string, menuKeys: string[]) {
-    if (principalRole === 'SUPER_ADMIN') return [...MENU_KEYS];
-    const selected = menuKeys.filter((key) => MENU_KEY_SET.has(String(key)));
-    if (!selected.includes('dashboard')) selected.unshift('dashboard');
-    return [...new Set(selected)];
+  private defaultGrants(principalRole: string): Grant[] {
+    return this.defaultMenuKeys(principalRole).map((menuKey) => ({
+      menuKey,
+      actions: this.actionsFor(menuKey),
+    }));
+  }
+
+  private grantsFromStored(keys: string[]): Grant[] {
+    const byMenu = new Map<string, Set<string>>();
+    for (const raw of keys) {
+      const value = String(raw || '');
+      const dot = value.lastIndexOf('.');
+      const menuKey = dot > 0 ? value.slice(0, dot) : value;
+      const action = dot > 0 ? value.slice(dot + 1) : '';
+      if (!MENU_KEY_SET.has(menuKey)) continue;
+      const known = this.actionsFor(menuKey);
+      const actions = action && known.includes(action) ? [action] : known;
+      const current = byMenu.get(menuKey) || new Set<string>();
+      actions.forEach((item) => current.add(item));
+      byMenu.set(menuKey, current);
+    }
+    return this.normalizeGrants(
+      'ADMIN',
+      [...byMenu.entries()].map(([menuKey, actions]) => ({
+        menuKey,
+        actions: [...actions],
+      })),
+    );
+  }
+
+  private normalizeGrants(principalRole: string, grants: Grant[]): Grant[] {
+    if (principalRole === 'SUPER_ADMIN') return this.defaultGrants('SUPER_ADMIN');
+    const byMenu = new Map<string, string[]>();
+    for (const grant of grants || []) {
+      const menuKey = String(grant?.menuKey || '');
+      if (!MENU_KEY_SET.has(menuKey)) continue;
+      const known = this.actionsFor(menuKey);
+      const actions = [...new Set((grant.actions || []).filter((action) => known.includes(action)))];
+      if (actions.some((action) => action !== 'view') && !actions.includes('view')) {
+        actions.unshift('view');
+      }
+      if (actions.length) byMenu.set(menuKey, actions);
+    }
+    if (!byMenu.has('dashboard')) byMenu.set('dashboard', ['view']);
+    return [...byMenu.entries()].map(([menuKey, actions]) => ({ menuKey, actions }));
   }
 
   private ensureTable() {
