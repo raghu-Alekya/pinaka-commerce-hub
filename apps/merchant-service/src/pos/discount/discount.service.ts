@@ -260,6 +260,15 @@ export class DiscountService implements OnModuleInit {
   /** Validate fixed-price offers against the saved product catalog before forwarding them to WordPress. */
   private async validateDiscountPrice(storeId: string, group: 'auto' | 'mix_match' | 'multipack', input: Record<string, any>) {
     const discountType = String(input.discount_type ?? '').toLowerCase();
+    // Multipack percentages are percentages off the qualifying pack subtotal;
+    // only fixed-price multipacks need to be compared with the catalog price.
+    if (group === 'multipack' && ['percent', 'percentage'].includes(discountType)) {
+      const percentage = Number(input.amount);
+      if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+        throw new BadRequestException('Multipack percentage amount must be between 0 and 100');
+      }
+      return;
+    }
     if (!['price', 'fixed_item'].includes(discountType) && group !== 'multipack') return;
     const amount = Number(input.amount);
     if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException('amount must be a valid discount price');
@@ -303,6 +312,12 @@ export class DiscountService implements OnModuleInit {
     const allowed = [...commonFields, ...typeFields[type]];
     const output: Record<string, any> = { type };
     for (const key of allowed) if (input[key] !== undefined) output[key] = input[key];
+    if (type === 'multipack' && ['percent', 'percentage'].includes(String(output.discount_type ?? '').toLowerCase())) {
+      // The WordPress multipack handler recognizes the exact value "percent"
+      // and persists it with a % suffix. Forward a canonical type so both API
+      // aliases are applied as percentages instead of fixed currency amounts.
+      output.discount_type = 'percent';
+    }
     for (const [snakeCase, camelCase] of [['usage_limit', 'usageLimit'], ['usage_count', 'usageCount']] as const) {
       if (output[snakeCase] === undefined && input[camelCase] !== undefined) {
         output[snakeCase] = input[camelCase];

@@ -45,7 +45,6 @@ export interface OrderRow {
   tax_lines: unknown;
   request_payload: unknown;
   meta_data: unknown;
-  metadata: unknown;
 }
 
 type Queryable = { query: (sql: string, parameters?: unknown[]) => Promise<unknown> };
@@ -291,7 +290,6 @@ export class LoyaltyRepository {
     if (!order) return undefined;
     const meta = await this.orderMeta(order.order_id, manager);
     order.meta_data = mergeMeta(order.meta_data, meta);
-    order.metadata = order.meta_data;
     return order;
   }
 
@@ -333,7 +331,6 @@ export class LoyaltyRepository {
           SET status = $2,
               line_items = $3::jsonb,
               meta_data = $4::jsonb,
-              metadata = $4::jsonb,
               subtotal = $5,
               discount_total = $6,
               fee_total = $7,

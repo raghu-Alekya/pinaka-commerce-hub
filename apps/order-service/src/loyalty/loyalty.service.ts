@@ -645,7 +645,6 @@ export class LoyaltyService implements OnModuleInit {
       else current.push(entry);
     }
     order.meta_data = current;
-    order.metadata = current;
     await this.loyalty.saveOrder(order, manager);
     await this.loyalty.saveOrderMeta(order.order_id, entries, manager);
   }
@@ -653,7 +652,6 @@ export class LoyaltyService implements OnModuleInit {
   private async removeOrderMeta(order: OrderRow, keys: string[], manager: EntityManager): Promise<void> {
     const current = asMeta(order.meta_data).filter((entry) => !keys.includes(entry.key));
     order.meta_data = current;
-    order.metadata = current;
     await this.loyalty.saveOrder(order, manager);
     await this.loyalty.deleteOrderMeta(order.order_id, keys, manager);
   }

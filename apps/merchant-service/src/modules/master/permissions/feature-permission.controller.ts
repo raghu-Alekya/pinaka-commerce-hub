@@ -1,4 +1,3 @@
-import { WorkforceValidationPipe } from '../../employee/workforce-validation.pipe';
 import { IsIn } from 'class-validator';
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
@@ -188,7 +187,7 @@ export class FeaturePermissionController {
   @Post()
   async create(
     @Param('feature_id') featureId: string,
-    @Body(new WorkforceValidationPipe({ expectedType: CreateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateFeaturePermissionDto,
+    @Body(new MasterFormValidationPipe({ expectedType: CreateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateFeaturePermissionDto,
     @Req() request: AuthenticatedRequest,
   ) {
     if (body.featureId && body.featureId.toLowerCase() !== featureId.toLowerCase()) {
@@ -212,7 +211,7 @@ export class FeaturePermissionController {
   async update(
     @Param('feature_id') featureId: string,
     @Param('id_or_code') idOrCode: string,
-    @Body(new WorkforceValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
+    @Body(new MasterFormValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
     @Req() request: AuthenticatedRequest,
   ) {
     const fields = permissionRequestToInternal(body as unknown as Record<string, unknown>) as {
@@ -234,7 +233,7 @@ export class FeaturePermissionController {
   patch(
     @Param('feature_id') featureId: string,
     @Param('id_or_code') idOrCode: string,
-    @Body(new WorkforceValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
+    @Body(new MasterFormValidationPipe({ expectedType: UpdateFeaturePermissionDto, transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateFeaturePermissionDto,
     @Req() request: AuthenticatedRequest,
   ) {
     return this.update(featureId, idOrCode, body, request);
