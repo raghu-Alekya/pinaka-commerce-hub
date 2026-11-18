@@ -909,10 +909,14 @@ export class PosAuthService {
     }
     const dataSource = this.merchantRepository.requireDataSource();
     const [session] = await dataSource.query(
-      `SELECT employee_id::text AS "employeeId", merchant_id::text AS "merchantId", store_id::text AS "storeId"
-       FROM public.employee_sessions
-       WHERE access_token = $1 AND lower(COALESCE(status, '')) = 'active'
-       ORDER BY session_created_at DESC NULLS LAST LIMIT 1`,
+      `SELECT session.employee_id::text AS "employeeId", session.merchant_id::text AS "merchantId", session.store_id::text AS "storeId"
+       FROM public.employee_sessions AS session
+       JOIN public.merchants AS merchant ON merchant.id = session.merchant_id
+         AND upper(merchant.status::text) = 'ACTIVE' AND COALESCE(merchant.is_deleted, false) = false
+       JOIN public.stores AS store ON store.id = session.store_id AND store.merchant_id = merchant.id
+         AND upper(store.status::text) = 'ACTIVE' AND COALESCE(store.is_deleted, false) = false
+       WHERE session.access_token = $1 AND lower(COALESCE(session.status, '')) = 'active'
+       ORDER BY session.session_created_at DESC NULLS LAST LIMIT 1`,
       [token],
     );
     if (!session || session.employeeId !== payload.sub ||
@@ -922,16 +926,19 @@ export class PosAuthService {
     }
     const candidates = await dataSource.query(
       `SELECT e.id::text AS id,
-              COALESCE(es.login_pin_hash, e.login_pin_hash) AS "pinHash",
-              COALESCE(es.login_pin, e.login_pin) AS pin
+              CASE WHEN es.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL
+                THEN es.login_pin_hash ELSE e.login_pin_hash END AS "pinHash",
+              CASE WHEN es.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL
+                THEN es.login_pin ELSE e.login_pin END AS pin
        FROM public.employee_stores AS es
        JOIN public.employees AS e ON e.id = es.employee_id
        WHERE es.store_id = $1::uuid
          AND (e.merchant_id = $2::uuid OR es.merchant_id = $2::uuid)
          AND (e.status IS NULL OR upper(e.status::text) <> 'INACTIVE')
          AND (es.status IS NULL OR upper(es.status::text) <> 'INACTIVE')
-         AND (es.login_pin_hash IS NOT NULL OR e.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL OR e.login_pin IS NOT NULL)`,
-      [session.storeId, session.merchantId],
+         AND (es.login_pin_hash IS NOT NULL OR e.login_pin_hash IS NOT NULL OR es.login_pin IS NOT NULL OR e.login_pin IS NOT NULL)
+       ORDER BY (e.id::text = $3) DESC, e.id`,
+      [session.storeId, session.merchantId, payload.sub],
     );
     let matchedEmployeeId: string | undefined;
     for (const candidate of candidates) {
