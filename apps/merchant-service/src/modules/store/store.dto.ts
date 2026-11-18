@@ -140,7 +140,7 @@ class StoreInputDto extends AuditInputDto {
   @fromAliases('storeEmail', 'email')
   store_email?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined && value !== null && value !== '')
   @IsEmail()
   @MaxLength(255)
   email?: string;
@@ -352,7 +352,7 @@ export class UpdateStoreDto extends AuditInputDto {
   @fromAliases('storeEmail', 'email')
   store_email?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined && value !== null && value !== '')
   @IsEmail()
   @MaxLength(255)
   email?: string;
