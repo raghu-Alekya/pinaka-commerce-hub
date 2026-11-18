@@ -9,7 +9,6 @@ import { WordPressResponseException } from './wordpress-response.exception';
 
 @Injectable()
 export class DiscountService implements OnModuleInit {
-  private polling = false;
   constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
 
   async onModuleInit(): Promise<void> {
@@ -19,7 +18,7 @@ export class DiscountService implements OnModuleInit {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
-        `[Discount sync] Database unavailable during startup (${message}); scheduled sync is disabled until PostgreSQL is available.`,
+        `[Discount sync] Database unavailable during initialization (${message}).`,
       );
       return;
     }
@@ -44,52 +43,25 @@ export class DiscountService implements OnModuleInit {
     } finally {
       await source.destroy();
     }
-    setTimeout(() => void this.pollConnectedStores(), 30_000);
-    setInterval(() => void this.pollConnectedStores(), 5 * 60_000);
-  }
-
-  private async pollConnectedStores() {
-    if (this.polling) return;
-    this.polling = true;
-    try {
-      const rows = await this.merchants.requireDataSource().query(
-        `SELECT store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt" FROM public.website_connections WHERE status='CONNECTED'`,
-      );
-      for (const row of rows) {
-        try {
-          if (!row.wordpressUrl || !row.encryptedJwt) continue;
-          await this.syncStoreDiscountsFromWordPress({
-            storeId: row.storeId,
-            wordpressUrl: row.wordpressUrl,
-            wordpressJwt: this.decryptConnectorSecret(row.encryptedJwt),
-          });
-        } catch (error: any) {
-          // The next scheduled poll retries transient failures; never log connection secrets.
-          console.warn(`[Discount sync] Store ${row.storeId} pull failed: ${error?.message ?? 'unknown error'}`);
-        }
-      }
-    } catch (error: any) {
-      console.warn(`[Discount sync] Polling failed: ${error?.message ?? 'unknown error'}`);
-    } finally {
-      this.polling = false;
-    }
   }
 
   async sync(storeId: string, role?: string) {
+    // Keep WooCommerce imports explicit: this is invoked by the sync POST only.
     const connection = await this.requireWordPressConnection(storeId, role);
     const result = await this.syncStoreDiscountsFromWordPress(connection);
     return { success: true, storeId: connection.storeId, ...result };
   }
 
   async list(storeId: string, role?: string, query: Record<string, string> = {}) {
-    const connection = await this.requireWordPressConnection(storeId, role);
-    return this.listFromConnection(storeId, connection, query);
+    await this.requireWordPressConnection(storeId, role);
+    // Page refreshes must never import remote changes; only sync() refreshes this snapshot.
+    return this.listStoredDiscounts(storeId, query, query.type);
   }
 
   async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
     const store = await this.resolveMerchantStore(storeId, actor);
-    const connection = await this.resolveWordPressConnection(store.id);
-    return this.listFromConnection(store.id, connection, query);
+    await this.resolveWordPressConnection(store.id);
+    return this.listStoredDiscounts(store.id, query, query.type);
   }
 
   async resolveMerchantStore(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined) {
@@ -104,92 +76,6 @@ export class DiscountService implements OnModuleInit {
       throw new ForbiddenException('Store is currently inactive');
     }
     return { id: store.id };
-  }
-
-  private async listFromConnection(storeId: string, connection: Awaited<ReturnType<DiscountService['requireWordPressConnection']>>, query: Record<string, string>) {
-    const { type, ...wordpressQuery } = query;
-    let response: any;
-    try {
-      response = await this.wordpressRequest(connection, 'custom-discount/get-all-discounts-for-admin', 'GET', undefined, {
-        page: '1',
-        per_page: '100',
-        ...wordpressQuery,
-      });
-    } catch (error) {
-      // WordPress can be down (for example its database is unreachable) while the
-      // store_discounts snapshot already has the records the Discounts page needs.
-      try {
-        return await this.listStoredDiscounts(storeId, wordpressQuery, type);
-      } catch {
-        throw error;
-      }
-    }
-    // An empty PHP list is JSON `[]`. Group lookups on that array miss every
-    // local discount, so a response can report a total while `data` stays empty.
-    this.ensureDiscountGroups(response);
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      const records = response?.data?.[group];
-      if (!Array.isArray(records)) continue;
-      for (const record of records) {
-        const recordId = record?.id ?? record?.discount_id ?? record?.wordpressId;
-        if (recordId === undefined || recordId === null) continue;
-        await this.persistWithoutChangingResponse(
-          () => this.saveDiscount(storeId, group, this.canonicalizeWordPressRecord(record), String(recordId)),
-          storeId,
-        );
-      }
-    }
-    // Usage is recorded by PCH when the discount is applied to an order. Overlay
-    // the locally tracked total because the WordPress list can lag behind PCH.
-    let localPayload: any = {};
-    try {
-      localPayload = await this.readDiscountPayload(storeId);
-    } catch {
-      // A WordPress list response remains available when the local snapshot DB
-      // is temporarily unavailable; the next poll retries the local write.
-    }
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      const remoteRecords = response?.data?.[group];
-      const localRecords = localPayload[group];
-      if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
-      for (const remote of remoteRecords) {
-        const remoteId = remote?.id ?? remote?.discount_id ?? remote?.wordpressId;
-        if (remoteId === undefined || remoteId === null) continue;
-        const local = localRecords.find((item: any) => this.discountMatchesId(item, String(remoteId)));
-        if (!local) continue;
-        const used = Number(local.usage_count ?? local.usageCount ?? 0);
-        if (Number.isFinite(used)) remote.usage_count = Math.max(0, used);
-      }
-    }
-    // WooCommerce may omit a used rule from its admin listing. Keep a locally
-    // tracked applied discount visible even when the remote catalog leaves it out.
-    for (const group of ['auto', 'mix_match', 'multipack']) {
-      if (Number(wordpressQuery.page ?? 1) !== 1) break;
-      const remoteRecords = response?.data?.[group];
-      const localRecords = localPayload[group];
-      if (!Array.isArray(remoteRecords) || !Array.isArray(localRecords)) continue;
-      const remoteIds = new Set(remoteRecords.map((item: any) => String(item?.id ?? item?.discount_id ?? item?.wordpressId ?? '')));
-      for (const local of localRecords) {
-        const localId = local?.id ?? local?.discount_id ?? local?.wordpressId;
-        if (localId === undefined || localId === null || remoteIds.has(String(localId))) continue;
-        const used = Number(local.usage_count ?? local.usageCount ?? 0);
-        const orderIds = Array.isArray(local.pch_used_order_ids) ? local.pch_used_order_ids : [];
-        const applications = local.pch_used_applications_by_order;
-        if (!(Number.isFinite(used) && used > 0) && !orderIds.length
-          && !(applications && typeof applications === 'object' && Object.keys(applications).length)) continue;
-        const retained = this.canonicalizeWordPressRecord(local);
-        retained.usage_count = Math.max(Number.isFinite(used) ? Math.max(0, used) : 0, orderIds.length);
-        remoteRecords.push(retained);
-        remoteIds.add(String(localId));
-      }
-    }
-    this.reconcileDiscountPagination(response);
-    if (!type) return response;
-    const group = this.discountGroup(type);
-    return {
-      data: Array.isArray(response?.data?.[group]) ? response.data[group] : [],
-      ...(response?.pagination ? { pagination: response.pagination } : {}),
-    };
   }
 
   async listByType(storeId: string, type: string, role?: string, query: Record<string, string> = {}) {
@@ -374,6 +260,15 @@ export class DiscountService implements OnModuleInit {
   /** Validate fixed-price offers against the saved product catalog before forwarding them to WordPress. */
   private async validateDiscountPrice(storeId: string, group: 'auto' | 'mix_match' | 'multipack', input: Record<string, any>) {
     const discountType = String(input.discount_type ?? '').toLowerCase();
+    // Multipack percentages are percentages off the qualifying pack subtotal;
+    // only fixed-price multipacks need to be compared with the catalog price.
+    if (group === 'multipack' && ['percent', 'percentage'].includes(discountType)) {
+      const percentage = Number(input.amount);
+      if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+        throw new BadRequestException('Multipack percentage amount must be between 0 and 100');
+      }
+      return;
+    }
     if (!['price', 'fixed_item'].includes(discountType) && group !== 'multipack') return;
     const amount = Number(input.amount);
     if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException('amount must be a valid discount price');
@@ -417,6 +312,12 @@ export class DiscountService implements OnModuleInit {
     const allowed = [...commonFields, ...typeFields[type]];
     const output: Record<string, any> = { type };
     for (const key of allowed) if (input[key] !== undefined) output[key] = input[key];
+    if (type === 'multipack' && ['percent', 'percentage'].includes(String(output.discount_type ?? '').toLowerCase())) {
+      // The WordPress multipack handler recognizes the exact value "percent"
+      // and persists it with a % suffix. Forward a canonical type so both API
+      // aliases are applied as percentages instead of fixed currency amounts.
+      output.discount_type = 'percent';
+    }
     for (const [snakeCase, camelCase] of [['usage_limit', 'usageLimit'], ['usage_count', 'usageCount']] as const) {
       if (output[snakeCase] === undefined && input[camelCase] !== undefined) {
         output[snakeCase] = input[camelCase];
@@ -727,34 +628,6 @@ export class DiscountService implements OnModuleInit {
     return { data: data[group], pagination };
   }
 
-  private ensureDiscountGroups(response: any) {
-    if (!response || typeof response !== 'object') return;
-    const groups = ['auto', 'mix_match', 'multipack'];
-    const data = response.data;
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      response.data = { auto: [], mix_match: [], multipack: [] };
-      return;
-    }
-    for (const group of groups) {
-      if (!Array.isArray(data[group])) data[group] = [];
-    }
-  }
-
-  private reconcileDiscountPagination(response: any) {
-    const pagination = response?.pagination;
-    if (!pagination || typeof pagination !== 'object' || !response?.data || Array.isArray(response.data)) return;
-    const count = ['auto', 'mix_match', 'multipack'].reduce(
-      (sum, group) => sum + (Array.isArray(response.data[group]) ? response.data[group].length : 0),
-      0,
-    );
-    const total = Number(pagination.total);
-    if (!Number.isFinite(total) || total >= count) return;
-    pagination.total = count;
-    const perPage = Number(pagination.per_page) || count || 1;
-    pagination.total_pages = Math.max(Number(pagination.total_pages) || 0, Math.max(1, Math.ceil(count / perPage)));
-    pagination.has_more = Number(pagination.page || 1) < Number(pagination.total_pages);
-  }
-
   private async wordpressRequest(connection: { wordpressUrl: string; wordpressJwt: string }, path: string, method: string, body?: any, query: Record<string, string> = {}) {
     const url = new URL(`${connection.wordpressUrl.replace(/\/+$/, '')}/wp-json/pinaka-pos/v1/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, value);
@@ -783,7 +656,7 @@ export class DiscountService implements OnModuleInit {
       await operation();
     } catch (error: any) {
       // The WooCommerce operation already succeeded. Keep its public response intact;
-      // the scheduled pull can rebuild the mapping. Do not include connection credentials in logs.
+      // a later explicit discount sync can rebuild the mapping. Do not include connection credentials in logs.
       console.error(`[Discount sync] Local mapping write failed for store ${storeId}: ${error?.message ?? 'unknown error'}`);
     }
   }

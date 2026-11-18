@@ -12,7 +12,7 @@ export class SettingsApiService {
     const general: Json = Object.fromEntries(Object.entries(current).filter(([, value]) =>
       value !== null && value !== undefined && value !== false && !(typeof value === 'string' && !value.trim()),
     ));
-    const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer', 'device_id'];
+    const textFields = ['business_name', 'language', 'nav_bar_location', 'pos_theme', 'contact_info', 'address', 'currency', 'timezone', 'version', 'gstin', 'receipt_header', 'receipt_footer'];
     for (const key of textFields) {
       if (body[key] === undefined) continue;
       const value = this.sanitizeText(body[key]);
@@ -40,7 +40,9 @@ export class SettingsApiService {
         continue;
       }
       const imageUrl = this.sanitizeUrl(body[key]);
-      if (!imageUrl) throw new BadRequestException(`${key} must be an http(s) URL or /uploads path`);
+      if (!imageUrl || !imageUrl.startsWith('/uploads/')) {
+        throw new BadRequestException(`${key} must be an uploaded image path under /uploads`);
+      }
       general[key] = imageUrl;
     }
     const printerSettings: Json = {};
@@ -53,7 +55,7 @@ export class SettingsApiService {
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
       'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
       'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
-      'receipt_footer', 'device_id',
+      'receipt_footer',
     ];
     const responseData: Json = {};
     for (const key of responseFields) {
@@ -70,35 +72,27 @@ export class SettingsApiService {
   }
 
   async getGeneral(scope: SettingsScope) {
-    const value = await this.repository.read(scope);
+    const [value, storeEmail] = await Promise.all([
+      this.repository.read(scope),
+      this.repository.storeEmail(scope),
+    ]);
     const general: Json = { ...(value.general ?? {}) };
+    if (storeEmail) general.email = storeEmail;
     const printer = await this.repository.readConfiguration(scope, 'printer_settings');
     for (const key of ['receipt_header', 'receipt_footer', 'address']) {
       if (printer[key] !== undefined && printer[key] !== null) general[key] = printer[key];
     }
-    const hasPrinterLogo = ['logo_url', 'logo', 'image_url'].some((key) =>
-      Object.prototype.hasOwnProperty.call(printer, key));
-    if (hasPrinterLogo) {
-      const printerLogo = printer.logo_url || printer.logo || printer.image_url;
-      if (typeof printerLogo === 'string' && printerLogo.trim()) {
-        general.logo_url = printerLogo;
-        general.image_url = printerLogo;
-      } else {
-        delete general.logo_url;
-        delete general.image_url;
-      }
-    } else {
-      const savedLogo = general.logo_url || general.image_url;
-      if (savedLogo) {
-        general.logo_url = savedLogo;
-        general.image_url = savedLogo;
-      }
-    }
+    // Keep the general image and receipt logo independent. Older code copied
+    // one printer logo value into both keys, hiding distinct uploaded images.
+    const printerImage = printer.image_url;
+    const printerLogo = printer.logo_url || printer.logo;
+    if (typeof printerImage === 'string' && printerImage.trim()) general.image_url = printerImage;
+    if (typeof printerLogo === 'string' && printerLogo.trim()) general.logo_url = printerLogo;
     const fields = [
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
       'address', 'currency', 'timezone', 'email_notification', 'sound_notification',
       'version', 'image_url', 'logo_url', 'company_name', 'gstin', 'receipt_header',
-      'receipt_footer', 'device_id',
+      'receipt_footer',
     ];
     const data: Json = {};
     for (const key of fields) {
