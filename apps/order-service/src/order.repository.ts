@@ -273,7 +273,6 @@ export class OrderRepository implements OnModuleInit {
     storeOrder.tipAmount = order.tipAmount;
     storeOrder.offline = order.offline;
     storeOrder.localShiftId = order.localShiftId;
-    storeOrder.metadata = order.metadata;
     storeOrder.requestPayload = order.requestPayload;
     storeOrder.orderStatus = order.orderStatus;
     storeOrder.statusHistory = [{
@@ -321,7 +320,7 @@ export class OrderRepository implements OnModuleInit {
               paymentRows.flat(),
             );
           }
-          await this.saveStoreOrderMeta(manager, id, storeOrder.metadata, storeOrder.metaData);
+          await this.saveStoreOrderMeta(manager, id, storeOrder.metaData);
           return { persistedStoreOrder };
         });
         savedStoreOrder = saved.persistedStoreOrder;
@@ -432,7 +431,6 @@ export class OrderRepository implements OnModuleInit {
       tipAmount,
       offline: Boolean(orderData.offline),
       localShiftId: orderData.localShiftId,
-      metadata: Array.isArray(orderData.metadata) ? orderData.metadata : metadata,
       requestPayload: orderData.requestPayload,
       orderStatus: orderData.orderStatus || 'CREATED',
       statusHistory: [],
@@ -603,7 +601,9 @@ export class OrderRepository implements OnModuleInit {
             ? codes.filter(appliedCode => appliedCode === code).length
             : 0)
           : 0;
-        const usedOrderIds = Array.isArray(record.pch_used_order_ids) ? record.pch_used_order_ids.map(String) : [];
+        const usedOrderIds: string[] = Array.isArray(record.pch_used_order_ids)
+          ? record.pch_used_order_ids.map((value: unknown) => String(value))
+          : [];
         const byOrder = record.pch_used_applications_by_order
           && typeof record.pch_used_applications_by_order === 'object'
           ? record.pch_used_applications_by_order as Record<string, number>
@@ -692,7 +692,7 @@ export class OrderRepository implements OnModuleInit {
       { key: 'pos_change_returned', value: change.change.toFixed(2) },
       { key: 'pos_cash_received', value: change.cashReceived.toFixed(2) },
     ]);
-    order.metadata = storeOrder.metadata;
+    order.metadata = storeOrder.metaData as OrderEntity['metadata'];
     let lastCashIndex = -1;
     payments.forEach((payment: any, index: number) => {
       const tender = payment?.payment_method ?? payment?.paymentMethod ?? payment?.method
@@ -1318,7 +1318,44 @@ export class OrderRepository implements OnModuleInit {
       CREATE INDEX IF NOT EXISTS store_orders_order_id_idx
       ON public.store_orders (order_id)
     `);
+    await this.dataSource.query(`
+      ALTER TABLE public.store_orders
+        ADD COLUMN IF NOT EXISTS meta_data jsonb NOT NULL DEFAULT '[]'::jsonb;
+    `);
     await this.consolidateDuplicateTables();
+    await this.dataSource.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'store_orders'
+            AND column_name = 'metadata'
+        ) THEN
+          WITH missing AS (
+            SELECT sale.id, jsonb_agg(entry) AS entries
+            FROM public.store_orders AS sale
+            CROSS JOIN LATERAL jsonb_array_elements(
+              CASE WHEN jsonb_typeof(sale.metadata) = 'array' THEN sale.metadata ELSE '[]'::jsonb END
+            ) AS entry
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(sale.meta_data) = 'array' THEN sale.meta_data ELSE '[]'::jsonb END
+              ) AS current_entry
+              WHERE current_entry->>'key' = entry->>'key'
+            )
+            GROUP BY sale.id
+          )
+          UPDATE public.store_orders AS sale
+          SET meta_data = COALESCE(sale.meta_data, '[]'::jsonb) || missing.entries
+          FROM missing
+          WHERE sale.id = missing.id;
+
+          ALTER TABLE public.store_orders DROP COLUMN metadata;
+        END IF;
+      END $$;
+    `);
   }
 
   private async ensurePosOrderColumns(): Promise<void> {
@@ -1722,7 +1759,6 @@ export class OrderRepository implements OnModuleInit {
         orderType: orderData.orderType,
         paymentMethodCode: orderData.paymentMethod,
         paymentStatus: orderData.paymentStatus,
-        metadata,
         requestPayload: payload,
         orderStatus,
         paymentMethod: payload.payment_method ? String(payload.payment_method) : current.storeOrder.paymentMethod,
@@ -1830,7 +1866,7 @@ export class OrderRepository implements OnModuleInit {
         );
       }
       await manager.query('DELETE FROM public.store_orders_meta WHERE order_id = $1::uuid', [current.order.id]);
-      await this.saveStoreOrderMeta(manager, current.order.id, replacement.metadata, replacement.metaData);
+      await this.saveStoreOrderMeta(manager, current.order.id, replacement.metaData);
       if (previousStatus !== String(orderStatus)) {
         await this.saveStatusHistory(
           manager,
@@ -1921,7 +1957,7 @@ export class OrderRepository implements OnModuleInit {
             NULLIF(sale.request_payload->>'created_via', ''),
             NULLIF((
               SELECT entry->>'value'
-              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              FROM jsonb_array_elements(COALESCE(sale.meta_data, '[]'::jsonb)) AS entry
               WHERE entry->>'key' IN ('order_created_via', 'created_via')
               LIMIT 1
             ), ''),
@@ -1934,7 +1970,7 @@ export class OrderRepository implements OnModuleInit {
             NULLIF(sale.placed_by, ''),
             NULLIF((
               SELECT entry->>'value'
-              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              FROM jsonb_array_elements(COALESCE(sale.meta_data, '[]'::jsonb)) AS entry
               WHERE entry->>'key' IN ('_wc_order_created_by', 'pos_placed_by', 'author')
               LIMIT 1
             ), ''),
@@ -2057,6 +2093,7 @@ export class OrderRepository implements OnModuleInit {
     orders: Array<{
       order: OrderEntity;
       storeOrder: StoreOrderEntity | null;
+      websiteOrderId?: number;
       items: OrderItemEntity[];
       products: Map<string, unknown>;
       refunds: Array<{ amount: unknown; metadata: Record<string, unknown> | null }>;
@@ -2116,7 +2153,7 @@ export class OrderRepository implements OnModuleInit {
             NULLIF(sale.request_payload->>'created_via', ''),
             NULLIF((
               SELECT entry->>'value'
-              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              FROM jsonb_array_elements(COALESCE(sale.meta_data, '[]'::jsonb)) AS entry
               WHERE entry->>'key' IN ('order_created_via', 'created_via')
               LIMIT 1
             ), ''),
@@ -2129,7 +2166,7 @@ export class OrderRepository implements OnModuleInit {
             NULLIF(sale.placed_by, ''),
             NULLIF((
               SELECT entry->>'value'
-              FROM jsonb_array_elements(COALESCE(sale.metadata, '[]'::jsonb)) AS entry
+              FROM jsonb_array_elements(COALESCE(sale.meta_data, '[]'::jsonb)) AS entry
               WHERE entry->>'key' IN ('_wc_order_created_by', 'pos_placed_by', 'author')
               LIMIT 1
             ), ''),
@@ -2163,6 +2200,13 @@ export class OrderRepository implements OnModuleInit {
     if (!ids.length) return { total, orders: [] };
     const storeOrders = await this.storeOrderRepo.find({ where: { orderId: In(ids) } });
     await this.applyStoredOrderMeta(storeOrders);
+    const websiteOrderRows: Array<{ order_id: string; meta_value: unknown }> = await this.dataSource.query(
+      `SELECT order_id::text AS order_id, meta_value
+       FROM public.store_orders_meta
+       WHERE order_id = ANY($1::uuid[]) AND meta_key = 'woocommerce_order_id'`,
+      [ids],
+    );
+    const websiteOrderIdByOrder = new Map(websiteOrderRows.map((row) => [row.order_id, Number(row.meta_value)]));
     const refundRows: Array<{
       order_id: string;
       amount: unknown;
@@ -2198,6 +2242,7 @@ export class OrderRepository implements OnModuleInit {
       return [{
         order: this.projectOrder(storeOrder),
         storeOrder,
+        websiteOrderId: websiteOrderIdByOrder.get(id),
         items: this.itemsFromStore(storeOrder),
         effectiveStatus: effectiveStatusById.get(id) || 'processing',
         refunds: refundRows
@@ -3204,27 +3249,23 @@ export class OrderRepository implements OnModuleInit {
   }
 
   private upsertOrderMeta(storeOrder: StoreOrderEntity, entries: Array<{ key: string; value: unknown }>): void {
-    const current = Array.isArray(storeOrder.metadata)
-      ? storeOrder.metadata.map((entry) => ({ ...entry }))
-      : Array.isArray(storeOrder.metaData)
-        ? (storeOrder.metaData as Array<{ key?: string; value?: unknown }>).map((entry) => ({
+    const current = Array.isArray(storeOrder.metaData)
+      ? (storeOrder.metaData as Array<{ key?: string; value?: unknown }>).map((entry) => ({
           key: String(entry?.key || ''),
           value: entry?.value,
         }))
-        : [];
+      : [];
     entries.forEach((entry) => {
       const index = current.findIndex((item) => item?.key === entry.key);
       if (index >= 0) current[index] = { ...current[index], key: entry.key, value: entry.value };
       else current.push({ key: entry.key, value: entry.value });
     });
-    storeOrder.metadata = current;
     storeOrder.metaData = current;
   }
 
   private async saveStoreOrderMeta(
     manager: EntityManager,
     orderId: string,
-    metadata: unknown,
     metaData: unknown,
   ): Promise<void> {
     const entries = new Map<string, unknown>();
@@ -3237,7 +3278,6 @@ export class OrderRepository implements OnModuleInit {
       });
     };
     collect(metaData);
-    collect(metadata);
     if (!entries.size) return;
     const rows = [...entries.entries()];
     await manager.query(
@@ -3318,7 +3358,7 @@ export class OrderRepository implements OnModuleInit {
       localShiftId: store.localShiftId,
       clientOrderId: store.clientOrderId,
       offline: Boolean(store.offline),
-      metadata: store.metadata || (Array.isArray(store.metaData) ? store.metaData as OrderEntity['metadata'] : []),
+      metadata: Array.isArray(store.metaData) ? store.metaData as OrderEntity['metadata'] : [],
       requestPayload: store.requestPayload,
       customerName: store.customerName || 'Walk-in Customer',
       customerPhone: store.customerPhone,
@@ -3373,7 +3413,6 @@ export class OrderRepository implements OnModuleInit {
         ADD COLUMN IF NOT EXISTS tip_amount numeric(12,2) NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS offline boolean NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS local_shift_id varchar(100),
-        ADD COLUMN IF NOT EXISTS metadata jsonb,
         ADD COLUMN IF NOT EXISTS request_payload jsonb,
         ADD COLUMN IF NOT EXISTS order_status varchar(50) DEFAULT 'CREATED',
         ADD COLUMN IF NOT EXISTS status_history jsonb NOT NULL DEFAULT '[]'::jsonb
@@ -3391,7 +3430,11 @@ export class OrderRepository implements OnModuleInit {
                tip_amount = COALESCE(legacy.tip_amount, 0),
                offline = COALESCE(legacy.offline, false),
                local_shift_id = legacy.local_shift_id,
-               metadata = legacy.metadata,
+               meta_data = CASE
+                 WHEN jsonb_typeof(sale.meta_data) = 'array' AND jsonb_array_length(sale.meta_data) > 0 THEN sale.meta_data
+                 WHEN jsonb_typeof(legacy.metadata) = 'array' THEN legacy.metadata
+                 ELSE sale.meta_data
+               END,
                request_payload = legacy.request_payload,
                order_status = COALESCE(legacy.order_status, sale.order_status)
           FROM public.orders AS legacy

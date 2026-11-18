@@ -362,7 +362,6 @@ export class OrderListPresenter {
     request: Record<string, unknown>,
   ): number {
     const metadata = [
-      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
       ...(Array.isArray(order.metadata) ? order.metadata : []),
       ...(Array.isArray(request.meta_data) ? request.meta_data : []),
@@ -380,7 +379,6 @@ export class OrderListPresenter {
     // persisted order metadata. Prefer persisted values; use request metadata
     // only as a fallback for older orders that have no saved redemption keys.
     const metadata = [
-      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
       ...(Array.isArray(order.metadata) ? order.metadata : []),
     ] as Array<{ key?: string; value?: unknown }>;
@@ -409,7 +407,6 @@ export class OrderListPresenter {
     request: Record<string, unknown>,
   ): string | null {
     const metadata = [
-      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
       ...(Array.isArray(order.metadata) ? order.metadata : []),
       ...(Array.isArray(request.meta_data) ? request.meta_data : []),
