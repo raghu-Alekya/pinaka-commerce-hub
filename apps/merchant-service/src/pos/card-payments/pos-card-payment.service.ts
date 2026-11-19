@@ -33,15 +33,16 @@ export class PosCardPaymentService {
   }
 
   async create(storeId: string, body: SavePosCardPaymentDto) {
+    const admin_payment_provider = "payroc";
     const store = await this.requireStore(storeId);
     this.assertFields(body);
     const document = await this.findDocument(store.id);
     const providers = this.providers(document);
-    if (providers.some(item => item.provider === body.provider)) {
-      throw new ConflictException(`Card payment settings already exist for ${body.provider}`);
+    if (providers.some(item => item.provider === admin_payment_provider)) {
+      throw new ConflictException(`Card payment settings already exist for ${admin_payment_provider}`);
     }
     const saved = await this.write(store.id, store.merchantId, [...providers, { id: randomUUID(), ...this.fields(body) }], body.payment_gateway_provider);
-    const created = this.providers(saved).find(item => item.provider === body.provider);
+    const created = this.providers(saved).find(item => item.provider === admin_payment_provider);
     return { success: true, cardPayment: this.present(created, saved) };
   }
 
