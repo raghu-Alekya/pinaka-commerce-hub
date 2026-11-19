@@ -6,6 +6,7 @@ import { OrderUpdatePresenter } from './modules/order-updates/order-update.prese
 import { OrderListPresenter } from './responses/order-list.presenter';
 import { OrderResponsePresenter } from './responses/order-response.presenter';
 import { OrderWebsiteSyncService } from './website-sync/order-website-sync.service';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 
 @Controller(['api/v1/orders', 'connector/api/v1/orders'])
 export class AppController {
@@ -58,10 +59,12 @@ export class AppController {
   @Post()
   async createOrder(
     @Body() body: any,
+    @Headers('authorization') authorization?: string,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
     @Headers('x-device-id') deviceHeader?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const normalized = this.normalizeCreateOrder(body, storeHeader, merchantHeader, deviceHeader);
     if (!normalized.storeId || !normalized.items.length) {
       throw new BadRequestException('storeId and at least 1 item are required to create an order');
@@ -147,6 +150,7 @@ export class AppController {
 
   @Get('total-orders')
   async listTotalOrders(
+    @Headers('authorization') authorization?: string,
     @Query('page') page?: string,
     @Query('per_page') perPage?: string,
     @Query('status') status?: string,
@@ -155,6 +159,7 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const criteria = this.orderLists.criteria({
       page,
       perPage,
@@ -310,7 +315,8 @@ export class AppController {
 
   // --- 4. Update Order Status (State Machine Transition) ---
   @Patch(':id/status')
-  async updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; changedBy?: string; reason?: string }) {
+  async updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; changedBy?: string; reason?: string }, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     if (!body.status) {
       throw new BadRequestException('target status is required');
     }

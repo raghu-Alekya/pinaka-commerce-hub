@@ -6,7 +6,6 @@ const ORDER_META_ENTRIES = `
     CROSS JOIN LATERAL jsonb_array_elements(
       CASE
         WHEN jsonb_typeof(sale.meta_data) = 'array' AND jsonb_array_length(sale.meta_data) > 0 THEN sale.meta_data
-        WHEN jsonb_typeof(sale.metadata) = 'array' THEN sale.metadata
         ELSE '[]'::jsonb
       END
     ) AS entry
@@ -124,8 +123,7 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
 
     await manager.query(`
       UPDATE public.store_orders AS sale
-         SET metadata = COALESCE(sale.metadata, '[]'::jsonb) || missing.entries,
-             meta_data = COALESCE(sale.meta_data, '[]'::jsonb) || missing.entries,
+         SET meta_data = COALESCE(sale.meta_data, '[]'::jsonb) || missing.entries,
              updated_at = now()
         FROM (
           SELECT meta.order_id,
@@ -135,7 +133,7 @@ export async function ensureStoreOrdersMetaSchema(db: DataSource): Promise<void>
            WHERE meta.meta_key IN ('pos_change_returned', 'pos_cash_received')
              AND NOT EXISTS (
                SELECT 1
-                 FROM jsonb_array_elements(COALESCE(sale_row.metadata, '[]'::jsonb)) AS entry
+                 FROM jsonb_array_elements(COALESCE(sale_row.meta_data, '[]'::jsonb)) AS entry
                 WHERE entry->>'key' = meta.meta_key
              )
            GROUP BY meta.order_id

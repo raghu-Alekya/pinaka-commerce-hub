@@ -1,8 +1,17 @@
-import { Body, Controller, Headers, HttpCode, Inject, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, CanActivate, Controller, ExecutionContext, Headers, HttpCode, Inject, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 import { AddOrderItemsDto, ApplyCouponDto, ApplyDiscountDto, CancelOrderDto, UpdateOrderDto } from './dto/order-update.dto';
 import { OrderUpdateService } from './services/order-update.service';
 
+class OrderUpdateAuthGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    verifyAccessToken(extractBearerToken(context.switchToHttp().getRequest().headers.authorization));
+    return true;
+  }
+}
+
 @Controller(['api/v1/orders', 'connector/api/v1/orders'])
+@UseGuards(OrderUpdateAuthGuard)
 export class OrderUpdatesController {
   constructor(@Inject(OrderUpdateService) private readonly updates: OrderUpdateService) {}
 
