@@ -33,9 +33,13 @@ import {
 } from './calculations/store-order.calculations';
 
 const CARD_PAYMENT_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
+const EBT_PAYMENT_METHODS = new Set(['ebt', 'pos-ebt', 'ebt-card']);
 
-function isCardPaymentMethod(method: unknown): boolean {
-  return CARD_PAYMENT_METHODS.has(String(method || '').trim().toLowerCase().replace(/_/g, '-'));
+function paymentTenderFamily(method: unknown): 'card' | 'ebt' | null {
+  const normalized = String(method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (CARD_PAYMENT_METHODS.has(normalized)) return 'card';
+  if (EBT_PAYMENT_METHODS.has(normalized)) return 'ebt';
+  return null;
 }
 
 @Injectable()
@@ -664,8 +668,8 @@ export class OrderRepository implements OnModuleInit {
     orderId: string,
     paymentRows: any[][],
   ): Promise<any[][]> {
-    const cardRows = paymentRows.filter((row) => isCardPaymentMethod(row[9]));
-    if (!cardRows.length) return paymentRows;
+    const gatewayRows = paymentRows.filter((row) => paymentTenderFamily(row[9]));
+    if (!gatewayRows.length) return paymentRows;
     const existing = await manager.query(
       `SELECT amount::text AS amount, payment_method, provider_transaction_id, payment_gateway_response
          FROM public.store_pos_payments
@@ -676,13 +680,18 @@ export class OrderRepository implements OnModuleInit {
       [orderId],
     );
     const taken = existing
-      .filter((row: { payment_method?: string }) => isCardPaymentMethod(row.payment_method))
-      .map((row: { amount: string }) => Number(row.amount));
+      .map((row: { payment_method?: string; amount: string }) => ({
+        family: paymentTenderFamily(row.payment_method),
+        amount: Number(row.amount),
+      }))
+      .filter((row: { family: 'card' | 'ebt' | null }) => row.family);
     if (!taken.length) return paymentRows;
     return paymentRows.filter((row) => {
-      if (!isCardPaymentMethod(row[9])) return true;
+      const family = paymentTenderFamily(row[9]);
+      if (!family) return true;
       const amount = Number(row[11]);
-      const match = taken.findIndex((saved) => Math.abs(saved - amount) < 0.001);
+      const match = taken.findIndex((saved: { family: 'card' | 'ebt' | null; amount: number }) =>
+        saved.family === family && Math.abs(saved.amount - amount) < 0.001);
       if (match < 0) return true;
       taken.splice(match, 1);
       return false;
@@ -691,13 +700,13 @@ export class OrderRepository implements OnModuleInit {
 
   private async gatewayCardSnapshots(manager: EntityManager, orderId: string): Promise<Array<Record<string, unknown>>> {
     return manager.query(
-      `SELECT amount::text AS amount, provider, provider_transaction_id, payment_gateway_response, metadata
+      `SELECT amount::text AS amount, payment_method, provider, provider_transaction_id, payment_gateway_response, metadata
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
           AND entry_type = 'payment'
           AND deleted_at IS NULL
           AND is_void = false
-          AND lower(replace(payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card', 'ebt', 'pos-ebt', 'ebt-card')
           AND (
             payment_gateway_response IS NOT NULL
             OR NULLIF(btrim(provider_transaction_id), '') IS NOT NULL
@@ -729,7 +738,10 @@ export class OrderRepository implements OnModuleInit {
                AND entry_type = 'payment'
                AND deleted_at IS NULL
                AND amount = $2::numeric
-               AND lower(replace(payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+               AND (
+                 ($7 = 'ebt' AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card'))
+                 OR ($7 = 'card' AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'))
+               )
              ORDER BY payment_gateway_response NULLS LAST, created_at
              LIMIT 1
           )`,
@@ -740,6 +752,7 @@ export class OrderRepository implements OnModuleInit {
           saved.provider_transaction_id ?? null,
           response,
           JSON.stringify(saved.metadata && typeof saved.metadata === 'object' ? saved.metadata : {}),
+          paymentTenderFamily(saved.payment_method) ?? 'card',
         ],
       );
     }
@@ -757,24 +770,46 @@ export class OrderRepository implements OnModuleInit {
           AND extra.entry_type = 'payment'
           AND extra.deleted_at IS NULL
           AND extra.is_void = false
-          AND lower(replace(extra.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND (
+            (
+              lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+              AND EXISTS (
+                SELECT 1
+                  FROM public.store_pos_payments AS charged
+                 WHERE charged.order_id = extra.order_id
+                   AND charged.id <> extra.id
+                   AND charged.deleted_at IS NULL
+                   AND charged.entry_type = 'payment'
+                   AND charged.is_void = false
+                   AND charged.amount = extra.amount
+                   AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+                   AND (
+                     charged.payment_gateway_response IS NOT NULL
+                     OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+                   )
+              )
+            )
+            OR (
+              lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card')
+              AND EXISTS (
+                SELECT 1
+                  FROM public.store_pos_payments AS charged
+                 WHERE charged.order_id = extra.order_id
+                   AND charged.id <> extra.id
+                   AND charged.deleted_at IS NULL
+                   AND charged.entry_type = 'payment'
+                   AND charged.is_void = false
+                   AND charged.amount = extra.amount
+                   AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card')
+                   AND (
+                     charged.payment_gateway_response IS NOT NULL
+                     OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+                   )
+              )
+            )
+          )
           AND extra.payment_gateway_response IS NULL
-          AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL
-          AND EXISTS (
-            SELECT 1
-              FROM public.store_pos_payments AS charged
-             WHERE charged.order_id = extra.order_id
-               AND charged.id <> extra.id
-               AND charged.deleted_at IS NULL
-               AND charged.entry_type = 'payment'
-               AND charged.is_void = false
-               AND charged.amount = extra.amount
-               AND lower(replace(charged.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
-               AND (
-                 charged.payment_gateway_response IS NOT NULL
-                 OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
-               )
-          )`,
+          AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL`,
       [orderId],
     );
   }
