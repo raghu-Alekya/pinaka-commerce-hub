@@ -73,6 +73,7 @@ export class MerchantCrudService {
       id: row.id,
       subscriptionCode: row.subscription_code ?? row.subscriptionCode ?? row.id,
       merchantId: row.merchant_code ?? row.merchant_id ?? row.merchantId ?? null,
+      merchantUuid: row.merchant_id ?? row.merchantId ?? null,
       merchantName: row.merchant_name ?? null,
       status: row.status,
       billingCycle: row.billing_cycle ?? row.billingCycle ?? null,
