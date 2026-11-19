@@ -2256,6 +2256,9 @@ export class OrderRepository implements OnModuleInit {
     statuses: string[];
     createdVia?: string;
     author?: string;
+    search?: string;
+    customer?: string;
+    createdAfter?: Date;
     after?: Date;
     before?: Date;
     orderBy?: 'created' | 'modified';
@@ -2279,7 +2282,7 @@ export class OrderRepository implements OnModuleInit {
     const author = criteria.author?.trim() || null;
     const merchantId = criteria.storeId ? null : criteria.merchantId || null;
     const storeId = criteria.storeId || null;
-    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
+    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.search || null, criteria.createdAfter || null, criteria.customer || null];
     const effectiveStatus = `CASE
       WHEN upper(COALESCE(sale.order_status, '')) = 'REFUNDED'
         OR lower(COALESCE(sale.status, '')) = 'refunded'
@@ -2346,6 +2349,11 @@ export class OrderRepository implements OnModuleInit {
         )
         AND ($6::timestamptz IS NULL OR sale.updated_at >= $6::timestamptz)
         AND ($7::timestamptz IS NULL OR sale.updated_at <= $7::timestamptz)
+        AND ($8::text IS NULL OR sale.order_number ILIKE '%' || $8::text || '%'
+          OR sale.client_order_id ILIKE '%' || $8::text || '%'
+          OR sale.customer_name ILIKE '%' || $8::text || '%')
+        AND ($9::timestamptz IS NULL OR sale.created_at >= $9::timestamptz)
+        AND ($10::text IS NULL OR sale.customer_name = $10::text)
     `;
     let countRows: Array<{ total?: number }>;
     let idRows: Array<{ id: string; effective_status: string }>;
@@ -2356,7 +2364,7 @@ export class OrderRepository implements OnModuleInit {
         `SELECT sale.order_id AS id, (${effectiveStatus}) AS effective_status
            ${where}
           ORDER BY ${orderColumn} DESC, sale.order_id DESC
-          LIMIT $8 OFFSET $9`,
+          LIMIT $11 OFFSET $12`,
         [...params, criteria.perPage, (criteria.page - 1) * criteria.perPage],
       );
     } catch (error: unknown) {

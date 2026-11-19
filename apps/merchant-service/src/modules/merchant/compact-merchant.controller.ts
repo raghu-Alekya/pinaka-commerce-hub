@@ -237,7 +237,8 @@ export class CompactMerchantController {
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
                 (SELECT COUNT(*)::int FROM public.stores store
                  WHERE store.merchant_id = m.id
-                   AND COALESCE(store.is_deleted, false) = false) AS store_count
+                   AND COALESCE(store.is_deleted, false) = false
+                   AND store.status = 'ACTIVE') AS store_count
          FROM public.merchants m
          LEFT JOIN LATERAL (
            SELECT sub.*, row_to_json(sp) AS plan
@@ -262,6 +263,7 @@ export class CompactMerchantController {
          WHERE (
              COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
              OR m.id::text = $1
+             OR m.merchant_code = $1
            )
            `,
         [id],
@@ -277,6 +279,7 @@ export class CompactMerchantController {
       `SELECT row_to_json(m) AS merchant FROM public.merchants m
        WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
           OR m.id::text = $1
+          OR m.merchant_code = $1
        LIMIT 1`,
       [id],
     );
@@ -718,7 +721,8 @@ export class CompactMerchantController {
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
                 (SELECT COUNT(*)::int FROM public.stores store
                  WHERE store.merchant_id = m.id
-                   AND COALESCE(store.is_deleted, false) = false) AS store_count
+                   AND COALESCE(store.is_deleted, false) = false
+                   AND store.status = 'ACTIVE') AS store_count
          FROM public.merchants m
          LEFT JOIN LATERAL (
            SELECT sub.*, row_to_json(sp) AS plan
@@ -762,7 +766,8 @@ export class CompactMerchantController {
           `SELECT row_to_json(m) AS merchant,
                   (SELECT COUNT(*)::int FROM public.stores store
                    WHERE store.merchant_id = m.id
-                     AND COALESCE(store.is_deleted, false) = false) AS store_count
+                     AND COALESCE(store.is_deleted, false) = false
+                     AND store.status = 'ACTIVE') AS store_count
            FROM public.merchants m
            ORDER BY COALESCE(
              (to_jsonb(m)->>'createdDate')::timestamptz,
@@ -787,7 +792,8 @@ export class CompactMerchantController {
           `SELECT row_to_json(m) AS merchant,
                   (SELECT COUNT(*)::int FROM public.stores store
                    WHERE store.merchant_id = m.id
-                     AND COALESCE(store.is_deleted, false) = false) AS store_count
+                     AND COALESCE(store.is_deleted, false) = false
+                     AND store.status = 'ACTIVE') AS store_count
            FROM public.merchants m`,
         );
         return {
@@ -1005,7 +1011,7 @@ export class CompactMerchantController {
       await this.db.transaction(async (manager) => {
         const [existing] = await manager.query(
           `SELECT * FROM public.merchants m
-         WHERE (COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1 OR m.id::text = $1)
+         WHERE (COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1 OR m.id::text = $1 OR m.merchant_code = $1)
            AND COALESCE(to_jsonb(m)->>'status', 'ACTIVE') = 'ACTIVE'
          FOR UPDATE`,
           [id],
@@ -1123,9 +1129,9 @@ export class CompactMerchantController {
           input.pinCode ?? existing.postalCode ?? existing.pinCode,
         );
         setCol('country', input.country ?? existing.country);
+        let previousPlanId: string | undefined;
         if (input.planId !== undefined) {
           const currentPlanId =
-            existing.planId ||
             (await manager.query(
               `SELECT COALESCE(
                  NULLIF(to_jsonb(s)->>'plan_id', ''),
@@ -1153,8 +1159,9 @@ export class CompactMerchantController {
                WHERE m.id::text = $1
                LIMIT 1`,
               [String(existing.id)],
-            ))[0]?.planId;
+            ))[0]?.planId || existing.planId;
           await assertSameStoreTypePlan(manager, currentPlanId, String(input.planId));
+          previousPlanId = currentPlanId;
         }
         setCol('planId', input.planId ?? existing.planId);
         if (requestedStoreTypeId) setCol('storeTypeId', requestedStoreTypeId);
@@ -1196,6 +1203,26 @@ export class CompactMerchantController {
             String(existing.id),
             input,
           );
+          if (previousPlanId && previousPlanId !== String(input.planId)) {
+            const limits = await manager.query(
+              'SELECT id::text AS id, stores_limit AS limit FROM public.plans WHERE id::text = ANY($1::text[])',
+              [[previousPlanId, String(input.planId)]],
+            );
+            const oldLimit = Number(limits.find((row: { id: string }) => row.id === previousPlanId)?.limit);
+            const newLimit = Number(limits.find((row: { id: string }) => row.id === String(input.planId))?.limit);
+            if (Number.isFinite(oldLimit) && Number.isFinite(newLimit) && newLimit < oldLimit) {
+              const [{ count }] = await manager.query(
+                "SELECT count(*)::integer AS count FROM public.stores WHERE merchant_id = $1 AND status = 'ACTIVE' AND is_deleted = false",
+                [existing.id],
+              );
+              if (Number(count) > newLimit) {
+                await manager.query(
+                  "UPDATE public.stores SET status = 'INACTIVE', updated_at = now() WHERE merchant_id = $1 AND status = 'ACTIVE' AND is_deleted = false",
+                  [existing.id],
+                );
+              }
+            }
+          }
         }
       });
     } catch (error: any) {
@@ -1698,4 +1725,5 @@ async function assertSameStoreTypePlan(
   throw new BadRequestException(
     `Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`,
   );
+
 }

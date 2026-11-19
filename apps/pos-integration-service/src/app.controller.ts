@@ -8,6 +8,7 @@ import { describeUnmappedShiftKeys, normalizeShiftClose, normalizeShiftCreate, n
 import { ShiftReportService } from './shift-report.service';
 import { shiftDebug, shiftErrorDetails, summarizeShiftWrite } from './shift-debug.log';
 import { withStoreShiftFields } from './shift.types';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 
 const SHIFT_REQUEST_ALIASES = [
   ['merchant_id', 'merchantId'],
@@ -22,12 +23,13 @@ const SHIFT_REQUEST_ALIASES = [
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-@Controller('api/v1/store-vendor-payments')
+@Controller(['api/v1/store-vendor-payments', 'connector/api/v1/store-vendor-payments'])
 export class PosVendorPaymentController {
   constructor(@Inject(PosRepository) private readonly shifts: PosRepository) {}
 
   @Get()
-  async list(@Query('merchant_id') merchantId?: string, @Query('store_id') storeId?: string, @Query('shift_id') shiftId?: string) {
+  async list(@Query('merchant_id') merchantId?: string, @Query('store_id') storeId?: string, @Query('shift_id') shiftId?: string, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     const payments = await StoreVendorPaymentEntity.listPayments(this.shifts.requireDataSource(), merchantId, storeId, shiftId);
     return { success: true, merchant_id: merchantId, store_id: storeId, shift_id: shiftId?.trim(), count: payments.length, payments };
   }
@@ -39,19 +41,22 @@ export class PosVendorPaymentController {
   }
 
   @Put(':id')
-  async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+  async update(@Param('id') id: string, @Body() body: Record<string, unknown>, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return { success: true, message: 'Vendor payment updated',
       payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, body) };
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return { success: true, message: 'Vendor payment soft-deleted',
       payment: await StoreVendorPaymentEntity.changePayment(this.shifts.requireDataSource(), id, {}, true) };
   }
 
   @Post()
-  async create(@Body() body: Record<string, unknown>) {
+  async create(@Body() body: Record<string, unknown>, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestException('Provide a payment JSON object');
     if (typeof body.shift_id !== 'string' || !body.shift_id.trim()) throw new BadRequestException('shift_id is required');
     const db = this.shifts.requireDataSource();
@@ -147,7 +152,8 @@ export class AppController {
   }
 
   @Post(['shifts', 'shifts/open'])
-  async openShift(@Body() request: Record<string, unknown>) {
+  async openShift(@Body() request: Record<string, unknown>, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return this.traceShift('POST /shifts', request, async () => {
       const write = normalizeShiftCreate(request);
       shiftDebug('normalized', { action: 'POST /shifts', save: summarizeShiftWrite(write) });
@@ -224,7 +230,8 @@ export class AppController {
   }
 
   @Post('shifts/close')
-  async closeShift(@Body() request: Record<string, unknown>) {
+  async closeShift(@Body() request: Record<string, unknown>, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return this.traceShift('POST /shifts/close', request, async () => {
       const write = normalizeShiftClose(request);
       const shift = await this.posRepository.updateShift(write.shiftId, write, async () => {
@@ -256,7 +263,9 @@ export class AppController {
     @Query('shift_id') shift_id?: string,
     @Query('employeeId') employeeId?: string,
     @Query('employee_id') employee_id?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const query = { shiftId, shift_id, employeeId, employee_id };
     return this.traceShift('GET /shifts/get-shift-by-id', query, () => this.shiftReport.getShiftById(shiftId || shift_id, employeeId || employee_id));
   }

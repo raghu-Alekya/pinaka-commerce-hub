@@ -1556,7 +1556,7 @@ export class AppController {
         : ((body.store_email || body.email || '').trim().toLowerCase() || null),
       storeWebsiteUrl: (body.store_website_url ?? body.url)?.trim() ?? existing.storeWebsiteUrl,
       currency: body.currency ?? existing.currency,
-      status: body.status ?? existing.status,
+      ...(body.status !== undefined ? { status: body.status } : {}),
       timezone: body.timezone ?? existing.timezone,
       activationPin: body.activation_pin ?? existing.activationPin,
       operationalStatus: body.operational_status ?? existing.operationalStatus,
@@ -1758,4 +1758,5 @@ export class AppController {
       throw new BadRequestException(`Could not sync WordPress catalog: ${message}`);
     }
   }
+
 }

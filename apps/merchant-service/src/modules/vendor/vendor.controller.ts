@@ -1,5 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UnauthorizedException } from '@nestjs/common';
-import { Public } from '@pinaka-delivery-hub/auth';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UnauthorizedException } from '@nestjs/common';
+import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { VendorRepository } from './vendor.repository';
 import { CreateVendorDto, UpdateVendorDto, normalizeVendorType } from './vendor.dto';
 import { VendorFormValidationPipe } from '../master/tenders/vendor-tendor.form.pipe';
@@ -23,16 +23,18 @@ const patchValidation = new VendorFormValidationPipe({
 });
 
 @Controller(['api/v1/store-vendor-payments', 'connector/api/v1/store-vendor-payments'])
+@RequireAuth()
 export class StoreVendorPaymentController {
   constructor(@Inject(VendorRepository) private readonly repository: VendorRepository) {}
 
-  @Public()
   @Get()
   async list(
     @Query('merchant_id') merchantId?: string,
     @Query('store_id') storeId?: string,
     @Query('shift_id') shiftId?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const payments = await this.repository.listStoreVendorPayments(merchantId, storeId, shiftId);
     return {
       success: true,
@@ -44,16 +46,16 @@ export class StoreVendorPaymentController {
     };
   }
 
-  @RequireAuth()
   @Post()
-  async create(@Body() body: Record<string, unknown>, @Req() request: AuthenticatedRequest) {
+  async create(@Body() body: Record<string, unknown>, @Req() request: AuthenticatedRequest, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return { success: true, message: 'Vendor payment created',
       payment: await this.repository.createStoreVendorPayment(body, request.user) };
   }
 
-  @Public()
   @Put(':id')
-  async update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+  async update(@Param('id') id: string, @Body() body: Record<string, unknown>, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return {
       success: true,
       message: 'Vendor payment updated',
@@ -61,9 +63,9 @@ export class StoreVendorPaymentController {
     };
   }
 
-  @Public()
   @Delete(':id')
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     return {
       success: true,
       message: 'Vendor payment soft-deleted',

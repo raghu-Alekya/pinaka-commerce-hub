@@ -227,6 +227,9 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
+    @Query('search') search?: string,
+    @Query('author') author?: string,
+    @Query('created_after') createdAfter?: string,
   ) {
     const criteria = this.orderLists.criteria({
       page,
@@ -235,7 +238,19 @@ export class AppController {
       createdVia,
       storeId: storeHeader || storeId || storeIdSnake,
     });
-    const listed = await this.orderRepository.listOrders({ ...criteria, merchantId: merchantHeader || undefined });
+    const createdAfterDate = createdAfter ? new Date(createdAfter) : undefined;
+    if (createdAfterDate && Number.isNaN(createdAfterDate.getTime())) {
+      throw new BadRequestException('created_after must be a valid date');
+    }
+    const statuses = status?.trim().toLowerCase() === 'pending payment' ? ['created'] : criteria.statuses;
+    const listed = await this.orderRepository.listOrders({
+      ...criteria,
+      statuses,
+      merchantId: merchantHeader || undefined,
+      search: search?.trim() || undefined,
+      customer: author?.trim() || undefined,
+      createdAfter: createdAfterDate,
+    });
     await this.hydrateCouponLines(listed.orders);
     const orders = listed.orders.map(({ order, storeOrder, effectiveStatus }) => {
       const request = (order.requestPayload || {}) as Record<string, any>;

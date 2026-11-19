@@ -981,14 +981,14 @@ export class MerchantRepository implements OnModuleInit {
       ],
       { synchronize: false, legacyQueryColumns: true },
       );
-      await this.dataSource.query(
-        'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
-      );
     // Never ALTER existing tables here. Repeated TypeORM synchronize drops and
     // re-adds columns, and PostgreSQL counts those dropped columns until startup
     // dies with "tables can have at most 1600 columns".
       await StoreVendorPaymentEntity.prepareSchema(this.dataSource);
       const createdTables = await createMissingTables(this.dataSource);
+      await this.dataSource.query(
+        'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
+      );
       await StoreVendorPaymentEntity.ensureConstraints(this.dataSource);
     await ensurePosDataSyncSchema(this.dataSource);
     if (createdTables.length) {
@@ -1640,6 +1640,26 @@ export class MerchantRepository implements OnModuleInit {
     return type.id;
   }
 
+  private async assertStoreLimit(manager: EntityManager, merchantId: string, newActiveStores: number): Promise<void> {
+    await manager.query('SELECT id FROM public.merchants WHERE id = $1 FOR UPDATE', [merchantId]);
+    const [plan] = await manager.query(`
+      SELECT p.stores_limit AS limit
+      FROM public.subscriptions s
+      JOIN public.plans p ON p.id::text = COALESCE(to_jsonb(s)->>'plan_id', to_jsonb(s)->>'planId')
+      WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = $1
+        AND upper(COALESCE(s.status::text, '')) = 'ACTIVE'
+      ORDER BY s.created_at DESC NULLS LAST LIMIT 1
+    `, [merchantId]);
+    if (!plan) throw new BadRequestException('Merchant has no active plan with a store limit');
+    const [{ count }] = await manager.query(
+      "SELECT count(*)::integer AS count FROM public.stores WHERE merchant_id = $1 AND status = 'ACTIVE' AND is_deleted = false",
+      [merchantId],
+    );
+    if (Number(count) + newActiveStores > Number(plan.limit)) {
+      throw new BadRequestException(`Plan allows ${plan.limit} active stores; ${count} are already active`);
+    }
+  }
+
   async createStore(
     merchantId: string,
     data: Partial<StoreEntity> & { storeType?: string },
@@ -1665,7 +1685,10 @@ export class MerchantRepository implements OnModuleInit {
     const { activationPin } = store;
     const entity = this.storeRepo.create(store);
     try {
-      await this.storeRepo.insert(entity);
+      await this.dataSource.transaction(async manager => {
+        if (entity.status === StoreStatus.ACTIVE) await this.assertStoreLimit(manager, identity.merchantUuid, 1);
+        await manager.getRepository(StoreEntity).save(entity);
+      });
       const [saved] = await this.dataSource.query(
         `SELECT store_code AS "storeCode" FROM public.stores WHERE id = $1::uuid`,
         [entity.id],
@@ -1731,6 +1754,8 @@ export class MerchantRepository implements OnModuleInit {
     }
     try {
       await this.storeRepo.manager.transaction(async (manager) => {
+        const newActiveStores = stores.filter(store => store.status === StoreStatus.ACTIVE).length;
+        if (newActiveStores) await this.assertStoreLimit(manager, identity.merchantUuid, newActiveStores);
         await manager.insert(StoreEntity, stores);
       });
       const saved: Array<{ id: string; storeCode: string }> = await this.dataSource.query(
@@ -1793,7 +1818,16 @@ export class MerchantRepository implements OnModuleInit {
           merchantId: identity.merchantUuid,
           updatedAt: new Date(),
         });
-        const saved = await this.storeRepo.save(existing);
+        const saved = await this.dataSource.transaction(async manager => {
+          await manager.query('SELECT id FROM public.merchants WHERE id = $1 FOR UPDATE', [identity.merchantUuid]);
+          const current = await manager.getRepository(StoreEntity).findOneBy({ id: existing.id, isDeleted: false });
+          if (!current) throw new NotFoundException('Store not found');
+          if (current.status !== StoreStatus.ACTIVE && existing.status === StoreStatus.ACTIVE) {
+            await this.assertStoreLimit(manager, identity.merchantUuid, 1);
+          }
+          if (data.status === undefined) existing.status = current.status;
+          return manager.getRepository(StoreEntity).save(existing);
+        });
         await this.recordAuditLog(
           'STORE_UPDATED',
           identity.merchantId,
@@ -1808,6 +1842,7 @@ export class MerchantRepository implements OnModuleInit {
   }
 
   async getStoreById(id: string): Promise<StoreEntity | null> {
+    this.requireDataSource();
     if (this.isUuid(id))
       return this.storeRepo.findOne({ where: { id, isDeleted: false } });
     return this.storeRepo.findOne({
@@ -2016,24 +2051,30 @@ export class MerchantRepository implements OnModuleInit {
       merchantId: store.merchantId,
       updatedAt: new Date(),
     };
-    if (
-      !(
-        await this.storeRepo.update(store.id, {
-          ...safeFields,
-          updatedAt: updated.updatedAt,
-        })
-      ).affected
-    )
+    const saved = await this.dataSource.transaction(async manager => {
+      await manager.query('SELECT id FROM public.merchants WHERE id = $1 FOR UPDATE', [store.merchantId]);
+      const current = await manager.getRepository(StoreEntity).findOneBy({ id: store.id, isDeleted: false });
+      if (!current) return false;
+      if (current.status !== StoreStatus.ACTIVE && safeFields.status === StoreStatus.ACTIVE) {
+        await this.assertStoreLimit(manager, store.merchantId, 1);
+      }
+      return manager.getRepository(StoreEntity).save({
+        ...current,
+        ...safeFields,
+        updatedAt: updated.updatedAt,
+      });
+    });
+    if (!saved)
       return null;
-    await this.cacheStorePin(updated.activationPin, updated);
+    await this.cacheStorePin(saved.activationPin, saved);
     await this.recordAuditLog(
       'STORE_UPDATED',
       store.merchantId,
       store.id,
       'merchant',
-      { storeName: updated.storeName },
+      { storeName: saved.storeName },
     );
-    return updated;
+    return saved;
   }
 
   /**
