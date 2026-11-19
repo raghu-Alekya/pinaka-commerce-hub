@@ -94,6 +94,8 @@ interface PaymentRow {
   status?: string | null;
   metadata?: unknown;
   provider?: string | null;
+  payment_method?: string | null;
+  payment_gateway_response?: unknown;
   order_id?: string;
   merchant_id?: string;
   store_id?: string;
@@ -164,9 +166,13 @@ export class CreatePaymentService {
     const localId = attemptLocalId(body, context.idempotencyKey);
     const payable = await this.payableTotal(tender.order);
     const existing = await this.listPayments(tender.order.order_id);
-    let attempt = existing.find((row) => row.local_id === localId);
+    // The order save writes a second card row titled POS-CARD. Reuse that row,
+    // or the row already charged for this amount, instead of inserting another.
+    let attempt = existing.find((row) => row.local_id === localId)
+      ?? adoptableCardPayment(existing, tender.amount);
     const capturedBefore = paidTotal(existing.filter((row) => row.id !== attempt?.id));
-    if (attempt && countsAsCaptured(attempt)) {
+    if (attempt && countsAsCaptured(attempt) && hasGatewayResult(attempt)) {
+      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
       const totalPaid = paidTotal(existing);
       const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
       const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
@@ -183,6 +189,7 @@ export class CreatePaymentService {
       );
     }
     if (attempt && resolved.gateway === 'kickback' && gatewayAlreadySubmitted(attempt)) {
+      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
       return this.storedGatewayResponse(tender, attempt, payable, capturedBefore);
     }
 
@@ -201,6 +208,7 @@ export class CreatePaymentService {
           payment_status: 'pending',
           gateway_submitted: resolved.gateway === 'kickback',
         }),
+        gatewayResponse: null,
       });
       attempt = {
         id: paymentId,
@@ -310,6 +318,7 @@ export class CreatePaymentService {
           transaction_details: gateway.details ?? {},
           transaction_fields: transactionFields(gateway.details ?? {}),
         }),
+        gatewayResponse: gateway.provider ? gatewayResponseDocument(gateway.details) : null,
       });
     const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
     const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
@@ -393,6 +402,15 @@ export class CreatePaymentService {
       gateway_response: asRecord(details)?.gateway_response ?? details ?? {},
       instruction: asRecord(details)?.instruction,
     });
+    const gatewayResponse = gatewayResponseDocument(details) ?? (
+      outcome.kind === 'approved' || outcome.kind === 'pending'
+        ? null
+        : {
+            status: outcome.kind,
+            message: outcome.message,
+            ...(outcome.kind === 'declined' && outcome.response !== undefined ? { response: outcome.response } : {}),
+          }
+    );
     await this.updatePayment({
       id: attempt.id,
       status,
@@ -402,7 +420,9 @@ export class CreatePaymentService {
       remaining,
       refundable: tender.amount,
       paymentAt: facts.at,
+      gatewayResponse,
     });
+    await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
     if (approved) {
       const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
       const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
@@ -602,7 +622,8 @@ export class CreatePaymentService {
   private async listPayments(orderId: string): Promise<PaymentRow[]> {
     return this.query<PaymentRow>(
       `SELECT id::text AS id, amount, is_void, provider_transaction_id, local_id, status,
-              metadata, provider, order_id::text AS order_id, merchant_id::text AS merchant_id,
+              metadata, provider, payment_method, payment_gateway_response,
+              order_id::text AS order_id, merchant_id::text AS merchant_id,
               store_id::text AS store_id, shift_id, user_id, currency, order_total
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
@@ -615,7 +636,8 @@ export class CreatePaymentService {
   private async findGatewayPayment(ids: string[]): Promise<PaymentRow | null> {
     const rows = await this.query<PaymentRow>(
       `SELECT id::text AS id, amount, is_void, provider_transaction_id, local_id, status,
-              metadata, provider, order_id::text AS order_id, merchant_id::text AS merchant_id,
+              metadata, provider, payment_method, payment_gateway_response,
+              order_id::text AS order_id, merchant_id::text AS merchant_id,
               store_id::text AS store_id, shift_id, user_id, currency, order_total
          FROM public.store_pos_payments
         WHERE deleted_at IS NULL
@@ -659,6 +681,7 @@ export class CreatePaymentService {
     localId: string;
     metadata: Record<string, unknown>;
     requestedOrderId: string;
+    gatewayResponse?: Record<string, unknown> | null;
   }): Promise<string> {
     const deviceId = input.order.device_id?.trim() ? input.order.device_id.trim() : null;
     const currency = String(input.order.currency || 'USD').trim().toUpperCase().slice(0, 3) || 'USD';
@@ -682,6 +705,7 @@ export class CreatePaymentService {
       input.transactionId || null,
       JSON.stringify(input.metadata),
       input.status,
+      input.gatewayResponse ? JSON.stringify(input.gatewayResponse) : null,
     ];
     try {
       const rows = await this.query<{ id: string }>(
@@ -689,12 +713,13 @@ export class CreatePaymentService {
            order_id, merchant_id, store_id, local_id, client_order_id, device_id,
            shift_id, user_id, payment_type, payment_method, payment_method_title,
            amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
-           currency, status, entry_type, is_void, provider, provider_transaction_id, payment_at, metadata
+           currency, status, entry_type, is_void, provider, provider_transaction_id, payment_at, metadata,
+           payment_gateway_response
          ) VALUES (
            $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
            $7, $8, 'pos_payment'::public.store_pos_payment_type, $9, $10,
            $11, $12, $13, $14, 0, 0,
-           $15, $19, 'payment', false, $16, $17, now(), $18::jsonb
+           $15, $19, 'payment', false, $16, $17, now(), $18::jsonb, $20::jsonb
          )
          RETURNING id::text AS id`,
         params,
@@ -721,6 +746,7 @@ export class CreatePaymentService {
     remaining: number;
     refundable: number;
     paymentAt: string;
+    gatewayResponse?: Record<string, unknown> | null;
   }): Promise<void> {
     const paymentAt = input.paymentAt && !Number.isNaN(Date.parse(input.paymentAt)) ? input.paymentAt : null;
     await this.query(
@@ -732,6 +758,7 @@ export class CreatePaymentService {
               remaining = $6,
               refundable_remaining = $7,
               payment_at = COALESCE($8::timestamptz, payment_at),
+              payment_gateway_response = COALESCE($9::jsonb, payment_gateway_response),
               updated_at = now()
         WHERE id = $1::uuid
           AND deleted_at IS NULL`,
@@ -744,7 +771,44 @@ export class CreatePaymentService {
         input.remaining,
         input.refundable,
         paymentAt,
+        input.gatewayResponse ? JSON.stringify(input.gatewayResponse) : null,
       ],
+    );
+  }
+
+  /** Removes the order-sync card row when the charged card row for that amount already exists. */
+  private async collapseDuplicateCardTenders(orderId: string, amount: number): Promise<void> {
+    await this.query(
+      `UPDATE public.store_pos_payments AS extra
+          SET deleted_at = now(),
+              updated_at = now(),
+              status = 'cancelled',
+              metadata = COALESCE(extra.metadata, '{}'::jsonb)
+                || jsonb_build_object('duplicate_card_tender', true)
+        WHERE extra.order_id = $1::uuid
+          AND extra.entry_type = 'payment'
+          AND extra.deleted_at IS NULL
+          AND extra.is_void = false
+          AND extra.amount = $2::numeric
+          AND lower(replace(extra.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND extra.payment_gateway_response IS NULL
+          AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM public.store_pos_payments AS charged
+             WHERE charged.order_id = extra.order_id
+               AND charged.id <> extra.id
+               AND charged.deleted_at IS NULL
+               AND charged.entry_type = 'payment'
+               AND charged.is_void = false
+               AND charged.amount = extra.amount
+               AND lower(replace(charged.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+               AND (
+                 charged.payment_gateway_response IS NOT NULL
+                 OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+               )
+          ) /* collapse_duplicate_card_tender */`,
+      [orderId, amount],
     );
   }
 
@@ -864,6 +928,47 @@ function attemptLocalId(body: Record<string, unknown>, headerKey?: string): stri
 
 function paidTotal(rows: PaymentRow[]): number {
   return money(rows.reduce((sum, row) => sum + (countsAsCaptured(row) ? numberValue(row.amount) : 0), 0));
+}
+
+const CARD_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
+
+function isCardMethod(method: unknown): boolean {
+  return CARD_METHODS.has(String(method || '').trim().toLowerCase().replace(/_/g, '-'));
+}
+
+function sameMoney(left: unknown, right: number): boolean {
+  return Math.abs(numberValue(left) - right) < 0.001;
+}
+
+function hasGatewayResult(row: PaymentRow): boolean {
+  return Boolean(textOf(row.provider_transaction_id) || row.payment_gateway_response);
+}
+
+/**
+ * The order snapshot and the payment API both record one card tender.
+ * A POS-CARD shell has no gateway payload. Reuse it, or the already charged
+ * row sitting next to that shell. A finished attempt with its own local id
+ * is left alone so a later attempt can insert its own row.
+ */
+function adoptableCardPayment(rows: PaymentRow[], amount: number): PaymentRow | undefined {
+  const cards = rows.filter((row) => isCardMethod(row.payment_method) && !row.is_void && sameMoney(row.amount, amount));
+  const charged = cards.filter((row) => hasGatewayResult(row));
+  const shells = cards.filter((row) => !hasGatewayResult(row));
+  if (charged.length === 1 && shells.length >= 1) return charged[0];
+  if (charged.length === 0 && shells.length === 1) return shells[0];
+  return undefined;
+}
+
+function gatewayResponseDocument(details: Record<string, unknown> | null): Record<string, unknown> | null {
+  const record = asRecord(details);
+  if (!record) return null;
+  const payment = record.gateway_response ?? record;
+  const instruction = record.instruction;
+  if (instruction && record.gateway_response !== undefined) {
+    return { instruction, payment: record.gateway_response };
+  }
+  const body = asRecord(payment);
+  return body ?? record;
 }
 
 function countsAsCaptured(row: PaymentRow): boolean {
