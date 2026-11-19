@@ -14,10 +14,14 @@ import { OrderRepository } from '../order.repository';
 import { PaymentGatewayClient } from './payment-gateway.client';
 import {
   isPhpEmpty,
+  payrocIdempotencyKey,
+  payrocOrderReference,
   readPaymentAmount,
   resolvePaymentGateway,
-  payrocOrderReference,
+  sanitizeGatewayPayload,
   transactionFields,
+  type GatewayCredentials,
+  type GatewayName,
   type GatewayOutcome,
 } from './payment-gateway';
 
@@ -25,6 +29,7 @@ export interface CreatePaymentContext {
   merchantId: string;
   storeId: string;
   userId: string;
+  idempotencyKey?: string;
 }
 
 export interface CreatePaymentSuccess {
@@ -49,6 +54,15 @@ export interface CreatePaymentDecline {
   response?: unknown;
 }
 
+export interface CreatePaymentPending {
+  success: false;
+  status: 'pending';
+  message: string;
+  payment_id: string;
+  transaction_id: string | null;
+  local_id: string;
+}
+
 interface SaleRow {
   order_id: string;
   merchant_id: string;
@@ -61,11 +75,32 @@ interface SaleRow {
   order_status: string | null;
 }
 
+interface TenderInput {
+  order: SaleRow;
+  shiftId: string;
+  userId: string;
+  paymentMethod: string;
+  paymentMethodTitle: string;
+  amount: number;
+  requestedOrderId: string;
+}
+
 interface PaymentRow {
   id: string;
   amount: string | number;
   is_void: boolean;
   provider_transaction_id: string | null;
+  local_id?: string | null;
+  status?: string | null;
+  metadata?: unknown;
+  provider?: string | null;
+  order_id?: string;
+  merchant_id?: string;
+  store_id?: string;
+  shift_id?: string | null;
+  user_id?: string | null;
+  currency?: string | null;
+  order_total?: string | number;
 }
 
 @Injectable()
@@ -78,7 +113,7 @@ export class CreatePaymentService {
   async create(
     body: Record<string, unknown>,
     context: CreatePaymentContext,
-  ): Promise<CreatePaymentSuccess | CreatePaymentDecline> {
+  ): Promise<CreatePaymentSuccess | CreatePaymentDecline | CreatePaymentPending> {
     const amount = readPaymentAmount(body.amount);
     if (isPhpEmpty(body.order_id) || amount === undefined || Number.isNaN(amount) || isPhpEmpty(body.payment_method)) {
       throw new BadRequestException('Order ID, amount, and payment method are required');
@@ -91,51 +126,352 @@ export class CreatePaymentService {
     const shiftId = String(body.shift_id).trim().slice(0, 150);
     const order = await this.findOrder(context, String(body.order_id).trim());
     if (!order) throw new NotFoundException('Invalid order ID');
+    const tender = {
+      order,
+      shiftId,
+      userId: context.userId.slice(0, 150),
+      paymentMethod,
+      paymentMethodTitle: paymentMethodRaw.trim().slice(0, 150) || paymentMethod,
+      amount,
+      requestedOrderId: String(body.order_id).trim(),
+    };
 
-    const gatewayResult = paymentMethodRaw.toLowerCase() === 'card'
-      ? await this.chargeCard(order, amount, context, body)
-      : { provider: null as string | null, transactionId: '', details: null as Record<string, unknown> | null };
-    if ('decline' in gatewayResult) return gatewayResult.decline;
+    if (paymentMethod !== 'card') {
+      return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
+    }
+    return this.captureCard(tender, context, body);
+  }
 
-    const payable = await this.payableTotal(order);
+  /**
+   * One card attempt is one store_pos_payments row. The row is inserted before
+   * the processor call and updated with the gateway result. The same local_id
+   * resumes that row. Payroc retries reuse the original Idempotency-Key.
+   * Kickback is not submitted again after the first request left this service.
+   */
+  private async captureCard(
+    tender: TenderInput,
+    context: CreatePaymentContext,
+    body: Record<string, unknown>,
+  ): Promise<CreatePaymentSuccess | CreatePaymentDecline | CreatePaymentPending> {
+    const configuration = await this.gatewayConfiguration(context.storeId);
+    const requested = body.payment_gateway_provider ?? body.pinaka_payment_gateway_provider ?? body.provider;
+    const resolved = resolvePaymentGateway(configuration, requested);
+    if (!resolved.ok) throw new BadRequestException(resolved.message);
+    if (resolved.gateway === 'offline') {
+      return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
+    }
+
+    const localId = attemptLocalId(body, context.idempotencyKey);
+    const payable = await this.payableTotal(tender.order);
+    const existing = await this.listPayments(tender.order.order_id);
+    let attempt = existing.find((row) => row.local_id === localId);
+    const capturedBefore = paidTotal(existing.filter((row) => row.id !== attempt?.id));
+    if (attempt && countsAsCaptured(attempt)) {
+      const totalPaid = paidTotal(existing);
+      const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
+      const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
+      const details = asRecord(metadataRecord(attempt.metadata).transaction_details);
+      return this.successBody(
+        tender,
+        attempt.id,
+        attempt.provider_transaction_id || '',
+        details,
+        totalPaid,
+        Math.max(0, money(payable - totalPaid)),
+        payable,
+        orderStatus,
+      );
+    }
+    if (attempt && resolved.gateway === 'kickback' && gatewayAlreadySubmitted(attempt)) {
+      return this.storedGatewayResponse(tender, attempt, payable, capturedBefore);
+    }
+
+    if (!attempt) {
+      const remaining = Math.max(0, money(payable - capturedBefore));
+      const paymentId = await this.insertPayment({
+        ...tender,
+        payable,
+        remaining,
+        refundable: tender.amount,
+        provider: resolved.gateway,
+        transactionId: '',
+        status: 'pending',
+        localId,
+        metadata: this.attemptMetadata(tender, resolved.gateway, resolved.credentials, localId, {
+          payment_status: 'pending',
+          gateway_submitted: resolved.gateway === 'kickback',
+        }),
+      });
+      attempt = {
+        id: paymentId,
+        amount: tender.amount,
+        is_void: false,
+        provider_transaction_id: null,
+        local_id: localId,
+        status: 'pending',
+        provider: resolved.gateway,
+        metadata: { gateway_submitted: resolved.gateway === 'kickback' },
+      };
+    }
+
+    const outcome = await this.submitCard(tender, context, body, resolved.gateway, resolved.credentials, attempt);
+    return this.applyGatewayOutcome(tender, attempt, payable, capturedBefore, resolved.gateway, resolved.credentials, localId, outcome);
+  }
+
+  /**
+   * Payroc calls this after the device finishes. The body is not trusted:
+   * the stored attempt is updated only from a live Payroc read. Unknown
+   * attempts are not inserted.
+   */
+  async applyPayrocWebhook(body: Record<string, unknown>): Promise<{ success: true; payment_id: string; status: string }> {
+    const ids = gatewayReferenceIds(body);
+    if (!ids.length) throw new BadRequestException('Payroc payment identifier is required');
+    const payment = await this.findGatewayPayment(ids);
+    if (!payment?.id || !payment.store_id || !payment.order_id) {
+      throw new NotFoundException('Payment attempt was not found');
+    }
+    if (countsAsCaptured(payment)) {
+      return { success: true, payment_id: payment.id, status: 'completed' };
+    }
+    const configuration = await this.gatewayConfiguration(payment.store_id);
+    const resolved = resolvePaymentGateway(configuration, 'payroc');
+    if (!resolved.ok || resolved.gateway !== 'payroc') {
+      throw new BadRequestException(resolved.ok ? 'Payroc is not the active card gateway' : resolved.message);
+    }
+    const instructionId = textOf(metadataRecord(payment.metadata).payment_instruction_id)
+      || ids.find((id) => /^[0-9a-f]{32}$/i.test(id))
+      || '';
+    const paymentId = ids.find((id) => id !== instructionId) || '';
+    const outcome = await this.gateways.continuePayroc({
+      secretKey: resolved.credentials.secretKey,
+      ...(instructionId ? { instructionId } : {}),
+      ...(paymentId ? { paymentId } : {}),
+    });
+    if (outcome.kind === 'failed' && countsAsCaptured(payment)) {
+      return { success: true, payment_id: payment.id, status: 'completed' };
+    }
+    const order = await this.findOrderById(payment.order_id);
+    if (!order) throw new NotFoundException('Payment attempt was not found');
+    const tender: TenderInput = {
+      order,
+      shiftId: String(payment.shift_id || '').slice(0, 150),
+      userId: String(payment.user_id || 'POS System').slice(0, 150),
+      paymentMethod: 'card',
+      paymentMethodTitle: 'Card',
+      amount: numberValue(payment.amount),
+      requestedOrderId: String(payment.local_id || payment.order_id),
+    };
     const existing = await this.listPayments(order.order_id);
-    const transactionId = gatewayResult.transactionId;
-    const replay = transactionId
-      ? existing.find((row) => row.provider_transaction_id === transactionId)
+    const capturedBefore = paidTotal(existing.filter((row) => row.id !== payment.id));
+    const applied = await this.applyGatewayOutcome(
+      tender,
+      payment,
+      await this.payableTotal(order),
+      capturedBefore,
+      'payroc',
+      resolved.credentials,
+      String(payment.local_id || payment.id),
+      outcome,
+    );
+    return {
+      success: true,
+      payment_id: payment.id,
+      status: applied.status === 'success' ? 'completed' : applied.status,
+    };
+  }
+
+  private async recordCaptured(
+    tender: TenderInput,
+    gateway: { provider: string | null; transactionId: string; details: Record<string, unknown> | null },
+  ): Promise<CreatePaymentSuccess> {
+    const payable = await this.payableTotal(tender.order);
+    const existing = await this.listPayments(tender.order.order_id);
+    const replay = gateway.transactionId
+      ? existing.find((row) => row.provider_transaction_id === gateway.transactionId && countsAsCaptured(row))
       : undefined;
-    const captured = replay
+    const totalPaid = paidTotal(replay
       ? existing
-      : [...existing, { id: '', amount, is_void: false, provider_transaction_id: transactionId || null }];
-    const totalPaid = money(captured.reduce((sum, row) => sum + (row.is_void ? 0 : numberValue(row.amount)), 0));
+      : [...existing, { id: '', amount: tender.amount, is_void: false, provider_transaction_id: gateway.transactionId || null, status: 'completed' }]);
     const remaining = Math.max(0, money(payable - totalPaid));
     const paymentId = replay
       ? replay.id
       : await this.insertPayment({
-        order,
-        shiftId,
-        userId: context.userId.slice(0, 150),
-        paymentMethod,
-        paymentMethodTitle: paymentMethodRaw.trim().slice(0, 150) || paymentMethod,
-        amount,
+        ...tender,
         payable,
         remaining,
-        provider: gatewayResult.provider,
-        transactionId,
-        details: gatewayResult.details,
-        requestedOrderId: String(body.order_id).trim(),
+        refundable: tender.amount,
+        provider: gateway.provider,
+        transactionId: gateway.transactionId,
+        status: 'completed',
+        localId: `gateway:${randomUUID()}`,
+        metadata: this.attemptMetadata(tender, gateway.provider, null, '', {
+          payment_status: 'success',
+          gateway_submitted: false,
+          transaction_details: gateway.details ?? {},
+          transaction_fields: transactionFields(gateway.details ?? {}),
+        }),
       });
-
     const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
-    const orderStatus = await this.applyOrderStatus(order, fullyPaid, context.userId);
+    const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
+    return this.successBody(tender, paymentId, gateway.transactionId, gateway.details, totalPaid, remaining, payable, orderStatus);
+  }
+
+  private async submitCard(
+    tender: TenderInput,
+    context: CreatePaymentContext,
+    body: Record<string, unknown>,
+    gateway: GatewayName,
+    credentials: GatewayCredentials,
+    attempt: PaymentRow,
+  ): Promise<GatewayOutcome> {
+    if (gateway === 'kickback') {
+      return this.gateways.chargeKickback({
+        deviceId: credentials.deviceId,
+        secretKey: credentials.secretKey,
+        amount: tender.amount,
+      });
+    }
+    const localId = String(attempt.local_id || '');
+    const instructionId = textOf(attempt.provider_transaction_id)
+      || textOf(metadataRecord(attempt.metadata).payment_instruction_id);
+    if (instructionId && gatewayAlreadySubmitted(attempt)) {
+      return this.gateways.continuePayroc({
+        secretKey: credentials.secretKey,
+        instructionId,
+      });
+    }
+    return this.gateways.chargePayroc({
+      deviceId: credentials.deviceId,
+      terminalId: credentials.terminalId,
+      secretKey: credentials.secretKey,
+      processorMerchantId: credentials.processorMerchantId,
+      amount: tender.amount,
+      currency: String(tender.order.currency || 'USD'),
+      orderId: payrocOrderReference(body.order_id, tender.order.client_order_id, tender.order.order_id),
+      operator: context.userId,
+      idempotencyKey: payrocIdempotencyKey(`${tender.order.order_id}:${localId}`),
+    });
+  }
+
+  private async applyGatewayOutcome(
+    tender: TenderInput,
+    attempt: PaymentRow,
+    payable: number,
+    capturedBefore: number,
+    gateway: GatewayName,
+    credentials: GatewayCredentials | null,
+    localId: string,
+    outcome: GatewayOutcome,
+  ): Promise<CreatePaymentSuccess | CreatePaymentDecline | CreatePaymentPending> {
+    const uncertain = outcome.kind === 'failed' && (
+      outcome.uncertain === true
+      || outcome.statusCode === 504
+      || /timeout|socket|network|aborted|econn|fetch failed/i.test(outcome.message)
+    );
+    const approved = outcome.kind === 'approved';
+    const pending = outcome.kind === 'pending' || uncertain;
+    const status = approved ? 'completed' : pending ? 'pending' : 'failed';
+    const transactionId = outcome.kind === 'failed' ? '' : outcome.transactionId || '';
+    const details = outcome.kind === 'failed' ? outcome.details ?? null : outcome.kind === 'declined' ? outcome.details ?? null : outcome.details;
+    const totalPaid = money(capturedBefore + (approved ? tender.amount : 0));
+    const remaining = Math.max(0, money(payable - totalPaid));
+    const facts = gatewayFacts(details);
+    const metadata = this.attemptMetadata(tender, gateway, credentials, localId, {
+      payment_status: approved ? 'success' : pending ? 'pending' : outcome.kind === 'declined' ? 'declined' : 'failed',
+      gateway_submitted: outcome.kind === 'failed' ? outcome.uncertain === true : true,
+      uncertain,
+      gateway_transaction_id: transactionId || facts.instructionId,
+      payment_instruction_id: facts.instructionId,
+      gateway_status: facts.status,
+      gateway_response_code: facts.code,
+      gateway_response_message: facts.message,
+      transaction_at: facts.at,
+      failure_reason: approved ? '' : outcome.kind === 'pending' ? '' : outcome.message,
+      transaction_details: details ?? {},
+      transaction_fields: transactionFields(asRecord(details) ?? {}),
+      gateway_request: asRecord(details)?.gateway_request,
+      gateway_response: asRecord(details)?.gateway_response ?? details ?? {},
+      instruction: asRecord(details)?.instruction,
+    });
+    await this.updatePayment({
+      id: attempt.id,
+      status,
+      provider: gateway,
+      transactionId: transactionId || facts.instructionId,
+      metadata,
+      remaining,
+      refundable: tender.amount,
+      paymentAt: facts.at,
+    });
+    if (approved) {
+      const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
+      const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
+      return this.successBody(tender, attempt.id, transactionId, details, totalPaid, remaining, payable, orderStatus);
+    }
+    if (pending) {
+      const message = outcome.kind === 'failed' ? outcome.message : outcome.kind === 'pending' ? outcome.message : 'Payment is in progress';
+      return {
+        success: false,
+        status: 'pending',
+        message,
+        payment_id: attempt.id,
+        transaction_id: transactionId || null,
+        local_id: localId,
+      };
+    }
+    if (outcome.kind === 'declined') {
+      console.error(`[Payment] ${gateway} declined for order ${tender.order.order_id}: ${outcome.message}`);
+      return declineBody(outcome);
+    }
+    throw new HttpException(outcome.message, outcome.statusCode);
+  }
+
+  private storedGatewayResponse(
+    tender: TenderInput,
+    attempt: PaymentRow,
+    payable: number,
+    capturedBefore: number,
+  ): CreatePaymentDecline | CreatePaymentPending {
+    const metadata = metadataRecord(attempt.metadata);
+    const remaining = Math.max(0, money(payable - capturedBefore));
+    if (String(attempt.status || '').toLowerCase() === 'pending' || metadata.uncertain === true) {
+      return {
+        success: false,
+        status: 'pending',
+        message: textOf(metadata.failure_reason) || textOf(metadata.gateway_response_message) || 'Payment is in progress',
+        payment_id: attempt.id,
+        transaction_id: attempt.provider_transaction_id,
+        local_id: String(attempt.local_id || ''),
+      };
+    }
+    void remaining;
+    return {
+      success: false,
+      status: 'declined',
+      message: textOf(metadata.failure_reason) || textOf(metadata.gateway_response_message) || 'Card declined',
+      ...(metadata.gateway_response !== undefined ? { response: metadata.gateway_response } : {}),
+    };
+  }
+
+  private successBody(
+    tender: TenderInput,
+    paymentId: string,
+    transactionId: string,
+    details: Record<string, unknown> | null,
+    totalPaid: number,
+    remaining: number,
+    payable: number,
+    orderStatus: string,
+  ): CreatePaymentSuccess {
     return {
       success: true,
       status: 'success',
       message: 'Payment successful',
       payment_id: paymentId,
       transaction_id: transactionId || null,
-      transaction_details: gatewayResult.details ?? [],
-      order_id: order.order_id,
-      paid_amount: amount,
+      transaction_details: details ?? [],
+      order_id: tender.order.order_id,
+      paid_amount: tender.amount,
       total_paid: totalPaid,
       remaining_amount: remaining,
       order_total: payable,
@@ -143,39 +479,32 @@ export class CreatePaymentService {
     };
   }
 
-  private async chargeCard(
-    order: SaleRow,
-    amount: number,
-    context: CreatePaymentContext,
-    body: Record<string, unknown>,
-  ): Promise<{ provider: string | null; transactionId: string; details: Record<string, unknown> | null } | { decline: CreatePaymentDecline }> {
-    const configuration = await this.gatewayConfiguration(context.storeId);
-    const requested = body.payment_gateway_provider ?? body.pinaka_payment_gateway_provider ?? body.provider;
-    const resolved = resolvePaymentGateway(configuration, requested);
-    if (!resolved.ok) throw new BadRequestException(resolved.message);
-    if (resolved.gateway === 'offline') {
-      return { provider: null, transactionId: '', details: null };
-    }
-    const outcome = resolved.gateway === 'kickback'
-      ? await this.gateways.chargeKickback({
-        deviceId: resolved.credentials.deviceId,
-        secretKey: resolved.credentials.secretKey,
-        amount,
-      })
-      : await this.gateways.chargePayroc({
-        deviceId: resolved.credentials.deviceId,
-        terminalId: resolved.credentials.terminalId,
-        secretKey: resolved.credentials.secretKey,
-        amount,
-        orderId: payrocOrderReference(body.order_id, order.client_order_id, order.order_id),
-        operator: context.userId,
-      });
-    if (outcome.kind === 'failed') throw new HttpException(outcome.message, outcome.statusCode);
-    if (outcome.kind === 'declined') {
-      console.error(`[Payment] ${resolved.gateway} declined for order ${order.order_id}: ${outcome.message}`);
-      return { decline: declineBody(outcome) };
-    }
-    return { provider: resolved.gateway, transactionId: outcome.transactionId, details: outcome.details };
+  private attemptMetadata(
+    tender: TenderInput,
+    provider: string | null,
+    credentials: GatewayCredentials | null,
+    localId: string,
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const deviceId = tender.order.device_id?.trim() ? tender.order.device_id.trim() : '';
+    return sanitizeGatewayPayload({
+      source: 'api/v1/payments/create-payment',
+      provider,
+      payment_method: tender.paymentMethod,
+      void: false,
+      attempt_id: localId,
+      gateway_device_id: credentials?.deviceId || undefined,
+      terminal_id: credentials?.terminalId || undefined,
+      processor_merchant_id: credentials?.processorMerchantId || undefined,
+      ...(deviceId ? {} : { device_id_missing_source: true }),
+      source_payload: {
+        order_id: tender.requestedOrderId,
+        amount: tender.amount,
+        payment_method: tender.paymentMethod,
+        shift_id: tender.shiftId,
+      },
+      ...extra,
+    }) as Record<string, unknown>;
   }
 
   private async findOrder(context: CreatePaymentContext, orderKey: string): Promise<SaleRow | null> {
@@ -274,13 +603,46 @@ export class CreatePaymentService {
 
   private async listPayments(orderId: string): Promise<PaymentRow[]> {
     return this.query<PaymentRow>(
-      `SELECT id::text AS id, amount, is_void, provider_transaction_id
+      `SELECT id::text AS id, amount, is_void, provider_transaction_id, local_id, status,
+              metadata, provider, order_id::text AS order_id, merchant_id::text AS merchant_id,
+              store_id::text AS store_id, shift_id, user_id, currency, order_total
          FROM public.store_pos_payments
         WHERE order_id = $1::uuid
           AND entry_type = 'payment'
           AND deleted_at IS NULL`,
       [orderId],
     );
+  }
+
+  private async findGatewayPayment(ids: string[]): Promise<PaymentRow | null> {
+    const rows = await this.query<PaymentRow>(
+      `SELECT id::text AS id, amount, is_void, provider_transaction_id, local_id, status,
+              metadata, provider, order_id::text AS order_id, merchant_id::text AS merchant_id,
+              store_id::text AS store_id, shift_id, user_id, currency, order_total
+         FROM public.store_pos_payments
+        WHERE deleted_at IS NULL
+          AND entry_type = 'payment'
+          AND (
+            provider_transaction_id = ANY($1::text[])
+            OR metadata->>'payment_instruction_id' = ANY($1::text[])
+            OR metadata->>'gateway_transaction_id' = ANY($1::text[])
+            OR metadata->>'attempt_id' = ANY($1::text[])
+          )
+        ORDER BY created_at DESC
+        LIMIT 1 /* payroc_webhook_payment */`,
+      [ids],
+    );
+    return rows[0] ?? null;
+  }
+
+  private async findOrderById(orderId: string): Promise<SaleRow | null> {
+    const rows = await this.query<SaleRow>(
+      `${ORDER_LOOKUP_SELECT}
+        WHERE sale.order_id = $1::uuid
+        LIMIT 1`,
+      [orderId],
+    );
+    return rows[0] ?? null;
   }
 
   private async insertPayment(input: {
@@ -292,67 +654,100 @@ export class CreatePaymentService {
     amount: number;
     payable: number;
     remaining: number;
+    refundable: number;
     provider: string | null;
     transactionId: string;
-    details: Record<string, unknown> | null;
+    status: string;
+    localId: string;
+    metadata: Record<string, unknown>;
     requestedOrderId: string;
   }): Promise<string> {
     const deviceId = input.order.device_id?.trim() ? input.order.device_id.trim() : null;
-    const details = input.details ?? {};
-    const metadata = {
-      source: 'api/v1/payments/create-payment',
-      payment_status: 'success',
-      void: false,
-      transaction_details: details,
-      transaction_fields: transactionFields(details),
-      ...(deviceId ? {} : { device_id_missing_source: true }),
-      source_payload: {
-        order_id: input.requestedOrderId,
-        amount: input.amount,
-        payment_method: input.paymentMethod,
-        shift_id: input.shiftId,
-        remaining: input.remaining,
-      },
-    };
     const currency = String(input.order.currency || 'USD').trim().toUpperCase().slice(0, 3) || 'USD';
-    const rows = await this.query<{ id: string }>(
-      `INSERT INTO public.store_pos_payments (
-         order_id, merchant_id, store_id, local_id, client_order_id, device_id,
-         shift_id, user_id, payment_type, payment_method, payment_method_title,
-         amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
-         currency, status, entry_type, is_void, provider, provider_transaction_id, payment_at, metadata
-       ) VALUES (
-         $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
-         $7, $8, 'pos_payment'::public.store_pos_payment_type, $9, $10,
-         $11, $12, $13, $14, 0, 0,
-         $15, 'completed', 'payment', false, $16, $17, now(), $18::jsonb
-       )
-       RETURNING id::text AS id`,
+    const params = [
+      input.order.order_id,
+      input.order.merchant_id,
+      input.order.store_id,
+      input.localId.slice(0, 150),
+      input.order.client_order_id,
+      deviceId,
+      input.shiftId,
+      input.userId,
+      input.paymentMethod,
+      input.paymentMethodTitle,
+      input.amount,
+      input.payable,
+      input.remaining,
+      input.refundable,
+      currency,
+      input.provider,
+      input.transactionId || null,
+      JSON.stringify(input.metadata),
+      input.status,
+    ];
+    try {
+      const rows = await this.query<{ id: string }>(
+        `INSERT INTO public.store_pos_payments (
+           order_id, merchant_id, store_id, local_id, client_order_id, device_id,
+           shift_id, user_id, payment_type, payment_method, payment_method_title,
+           amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
+           currency, status, entry_type, is_void, provider, provider_transaction_id, payment_at, metadata
+         ) VALUES (
+           $1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
+           $7, $8, 'pos_payment'::public.store_pos_payment_type, $9, $10,
+           $11, $12, $13, $14, 0, 0,
+           $15, $19, 'payment', false, $16, $17, now(), $18::jsonb
+         )
+         RETURNING id::text AS id`,
+        params,
+      );
+      const id = rows[0]?.id;
+      if (!id) throw new ServiceUnavailableException('Payment record was not saved');
+      console.log(`[Payment] saved ${id} for order ${input.order.order_id} via ${input.provider || input.paymentMethod}`);
+      return id;
+    } catch (error: unknown) {
+      if (!isUniqueViolation(error)) throw error;
+      const existing = await this.listPayments(input.order.order_id);
+      const saved = existing.find((row) => row.local_id === input.localId.slice(0, 150));
+      if (!saved) throw error;
+      return saved.id;
+    }
+  }
+
+  private async updatePayment(input: {
+    id: string;
+    status: string;
+    provider: string | null;
+    transactionId: string;
+    metadata: Record<string, unknown>;
+    remaining: number;
+    refundable: number;
+    paymentAt: string;
+  }): Promise<void> {
+    const paymentAt = input.paymentAt && !Number.isNaN(Date.parse(input.paymentAt)) ? input.paymentAt : null;
+    await this.query(
+      `UPDATE public.store_pos_payments
+          SET status = $2,
+              provider = $3,
+              provider_transaction_id = COALESCE(NULLIF($4, ''), provider_transaction_id),
+              metadata = $5::jsonb,
+              remaining = $6,
+              refundable_remaining = $7,
+              payment_at = COALESCE($8::timestamptz, payment_at),
+              updated_at = now()
+        WHERE id = $1::uuid
+          AND deleted_at IS NULL`,
       [
-        input.order.order_id,
-        input.order.merchant_id,
-        input.order.store_id,
-        `gateway:${randomUUID()}`,
-        input.order.client_order_id,
-        deviceId,
-        input.shiftId,
-        input.userId,
-        input.paymentMethod,
-        input.paymentMethodTitle,
-        input.amount,
-        input.payable,
-        input.remaining,
-        input.amount,
-        currency,
+        input.id,
+        input.status,
         input.provider,
-        input.transactionId || null,
-        JSON.stringify(metadata),
+        input.transactionId || '',
+        JSON.stringify(input.metadata),
+        input.remaining,
+        input.refundable,
+        paymentAt,
       ],
     );
-    const id = rows[0]?.id;
-    if (!id) throw new ServiceUnavailableException('Payment record was not saved');
-    console.log(`[Payment] saved ${id} for order ${input.order.order_id} via ${input.provider || input.paymentMethod}`);
-    return id;
   }
 
   /**
@@ -451,6 +846,99 @@ const ORDER_LOOKUP_SELECT = `
          sale.status,
          sale.order_status
     FROM public.store_orders AS sale`;
+
+function attemptLocalId(body: Record<string, unknown>, headerKey?: string): string {
+  const candidates = [
+    body.local_id,
+    body.localId,
+    body.idempotency_key,
+    body.idempotencyKey,
+    body.payment_local_id,
+    body.paymentLocalId,
+    headerKey,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value) return value.slice(0, 150);
+  }
+  return `gateway:${randomUUID()}`;
+}
+
+function paidTotal(rows: PaymentRow[]): number {
+  return money(rows.reduce((sum, row) => sum + (countsAsCaptured(row) ? numberValue(row.amount) : 0), 0));
+}
+
+function countsAsCaptured(row: PaymentRow): boolean {
+  if (row.is_void) return false;
+  const status = String(row.status || 'completed').trim().toLowerCase();
+  return !['failed', 'cancelled', 'canceled', 'declined', 'pending'].includes(status);
+}
+
+function gatewayAlreadySubmitted(row: PaymentRow): boolean {
+  const metadata = metadataRecord(row.metadata);
+  return metadata.gateway_submitted === true || Boolean(textOf(row.provider_transaction_id));
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return asRecord(JSON.parse(value)) ?? {};
+    } catch {
+      return {};
+    }
+  }
+  return asRecord(value) ?? {};
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function gatewayFacts(details: Record<string, unknown> | null | undefined): {
+  code: string;
+  message: string;
+  status: string;
+  at: string;
+  instructionId: string;
+} {
+  const source = asRecord(details?.gateway_response) ?? details ?? {};
+  const result = asRecord(source.transactionResult) ?? asRecord(details?.transactionResult);
+  const order = asRecord(source.order) ?? asRecord(details?.order);
+  return {
+    code: textOf(result?.responseCode) || textOf(source.response) || textOf(details?.response),
+    message: textOf(result?.responseMessage) || textOf(source.responsetext) || textOf(details?.responsetext),
+    status: textOf(result?.status) || textOf(source.status) || textOf(details?.status),
+    at: textOf(order?.dateTime) || textOf(source.dateTime),
+    instructionId: textOf(details?.paymentInstructionId) || textOf(source.paymentInstructionId),
+  };
+}
+
+function gatewayReferenceIds(body: Record<string, unknown>): string[] {
+  const values = [
+    body.paymentInstructionId,
+    body.payment_instruction_id,
+    body.paymentId,
+    body.payment_id,
+    body.transactionId,
+    body.transaction_id,
+    body.provider_transaction_id,
+    asRecord(body.data)?.paymentInstructionId,
+    asRecord(body.data)?.paymentId,
+  ];
+  return [...new Set(values.map((value) => textOf(value)).filter(Boolean))];
+}
+
+function textOf(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  const driver = error instanceof QueryFailedError
+    ? (error as { driverError?: { code?: string } }).driverError
+    : undefined;
+  return driver?.code === '23505';
+}
 
 function declineBody(outcome: Extract<GatewayOutcome, { kind: 'declined' }>): CreatePaymentDecline {
   return {

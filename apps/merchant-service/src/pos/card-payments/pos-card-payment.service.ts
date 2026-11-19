@@ -14,6 +14,8 @@ export interface PosCardPaymentRecord {
   terminalId: string;
   secretKey: string;
   webhookUrl: string;
+  enabled: boolean;
+  isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,16 +35,15 @@ export class PosCardPaymentService {
   }
 
   async create(storeId: string, body: SavePosCardPaymentDto) {
-    const admin_payment_provider = "payroc";
     const store = await this.requireStore(storeId);
     this.assertFields(body);
     const document = await this.findDocument(store.id);
     const providers = this.providers(document);
-    if (providers.some(item => item.provider === admin_payment_provider)) {
-      throw new ConflictException(`Card payment settings already exist for ${admin_payment_provider}`);
+    if (providers.some(item => item.provider === body.provider)) {
+      throw new ConflictException(`Card payment settings already exist for ${body.provider}`);
     }
     const saved = await this.write(store.id, store.merchantId, [...providers, { id: randomUUID(), ...this.fields(body) }], body.payment_gateway_provider);
-    const created = this.providers(saved).find(item => item.provider === admin_payment_provider);
+    const created = this.providers(saved).find(item => item.provider === body.provider);
     return { success: true, cardPayment: this.present(created, saved) };
   }
 
@@ -113,6 +114,8 @@ export class PosCardPaymentService {
       terminalId: body.provider === 'Payroc' ? (body.terminalId || '').trim() : '',
       secretKey: body.secretKey.trim(),
       webhookUrl: body.webhookUrl.trim(),
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      ...(body.isDefault !== undefined ? { isDefault: body.isDefault } : {}),
     };
   }
 
@@ -127,6 +130,8 @@ export class PosCardPaymentService {
       terminalId: record?.terminalId || '',
       secretKey: record?.secretKey,
       webhookUrl: record?.webhookUrl,
+      enabled: record?.enabled !== false && record?.enabled !== 'false',
+      isDefault: record?.isDefault === true || record?.is_default === true || record?.isDefault === 'true',
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
     };

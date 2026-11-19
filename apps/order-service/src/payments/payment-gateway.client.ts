@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { chargeKickback, chargePayroc, type GatewayOutcome } from './payment-gateway';
+import {
+  chargeKickback,
+  chargePayroc,
+  continuePayroc,
+  type GatewayOutcome,
+  type PayrocChargeInput,
+} from './payment-gateway';
 
 @Injectable()
 export class PaymentGatewayClient {
@@ -7,14 +13,12 @@ export class PaymentGatewayClient {
     return chargeKickback(input, fetch);
   }
 
-  chargePayroc(input: {
-    deviceId: string;
-    terminalId: string;
-    secretKey: string;
-    amount: number;
-    orderId: string;
-    operator: string;
-  }): Promise<GatewayOutcome> {
+  chargePayroc(input: PayrocChargeInput): Promise<GatewayOutcome> {
     return chargePayroc(input, fetch);
+  }
+
+  /** Reads an instruction or payment that was already submitted. Does not create a charge. */
+  continuePayroc(input: { secretKey: string; instructionId?: string; paymentId?: string }): Promise<GatewayOutcome> {
+    return continuePayroc(input, fetch);
   }
 }
