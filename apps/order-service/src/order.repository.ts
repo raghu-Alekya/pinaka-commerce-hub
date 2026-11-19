@@ -32,6 +32,12 @@ import {
   taxUnitsForMinor,
 } from './calculations/store-order.calculations';
 
+const CARD_PAYMENT_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
+
+function isCardPaymentMethod(method: unknown): boolean {
+  return CARD_PAYMENT_METHODS.has(String(method || '').trim().toLowerCase().replace(/_/g, '-'));
+}
+
 @Injectable()
 export class OrderRepository implements OnModuleInit {
   private dataSource?: DataSource;
@@ -305,7 +311,8 @@ export class OrderRepository implements OnModuleInit {
           );
           await this.saveLineItems(manager, id, items, true);
           await this.saveStatusHistory(manager, storeOrder.statusHistory[0] as OrderStatusHistoryEntity);
-          if (paymentRows.length) {
+          const rowsToInsert = await this.withoutDuplicateCardTenders(manager, id, paymentRows);
+          if (rowsToInsert.length) {
             await manager.query(
               `INSERT INTO public.store_pos_payments (
                  order_id, merchant_id, store_id, local_id, client_order_id, device_id,
@@ -313,14 +320,15 @@ export class OrderRepository implements OnModuleInit {
                  amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
                  currency, status, entry_type, provider,
                  provider_transaction_id, payment_at, metadata
-               ) VALUES ${paymentRows.map((_, index) => {
+               ) VALUES ${rowsToInsert.map((_, index) => {
                  const offset = index * 24;
                  return `(${Array.from({ length: 24 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
                }).join(', ')}
                ON CONFLICT DO NOTHING`,
-              paymentRows.flat(),
+              rowsToInsert.flat(),
             );
           }
+          await this.collapseDuplicateCardTenders(manager, id);
           await this.saveStoreOrderMeta(manager, id, storeOrder.metadata, storeOrder.metaData);
           return { persistedStoreOrder };
         });
@@ -644,6 +652,131 @@ export class OrderRepository implements OnModuleInit {
         [storeId, JSON.stringify(payload)],
       );
     }
+  }
+
+  /**
+   * create-payment and the order snapshot both store the same card tender.
+   * The snapshot row is titled POS-CARD and has no gateway payload. Skip it
+   * when that amount was already charged.
+   */
+  private async withoutDuplicateCardTenders(
+    manager: EntityManager,
+    orderId: string,
+    paymentRows: any[][],
+  ): Promise<any[][]> {
+    const cardRows = paymentRows.filter((row) => isCardPaymentMethod(row[9]));
+    if (!cardRows.length) return paymentRows;
+    const existing = await manager.query(
+      `SELECT amount::text AS amount, payment_method, provider_transaction_id, payment_gateway_response
+         FROM public.store_pos_payments
+        WHERE order_id = $1::uuid
+          AND entry_type = 'payment'
+          AND deleted_at IS NULL
+          AND is_void = false`,
+      [orderId],
+    );
+    const taken = existing
+      .filter((row: { payment_method?: string }) => isCardPaymentMethod(row.payment_method))
+      .map((row: { amount: string }) => Number(row.amount));
+    if (!taken.length) return paymentRows;
+    return paymentRows.filter((row) => {
+      if (!isCardPaymentMethod(row[9])) return true;
+      const amount = Number(row[11]);
+      const match = taken.findIndex((saved) => Math.abs(saved - amount) < 0.001);
+      if (match < 0) return true;
+      taken.splice(match, 1);
+      return false;
+    });
+  }
+
+  private async gatewayCardSnapshots(manager: EntityManager, orderId: string): Promise<Array<Record<string, unknown>>> {
+    return manager.query(
+      `SELECT amount::text AS amount, provider, provider_transaction_id, payment_gateway_response, metadata
+         FROM public.store_pos_payments
+        WHERE order_id = $1::uuid
+          AND entry_type = 'payment'
+          AND deleted_at IS NULL
+          AND is_void = false
+          AND lower(replace(payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND (
+            payment_gateway_response IS NOT NULL
+            OR NULLIF(btrim(provider_transaction_id), '') IS NOT NULL
+          )`,
+      [orderId],
+    );
+  }
+
+  private async restoreGatewayCardSnapshots(
+    manager: EntityManager,
+    orderId: string,
+    snapshots: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    for (const saved of snapshots) {
+      const response = saved.payment_gateway_response == null
+        ? null
+        : JSON.stringify(saved.payment_gateway_response);
+      await manager.query(
+        `UPDATE public.store_pos_payments AS payment
+            SET provider = COALESCE(payment.provider, $3),
+                provider_transaction_id = COALESCE(NULLIF(btrim(payment.provider_transaction_id), ''), $4),
+                payment_gateway_response = COALESCE(payment.payment_gateway_response, $5::jsonb),
+                metadata = COALESCE(payment.metadata, '{}'::jsonb) || COALESCE($6::jsonb, '{}'::jsonb),
+                updated_at = now()
+          WHERE payment.id = (
+            SELECT id
+              FROM public.store_pos_payments
+             WHERE order_id = $1::uuid
+               AND entry_type = 'payment'
+               AND deleted_at IS NULL
+               AND amount = $2::numeric
+               AND lower(replace(payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+             ORDER BY payment_gateway_response NULLS LAST, created_at
+             LIMIT 1
+          )`,
+        [
+          orderId,
+          saved.amount,
+          saved.provider ?? null,
+          saved.provider_transaction_id ?? null,
+          response,
+          JSON.stringify(saved.metadata && typeof saved.metadata === 'object' ? saved.metadata : {}),
+        ],
+      );
+    }
+  }
+
+  private async collapseDuplicateCardTenders(manager: EntityManager, orderId: string): Promise<void> {
+    await manager.query(
+      `UPDATE public.store_pos_payments AS extra
+          SET deleted_at = now(),
+              updated_at = now(),
+              status = 'cancelled',
+              metadata = COALESCE(extra.metadata, '{}'::jsonb)
+                || jsonb_build_object('duplicate_card_tender', true)
+        WHERE extra.order_id = $1::uuid
+          AND extra.entry_type = 'payment'
+          AND extra.deleted_at IS NULL
+          AND extra.is_void = false
+          AND lower(replace(extra.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND extra.payment_gateway_response IS NULL
+          AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM public.store_pos_payments AS charged
+             WHERE charged.order_id = extra.order_id
+               AND charged.id <> extra.id
+               AND charged.deleted_at IS NULL
+               AND charged.entry_type = 'payment'
+               AND charged.is_void = false
+               AND charged.amount = extra.amount
+               AND lower(replace(charged.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+               AND (
+                 charged.payment_gateway_response IS NOT NULL
+                 OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+               )
+          )`,
+      [orderId],
+    );
   }
 
   private buildStorePosPaymentRows(
@@ -1810,6 +1943,7 @@ export class OrderRepository implements OnModuleInit {
         persisted.lineItems,
       );
       await this.saveLineItems(manager, current.order.id, items, true);
+      const preservedCardCharges = await this.gatewayCardSnapshots(manager, current.order.id);
       await manager.query(
         `DELETE FROM public.store_pos_payments
           WHERE order_id = $1::uuid AND entry_type = 'payment'`,
@@ -1829,6 +1963,8 @@ export class OrderRepository implements OnModuleInit {
           paymentRows.flat(),
         );
       }
+      await this.restoreGatewayCardSnapshots(manager, current.order.id, preservedCardCharges);
+      await this.collapseDuplicateCardTenders(manager, current.order.id);
       await manager.query('DELETE FROM public.store_orders_meta WHERE order_id = $1::uuid', [current.order.id]);
       await this.saveStoreOrderMeta(manager, current.order.id, replacement.metadata, replacement.metaData);
       if (previousStatus !== String(orderStatus)) {

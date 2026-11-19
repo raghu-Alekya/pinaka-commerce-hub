@@ -188,6 +188,17 @@ export async function ensureStorePosPaymentsSchema(db: DataSource): Promise<void
         DROP COLUMN IF EXISTS raw_payload
     `);
     await manager.query(`
+      ALTER TABLE public.store_pos_payments
+        ADD COLUMN IF NOT EXISTS payment_gateway_response jsonb
+    `);
+    await manager.query(`
+      UPDATE public.store_pos_payments
+         SET payment_gateway_response = COALESCE(metadata->'gateway_response', metadata->'transaction_details')
+       WHERE payment_gateway_response IS NULL
+         AND jsonb_typeof(COALESCE(metadata->'gateway_response', metadata->'transaction_details')) = 'object'
+         AND COALESCE(metadata->'gateway_response', metadata->'transaction_details') <> '{}'::jsonb
+    `);
+    await manager.query(`
       UPDATE public.store_pos_payments
          SET payment_method = lower(btrim(payment_method)),
              currency = NULLIF(upper(btrim(currency)), ''),
