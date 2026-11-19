@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
 
 export class SavePosCardPaymentDto {
   @IsIn(['Kickback', 'Payroc'])
@@ -29,4 +29,13 @@ export class SavePosCardPaymentDto {
   @IsOptional()
   @IsIn(['kickback', 'payroc', 'payrock', 'default', 'offline'])
   payment_gateway_provider?: string;
+
+  /** Omitted values leave a stored flag unchanged. A missing flag is treated as enabled. */
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
 }
