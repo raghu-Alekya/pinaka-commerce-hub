@@ -138,7 +138,7 @@ export class CreatePaymentService {
       requestedOrderId: String(body.order_id).trim(),
     };
 
-    if (paymentMethod !== 'card') {
+    if (paymentMethod !== 'card' && !isEbtMethod(paymentMethod)) {
       return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
     }
     return this.captureCard(tender, context, body);
@@ -169,10 +169,10 @@ export class CreatePaymentService {
     // The order save writes a second card row titled POS-CARD. Reuse that row,
     // or the row already charged for this amount, instead of inserting another.
     let attempt = existing.find((row) => row.local_id === localId)
-      ?? adoptableCardPayment(existing, tender.amount);
+      ?? adoptableCardPayment(existing, tender.amount, tender.paymentMethod);
     const capturedBefore = paidTotal(existing.filter((row) => row.id !== attempt?.id));
     if (attempt && countsAsCaptured(attempt) && hasGatewayResult(attempt)) {
-      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
+      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount, tender.paymentMethod);
       const totalPaid = paidTotal(existing);
       const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
       const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
@@ -189,7 +189,7 @@ export class CreatePaymentService {
       );
     }
     if (attempt && resolved.gateway === 'kickback' && gatewayAlreadySubmitted(attempt)) {
-      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
+      await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount, tender.paymentMethod);
       return this.storedGatewayResponse(tender, attempt, payable, capturedBefore);
     }
 
@@ -264,8 +264,8 @@ export class CreatePaymentService {
       order,
       shiftId: String(payment.shift_id || '').slice(0, 150),
       userId: String(payment.user_id || 'POS System').slice(0, 150),
-      paymentMethod: 'card',
-      paymentMethodTitle: 'Card',
+      paymentMethod: isEbtMethod(payment.payment_method) ? normalizeTender(payment.payment_method) : 'card',
+      paymentMethodTitle: isEbtMethod(payment.payment_method) ? normalizeTender(payment.payment_method) : 'Card',
       amount: numberValue(payment.amount),
       requestedOrderId: String(payment.local_id || payment.order_id),
     };
@@ -422,7 +422,7 @@ export class CreatePaymentService {
       paymentAt: facts.at,
       gatewayResponse,
     });
-    await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount);
+    await this.collapseDuplicateCardTenders(tender.order.order_id, tender.amount, tender.paymentMethod);
     if (approved) {
       const fullyPaid = Math.round(totalPaid * 100) >= Math.round(payable * 100);
       const orderStatus = await this.applyOrderStatus(tender.order, fullyPaid, tender.userId);
@@ -777,7 +777,9 @@ export class CreatePaymentService {
   }
 
   /** Removes the order-sync card row when the charged card row for that amount already exists. */
-  private async collapseDuplicateCardTenders(orderId: string, amount: number): Promise<void> {
+  private async collapseDuplicateCardTenders(orderId: string, amount: number, method: string): Promise<void> {
+    const family = tenderFamily(method);
+    if (!family) return;
     await this.query(
       `UPDATE public.store_pos_payments AS extra
           SET deleted_at = now(),
@@ -790,7 +792,10 @@ export class CreatePaymentService {
           AND extra.deleted_at IS NULL
           AND extra.is_void = false
           AND extra.amount = $2::numeric
-          AND lower(replace(extra.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+          AND (
+            ($3 = 'card' AND lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'))
+            OR ($3 = 'ebt' AND lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card'))
+          )
           AND extra.payment_gateway_response IS NULL
           AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL
           AND EXISTS (
@@ -802,13 +807,16 @@ export class CreatePaymentService {
                AND charged.entry_type = 'payment'
                AND charged.is_void = false
                AND charged.amount = extra.amount
-               AND lower(replace(charged.payment_method, '_', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+               AND (
+                 ($3 = 'card' AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'))
+                 OR ($3 = 'ebt' AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card'))
+               )
                AND (
                  charged.payment_gateway_response IS NOT NULL
                  OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
                )
           ) /* collapse_duplicate_card_tender */`,
-      [orderId, amount],
+      [orderId, amount, family],
     );
   }
 
@@ -931,9 +939,25 @@ function paidTotal(rows: PaymentRow[]): number {
 }
 
 const CARD_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
+const EBT_METHODS = new Set(['ebt', 'pos-ebt', 'ebt-card']);
+
+function normalizeTender(method: unknown): string {
+  return String(method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+function tenderFamily(method: unknown): 'card' | 'ebt' | null {
+  const normalized = normalizeTender(method);
+  if (CARD_METHODS.has(normalized)) return 'card';
+  if (EBT_METHODS.has(normalized)) return 'ebt';
+  return null;
+}
 
 function isCardMethod(method: unknown): boolean {
-  return CARD_METHODS.has(String(method || '').trim().toLowerCase().replace(/_/g, '-'));
+  return tenderFamily(method) === 'card';
+}
+
+function isEbtMethod(method: unknown): boolean {
+  return tenderFamily(method) === 'ebt';
 }
 
 function sameMoney(left: unknown, right: number): boolean {
@@ -950,8 +974,9 @@ function hasGatewayResult(row: PaymentRow): boolean {
  * row sitting next to that shell. A finished attempt with its own local id
  * is left alone so a later attempt can insert its own row.
  */
-function adoptableCardPayment(rows: PaymentRow[], amount: number): PaymentRow | undefined {
-  const cards = rows.filter((row) => isCardMethod(row.payment_method) && !row.is_void && sameMoney(row.amount, amount));
+function adoptableCardPayment(rows: PaymentRow[], amount: number, method: string): PaymentRow | undefined {
+  const family = tenderFamily(method);
+  const cards = rows.filter((row) => tenderFamily(row.payment_method) === family && family !== null && !row.is_void && sameMoney(row.amount, amount));
   const charged = cards.filter((row) => hasGatewayResult(row));
   const shells = cards.filter((row) => !hasGatewayResult(row));
   if (charged.length === 1 && shells.length >= 1) return charged[0];
