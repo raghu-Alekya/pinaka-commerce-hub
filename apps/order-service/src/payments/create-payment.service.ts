@@ -563,7 +563,6 @@ export class CreatePaymentService {
               SELECT 1
                 FROM jsonb_array_elements(
                   CASE WHEN jsonb_typeof(sale.meta_data) = 'array' THEN sale.meta_data ELSE '[]'::jsonb END
-                  || CASE WHEN jsonb_typeof(sale.metadata) = 'array' THEN sale.metadata ELSE '[]'::jsonb END
                   || CASE WHEN jsonb_typeof(sale.request_payload->'meta_data') = 'array'
                        THEN sale.request_payload->'meta_data' ELSE '[]'::jsonb END
                 ) AS entry
@@ -606,7 +605,6 @@ export class CreatePaymentService {
              CROSS JOIN LATERAL jsonb_array_elements(
                CASE
                  WHEN jsonb_typeof(sale.meta_data) = 'array' THEN sale.meta_data
-                 WHEN jsonb_typeof(sale.metadata) = 'array' THEN sale.metadata
                  ELSE '[]'::jsonb
                END
              ) AS entry

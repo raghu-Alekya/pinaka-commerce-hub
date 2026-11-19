@@ -59,9 +59,6 @@ export class StoreOrderEntity {
   @Column({ name: 'local_shift_id', type: 'varchar', length: 100, nullable: true })
   localShiftId?: string;
 
-  @Column({ type: 'jsonb', nullable: true })
-  metadata?: Array<{ key: string; value: unknown }>;
-
   @Column({ name: 'request_payload', type: 'jsonb', nullable: true })
   requestPayload?: Record<string, unknown>;
 

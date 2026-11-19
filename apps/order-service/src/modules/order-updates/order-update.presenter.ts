@@ -20,7 +20,6 @@ export class OrderUpdatePresenter {
     const sourceLines = (Array.isArray(storeOrder?.lineItems) ? storeOrder.lineItems : stored.line_items) as PosLineItem[] | undefined;
     const feeLines = (Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : stored.fee_lines) as PosFeeLine[] | undefined;
     const metadata = [
-      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
       ...(Array.isArray(graph.order.metadata) ? graph.order.metadata : []),
       ...(Array.isArray(stored.meta_data) ? stored.meta_data as Array<{ key?: string; value?: unknown }> : []),
@@ -54,7 +53,6 @@ export class OrderUpdatePresenter {
     });
     const responseMeta = Array.isArray(response?.meta_data) ? response.meta_data : [];
     const storedMeta = [
-      ...(Array.isArray(storeOrder?.metadata) ? storeOrder.metadata : []),
       ...(Array.isArray(storeOrder?.metaData) ? storeOrder.metaData : []),
     ];
     const storedValue = (key: string, fallback: unknown) => {
