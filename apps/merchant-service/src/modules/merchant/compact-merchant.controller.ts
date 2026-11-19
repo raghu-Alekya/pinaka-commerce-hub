@@ -1725,4 +1725,5 @@ async function assertSameStoreTypePlan(
   throw new BadRequestException(
     `Plan must stay on the same store type (${currentType}). Other store types cannot be selected.`,
   );
+
 }

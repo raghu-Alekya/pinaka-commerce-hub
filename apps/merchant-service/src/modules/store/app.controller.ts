@@ -1758,4 +1758,5 @@ export class AppController {
       throw new BadRequestException(`Could not sync WordPress catalog: ${message}`);
     }
   }
+
 }
