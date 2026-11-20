@@ -712,7 +712,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list() {
+  async list(@Req() request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -747,11 +747,7 @@ export class CompactMerchantController {
            now()
          ) DESC`,
       );
-      return {
-        success: true,
-        count: rows.length,
-        merchants: rows.map((row: Input) => this.showMerchantCode(row)),
-      };
+      return this.merchantListResponse(rows, request);
     } catch (error: unknown) {
       console.error(
         '[CompactMerchantController.list]',
@@ -771,11 +767,7 @@ export class CompactMerchantController {
              now()
            ) DESC`,
         );
-        return {
-          success: true,
-          count: rows.length,
-          merchants: rows.map((row: Input) => this.showMerchantCode(row)),
-        };
+        return this.merchantListResponse(rows, request);
       } catch (fallbackError: unknown) {
         console.error(
           '[CompactMerchantController.list.fallback]',
@@ -790,13 +782,29 @@ export class CompactMerchantController {
                      AND COALESCE(store.is_deleted, false) = false) AS store_count
            FROM public.merchants m`,
         );
-        return {
-          success: true,
-          count: rows.length,
-          merchants: rows.map((row: Input) => this.showMerchantCode(row)),
-        };
+        return this.merchantListResponse(rows, request);
       }
     }
+  }
+
+  private merchantListResponse(rows: Input[], request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const merchantId = request?.user?.accountType ? request.user.merchantId : undefined;
+    const merchantCode = request?.user?.merchantCode;
+    const visible = merchantId
+      ? rows.filter((row) => {
+          const merchant = (row.merchant || {}) as Input;
+          return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
+            .some((value) => {
+              const text = String(value || '');
+              return text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase());
+            });
+        })
+      : rows;
+    return {
+      success: true,
+      count: visible.length,
+      merchants: visible.map((row) => this.showMerchantCode(row)),
+    };
   }
 
   @Public()
@@ -919,9 +927,10 @@ export class CompactMerchantController {
   // Register the reserved employees path before the merchant identifier route.
   @Get('employees')
   @UseInterceptors(EmployeeResponseInterceptor)
-  async listEmployees(@Query('status') status?: string) {
-    const employees = await this.repository.listEmployees(undefined, status);
-    const statistics = await this.repository.employeeStatistics(undefined);
+  async listEmployees(@Query('status') status?: string, @Req() request?: { user?: { accountType?: string; merchantId?: string } }) {
+    const merchantId = request?.user?.accountType ? request.user.merchantId : undefined;
+    const employees = await this.repository.listEmployees(merchantId, status);
+    const statistics = await this.repository.employeeStatistics(merchantId);
     return { success: true, count: employees.length, statistics, employees };
   }
 

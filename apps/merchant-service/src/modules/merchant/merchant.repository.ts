@@ -6300,6 +6300,16 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   async deleteRole(merchantId: string, idOrCode: string): Promise<boolean> {
     const existing = await this.getRoleByIdOrCode(merchantId, idOrCode);
     if (!existing) return false;
+    const assigned = await this.dataSource.query(
+      `SELECT 1 FROM public.employee_store_roles
+        WHERE role_id = $1
+          AND UPPER(COALESCE(status::text, 'ACTIVE')) NOT IN ('INACTIVE', 'DISABLED')
+        LIMIT 1`,
+      [existing.id],
+    );
+    if (assigned.length) {
+      throw new ConflictException('This role is assigned to employees. Reassign them before deleting it.');
+    }
     existing.status = RoleStatus.INACTIVE;
     existing.updatedAt = new Date();
     await this.roleRepo.save(existing);

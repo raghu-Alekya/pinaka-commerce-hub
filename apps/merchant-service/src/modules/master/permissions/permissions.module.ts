@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { FeaturePermissionController } from './feature-permission.controller';
 import { MenuPermissionController } from './menu-permission.controller';
+import { MerchantAccessController } from './merchant-access.controller';
 import { MenuPermissionService } from './menu-permission.service';
 import { PermissionController } from './permission.controller';
 import { RolePermissionController } from './role-permission.controller';
@@ -14,6 +15,7 @@ import { RelationshipsModule } from '../../shared/relationships.module';
     FeaturePermissionController,
     RolePermissionController,
     MenuPermissionController,
+    MerchantAccessController,
   ],
   providers: [MenuPermissionService],
 })
