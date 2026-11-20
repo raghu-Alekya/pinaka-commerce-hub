@@ -3,7 +3,7 @@ import { EmployeeController } from './employee.controller';
 import { EmployeeAccessController } from './employee-access.controller';
 import { EmployeeAccessRepository } from './employee-access.repository';
 import { EmployeeStoreRoleCatalogController } from './employee-store-role-catalog.controller';
-import { MerchantEmployeeController } from './merchant-employee.controller';
+import { MerchantEmployeeController, MerchantEmployeeTokenGuard, MerchantTokenEmployeeController } from './merchant-employee.controller';
 import { MerchantModule } from '../merchant/merchant.module';
 import { RelationshipsModule } from '../shared/relationships.module';
 
@@ -12,9 +12,10 @@ import { RelationshipsModule } from '../shared/relationships.module';
   controllers: [
     EmployeeController,
     MerchantEmployeeController,
+    MerchantTokenEmployeeController,
     EmployeeAccessController,
     EmployeeStoreRoleCatalogController,
   ],
-  providers: [EmployeeAccessRepository],
+  providers: [EmployeeAccessRepository, MerchantEmployeeTokenGuard],
 })
 export class EmployeeModule {}

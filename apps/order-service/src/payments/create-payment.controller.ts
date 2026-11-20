@@ -1,0 +1,40 @@
+import { BadRequestException, Body, Controller, Headers, HttpCode, HttpStatus, Inject, Post } from '@nestjs/common';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
+import { CreatePaymentService } from './create-payment.service';
+
+@Controller([
+  'api/v1/payments',
+  'connector/api/v1/payments',
+])
+export class CreatePaymentController {
+  constructor(@Inject(CreatePaymentService) private readonly payments: CreatePaymentService) {}
+
+  /** Payroc notifies this route. The handler re-reads Payroc before changing the saved attempt. */
+  @Post('payroc/webhook')
+  @HttpCode(HttpStatus.OK)
+  payrocWebhook(@Body() body: Record<string, unknown>) {
+    return this.payments.applyPayrocWebhook(body ?? {});
+  }
+
+  @Post('create-payment')
+  @HttpCode(HttpStatus.OK)
+  create(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    const token = verifyAccessToken(extractBearerToken(authorization));
+    const merchant = String(merchantId || '').trim();
+    const store = String(storeId || '').trim();
+    if (!merchant) throw new BadRequestException('x-merchant-id header is required');
+    if (!store) throw new BadRequestException('x-store-id header is required');
+    return this.payments.create(body ?? {}, {
+      merchantId: merchant,
+      storeId: store,
+      userId: token.sub,
+      idempotencyKey,
+    });
+  }
+}

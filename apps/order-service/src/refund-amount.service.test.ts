@@ -48,6 +48,18 @@ test('partial refund uses selected amounts', async () => {
   assert.equal(result.total, 6.99);
 });
 
+test('partial refund preview rejects an amount above the remaining order total', async () => {
+  await assert.rejects(
+    service().calculate(
+      { order_id: '262881247', refund_type: 'Partial', items: [{ order_item_id: 30486, order_item_amount: 20 }] },
+      'cb1f2437-a9e9-4a2b-b044-caf7cdfac180',
+      '2ad68afe-8203-44bf-9bad-c3b5ec01bfb0',
+    ),
+    (error: unknown) => error instanceof BadRequestException
+      && (error.getResponse() as any).code === 'exceeds_remaining',
+  );
+});
+
 test('partial refund rejects discounted items', async () => {
   const context: any = structuredClone(baseContext);
   context.storeOrder.lineItems[0].meta_data = [{ key: '_pos_discount_rule_id', value: 'AUTO_4889' }];

@@ -59,9 +59,6 @@ export class StoreOrderEntity {
   @Column({ name: 'local_shift_id', type: 'varchar', length: 100, nullable: true })
   localShiftId?: string;
 
-  @Column({ type: 'jsonb', nullable: true })
-  metadata?: Array<{ key: string; value: unknown }>;
-
   @Column({ name: 'request_payload', type: 'jsonb', nullable: true })
   requestPayload?: Record<string, unknown>;
 
@@ -103,6 +100,9 @@ export class StoreOrderEntity {
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   total!: number;
+
+  @Column({ name: 'grand_total', type: 'decimal', precision: 12, scale: 2, default: 0 })
+  grandTotal!: number;
 
   @Column({ name: 'line_items', type: 'jsonb', default: () => "'[]'" })
   lineItems!: unknown[];

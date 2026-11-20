@@ -84,4 +84,7 @@ COMMENT ON COLUMN public.pos_shift_transactions.transaction_type IS
 COMMENT ON COLUMN public.pos_shift_transactions.json_payload IS
   'Transaction detail such as vendor, invoice, denomination breakdown, or tender lines.';
 
+-- The POS service copies legacy pos_shifts columns into these tables, then drops them.
+-- Do not drop those columns from this script before that copy has run.
+
 COMMIT;

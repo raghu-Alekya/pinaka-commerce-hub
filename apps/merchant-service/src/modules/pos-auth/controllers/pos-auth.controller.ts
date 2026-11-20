@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Body, Headers, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, HttpCode, HttpStatus, createParamDecorator, ExecutionContext, Inject, Req } from '@nestjs/common';
 import { Public } from '@pinaka-delivery-hub/auth';
+import { RequireAuth } from '../../shared/session-auth.guard';
 import { PosAuthService, DeviceContext } from '../services/pos-auth.service';
 import { MerchantStoreLoginDto } from '../dto/merchant-store-login.dto';
 import { PosLoginDto } from '../dto/pos-login.dto';
@@ -23,6 +24,39 @@ export class PosAuthController {
   constructor(
     @Inject(PosAuthService) private readonly posAuthService: PosAuthService,
   ) {}
+
+  @Public()
+  @Post('merchant-login')
+  @HttpCode(HttpStatus.OK)
+  merchantPasswordLogin(@Body() body: { email?: string; password?: string }) {
+    return this.posAuthService.merchantPasswordLogin(body);
+  }
+
+  @Post('merchant-logout')
+  @HttpCode(HttpStatus.OK)
+  merchantLogout(@Headers('authorization') authorization?: string) {
+    return this.posAuthService.merchantLogout(authorization);
+  }
+
+  @Public()
+  @Post('employee-console-login')
+  @HttpCode(HttpStatus.OK)
+  employeePasswordLogin(@Body() body: { email?: string; password?: string }) {
+    return this.posAuthService.employeePasswordLogin(body);
+  }
+
+  @RequireAuth()
+  @Get('console/me')
+  consoleProfile(@Req() request: { user?: { accountType?: string; merchantId?: string; employeeId?: string; id?: string; email?: string } }) {
+    return this.posAuthService.consoleProfile(request.user || {});
+  }
+
+  @RequireAuth()
+  @Post('console/logout')
+  @HttpCode(HttpStatus.OK)
+  consoleLogout(@Req() request: { user?: { sessionId?: string } }) {
+    return this.posAuthService.consoleLogout(request.user?.sessionId);
+  }
 
   /**
    * API 1: Merchant & Store Login / Information Lookup
@@ -72,10 +106,41 @@ export class PosAuthController {
   }
 
   /**
+   * WooCommerce product options for POS product entry.
+   * GET /api/v1/pos/auth/catalog/product-options
+   * Requires an active employee PIN session token plus x-merchant-id and x-store-id.
+   */
+  @Get('catalog/product-options')
+  @HttpCode(HttpStatus.OK)
+  async getStoreProductOptions(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreProductOptions(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
+  /**
    * Store products.
    * GET /api/v1/pos/auth/catalog/products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get('merchant/catalog/products')
+  @HttpCode(HttpStatus.OK)
+  async getMerchantStoreProducts(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getMerchantStoreProducts(
+      headerValue(authorization), headerValue(merchantId), headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/products', 'products', 'store-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProducts(
@@ -95,6 +160,20 @@ export class PosAuthController {
    * GET /api/v1/pos/auth/catalog/get-categories-products
    * Requires the POS login access token plus x-merchant-id and x-store-id.
    */
+  @Get(['catalog/get-categories-with-tax', 'get-categories-with-tax'])
+  @HttpCode(HttpStatus.OK)
+  async getCategoriesWithTax(
+    @Headers('authorization') authorization?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string,
+  ) {
+    return this.posAuthService.getStoreCategoriesWithTax(
+      headerValue(authorization),
+      headerValue(merchantId),
+      headerValue(storeId),
+    );
+  }
+
   @Get(['catalog/get-categories-products', 'get-categories-products'])
   @HttpCode(HttpStatus.OK)
   async getStoreProductsAndCategories(

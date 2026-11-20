@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import {
@@ -10,10 +10,11 @@ import {
   TaxSettings,
 } from './pos-config.entity';
 
+const STORE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class PosConfigRepository implements OnModuleInit {
   private dataSource?: DataSource;
-  private configRepo?: Repository<PosConfigEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
@@ -22,13 +23,15 @@ export class PosConfigRepository implements OnModuleInit {
   private memoryConfigs = new Map<string, PosConfigEntity>();
 
   async onModuleInit() {
-    // 1. PostgreSQL Connection
-      this.dataSource = await connectPostgres('PCH POS Config DB', [PosConfigEntity]);
-      this.configRepo = this.dataSource.getRepository(PosConfigEntity);
+    try {
+      this.dataSource = await connectPostgres('PCH POS Config DB', [], { synchronize: false });
       this.isDbConnected = true;
-      await this.seedDefaultConfig('STR-5001', 'MCH-1001', 'RETAIL');
+    } catch (err: any) {
+      console.log(`⚠️ [PCH POS Config DB] Offline (${err.message}).`);
+      this.isDbConnected = false;
+    }
 
-    // 2. Redis Connection
+    // Redis Connection
     try {
       this.redisClient = new Redis({
         host: process.env.REDIS_HOST || 'localhost',
@@ -42,21 +45,6 @@ export class PosConfigRepository implements OnModuleInit {
     } catch (err: any) {
       console.log(`⚠️ [PCH POS Config Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
-    }
-  }
-
-  /**
-   * Seed default configuration for store
-   */
-  private async seedDefaultConfig(storeId: string, merchantId: string, businessType: string) {
-    if (!this.configRepo) return;
-    const existing = await this.configRepo.findOne({ where: { storeId } });
-    if (!existing) {
-      const config = this.buildDefaultConfig(storeId, merchantId, businessType);
-      const entity = this.configRepo.create(config);
-      await this.configRepo.save(entity);
-      await this.cacheConfig(config);
-      console.log(`✅ [POS Seed] Created default POS config for Store ${storeId}`);
     }
   }
 
@@ -121,16 +109,14 @@ export class PosConfigRepository implements OnModuleInit {
     const cached = await this.getCachedConfig(storeId);
     if (cached) return cached;
 
-    // 2. Try PostgreSQL DB
-    if (this.isDbConnected && this.configRepo) {
-      let config = await this.configRepo.findOne({ where: { storeId } });
-      if (!config) {
-        config = this.buildDefaultConfig(storeId, 'MCH-1001', 'RETAIL');
-        const entity = this.configRepo.create(config);
-        config = await this.configRepo.save(entity);
+    if (this.isDbConnected && this.dataSource && STORE_UUID.test(storeId)) {
+      const stored = await this.readStored(storeId);
+      if (stored) {
+        await this.cacheConfig(stored);
+        return stored;
       }
-      await this.cacheConfig(config);
-      return config;
+      const created = this.buildDefaultConfig(storeId, 'MCH-1001', 'RETAIL');
+      return this.saveConfig(created);
     }
 
     // 3. In-memory fallback
@@ -187,16 +173,50 @@ export class PosConfigRepository implements OnModuleInit {
     return { valid: false, message: 'Invalid Manager PIN authorization code' };
   }
 
+  private async readStored(storeId: string): Promise<PosConfigEntity | null> {
+    if (!this.dataSource) return null;
+    try {
+      const rows: Array<{ configuration_value: PosConfigEntity; created_at: Date; updated_at: Date }> = await this.dataSource.query(
+        `SELECT configuration_value, created_at, updated_at
+           FROM public.store_pos_configurations
+          WHERE store_id = $1::uuid
+            AND configuration_name = 'pos_runtime'
+          LIMIT 1`,
+        [storeId],
+      );
+      const row = rows[0];
+      if (!row?.configuration_value) return null;
+      return {
+        ...row.configuration_value,
+        storeId,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private async saveConfig(config: PosConfigEntity): Promise<PosConfigEntity> {
-    if (this.isDbConnected && this.configRepo) {
-      const entity = this.configRepo.create(config);
-      const saved = await this.configRepo.save(entity);
+    if (this.isDbConnected && this.dataSource && STORE_UUID.test(config.storeId)) {
+      const payload = { ...config };
+      delete (payload as { createdAt?: Date }).createdAt;
+      delete (payload as { updatedAt?: Date }).updatedAt;
+      const rows: Array<{ created_at: Date; updated_at: Date }> = await this.dataSource.query(
+        `INSERT INTO public.store_pos_configurations (store_id, configuration_name, configuration_value)
+         VALUES ($1::uuid, 'pos_runtime', $2::jsonb)
+         ON CONFLICT (store_id, configuration_name) DO UPDATE
+           SET configuration_value = EXCLUDED.configuration_value,
+               updated_at = now()
+         RETURNING created_at, updated_at`,
+        [config.storeId, JSON.stringify(payload)],
+      );
+      const saved = { ...config, createdAt: rows[0]?.created_at || config.createdAt, updatedAt: rows[0]?.updated_at || new Date() };
       await this.cacheConfig(saved);
       return saved;
-    } else {
-      this.memoryConfigs.set(config.storeId, config);
-      return config;
     }
+    this.memoryConfigs.set(config.storeId, config);
+    return config;
   }
 
   private async cacheConfig(config: PosConfigEntity) {

@@ -6,6 +6,15 @@ export interface AccessTokenPayload {
   accountId?: string | null;
   email?: string;
   role?: string;
+  accountType?: string;
+  merchantId?: string;
+  merchantCode?: string;
+  employeeId?: string;
+  storeId?: string;
+  deviceId?: string;
+  roleId?: string;
+  roleCode?: string;
+  roleName?: string;
   type?: string;
   jti?: string;
   iat?: number;

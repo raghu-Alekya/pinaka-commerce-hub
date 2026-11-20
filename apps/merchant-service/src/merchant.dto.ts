@@ -3,11 +3,6 @@ import { AuditInputDto } from './audit.dto';
 import { MerchantStatus } from './entities/merchant.entity';
 
 export class CreateMerchantDto extends AuditInputDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  merchantCode?: string;
-
   @IsString()
   @MaxLength(100)
   merchantId!: string;
@@ -84,11 +79,6 @@ export class CreateMerchantDto extends AuditInputDto {
 }
 
 export class UpdateMerchantDto extends AuditInputDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  merchantCode?: string;
-
   @IsOptional()
   @IsString()
   @MaxLength(100)

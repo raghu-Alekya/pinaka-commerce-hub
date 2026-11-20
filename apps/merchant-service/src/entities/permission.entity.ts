@@ -5,6 +5,7 @@ export enum PermissionStatus {
   INACTIVE = 'INACTIVE',
 }
 
+/** Role-assignment catalog. feature_permissions is a separate catalog and does not replace this table. */
 @Entity('permissions')
 export class PermissionEntity {
   @PrimaryGeneratedColumn('uuid')

@@ -1,10 +1,22 @@
 import { WorkforceValidationPipe } from '../../employee/workforce-validation.pipe';
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, Inject, Patch, UseGuards } from '@nestjs/common';
+import { CanActivate, Controller, Delete, ExecutionContext, Get, Inject, Injectable, Param, Patch, Post, Put, Query, Body, NotFoundException, UseGuards } from '@nestjs/common';
+import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
+import { RequireAuth } from '../../shared/session-auth.guard';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { CreatePermissionDto, UpdatePermissionDto } from './permission.dto';
 
-@UseGuards(RelationshipOwnerGuard)
+@Injectable()
+class PermissionBearerGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const authorization = context.switchToHttp().getRequest().headers?.authorization;
+    verifyAccessToken(extractBearerToken(authorization));
+    return true;
+  }
+}
+
+@RequireAuth()
+@UseGuards(PermissionBearerGuard, RelationshipOwnerGuard)
 @Controller(['api/v1/permissions', 'connector/api/v1/permissions', 'permissions'])
 export class PermissionController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}

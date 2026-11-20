@@ -13,7 +13,9 @@ function attachMerchantCode(value: unknown): unknown {
   const merchantId = next.merchantId ?? next.merchant_id;
   if (typeof merchantId === 'string' && merchantId) next.merchant_code = merchantId;
   for (const key of ['phone', 'merchantPhoneNumber', 'phoneNumber']) {
-    if (typeof next[key] === 'string') next[key] = nationalPhone(next[key], next.country);
+    if (typeof next[key] === 'string' && !next[key].startsWith('+')) {
+      next[key] = nationalPhone(next[key], next.country);
+    }
   }
   return next;
 }

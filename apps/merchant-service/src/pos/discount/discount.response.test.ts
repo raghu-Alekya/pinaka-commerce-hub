@@ -26,47 +26,40 @@ function respond(body: unknown, status = 200) {
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test('list returns the WordPress grouped data and pagination wrapper unchanged', async () => {
-  const wordpressResponse = {
-    data: {
-      auto: [{ id: 1, code: 'AUTO', discount_type: 'percent', coupon_amount: '10', type: 'auto' }],
-      mix_match: [{ id: 2, code: 'MIX', discount_type: 'fixed_item', coupon_amount: '5', type: 'mix_match' }],
-      multipack: [{ id: 3, code: 'PACK-3', coupon_amount: 2, qty: '3', type: 'multipack' }],
-    },
-    pagination: { page: 2, per_page: 10, total: 12, total_pages: 2, has_more: false },
-  };
-  respond(wordpressResponse);
-  const result = await serviceWithConnection().list('store-1', 'OWNER', { page: '2', per_page: '10', search: 'sale' });
-  assert.deepEqual(result, wordpressResponse);
-});
-
-test('list supports a type query while preserving the source list pagination', async () => {
-  const source = {
-    data: { auto: [{ id: 1 }], mix_match: [{ id: 2 }], multipack: [{ id: 3 }] },
-    pagination: { page: 1, per_page: 10, total: 3, total_pages: 1, has_more: false },
+test('list returns the saved PCH snapshot without reading WooCommerce', async () => {
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    throw new Error('List must not request WooCommerce');
   };
   const service = serviceWithConnection();
-  (service as any).wordpressRequest = async () => source;
-  (service as any).saveDiscount = async () => undefined;
-  assert.deepEqual(await service.list('store-1', 'OWNER', { type: 'mix_match' }), {
-    data: source.data.mix_match,
-    pagination: source.pagination,
+  const stored = {
+    auto: [{ id: 1, code: 'AUTO', type: 'auto' }],
+    mix_match: [{ id: 2, code: 'MIX', type: 'mix_match' }],
+    multipack: [{ id: 3, code: 'PACK-3', type: 'multipack' }],
+  };
+  (service as any).readDiscountPayload = async () => stored;
+
+  assert.deepEqual(await service.list('store-1', 'OWNER'), {
+    data: stored,
+    pagination: { page: 1, per_page: 100, total: 3, total_pages: 1, has_more: false },
   });
+  assert.equal(fetchCount, 0);
 });
 
-test('list requests 100 records by default and allows explicit pagination overrides', async () => {
+test('list supports a type query against the saved PCH snapshot', async () => {
   const service = serviceWithConnection();
-  const queries: Record<string, string>[] = [];
-  (service as any).wordpressRequest = async (_connection: unknown, _path: string, _method: string, _body: unknown, query: Record<string, string>) => {
-    queries.push(query);
-    return { data: {} };
+  const stored = {
+    auto: [{ id: 1 }],
+    mix_match: [{ id: 2 }],
+    multipack: [{ id: 3 }],
   };
-  await service.list('store-1', 'OWNER');
-  await service.list('store-1', 'OWNER', { page: '2', per_page: '25' });
-  assert.deepEqual(queries, [
-    { page: '1', per_page: '100' },
-    { page: '2', per_page: '25' },
-  ]);
+  (service as any).readDiscountPayload = async () => stored;
+
+  assert.deepEqual(await service.list('store-1', 'OWNER', { type: 'mix_match' }), {
+    data: stored.mix_match,
+    pagination: { page: 1, per_page: 100, total: 3, total_pages: 1, has_more: false },
+  });
 });
 
 test('get by ID reads only the requested type from the existing store_discounts payload', async () => {
@@ -304,6 +297,65 @@ test('discount ID matching recognizes either local or WooCommerce IDs', () => {
   assert.equal((service as any).discountMatchesId(record, 'pch-9'), true);
   assert.equal((service as any).discountMatchesId(record, '17439'), true);
   assert.equal((service as any).discountMatchesId(record, 'other'), false);
+});
+
+test('refreshing a discount record preserves the per-order usage ledger and local count', async () => {
+  const service = serviceWithConnection();
+  let savedPayload: any;
+  const manager = {
+    query: async (sql: string, parameters: unknown[] = []) => {
+      if (/SELECT payload/i.test(sql)) return [{ payload: {
+        auto: [{
+          id: 44, name: 'Diwali Mix', usage_count: 12,
+          pch_used_order_ids: ['order-1'],
+          pch_used_applications_by_order: { 'order-1': 10, 'order-2': 2 },
+        }],
+        mix_match: [], multipack: [],
+      } }];
+      if (/INSERT INTO public\.store_discounts/i.test(sql)) savedPayload = JSON.parse(String(parameters[1]));
+      return [];
+    },
+  };
+  (service as any).merchants = {
+    requireDataSource: () => ({ transaction: async (operation: (value: unknown) => Promise<unknown>) => operation(manager) }),
+  };
+  await (service as any).saveDiscount('store-1', 'auto', { id: 44, name: 'Diwali Mix', usage_count: 3 }, '44');
+  assert.equal(savedPayload.auto[0].name, 'Diwali Mix');
+  assert.equal(savedPayload.auto[0].usage_count, 12);
+  assert.deepEqual(savedPayload.auto[0].pch_used_applications_by_order, { 'order-1': 10, 'order-2': 2 });
+});
+
+test('a concurrent order usage update wins over an older WooCommerce refresh snapshot', async () => {
+  const service = serviceWithConnection();
+  let savedPayload: any;
+  const manager = {
+    query: async (sql: string, parameters: unknown[] = []) => {
+      if (/SELECT payload/i.test(sql)) return [{ payload: {
+        auto: [{ id: 44, usage_count: 8, pch_used_order_ids: ['order-1', 'order-2'],
+          pch_used_applications_by_order: { 'order-1': 5, 'order-2': 3 } }],
+        mix_match: [], multipack: [],
+      } }];
+      if (/INSERT INTO public\.store_discounts/i.test(sql)) savedPayload = JSON.parse(String(parameters[1]));
+      return [];
+    },
+  };
+  (service as any).merchants = {
+    requireDataSource: () => ({
+      query: async (sql: string) => sql.includes('to_regclass')
+        ? [{ name: 'store_products' }]
+        : [{ payload: [{ id: 123 }] }],
+      transaction: async (operation: (value: unknown) => Promise<unknown>) => operation(manager),
+    }),
+  };
+  (service as any).readDiscountPayload = async () => ({ auto: [{ id: 44, usage_count: 4 }], mix_match: [], multipack: [] });
+  (service as any).pushUsageCountToWordPress = async () => true;
+  respond({ data: { auto: [{ id: 44, usage_count: 0 }], mix_match: [], multipack: [] }, pagination: { has_more: false } });
+  await service.syncStoreDiscountsFromWordPress({
+    storeId: 'store-1', wordpressUrl: 'https://shop.example', wordpressJwt: 'test-jwt',
+  });
+  assert.equal(savedPayload.auto[0].usage_count, 8);
+  assert.deepEqual(savedPayload.auto[0].pch_used_applications_by_order, { 'order-1': 5, 'order-2': 3 });
+  assert.equal(savedPayload.auto[0].pch_usage_sync_pending, true);
 });
 
 test('auto and mix-match discount names are compared case-insensitively before create', async () => {

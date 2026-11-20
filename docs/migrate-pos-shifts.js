@@ -27,41 +27,18 @@ async function migrateDatabase(dbName) {
         id VARCHAR(100) PRIMARY KEY,
         merchant_id VARCHAR(100) NOT NULL,
         store_id VARCHAR(100) NOT NULL,
-        register_id UUID,
         device_id VARCHAR(100) NOT NULL,
-        opening_device_id UUID,
-        opened_by_employee_id UUID,
-        closed_by_employee_id UUID,
-        closed_by_device_id VARCHAR(100),
-        shift_number VARCHAR(100),
-        cashier_name VARCHAR(150) NOT NULL,
-        opening_cash DECIMAL(10,2) DEFAULT 200.00,
-        total_cash_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_card_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_safe_drops DECIMAL(10,2) DEFAULT 0.00,
-        total_paid_outs DECIMAL(10,2) DEFAULT 0.00,
-        total_orders INTEGER DEFAULT 0,
-        total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00,
-        total_cashback DECIMAL(10,2) DEFAULT 0.00,
-        total_payouts DECIMAL(10,2) DEFAULT 0.00,
-        total_ebt_sales DECIMAL(10,2) DEFAULT 0.00,
-        total_pay_later DECIMAL(10,2) DEFAULT 0.00,
-        total_refunds DECIMAL(10,2) DEFAULT 0.00,
-        total_cancelled_orders INTEGER DEFAULT 0,
-        total_void_items INTEGER DEFAULT 0,
-        drawer_denominations JSONB,
-        drawer_total_amount DECIMAL(12,2),
-        tube_denominations JSONB,
-        tube_total_amount DECIMAL(12,2),
-        total_amount DECIMAL(12,2),
-        closing_cash_actual DECIMAL(10,2),
-        expected_cash_in_drawer DECIMAL(10,2),
-        declared_cash DECIMAL(10,2),
-        cash_difference DECIMAL(10,2),
-        discrepancy DECIMAL(10,2),
-        opening_note TEXT,
-        closing_note TEXT,
+        opening_device_id VARCHAR(100),
+        closing_device_id VARCHAR(100),
+        created_by VARCHAR(100),
+        updated_by VARCHAR(100),
+        closed_by VARCHAR(100),
         status VARCHAR(50) DEFAULT 'OPEN',
+        opening_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+        closing_balance DECIMAL(12,2),
+        over_short DECIMAL(12,2),
+        declared_cash DECIMAL(12,2),
+        discrepancy DECIMAL(12,2),
         opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         closed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -69,44 +46,21 @@ async function migrateDatabase(dbName) {
       );
     `);
 
-    // 2. Add any missing snake_case columns
+    // 2. Add master columns only. Do not recreate the old totals, notes, or denomination columns.
     await client.query(`
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(100);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS register_id UUID;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_employee_id UUID;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by_device_id VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS shift_number VARCHAR(100);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cashier_name VARCHAR(150);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_cash DECIMAL(10,2) DEFAULT 200.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cash_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_card_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_safe_drops DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_paid_outs DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_order_sale_amount DECIMAL(12,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cashback DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_payouts DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_ebt_sales DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_pay_later DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_refunds DECIMAL(10,2) DEFAULT 0.00;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_cancelled_orders INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_void_items INTEGER DEFAULT 0;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS drawer_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_denominations JSONB;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS tube_total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS total_amount DECIMAL(12,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_cash_actual DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS expected_cash_in_drawer DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS cash_difference DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(10,2);
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_note TEXT;
-      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_note TEXT;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_device_id VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_by VARCHAR(100);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opening_balance DECIMAL(12,2) DEFAULT 0;
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closing_balance DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS over_short DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS declared_cash DECIMAL(12,2);
+      ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS discrepancy DECIMAL(12,2);
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'OPEN';
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE public.pos_shifts ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
@@ -118,25 +72,15 @@ async function migrateDatabase(dbName) {
     const camelColumns = [
       ['merchantId', 'merchant_id'],
       ['storeId', 'store_id'],
-      ['registerId', 'register_id'],
       ['terminalId', 'device_id'],
       ['terminal_id', 'device_id'],
       ['openingDeviceId', 'opening_device_id'],
-      ['openedByEmployeeId', 'opened_by_employee_id'],
-      ['closedByEmployeeId', 'closed_by_employee_id'],
-      ['shiftNumber', 'shift_number'],
-      ['cashierName', 'cashier_name'],
-      ['openingCash', 'opening_cash'],
-      ['totalCashSales', 'total_cash_sales'],
-      ['totalCardSales', 'total_card_sales'],
-      ['totalSafeDrops', 'total_safe_drops'],
-      ['totalPaidOuts', 'total_paid_outs'],
-      ['closingCashActual', 'closing_cash_actual'],
-      ['expectedCashInDrawer', 'expected_cash_in_drawer'],
+      ['openedByEmployeeId', 'created_by'],
+      ['closedByEmployeeId', 'closed_by'],
+      ['openingCash', 'opening_balance'],
+      ['closingCashActual', 'closing_balance'],
       ['declaredCash', 'declared_cash'],
-      ['cashDifference', 'cash_difference'],
-      ['openingNote', 'opening_note'],
-      ['closingNote', 'closing_note'],
+      ['cashDifference', 'over_short'],
       ['openedAt', 'opened_at'],
       ['closedAt', 'closed_at'],
       ['createdAt', 'created_at'],
@@ -145,11 +89,16 @@ async function migrateDatabase(dbName) {
 
     for (const [legacyCol, snakeCol] of camelColumns) {
       const check = await client.query(
-        `SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = $1`,
-        [legacyCol]
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'pos_shifts' AND column_name = ANY($1)`,
+        [[legacyCol, snakeCol]]
       );
-      if (check.rows.length > 0) {
-        await client.query(`UPDATE public.pos_shifts SET "${snakeCol}" = "${legacyCol}" WHERE "${snakeCol}" IS NULL AND "${legacyCol}" IS NOT NULL`);
+      const present = new Set(check.rows.map((row) => row.column_name));
+      if (present.has(legacyCol) && present.has(snakeCol)) {
+        const valueSql = snakeCol === 'created_by' || snakeCol === 'closed_by'
+          ? `"${legacyCol}"::text`
+          : `"${legacyCol}"`;
+        await client.query(`UPDATE public.pos_shifts SET "${snakeCol}" = ${valueSql} WHERE "${snakeCol}" IS NULL AND "${legacyCol}" IS NOT NULL`);
         if (legacyCol !== snakeCol) {
           await client.query(`ALTER TABLE public.pos_shifts DROP COLUMN IF EXISTS "${legacyCol}"`);
           console.log(`   Dropped legacy camelCase column: pos_shifts."${legacyCol}"`);

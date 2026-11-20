@@ -44,13 +44,19 @@ export class StoreDeviceMappingRepository {
     });
   }
 
-  async findByStore(storeId: string): Promise<StoreDeviceMapping[]> {
+  async findByStore(storeId: string): Promise<(StoreDeviceMapping & {
+    device_name: string | null;
+    device_type: string | null;
+    status: string | null;
+  })[]> {
     return this.merchants.requireDataSource().query(
-      `SELECT id, store_id, device_id, merchant_id, is_mapped,
-              created_by, updated_by, is_deleted, created_at, updated_at
-       FROM public.store_devices
-       WHERE store_id = $1 AND is_deleted = false AND is_mapped = true
-       ORDER BY created_at DESC`,
+      `SELECT m.id, m.store_id, m.device_id, m.merchant_id, m.is_mapped,
+              m.created_by, m.updated_by, m.is_deleted, m.created_at, m.updated_at,
+              d.device_name, d.device_type, d.status
+       FROM public.store_devices m
+       LEFT JOIN public.devices d ON d.id::text = m.device_id::text
+       WHERE m.store_id = $1 AND m.is_deleted = false AND m.is_mapped = true
+       ORDER BY m.created_at DESC`,
       [storeId],
     );
   }

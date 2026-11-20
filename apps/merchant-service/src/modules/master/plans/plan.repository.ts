@@ -91,16 +91,24 @@ export class PlanRepository {
       values = [id, userId];
     }
     try {
-      const result = operation === 'create'
+      const result = operation === 'create' || operation === 'update'
         ? await dataSource.transaction(async manager => {
-            // Serialize creates for the same normalized name to avoid concurrent duplicates.
-            await manager.query('SELECT pg_advisory_xact_lock(724621, hashtext(lower(btrim($1))))', [fields.name]);
+            const current = operation === 'update'
+              ? (await manager.query('SELECT name, store_type_id FROM public.plans WHERE id = $1', [id]))[0]
+              : undefined;
+            if (operation === 'update' && !current) throw new NotFoundException('Plan not found');
+            const name = String(fields.name ?? current?.name).trim();
+            const storeTypeId = fields.store_type_id ?? current?.store_type_id ?? null;
+            await manager.query(
+              'SELECT pg_advisory_xact_lock(hashtext(lower(btrim($1))), hashtext(coalesce($2::text, \'\')))',
+              [name, storeTypeId],
+            );
             const duplicates = await manager.query(
-              'SELECT id FROM public.plans WHERE lower(btrim(name)) = lower(btrim($1)) LIMIT 1',
-              [fields.name],
+              'SELECT id FROM public.plans WHERE lower(btrim(name)) = lower(btrim($1)) AND store_type_id IS NOT DISTINCT FROM $2::uuid AND ($3::uuid IS NULL OR id <> $3::uuid) LIMIT 1',
+              [name, storeTypeId, operation === 'update' ? id : null],
             );
             if (duplicates.length) {
-              throw new ConflictException(`Plan name '${String(fields.name).trim()}' already exists`);
+              throw new ConflictException(`Plan name '${name}' already exists for this store type`);
             }
             return manager.query(sql, values);
           })

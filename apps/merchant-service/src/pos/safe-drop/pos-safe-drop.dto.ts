@@ -44,9 +44,15 @@ export class PosSafeDropDenominationDto {
   @MaxLength(255)
   imageName!: string;
 
+  @ValidateIf((item: PosSafeDropDenominationDto) => !item.image)
   @IsString()
   @MaxLength(2_800_000)
-  imageData!: string;
+  imageData?: string;
+
+  @ValidateIf((item: PosSafeDropDenominationDto) => !item.imageData)
+  @IsString()
+  @MaxLength(2048)
+  image?: string;
 }
 
 export class SavePosSafeDropDto {

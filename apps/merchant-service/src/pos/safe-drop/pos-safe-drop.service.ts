@@ -8,10 +8,9 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { MerchantRepository } from '../../modules/merchant/merchant.repository';
+import { PosConfigurationImageService } from '../../modules/store-pos-configuration/pos-configuration-image.service';
 import { StorePosConfigurationEntity } from '../../entities/store-pos-configuration.entity';
 import { SavePosSafeDropDto } from './pos-safe-drop.dto';
-
-const imagePattern = /^data:image\/(png|jpeg|jpg|webp);base64,/i;
 
 export interface PosSafeDropRecord {
   id: string;
@@ -42,13 +41,16 @@ type AuthenticatedActor = {
 
 @Injectable()
 export class PosSafeDropService {
-  constructor(@Inject(MerchantRepository) private readonly merchants: MerchantRepository) {}
+  constructor(
+    @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
+    @Inject(PosConfigurationImageService) private readonly images: PosConfigurationImageService,
+  ) {}
 
-  async get(storeId: string): Promise<{ success: true; safe_drop: PosSafeDropRecord }> {
+  async get(storeId: string, origin?: string): Promise<{ success: true; safe_drop: PosSafeDropRecord }> {
     const store = await this.requireStore(storeId);
     const record = await this.findConfiguration(store.id);
     if (!record) throw new NotFoundException('Safe and safe drop settings are not configured for this store');
-    return { success: true, safe_drop: this.present(record, store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(await this.withoutInlineImages(record), store.id, store.merchantId, origin) };
   }
 
   async getStatus(storeId: string, actor: AuthenticatedActor) {
@@ -76,7 +78,7 @@ export class PosSafeDropService {
               OR EXISTS (
                 SELECT 1 FROM public.users u
                  WHERE u.id::text = $2
-                   AND u."accountId"::text = $3
+                   AND u.account_id::text = $3
                    AND lower(u.email) = lower(m.email)
               )
             )
@@ -126,23 +128,23 @@ export class PosSafeDropService {
     };
   }
 
-  async create(storeId: string, body: SavePosSafeDropDto) {
+  async create(storeId: string, body: SavePosSafeDropDto, origin?: string) {
     const store = await this.requireStore(storeId);
     this.assertRules(body);
     if (await this.findConfiguration(store.id)) {
       throw new ConflictException('Safe and safe drop settings already exist for this store');
     }
     const record = await this.saveConfiguration(store.id, body);
-    return { success: true, safe_drop: this.present(record, store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(record, store.id, store.merchantId, origin) };
   }
 
-  async update(storeId: string, body: SavePosSafeDropDto) {
+  async update(storeId: string, body: SavePosSafeDropDto, origin?: string) {
     const store = await this.requireStore(storeId);
     this.assertRules(body);
     const current = await this.findConfiguration(store.id);
     if (!current) throw new NotFoundException('Safe and safe drop settings are not configured for this store');
     const record = await this.saveConfiguration(store.id, body, current);
-    return { success: true, safe_drop: this.present(record, store.id, store.merchantId) };
+    return { success: true, safe_drop: this.present(record, store.id, store.merchantId, origin) };
   }
 
   private async requireStore(storeId: string) {
@@ -165,13 +167,18 @@ export class PosSafeDropService {
     };
     unique((body.tubes || []).map(item => Number(item.amount)), 'Tube denomination');
     unique((body.drops || []).map(item => Number(item.amount)), 'Safe-drop denomination');
-    if ((body.drops || []).some(item => !imagePattern.test(item.imageData || ''))) {
-      throw new BadRequestException('Each safe-drop image must be a PNG, JPG, or WEBP data URL');
-    }
   }
 
   private configurationRepository() {
     return this.merchants.requireDataSource().getRepository(StorePosConfigurationEntity);
+  }
+
+  private async withoutInlineImages(record: StorePosConfigurationEntity) {
+    if (!this.images.hasInlineImage(record.configurationValue)) return record;
+    const prepared = await this.images.materialize(record.storeId, 'safe_and_safe_drop', record.configurationValue, false);
+    if (!prepared.changed) return record;
+    record.configurationValue = prepared.value;
+    return this.configurationRepository().save(record);
   }
 
   private findConfiguration(storeId: string) {
@@ -217,9 +224,11 @@ export class PosSafeDropService {
         id: item.id ?? randomUUID(),
         amount: Number(item.amount),
         imageName: item.imageName.trim() || 'denomination',
-        imageData: item.imageData,
+        image: item.image || item.imageData,
       })),
     };
+    const prepared = await this.images.materialize(storeId, 'safe_and_safe_drop', configurationValue, true);
+    configurationValue.drops = prepared.value.drops;
     const configuration = existing ?? repository.create({
       storeId,
       configurationName: 'safe_and_safe_drop',
@@ -233,6 +242,7 @@ export class PosSafeDropService {
     record: StorePosConfigurationEntity,
     storeId: string,
     merchantId: string,
+    origin?: string,
   ): PosSafeDropRecord {
     const value = record.configurationValue ?? {};
     const numberOrNull = (item: unknown) => item === null || item === undefined ? null : Number(item);
@@ -259,7 +269,7 @@ export class PosSafeDropService {
         id: String(item.id ?? randomUUID()),
         amount: Number(item.amount),
         image_name: String(item.imageName ?? item.image_name ?? ''),
-        image_data: String(item.imageData ?? item.image_data ?? ''),
+        image_data: this.images.publishImage(String(item.image ?? item.imageData ?? item.image_data ?? ''), origin) || '',
       })) : [],
       created_at: record.createdAt,
       updated_at: record.updatedAt,

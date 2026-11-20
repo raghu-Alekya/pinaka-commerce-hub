@@ -13,6 +13,12 @@ const aliases: Record<string, Record<string, string>> = {
     additional_employee_price: 'additionalEmployeePrice', trial_period: 'trialPeriod',
     effective_from: 'effectiveFrom', included_features: 'includedFeatures',
   },
+  CreateFeaturePermissionDto: {
+    feature_id: 'featureId', permission_code: 'permissionCode', permission_type: 'permissionType',
+  },
+  UpdateFeaturePermissionDto: {
+    feature_id: 'featureId', permission_code: 'permissionCode', permission_type: 'permissionType',
+  },
 };
  
 /** Accept form labels at the HTTP boundary; persistence retains the API schema. */

@@ -37,6 +37,12 @@ export class FullOrderRefundService {
     if (result.kind === 'already_refunded') {
       throw this.error('order_already_refunded', 'This order has already been fully refunded.');
     }
+    if (result.kind === 'exceeds_remaining') {
+      throw this.error(
+        'exceeds_remaining',
+        `Refund amount exceeds remaining refundable amount of ${result.remainingAmount.toFixed(2)}`,
+      );
+    }
     const numericOrderNumber = Number(result.orderNumber.replace(/\D/g, ''));
     return {
       success: true,
