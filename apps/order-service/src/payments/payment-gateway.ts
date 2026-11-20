@@ -183,7 +183,8 @@ function gatewayLabel(gateway: GatewayName): string {
 
 function missingCredentialFields(gateway: ListedGateway): string[] {
   const missing: string[] = [];
-  if (!gateway.credentials.deviceId) missing.push('device ID');
+  // A Payroc card sale takes its device id from deviceMappings, not this field.
+  if (gateway.gateway !== 'payroc' && !gateway.credentials.deviceId) missing.push('device ID');
   if (!gateway.credentials.secretKey) missing.push('secret key');
   if (gateway.gateway === 'payroc' && !gateway.credentials.terminalId) missing.push('terminal ID');
   return missing;

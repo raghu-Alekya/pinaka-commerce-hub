@@ -168,6 +168,9 @@ export class CreatePaymentService {
     if (resolved.gateway === 'offline') {
       return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
     }
+    if (resolved.gateway === 'payroc' && isEbtMethod(tender.paymentMethod) && !resolved.credentials.deviceId) {
+      throw new BadRequestException('Payroc device ID is required');
+    }
     const credentials = resolved.gateway === 'payroc' && !isEbtMethod(tender.paymentMethod)
       ? this.payrocCredentialsForOrder(tender, configuration, resolved.credentials)
       : resolved.credentials;
