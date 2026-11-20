@@ -12,7 +12,7 @@ import { QueryFailedError } from 'typeorm';
 import { OrderStatus } from '../entities/order.entity';
 import { OrderRepository } from '../order.repository';
 import { PaymentGatewayClient } from './payment-gateway.client';
-import { logPayrocPayment } from './payment-log';
+import { logPayrocPayment, payrocPaymentLogPath } from './payment-log';
 import {
   isPhpEmpty,
   payrocCardTerminalDeviceId,
@@ -114,7 +114,9 @@ export class CreatePaymentService {
   constructor(
     @Inject(OrderRepository) private readonly orders: OrderRepository,
     @Inject(PaymentGatewayClient) private readonly gateways: PaymentGatewayClient,
-  ) {}
+  ) {
+    logPayrocPayment('payment_log_ready', { file: payrocPaymentLogPath() });
+  }
 
   async create(
     body: Record<string, unknown>,
