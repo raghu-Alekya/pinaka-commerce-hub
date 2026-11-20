@@ -952,11 +952,6 @@ export class CompactMerchantController {
       } else if (merchant.actualPassword !== undefined) {
         merchant.password = merchant.actualPassword;
       }
-      merchant.phone = nationalPhone(merchant.phone, merchant.country);
-      merchant.merchantPhoneNumber = nationalPhone(
-        merchant.merchantPhoneNumber ?? merchant.phone,
-        merchant.country,
-      );
     }
     return { success: true, ...record };
   }
@@ -1111,12 +1106,8 @@ export class CompactMerchantController {
           'postal_code',
           input.pinCode ?? existing.postal_code ?? existing.pinCode,
         );
-        const phoneValue = nationalPhone(
-          input.merchantPhoneNumber ??
-            existing.merchantPhoneNumber ??
-            existing.phone,
-          phoneCountry,
-        );
+        const phoneValue = input.merchantPhoneNumber ??
+          existing.merchantPhoneNumber ?? existing.phone;
         setCol('merchantPhoneNumber', phoneValue);
         setCol('phone', phoneValue);
         setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);
