@@ -12,11 +12,14 @@ import { QueryFailedError } from 'typeorm';
 import { OrderStatus } from '../entities/order.entity';
 import { OrderRepository } from '../order.repository';
 import { PaymentGatewayClient } from './payment-gateway.client';
+import { logPayrocPayment } from './payment-log';
 import {
   isPhpEmpty,
+  payrocCardTerminalDeviceId,
   payrocIdempotencyKey,
   payrocOrderReference,
   readPaymentAmount,
+  readPosDeviceId,
   resolvePaymentGateway,
   sanitizeGatewayPayload,
   transactionFields,
@@ -73,6 +76,7 @@ interface SaleRow {
   total: string | number;
   status: string | null;
   order_status: string | null;
+  request_payload?: unknown;
 }
 
 interface TenderInput {
@@ -162,6 +166,9 @@ export class CreatePaymentService {
     if (resolved.gateway === 'offline') {
       return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
     }
+    const credentials = resolved.gateway === 'payroc' && !isEbtMethod(tender.paymentMethod)
+      ? this.payrocCredentialsForOrder(tender, configuration, resolved.credentials)
+      : resolved.credentials;
 
     const localId = attemptLocalId(body, context.idempotencyKey);
     const payable = await this.payableTotal(tender.order);
@@ -204,7 +211,7 @@ export class CreatePaymentService {
         transactionId: '',
         status: 'pending',
         localId,
-        metadata: this.attemptMetadata(tender, resolved.gateway, resolved.credentials, localId, {
+        metadata: this.attemptMetadata(tender, resolved.gateway, credentials, localId, {
           payment_status: 'pending',
           gateway_submitted: resolved.gateway === 'kickback',
         }),
@@ -222,8 +229,8 @@ export class CreatePaymentService {
       };
     }
 
-    const outcome = await this.submitCard(tender, context, body, resolved.gateway, resolved.credentials, attempt);
-    return this.applyGatewayOutcome(tender, attempt, payable, capturedBefore, resolved.gateway, resolved.credentials, localId, outcome);
+    const outcome = await this.submitCard(tender, context, body, resolved.gateway, credentials, attempt);
+    return this.applyGatewayOutcome(tender, attempt, payable, capturedBefore, resolved.gateway, credentials, localId, outcome);
   }
 
   /**
@@ -349,6 +356,12 @@ export class CreatePaymentService {
         instructionId,
       });
     }
+    logPayrocPayment('payroc_submit', {
+      orderId: tender.order.order_id,
+      storeId: tender.order.store_id,
+      cardTerminalDeviceId: credentials.deviceId,
+      terminalId: credentials.terminalId,
+    });
     return this.gateways.chargePayroc({
       deviceId: credentials.deviceId,
       terminalId: credentials.terminalId,
@@ -575,6 +588,40 @@ export class CreatePaymentService {
       params,
     );
     return byClientOrder[0] ?? null;
+  }
+
+  /** Card sales use the Payroc terminal mapped to this order's POS device. EBT keeps the stored device id. */
+  private payrocCredentialsForOrder(
+    tender: TenderInput,
+    configuration: unknown,
+    credentials: GatewayCredentials,
+  ): GatewayCredentials {
+    const posDevice = readPosDeviceId(tender.order.request_payload);
+    if (!posDevice.ok) {
+      logPayrocPayment('mapping_error', {
+        orderId: tender.order.order_id,
+        storeId: tender.order.store_id,
+        message: posDevice.message,
+      });
+      throw new BadRequestException(posDevice.message);
+    }
+    const mapped = payrocCardTerminalDeviceId(configuration, posDevice.posDeviceId);
+    if (!mapped.ok) {
+      logPayrocPayment('mapping_error', {
+        orderId: tender.order.order_id,
+        storeId: tender.order.store_id,
+        posDeviceId: posDevice.posDeviceId,
+        message: mapped.message,
+      });
+      throw new BadRequestException(mapped.message);
+    }
+    logPayrocPayment('terminal_mapped', {
+      orderId: tender.order.order_id,
+      storeId: tender.order.store_id,
+      posDeviceId: posDevice.posDeviceId,
+      cardTerminalDeviceId: mapped.cardTerminalDeviceId,
+    });
+    return { ...credentials, deviceId: mapped.cardTerminalDeviceId };
   }
 
   private async gatewayConfiguration(storeId: string): Promise<unknown> {
@@ -914,7 +961,8 @@ const ORDER_LOOKUP_SELECT = `
          sale.currency,
          sale.total,
          sale.status,
-         sale.order_status
+         sale.order_status,
+         sale.request_payload
     FROM public.store_orders AS sale`;
 
 function attemptLocalId(body: Record<string, unknown>, headerKey?: string): string {
