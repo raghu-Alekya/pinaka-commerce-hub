@@ -10,6 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { extractBearerToken, IS_PUBLIC_ROUTE, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from '../merchant/merchant.repository';
+import { ConsoleAccessService } from './console-access.service';
 
 export const REQUIRE_AUTH_ROUTE = 'requireAuthRoute';
 export const RequireAuth = () => SetMetadata(REQUIRE_AUTH_ROUTE, true);
@@ -19,6 +20,7 @@ export class SessionAuthGuard implements CanActivate {
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
     @Inject(MerchantRepository) private readonly merchants: MerchantRepository,
+    @Inject(ConsoleAccessService) private readonly consoleAccess: ConsoleAccessService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -79,7 +81,14 @@ export class SessionAuthGuard implements CanActivate {
       sessionId: session.id,
       merchantId: scopedPayload.merchantId ?? session.merchantId,
       storeId: scopedPayload.storeId ?? session.storeId,
+      accountType: payload.accountType,
+      employeeId: payload.employeeId,
+      merchantCode: payload.merchantCode,
+      roleId: payload.roleId,
     };
+    if (payload.accountType === 'merchant' || payload.accountType === 'employee') {
+      await this.consoleAccess.assert(request as Parameters<ConsoleAccessService['assert']>[0]);
+    }
     return true;
   }
 }
