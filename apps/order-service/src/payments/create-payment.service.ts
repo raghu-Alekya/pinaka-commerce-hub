@@ -172,7 +172,7 @@ export class CreatePaymentService {
       throw new BadRequestException('Payroc device ID is required');
     }
     const credentials = resolved.gateway === 'payroc' && !isEbtMethod(tender.paymentMethod)
-      ? this.payrocCredentialsForOrder(tender, configuration, resolved.credentials)
+      ? await this.payrocCredentialsForOrder(tender, configuration, resolved.credentials)
       : resolved.credentials;
 
     const localId = attemptLocalId(body, context.idempotencyKey);
@@ -596,7 +596,7 @@ export class CreatePaymentService {
   }
 
   /** Card sales use the Payroc terminal mapped to this order's POS device. EBT keeps the stored device id. */
-  private payrocCredentialsForOrder(
+  private async payrocCredentialsForOrder(
     tender: TenderInput,
     configuration: unknown,
     credentials: GatewayCredentials,
@@ -610,23 +610,73 @@ export class CreatePaymentService {
       });
       throw new BadRequestException(posDevice.message);
     }
-    const mapped = payrocCardTerminalDeviceId(configuration, posDevice.posDeviceId);
-    if (!mapped.ok) {
-      logPayrocPayment('mapping_error', {
-        orderId: tender.order.order_id,
-        storeId: tender.order.store_id,
-        posDeviceId: posDevice.posDeviceId,
-        message: mapped.message,
-      });
-      throw new BadRequestException(mapped.message);
-    }
+    const mapped = await this.mappedPayrocTerminal(tender, configuration, posDevice.posDeviceId);
     logPayrocPayment('terminal_mapped', {
       orderId: tender.order.order_id,
       storeId: tender.order.store_id,
       posDeviceId: posDevice.posDeviceId,
+      deviceCode: mapped.deviceCode,
       cardTerminalDeviceId: mapped.cardTerminalDeviceId,
     });
     return { ...credentials, deviceId: mapped.cardTerminalDeviceId };
+  }
+
+  /**
+   * Mappings are stored by device code (DVC_00025). A register may send that
+   * code or its hardware serial. A serial is resolved to the store device
+   * before Payroc is called, and is never used as the terminal id.
+   */
+  private async mappedPayrocTerminal(
+    tender: TenderInput,
+    configuration: unknown,
+    posDeviceId: string,
+  ): Promise<{ deviceCode: string; cardTerminalDeviceId: string }> {
+    const direct = payrocCardTerminalDeviceId(configuration, posDeviceId);
+    if (direct.ok) return { deviceCode: posDeviceId, cardTerminalDeviceId: direct.cardTerminalDeviceId };
+    if (!direct.message.startsWith('No Payroc terminal is mapped')) {
+      this.rejectMapping(tender, posDeviceId, direct.message);
+    }
+    const codes = await this.deviceCodesForPosIdentifier(tender.order.store_id, posDeviceId);
+    if (codes.length > 1) {
+      this.rejectMapping(tender, posDeviceId, `POS device ${posDeviceId} matches more than one store device`);
+    }
+    if (codes.length === 1 && codes[0] !== posDeviceId) {
+      const mapped = payrocCardTerminalDeviceId(configuration, codes[0]);
+      if (!mapped.ok) this.rejectMapping(tender, posDeviceId, mapped.message, codes[0]);
+      if (mapped.ok) return { deviceCode: codes[0], cardTerminalDeviceId: mapped.cardTerminalDeviceId };
+    }
+    this.rejectMapping(tender, posDeviceId, direct.message);
+  }
+
+  private rejectMapping(tender: TenderInput, posDeviceId: string, message: string, deviceCode?: string): never {
+    logPayrocPayment('mapping_error', {
+      orderId: tender.order.order_id,
+      storeId: tender.order.store_id,
+      posDeviceId,
+      ...(deviceCode ? { deviceCode } : {}),
+      message,
+    });
+    throw new BadRequestException(message);
+  }
+
+  private async deviceCodesForPosIdentifier(storeId: string, posDeviceId: string): Promise<string[]> {
+    const rows = await this.query<{ device_code: string | null }>(
+      `SELECT DISTINCT btrim(d.device_code) AS device_code
+         FROM public.devices AS d
+         JOIN public.store_devices AS sd
+           ON sd.device_id::text = d.id::text
+        WHERE sd.store_id::text = $1
+          AND COALESCE(sd.is_deleted, false) = false
+          AND COALESCE(d.is_deleted, false) = false
+          AND (
+            btrim(COALESCE(d.device_code, '')) = $2
+            OR btrim(COALESCE(d.serial_number, '')) = $2
+            OR btrim(COALESCE(d.device_id, '')) = $2
+            OR d.id::text = $2
+          )`,
+      [storeId, posDeviceId],
+    );
+    return [...new Set(rows.map((row) => String(row.device_code ?? '').trim()).filter(Boolean))];
   }
 
   private async gatewayConfiguration(storeId: string): Promise<unknown> {
