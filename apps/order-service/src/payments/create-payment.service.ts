@@ -264,6 +264,8 @@ export class CreatePaymentService {
     const paymentId = ids.find((id) => id !== instructionId) || '';
     const outcome = await this.gateways.continuePayroc({
       secretKey: resolved.credentials.secretKey,
+      authorizeUrl: resolved.credentials.authorizeUrl,
+      apiUrl: resolved.credentials.apiUrl,
       ...(instructionId ? { instructionId } : {}),
       ...(paymentId ? { paymentId } : {}),
     });
@@ -358,6 +360,8 @@ export class CreatePaymentService {
     if (instructionId && gatewayAlreadySubmitted(attempt)) {
       return this.gateways.continuePayroc({
         secretKey: credentials.secretKey,
+        authorizeUrl: credentials.authorizeUrl,
+        apiUrl: credentials.apiUrl,
         instructionId,
       });
     }
@@ -372,6 +376,8 @@ export class CreatePaymentService {
       terminalId: credentials.terminalId,
       secretKey: credentials.secretKey,
       processorMerchantId: credentials.processorMerchantId,
+      authorizeUrl: credentials.authorizeUrl,
+      apiUrl: credentials.apiUrl,
       amount: tender.amount,
       currency: String(tender.order.currency || 'USD'),
       orderId: payrocOrderReference(body.order_id, tender.order.client_order_id, tender.order.order_id),

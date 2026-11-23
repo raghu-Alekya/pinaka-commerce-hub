@@ -15,6 +15,10 @@ import { ProductOptionsService } from './product-options.service';
 import { PosEmployeeCatalogGuard } from './pos-employee-catalog.guard';
 
 type ProductImageUpload = { buffer: Buffer; mimetype: string };
+type ConnectorRequest = {
+  headers?: { 'x-pch-web-console'?: string };
+  user?: { role?: string; accountType?: string; merchantId?: string };
+};
 const productImageUpload = FileInterceptor('image', {
   storage: require('multer').memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -291,11 +295,11 @@ export class AppController {
   async saveWebsiteConnector(
     @Param('storeId') storeId: string,
     @Body() body: { wordpressUrl?: string; wordpressJwt?: string; merchantId?: string },
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const existing = await this.merchantRepository.getWebsiteConnection(storeId);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
     const replacementJwt = body.wordpressJwt?.trim();
@@ -338,11 +342,11 @@ export class AppController {
   async testWebsiteConnector(
     @Param('storeId') storeId: string,
     @Body() body: { wordpressUrl?: string; wordpressJwt?: string },
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const existing = await this.merchantRepository.getWebsiteConnection(storeId);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl || existing?.wordpressUrl);
     const wordpressJwt = body.wordpressJwt?.trim();
@@ -359,11 +363,11 @@ export class AppController {
   @Get('stores/:storeId/connector')
   async getWebsiteConnector(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     return {
       success: true,
@@ -376,11 +380,11 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync')
   async syncStoreCatalogFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connector = await this.merchantRepository.getWebsiteConnector(storeId);
     if (!connector?.encryptedJwt || !connector.wordpressUrl) {
       throw new BadRequestException('Connect the WordPress site before syncing the catalog');
@@ -403,9 +407,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/products')
   async syncStoreProductsFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreProductsFromWordPress(connection);
     return {
       success: true,
@@ -418,9 +422,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/categories')
   async syncStoreCategoriesFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     // Fetch the full WooCommerce taxonomy so child categories are included too.
     const count = await this.merchantRepository.syncStoreCategoriesFromWordPress({
       ...connection,
@@ -447,9 +451,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/attributes')
   async syncStoreAttributesFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreAttributesFromWordPress(connection);
     return {
       success: true,
@@ -462,9 +466,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/tags')
   async syncStoreTagsFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreTagsFromWordPress(connection);
     return {
       success: true,
@@ -1678,6 +1682,19 @@ export class AppController {
     if (role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
   }
 
+  private async assertWebsiteConnectorAccess(
+    store: { merchantId: string }, request: ConnectorRequest,
+  ): Promise<void> {
+    if (isWebConsoleRequest(request) && request.user?.accountType === 'merchant') {
+      if (!request.user.merchantId ||
+          !(await this.merchantRepository.storeMatchesMerchant(store, request.user.merchantId))) {
+        throw new ForbiddenException('You can only manage connections for your own stores');
+      }
+      return;
+    }
+    this.requireOwnerRole(request.user?.role);
+  }
+
   private async pingWordPress(wordpressUrl: string, wordpressJwt: string): Promise<{ ok: boolean; message: string }> {
     const headers = { Accept: 'application/json', Authorization: `Bearer ${wordpressJwt}` };
     const baseUrl = wordpressUrl.replace(/\/+$/, '');
@@ -1759,10 +1776,10 @@ export class AppController {
     }
   }
 
-  private async requireWordPressConnection(storeId: string, role?: string) {
-    this.requireOwnerRole(role);
+  private async requireWordPressConnection(storeId: string, request: ConnectorRequest) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connector = await this.merchantRepository.getWebsiteConnection(store.id)
       || await this.merchantRepository.getWebsiteConnection(storeId);
     if (!connector?.encryptedJwt || !connector.wordpressUrl) {

@@ -4,7 +4,7 @@ import { logPayrocPayment } from './payment-log';
 /**
  * Kickback and Payroc calls follow
  * Pinaka_Payments_Api_Controller::payment_create_callback and get_payroc_token.
- * Payroc stays on the same UAT hosts the WordPress plugin calls.
+ * Existing stores use the WordPress UAT hosts until endpoint settings are saved.
  */
 export const KICKBACK_SALE_URL = 'https://kicbac.transactiongateway.com/api/transact.php';
 export const PAYROC_AUTHORIZE_URL = 'https://identity.uat.payroc.com/authorize';
@@ -17,6 +17,8 @@ export interface GatewayCredentials {
   terminalId: string;
   secretKey: string;
   processorMerchantId: string;
+  authorizeUrl?: string;
+  apiUrl?: string;
 }
 
 export type GatewayName = 'kickback' | 'payroc';
@@ -79,11 +81,15 @@ function credentialText(record: Record<string, unknown>, keys: string[]): string
 }
 
 function readCredentials(provider: Record<string, unknown>): GatewayCredentials {
+  const urls = asRecord(provider.terminalUrls) ?? asRecord(provider.payrocUrls) ?? {};
+  const production = provider.payrocEnvironment === 'production';
   return {
     deviceId: credentialText(provider, ['deviceId', 'device_id']),
     terminalId: credentialText(provider, ['terminalId', 'terminal_id']),
     secretKey: credentialText(provider, ['secretKey', 'secret_key']),
     processorMerchantId: credentialText(provider, ['processorMerchantId', 'processor_merchant_id']),
+    authorizeUrl: credentialText(urls, [production ? 'productionIdentity' : 'uatIdentity']) || (production ? 'https://identity.payroc.com/authorize' : PAYROC_AUTHORIZE_URL),
+    apiUrl: (credentialText(urls, [production ? 'productionApi' : 'uatApi']) || (production ? 'https://api.payroc.com' : PAYROC_API_URL)).replace(/\/+$/, ''),
   };
 }
 
@@ -418,6 +424,8 @@ export interface PayrocChargeInput {
   deviceId: string;
   terminalId: string;
   secretKey: string;
+  authorizeUrl?: string;
+  apiUrl?: string;
   processorMerchantId?: string;
   amount: number;
   currency?: string;
@@ -439,7 +447,7 @@ export async function chargePayroc(
   cache: PayrocTokenCache = payrocTokens,
   options?: { maxPolls?: number },
 ): Promise<GatewayOutcome> {
-  const token = await payrocToken(input.secretKey, fetchImpl, cache);
+  const token = await payrocToken(input.secretKey, fetchImpl, cache, input.authorizeUrl);
   if (!token) {
     return { kind: 'failed', statusCode: 500, message: 'Unable to obtain Payroc token', uncertain: false };
   }
@@ -468,9 +476,9 @@ export async function chargePayroc(
     gateway_submitted: false,
   };
   if (input.instructionId) {
-    return finishPayrocInstruction(input.instructionId, token, fetchImpl, context, options?.maxPolls ?? 4);
+    return finishPayrocInstruction(input.instructionId, token, fetchImpl, context, options?.maxPolls ?? 4, undefined, input.apiUrl);
   }
-  const paymentUrl = `${PAYROC_API_URL}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`;
+  const paymentUrl = `${input.apiUrl || PAYROC_API_URL}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`;
   logPayrocPayment('payroc_request', {
     orderId: gatewayOrderId,
     cardTerminalDeviceId: input.deviceId,
@@ -506,21 +514,21 @@ export async function chargePayroc(
     ...submittedContext,
     instruction: instruction.body,
     paymentInstructionId: instruction.id,
-  }, options?.maxPolls ?? 4, instruction);
+  }, options?.maxPolls ?? 4, instruction, input.apiUrl);
 }
 
 /** Read an instruction that was already submitted. This does not create a charge. */
 export async function continuePayroc(
-  input: { secretKey: string; instructionId?: string; paymentId?: string },
+  input: { secretKey: string; instructionId?: string; paymentId?: string; authorizeUrl?: string; apiUrl?: string },
   fetchImpl: FetchLike,
   cache: PayrocTokenCache = payrocTokens,
 ): Promise<GatewayOutcome> {
-  const token = await payrocToken(input.secretKey, fetchImpl, cache);
+  const token = await payrocToken(input.secretKey, fetchImpl, cache, input.authorizeUrl);
   if (!token) {
     return { kind: 'failed', statusCode: 500, message: 'Unable to obtain Payroc token', uncertain: false };
   }
   if (input.paymentId && !input.instructionId) {
-    return readPayrocPayment(input.paymentId, token, fetchImpl, { gateway_submitted: true, provider: 'payroc' });
+    return readPayrocPayment(input.paymentId, token, fetchImpl, { gateway_submitted: true, provider: 'payroc' }, input.apiUrl);
   }
   if (!input.instructionId) {
     return { kind: 'failed', statusCode: 400, message: 'Payroc payment identifier is required', uncertain: false };
@@ -529,7 +537,7 @@ export async function continuePayroc(
     provider: 'payroc',
     gateway_submitted: true,
     paymentInstructionId: input.instructionId,
-  }, 1);
+  }, 1, undefined, input.apiUrl);
 }
 
 type PayrocContext = Record<string, unknown>;
@@ -548,6 +556,7 @@ async function finishPayrocInstruction(
   context: PayrocContext,
   maxPolls: number,
   initial?: PayrocInstructionView,
+  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   let current = initial;
   let fetches = 0;
@@ -555,7 +564,7 @@ async function finishPayrocInstruction(
   while ((!current || current.type === 'pending') && fetches < limit && instructionId) {
     fetches += 1;
     const loaded = await requestPayroc(
-      `${PAYROC_API_URL}/v1/payment-instructions/${encodeURIComponent(instructionId)}`,
+      `${apiUrl}/v1/payment-instructions/${encodeURIComponent(instructionId)}`,
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
@@ -615,7 +624,7 @@ async function finishPayrocInstruction(
       details: { instruction: current.body, paymentInstructionId: current.id || instructionId },
     }, withInstruction);
   }
-  return readPayrocPayment(paymentId, token, fetchImpl, withInstruction);
+  return readPayrocPayment(paymentId, token, fetchImpl, withInstruction, apiUrl);
 }
 
 async function readPayrocPayment(
@@ -623,9 +632,10 @@ async function readPayrocPayment(
   token: string,
   fetchImpl: FetchLike,
   context: PayrocContext,
+  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   const loaded = await requestPayroc(
-    `${PAYROC_API_URL}/v1/payments/${encodeURIComponent(paymentId)}`,
+    `${apiUrl}/v1/payments/${encodeURIComponent(paymentId)}`,
     {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
@@ -824,11 +834,12 @@ async function postGateway(
   }
 }
 
-async function payrocToken(apiKey: string, fetchImpl: FetchLike, cache: PayrocTokenCache): Promise<string> {
-  const cached = cache.get(apiKey);
+async function payrocToken(apiKey: string, fetchImpl: FetchLike, cache: PayrocTokenCache, authorizeUrl: string = PAYROC_AUTHORIZE_URL): Promise<string> {
+  const cacheKey = `${authorizeUrl}:${apiKey}`;
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) return cached.token;
   try {
-    const response = await fetchImpl(PAYROC_AUTHORIZE_URL, {
+    const response = await fetchImpl(authorizeUrl, {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
@@ -841,7 +852,7 @@ async function payrocToken(apiKey: string, fetchImpl: FetchLike, cache: PayrocTo
       ? parsed.access_token
       : typeof parsed?.token === 'string' ? parsed.token : '';
     if (!token) return '';
-    cache.set(apiKey, { token, expiresAt: Date.now() + 3_500_000 });
+    cache.set(cacheKey, { token, expiresAt: Date.now() + 3_500_000 });
     return token;
   } catch {
     return '';

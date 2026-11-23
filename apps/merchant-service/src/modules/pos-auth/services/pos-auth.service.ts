@@ -864,11 +864,7 @@ export class PosAuthService {
     merchantHeader?: string,
     storeHeader?: string,
   ) {
-    const token = this.extractBearerToken(authorization);
-    const payload = this.posSessionService.verifyAccessToken(token);
-    const scope = String(payload.jti || '').startsWith('sess_')
-      ? await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader)
-      : await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
+    const scope = await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
     const products = await this.queryStoreProducts(scope);
     return {
       success: true,
@@ -884,7 +880,11 @@ export class PosAuthService {
     merchantHeader?: string,
     storeHeader?: string,
   ) {
-    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+    const scope = String(payload.jti || '').startsWith('sess_')
+      ? await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader)
+      : await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
     const products = await this.queryStoreProducts(scope);
     return {
       success: true,
@@ -1237,11 +1237,10 @@ export class PosAuthService {
     const dataSource = this.merchantRepository.requireDataSource();
     const [merchant] = await dataSource.query(
       `SELECT m.id::text AS id,m.merchant_code AS "merchantCode",m.status
-       FROM public.merchants m JOIN public.users u ON u.id::text=$2
-       WHERE m.id::text=$1 AND (m.id::text=$3 OR m.merchant_code=$3 OR lower(m.email)=lower($3))
-         AND COALESCE(m.is_deleted,false)=false AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
-         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
-      [payload.merchantId, payload.sub, merchantKey],
+       FROM public.merchants m
+       WHERE m.id::text=$1 AND (m.id::text=$2 OR m.merchant_code=$2 OR lower(m.email)=lower($2))
+         AND COALESCE(m.is_deleted,false)=false`,
+      [payload.merchantId, merchantKey],
     );
     if (!merchant) throw new ForbiddenException('User is not authorized for this merchant');
     if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');

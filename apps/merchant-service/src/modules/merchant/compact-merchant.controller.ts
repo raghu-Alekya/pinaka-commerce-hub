@@ -27,7 +27,7 @@ import {
 import { SubscriptionPlanChangeController } from '../master/plans/subscription-plan-change.controller';
 import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
-import { decryptMerchantPassword } from './merchant-password-crypto';
+import { decryptMerchantPassword, encryptMerchantPassword } from './merchant-password-crypto';
 import { isWebConsoleRequest } from '../shared/console-access';
 
 const fields = [
