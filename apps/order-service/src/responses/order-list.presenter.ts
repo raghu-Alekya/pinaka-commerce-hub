@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { posSellingBill } from '../calculations/store-order.calculations';
 import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../loyalty/loyalty-line';
 import type { OrderEntity } from '../entities/order.entity';
 import { PaymentStatus } from '../entities/order.entity';
@@ -74,12 +73,6 @@ export class OrderListPresenter {
     const storedFees = Array.isArray(storeOrder?.feeLines) ? storeOrder.feeLines : [];
     const storedTaxLines = Array.isArray(storeOrder?.taxLines) ? storeOrder.taxLines : [];
     const tax = storeOrder?.taxTotal ?? request.total_tax ?? order.taxAmount;
-    const sellingBill = posSellingBill(
-      storedLines as any[],
-      Array.isArray(storeOrder?.couponLines) ? storeOrder.couponLines as any[] : [],
-      storedFees as any[],
-      storedTaxLines as any[],
-    );
     const loyaltyAmount = this.loyaltyAmount(order, storeOrder, request);
     const loyaltyRedemption = this.loyaltyRedemption(order, storeOrder, request);
     if (loyaltyRedemption.points > 0 && loyaltyRedemption.amount === 0 && redemptionSetting && redemptionSetting.points > 0 && redemptionSetting.amount > 0) {
@@ -87,7 +80,7 @@ export class OrderListPresenter {
     }
     const displayedLoyaltyAmount = loyaltyAmount > 0 ? loyaltyAmount : loyaltyRedemption.amount;
     const storedTotal = Number(storeOrder?.total ?? order.totalAmount ?? 0);
-    const total = this.money(sellingBill ? sellingBill.total : (Number.isFinite(storedTotal) ? storedTotal : 0));
+    const total = this.money(Number.isFinite(storedTotal) ? storedTotal : 0);
     const totalNumber = Number(total);
     const calculatedRefundTotal = this.refundTotal(row.refunds, status);
     const refundTotal = this.capRefundTotal(calculatedRefundTotal, totalNumber);
@@ -118,7 +111,7 @@ export class OrderListPresenter {
       redeem_amount: this.money(loyaltyRedemption.amount),
       discount_total: this.money(storeOrder?.discountTotal ?? order.discountAmount),
       discount_tax: this.taxText(request.discount_tax),
-      total_tax: this.taxText(sellingBill ? sellingBill.tax : tax),
+      total_tax: this.taxText(tax),
       change_amount: this.money(this.metaValueFromPayloadOrOrder(request, order, 'pos_change_returned')),
       created_via: String(request.created_via || this.metaValue(order, 'order_created_via') || 'rest-api'),
       author: String(storeOrder?.placedBy || this.metaValue(order, 'pos_placed_by') || ''),
