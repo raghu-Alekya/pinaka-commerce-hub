@@ -27,7 +27,8 @@ import {
 import { SubscriptionPlanChangeController } from '../master/plans/subscription-plan-change.controller';
 import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
-import { decryptMerchantPassword, encryptMerchantPassword } from './merchant-password-crypto';
+import { decryptMerchantPassword } from './merchant-password-crypto';
+import { isWebConsoleRequest } from '../shared/console-access';
 
 const fields = [
   'password',
@@ -545,7 +546,7 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', encryptMerchantPassword(String(input.password)));
+          setCol('actual_password', String(input.password));
         }
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
@@ -716,7 +717,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list(@Req() request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -794,23 +795,29 @@ export class CompactMerchantController {
     }
   }
 
-  private merchantListResponse(rows: Input[], request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
-    const merchantId = request?.user?.accountType ? request.user.merchantId : undefined;
+  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
+    const merchantId = scoped ? request?.user?.merchantId : undefined;
     const merchantCode = request?.user?.merchantCode;
-    const visible = merchantId
+    const visible = scoped
       ? rows.filter((row) => {
           const merchant = (row.merchant || {}) as Input;
           return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
             .some((value) => {
               const text = String(value || '');
-              return text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase());
+              return Boolean(text) && (text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase()));
             });
         })
       : rows;
     return {
       success: true,
       count: visible.length,
-      merchants: visible.map((row) => this.showMerchantCode(row)),
+      merchants: visible.map((row) => {
+        const merchant = { ...((row.merchant || {}) as Input) };
+        delete merchant.password;
+        delete merchant.actual_password;
+        return this.showMerchantCode({ ...row, merchant });
+      }),
     };
   }
 
@@ -948,12 +955,12 @@ export class CompactMerchantController {
     if (merchant && typeof merchant === 'object') {
       const [saved] = await this.db.query('SELECT actual_password FROM public.merchants WHERE id=$1', [merchant.id]);
       if (saved?.actual_password) {
-        merchant.password = decryptMerchantPassword(saved.actual_password);
-        if (!saved.actual_password.startsWith('enc:v1:')) {
-          await this.db.query(
-            'UPDATE public.merchants SET actual_password=$1 WHERE id=$2 AND actual_password=$3',
-            [encryptMerchantPassword(saved.actual_password), merchant.id, saved.actual_password],
-          );
+        try {
+          merchant.password = decryptMerchantPassword(saved.actual_password);
+        } catch (error) {
+          // A record encrypted with a previous key must not break merchant details.
+          // Keep its existing password hash until an administrator resets it.
+          console.warn('[CompactMerchantController.get] Stored merchant password could not be decrypted', merchant.id);
         }
       }
     }
@@ -1043,7 +1050,7 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', encryptMerchantPassword(String(input.password)));
+          setCol('actual_password', String(input.password));
           await manager.query(
             `UPDATE public.users SET password_hash = $1, updated_at = now()
              WHERE lower(email) = lower($2)`,
