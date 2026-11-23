@@ -420,7 +420,11 @@ export class AppController {
     @Req() request: { user?: { role?: string } },
   ) {
     const connection = await this.requireWordPressConnection(storeId, request.user?.role);
-    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress(connection);
+    // Fetch the full WooCommerce taxonomy so child categories are included too.
+    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress({
+      ...connection,
+      includeAll: true,
+    });
     let categoryTaxCount = 0;
     try {
       categoryTaxCount = await this.merchantRepository.syncCategoryWithTax(connection);

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { logPayrocPayment } from './payment-log';
 
 /**
  * Kickback and Payroc calls follow
@@ -182,7 +183,8 @@ function gatewayLabel(gateway: GatewayName): string {
 
 function missingCredentialFields(gateway: ListedGateway): string[] {
   const missing: string[] = [];
-  if (!gateway.credentials.deviceId) missing.push('device ID');
+  // A Payroc card sale takes its device id from deviceMappings, not this field.
+  if (gateway.gateway !== 'payroc' && !gateway.credentials.deviceId) missing.push('device ID');
   if (!gateway.credentials.secretKey) missing.push('secret key');
   if (gateway.gateway === 'payroc' && !gateway.credentials.terminalId) missing.push('terminal ID');
   return missing;
@@ -193,6 +195,67 @@ function flagEnabled(record: Record<string, unknown>): boolean {
   const value = record.enabled;
   if (typeof value === 'string' && value.trim().toLowerCase() === 'false') return false;
   return !isPhpEmpty(value);
+}
+
+export function readPosDeviceId(requestPayload: unknown): { ok: true; posDeviceId: string } | { ok: false; message: string } {
+  let payload = requestPayload;
+  if (typeof payload === 'string') {
+    const text = payload.trim();
+    if (!text) return { ok: false, message: 'Order request_payload is missing or invalid' };
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      return { ok: false, message: 'Order request_payload is missing or invalid' };
+    }
+  }
+  const record = asRecord(payload);
+  if (!record || !Array.isArray(record.meta_data)) {
+    return { ok: false, message: 'Order request_payload is missing or invalid' };
+  }
+  const matches = record.meta_data.filter((entry) => asRecord(entry)?.key === 'pos_device_id');
+  const ids = [...new Set(matches.map((entry) => credentialText(asRecord(entry) ?? {}, ['value'])).filter(Boolean))];
+  if (ids.length === 0) return { ok: false, message: 'Order pos_device_id is missing' };
+  if (ids.length > 1) return { ok: false, message: 'Order pos_device_id is ambiguous' };
+  return { ok: true, posDeviceId: ids[0] };
+}
+
+/** The Payroc device serial for this POS, taken from the store's enabled Payroc deviceMappings. */
+export function payrocCardTerminalDeviceId(
+  configuration: unknown,
+  posDeviceId: string,
+): { ok: true; cardTerminalDeviceId: string } | { ok: false; message: string } {
+  const document = asRecord(
+    typeof configuration === 'string' ? safeJson(configuration) : configuration,
+  );
+  if (!document) return { ok: false, message: 'Card payment settings were not found for this store' };
+  const source = Array.isArray(document.cardPayments)
+    ? document.cardPayments
+    : Array.isArray(document.providers) ? document.providers : null;
+  if (!source) return { ok: false, message: 'Card payment settings were not found for this store' };
+  const payroc = source.flatMap((item) => {
+    const record = asRecord(item);
+    if (!record || normalizeGatewayName(record.provider) !== 'payroc') return [];
+    return [record];
+  });
+  if (payroc.length === 0) return { ok: false, message: 'Payroc configuration was not found' };
+  const enabled = payroc.filter((record) => flagEnabled(record));
+  if (enabled.length === 0) return { ok: false, message: 'Payroc configuration is disabled' };
+  if (enabled.length > 1) return { ok: false, message: 'Multiple Payroc configurations are enabled' };
+  const mappings = Array.isArray(enabled[0].deviceMappings) ? enabled[0].deviceMappings : [];
+  const matches = mappings.flatMap((item) => {
+    const mapping = asRecord(item);
+    if (!mapping) return [];
+    const deviceCode = credentialText(mapping, ['deviceCode', 'device_code']);
+    if (deviceCode !== posDeviceId) return [];
+    return [mapping];
+  });
+  if (matches.length === 0) return { ok: false, message: `No Payroc terminal is mapped to POS device ${posDeviceId}` };
+  if (matches.length > 1) return { ok: false, message: `Multiple Payroc terminals are mapped to POS device ${posDeviceId}` };
+  const cardTerminalDeviceId = credentialText(matches[0], ['cardTerminalDeviceId', 'card_terminal_device_id']);
+  if (!cardTerminalDeviceId) {
+    return { ok: false, message: `Payroc card terminal device ID is empty for POS device ${posDeviceId}` };
+  }
+  return { ok: true, cardTerminalDeviceId };
 }
 
 function flagDefault(record: Record<string, unknown>): boolean {
@@ -407,8 +470,15 @@ export async function chargePayroc(
   if (input.instructionId) {
     return finishPayrocInstruction(input.instructionId, token, fetchImpl, context, options?.maxPolls ?? 4);
   }
+  const paymentUrl = `${PAYROC_API_URL}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`;
+  logPayrocPayment('payroc_request', {
+    orderId: gatewayOrderId,
+    cardTerminalDeviceId: input.deviceId,
+    terminalId: input.terminalId,
+    url: paymentUrl,
+  });
   const submitted = await requestPayroc(
-    `${PAYROC_API_URL}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`,
+    paymentUrl,
     {
       method: 'POST',
       headers: {
