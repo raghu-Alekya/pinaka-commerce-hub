@@ -147,12 +147,41 @@ export function calculateDiscountTotal(
       merchantCouponDiscount += amount;
     }
   });
-  // Coupon application can rewrite line totals, so the original automatic,
-  // multipack, and mix-and-match amounts must be retained from POS metadata.
-  const representedByLines = Math.max(lineReduction, promotionDiscount + couponDiscount);
   const merchantFeeDiscount = merchantDiscountMinor(feeLines, places);
-  const unrepresentedMerchantFee = Math.max(0, merchantFeeDiscount - merchantCouponDiscount);
-  return fromMinor(representedByLines + unrepresentedMerchantFee, places);
+  const merchantFeeOnly = Math.max(0, merchantFeeDiscount - merchantCouponDiscount);
+  // A promotion amount already covered by the coupon, or already inside the
+  // line gap, is one discount. Adding it again makes discount_total larger
+  // than the money taken off the products.
+  const couponExplainsGap = couponDiscount > 0 && lineReduction > 0 && couponDiscount >= lineReduction;
+  const promotionExplainsGap = !couponExplainsGap && promotionDiscount > 0 && promotionDiscount >= lineReduction;
+  const couponAndMerchantExplainGap = !couponExplainsGap
+    && !promotionExplainsGap
+    && lineReduction > 0
+    && couponDiscount + merchantFeeOnly >= lineReduction;
+  let couponInLines = 0;
+  let promotionInLines = 0;
+  let merchantInLines = 0;
+  if (couponExplainsGap) {
+    couponInLines = lineReduction;
+    promotionInLines = Math.min(promotionDiscount, couponDiscount);
+  } else if (promotionExplainsGap) {
+    promotionInLines = lineReduction;
+  } else if (couponAndMerchantExplainGap) {
+    couponInLines = Math.min(couponDiscount, lineReduction);
+    merchantInLines = Math.min(merchantFeeOnly, lineReduction - couponInLines);
+    promotionInLines = Math.min(promotionDiscount, couponDiscount);
+  } else {
+    let remaining = lineReduction;
+    promotionInLines = Math.min(promotionDiscount, remaining);
+    remaining -= promotionInLines;
+    couponInLines = Math.min(couponDiscount, remaining);
+    remaining -= couponInLines;
+    merchantInLines = Math.min(merchantFeeOnly, remaining);
+  }
+  const couponExtra = Math.max(0, couponDiscount - couponInLines);
+  const promotionExtra = Math.max(0, promotionDiscount - promotionInLines);
+  const merchantExtra = Math.max(0, merchantFeeOnly - merchantInLines);
+  return fromMinor(lineReduction + couponExtra + merchantExtra + promotionExtra, places);
 }
 
 export function sumCouponDiscounts(couponLines: PosCouponLine[] = [], places = 2): number {
@@ -182,28 +211,53 @@ export function authoritativeCouponDiscount(
   return fromMinor(chosen, places);
 }
 
-export function isMerchantDiscountRepresented(
-  lineItems: PosLineItem[] = [],
-  feeLines: PosFeeLine[] = [],
-  places = 2,
-): boolean {
-  const merchantMinor = merchantDiscountMinor(feeLines, places);
-  if (!merchantMinor) return false;
-  const representedMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+function merchandiseReductionMinor(lineItems: PosLineItem[] = [], places = 2): number {
+  return lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
     sum + Math.max(
       0,
       toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
     )
   ), 0);
-  return representedMinor >= merchantMinor;
+}
+
+function couponAmountMinor(
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const couponLineMinor = toMinor(sumCouponDiscounts(couponLines, places), places);
+  if (couponLineMinor > 0) return couponLineMinor;
+  return feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum + Math.abs(toMinor(fee?.total ?? 0, places)) : sum
+  ), 0);
+}
+
+/**
+ * The line gap is the coupon first. Only the remainder can be a merchant
+ * discount that is already inside the line totals. A larger coupon must not
+ * be treated as the merchant discount.
+ */
+export function isMerchantDiscountRepresented(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+  couponLines: PosCouponLine[] = [],
+): boolean {
+  const merchantMinor = merchantDiscountMinor(feeLines, places);
+  if (!merchantMinor) return false;
+  const lineReductionMinor = merchandiseReductionMinor(lineItems, places);
+  const couponMinor = couponAmountMinor(couponLines, feeLines, places);
+  const leftoverMinor = Math.max(0, lineReductionMinor - Math.min(lineReductionMinor, couponMinor));
+  return leftoverMinor >= merchantMinor;
 }
 
 export function feeLinesForCalculation(
   lineItems: PosLineItem[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
+  couponLines: PosCouponLine[] = [],
 ): PosFeeLine[] {
-  return isMerchantDiscountRepresented(lineItems, feeLines, places)
+  return isMerchantDiscountRepresented(lineItems, feeLines, places, couponLines)
     ? feeLines.filter((fee) => !isMerchantDiscountFee(fee))
     : feeLines;
 }
@@ -212,15 +266,11 @@ export function representedCouponDiscount(
   lineItems: PosLineItem[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
+  couponLines: PosCouponLine[] = [],
 ): number {
-  const lineReductionMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
-    sum + Math.max(
-      0,
-      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
-    )
-  ), 0);
-  const representedMerchantMinor = Math.min(lineReductionMinor, merchantDiscountMinor(feeLines, places));
-  return fromMinor(Math.max(0, lineReductionMinor - representedMerchantMinor), places);
+  const lineReductionMinor = merchandiseReductionMinor(lineItems, places);
+  const couponMinor = couponAmountMinor(couponLines, feeLines, places);
+  return fromMinor(Math.min(lineReductionMinor, couponMinor), places);
 }
 
 /**
@@ -583,7 +633,7 @@ export function correctStoredDiscountTax(
   }));
   const feeLines = storedFees.map((fee: any) => ({ ...fee }));
   const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
-  const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
+  const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[], 2, couponLines as any[]);
   const couponDiscount = authoritativeCouponDiscount(
     couponLines as any[],
     feeLines as any[],
