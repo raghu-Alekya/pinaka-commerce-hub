@@ -18,7 +18,7 @@ export class PaymentGatewayClient {
   }
 
   /** Reads an instruction or payment that was already submitted. Does not create a charge. */
-  continuePayroc(input: { secretKey: string; instructionId?: string; paymentId?: string }): Promise<GatewayOutcome> {
+  continuePayroc(input: { secretKey: string; instructionId?: string; paymentId?: string; authorizeUrl?: string; apiUrl?: string }): Promise<GatewayOutcome> {
     return continuePayroc(input, fetch);
   }
 }
