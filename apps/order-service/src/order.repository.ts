@@ -13,11 +13,11 @@ import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schem
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
 import {
   allocateRoundedTax,
-  authoritativeCouponDiscount,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   adminOrderCounts,
   calculateDiscountTotal,
+  couponToApply,
   calculateStoreOrder,
   effectiveFeeTotal,
   feeLinesForCalculation,
@@ -1175,12 +1175,7 @@ export class OrderRepository implements OnModuleInit {
     const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
     const representedCoupon = representedCouponDiscount(lines, sourceFees, places, sourceCoupons);
     const calculationFees = feeLinesForCalculation(lines, sourceFees, places, sourceCoupons);
-    const authoritativeCoupon = authoritativeCouponDiscount(
-      sourceCoupons,
-      sourceFees,
-      places,
-      lines,
-    );
+    const authoritativeCoupon = couponToApply(lines, sourceCoupons, sourceFees, places);
     applyCouponDiscountToStoredLinesAndTax(
       lines,
       authoritativeCoupon > 0
