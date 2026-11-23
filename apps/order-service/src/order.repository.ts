@@ -15,6 +15,7 @@ import {
   allocateRoundedTax,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
+  applyPosSaleCalculation,
   adminOrderCounts,
   calculateDiscountTotal,
   couponToApply,
@@ -427,7 +428,9 @@ export class OrderRepository implements OnModuleInit {
     const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
     const tipAmount = Number(orderData.tipAmount || 0);
     const calculationFees = feeLinesForCalculation(lineItems, feeLines, 2, couponLines);
-    const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+    const discountTotal = orderData.saleCalculated
+      ? Number(orderData.discountAmount || 0)
+      : calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
       id: randomUUID(),
@@ -460,7 +463,7 @@ export class OrderRepository implements OnModuleInit {
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
       discountTotal,
-      feeTotal: effectiveFeeTotal(calculationFees),
+      feeTotal: effectiveFeeTotal(orderData.saleCalculated ? feeLines : calculationFees),
       taxTotal,
       total,
       grandTotal: listOrderTotal({
@@ -969,12 +972,19 @@ export class OrderRepository implements OnModuleInit {
    */
   private async enrichWooCommerceCreateOrder(orderData: any, sourcePayload: any): Promise<void> {
     const lines = Array.isArray(sourcePayload?.line_items) ? sourcePayload.line_items : null;
-    if (!lines || !this.dataSource || !orderData.storeId) return;
+    if (!lines?.length) return;
+    if (!this.dataSource || !orderData.storeId) {
+      this.rememberSale(orderData, sourcePayload, applyPosSaleCalculation(lines, sourcePayload, 2));
+      return;
+    }
 
     const productIds = [...new Set(lines
       .map((line: any) => String(line?.product_id ?? '').trim())
       .filter(Boolean))];
-    if (!productIds.length) return;
+    if (!productIds.length) {
+      this.rememberSale(orderData, sourcePayload, applyPosSaleCalculation(lines, sourcePayload, 2));
+      return;
+    }
 
     const productRows: Array<{ id?: string; product?: Record<string, unknown> }> = await this.dataSource.query(
       `SELECT product->>'id' AS id, product
@@ -1171,69 +1181,94 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
-    const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
-    const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
-    const representedCoupon = representedCouponDiscount(lines, sourceFees, places, sourceCoupons);
-    const calculationFees = feeLinesForCalculation(lines, sourceFees, places, sourceCoupons);
-    const authoritativeCoupon = couponToApply(lines, sourceCoupons, sourceFees, places);
-    applyCouponDiscountToStoredLinesAndTax(
-      lines,
-      authoritativeCoupon > 0
-        ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
-        : [],
-      sourcePayload,
-      places,
-      representedCoupon,
-    );
-    applyMerchantDiscountToStoredTax(
-      lines,
-      calculationFees,
-      sourcePayload,
-      places,
-    );
+    const sale = applyPosSaleCalculation(lines, sourcePayload, places);
+    if (!sale) {
+      const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+      const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+      const representedCoupon = representedCouponDiscount(lines, sourceFees, places, sourceCoupons);
+      const calculationFees = feeLinesForCalculation(lines, sourceFees, places, sourceCoupons);
+      const authoritativeCoupon = couponToApply(lines, sourceCoupons, sourceFees, places);
+      applyCouponDiscountToStoredLinesAndTax(
+        lines,
+        authoritativeCoupon > 0
+          ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
+          : [],
+        sourcePayload,
+        places,
+        representedCoupon,
+      );
+      applyMerchantDiscountToStoredTax(
+        lines,
+        calculationFees,
+        sourcePayload,
+        places,
+      );
 
-    const couponDiscount = authoritativeCoupon;
-    if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
-      sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
-        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-        return name === 'coupon_discount'
-          ? { ...fee, total: (-couponDiscount).toFixed(places) }
-          : fee;
+      const couponDiscount = authoritativeCoupon;
+      if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
+        sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
+          const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+          return name === 'coupon_discount'
+            ? { ...fee, total: (-couponDiscount).toFixed(places) }
+            : fee;
+        });
+      }
+
+      const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
+      const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
+      const feeTotal = effectiveFeeTotal(
+        calculationFees,
+        places,
+      );
+      const taxTotal = Number(sourcePayload.total_tax || 0);
+      const shippingTotal = Number(sourcePayload.shipping_total || 0);
+      if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
+      const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+      sourcePayload.total = orderTotalWithTax({
+        netBeforeTax,
+        tax: taxTotal,
+        pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
+        decimalPlaces: places,
+      }).toFixed(places);
+    }
+    this.rememberSale(orderData, sourcePayload, sale);
+    if (!sale) {
+      orderData.subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
+      orderData.taxAmount = Number(sourcePayload.total_tax || 0);
+      orderData.totalAmount = Number(sourcePayload.total);
+      orderData.requestPayload = sourcePayload;
+    }
+  }
+
+  private rememberSale(
+    orderData: any,
+    sourcePayload: any,
+    sale: { subtotal: number; discountTotal: number; tax: number; total: number } | null,
+  ): void {
+    const lines = Array.isArray(sourcePayload?.line_items) ? sourcePayload.line_items : [];
+    if (sale || lines.length) {
+      orderData.items = lines.map((line: any) => {
+        const quantity = Number(line.quantity || 1);
+        const total = Number(line.total ?? line.subtotal ?? 0);
+        const unitPrice = line.price !== undefined && line.price !== null && String(line.price).trim() !== ''
+          ? Number(line.price)
+          : (quantity ? Number(line.subtotal ?? total) / quantity : 0);
+        return {
+          productId: String(line.product_id ?? ''),
+          productName: line.name || 'Sales Item',
+          quantity,
+          unitPrice,
+          totalPrice: total,
+          modifiers: Array.isArray(line.meta_data) ? line.meta_data : [],
+        };
       });
     }
-
-    const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
-    const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
-    const feeTotal = effectiveFeeTotal(
-      calculationFees,
-      places,
-    );
-    const taxTotal = Number(sourcePayload.total_tax || 0);
-    const shippingTotal = Number(sourcePayload.shipping_total || 0);
-    if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
-    const netBeforeTax = lineTotal + feeTotal + shippingTotal;
-    sourcePayload.total = orderTotalWithTax({
-      netBeforeTax,
-      tax: taxTotal,
-      pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
-      decimalPlaces: places,
-    }).toFixed(places);
-
-    orderData.items = lines.map((line: any) => {
-      const quantity = Number(line.quantity || 1);
-      const total = Number(line.total ?? line.subtotal ?? 0);
-      return {
-        productId: String(line.product_id ?? ''),
-        productName: line.name || 'Sales Item',
-        quantity,
-        unitPrice: quantity ? Number(line.subtotal ?? total) / quantity : 0,
-        totalPrice: total,
-        modifiers: Array.isArray(line.meta_data) ? line.meta_data : [],
-      };
-    });
-    orderData.subtotal = subtotal;
-    orderData.taxAmount = taxTotal;
-    orderData.totalAmount = Number(sourcePayload.total);
+    if (!sale) return;
+    orderData.subtotal = sale.subtotal;
+    orderData.taxAmount = sale.tax;
+    orderData.totalAmount = sale.total;
+    orderData.discountAmount = sale.discountTotal;
+    orderData.saleCalculated = true;
     orderData.requestPayload = sourcePayload;
   }
 
