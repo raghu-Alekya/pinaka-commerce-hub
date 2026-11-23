@@ -54,28 +54,7 @@ export class PosAuthService {
       throw new UnauthorizedException('Invalid merchant email or password');
     }
     if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
-    // Older merchant records may have been created without a linked console user.
-    // Provision one only after the merchant password has been verified.
-    await db.query(
-      `INSERT INTO public.users (first_name, last_name, email, phone_number, role, status, password_hash, merchant_id)
-       SELECT COALESCE(NULLIF(BTRIM(to_jsonb(m)->>'first_name'), ''), 'Merchant'),
-              COALESCE(to_jsonb(m)->>'last_name', ''), m.email,
-              COALESCE(NULLIF(to_jsonb(m)->>'phone', ''), NULLIF(to_jsonb(m)->>'merchantPhoneNumber', ''), ''),
-              'USER', 'ACTIVE', m.password, m.id::text
-         FROM public.merchants m
-        WHERE m.id = $1::uuid
-          AND NOT EXISTS (SELECT 1 FROM public.users u WHERE lower(u.email) = lower(m.email))
-       ON CONFLICT (email) DO NOTHING`,
-      [merchant.id],
-    );
-    const users = await db.query(
-      `SELECT id,email,role,account_id AS "accountId" FROM public.users
-       WHERE lower(email)=lower($1) AND status='ACTIVE'
-         AND (merchant_id::text=$2 OR merchant_id::text=$3 OR NULLIF(merchant_id::text,'') IS NULL)
-       LIMIT 2`, [merchant.email, merchant.id, merchant.merchantCode],
-    );
-    if (users.length !== 1) throw new UnauthorizedException('An active linked PCH user account is required for merchant API access');
-    const user = users[0];
+    const user = { id: merchant.id, accountId: null, email: merchant.email, role: 'USER' };
     const stores = await db.query(
       `SELECT id,store_code AS "storeCode",store_name AS "storeName",status
        FROM public.stores WHERE merchant_id::text=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
