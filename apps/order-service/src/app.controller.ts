@@ -457,28 +457,23 @@ export class AppController {
         const setMetadata = (key: string, value: unknown) => {
           if (!metadata.some((item) => item?.key === key)) metadata.push({ key, value });
         };
-        const configuredAmount = Number(catalog.amount);
         setMetadata('discount_type', catalog.discount_type || 'fixed_cart');
-        setMetadata(
-          'amount',
-          Number.isFinite(configuredAmount) ? String(configuredAmount) : String(catalog.amount ?? '0'),
-        );
+        if (catalog.amount !== undefined && catalog.amount !== null) {
+          setMetadata('amount', String(catalog.amount));
+        }
         setMetadata('product_ids', Array.isArray(catalog.product_ids) ? catalog.product_ids : []);
         setMetadata(
           'excluded_product_ids',
           Array.isArray(catalog.excluded_product_ids) ? catalog.excluded_product_ids : [],
         );
-        const fallbackDiscount = source.length === 1
-          ? Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0)
-          : 0;
-        const discount = Number.isFinite(configuredAmount)
-          ? configuredAmount
-          : Number(coupon.discount ?? fallbackDiscount);
+        const storedDiscount = coupon.discount ?? coupon.discount_amount;
 
         return {
           ...coupon,
           code,
-          discount: (Number.isFinite(discount) ? discount : 0).toFixed(2),
+          ...(storedDiscount !== undefined && storedDiscount !== null && storedDiscount !== ''
+            ? { discount: Number(storedDiscount).toFixed(2) }
+            : {}),
           discount_tax: Number(coupon.discount_tax || 0).toFixed(2),
           meta_data: metadata,
         };
