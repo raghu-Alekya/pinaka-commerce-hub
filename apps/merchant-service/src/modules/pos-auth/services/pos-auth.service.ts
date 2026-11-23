@@ -885,7 +885,11 @@ export class PosAuthService {
     merchantHeader?: string,
     storeHeader?: string,
   ) {
-    const scope = await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+    const scope = String(payload.jti || '').startsWith('sess_')
+      ? await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader)
+      : await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
     const products = await this.queryStoreProducts(scope);
     return {
       success: true,
