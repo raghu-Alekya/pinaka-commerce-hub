@@ -18,6 +18,7 @@ type AttendanceTokenPayload = ReturnType<typeof verifyAccessToken> & {
   jti?: string;
   role?: string;
   roleId?: string;
+  accountType?: string;
   merchantId?: string;
   storeId?: string;
   accountId?: string;
@@ -28,6 +29,7 @@ export interface PosEmployeeAttendanceRequest {
   query?: Record<string, string | string[] | undefined>;
   params?: Record<string, string | undefined>;
   posEmployee?: PosAttendanceIdentity;
+  attendanceScope?: { merchantId: string; storeId: string };
 }
 
 const sessionRequired = {
@@ -125,6 +127,25 @@ export class PosEmployeeAttendanceGuard implements CanActivate {
       });
     }
 
+    if (payload.accountType === 'merchant') {
+      const store = await this.merchantStore(payload.merchantId || '', merchantId, storeId);
+      if (!store) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'You are not authorized to access attendance for this store',
+        });
+      }
+      request.posEmployee = {
+        employeeId: '',
+        employeeCode: '',
+        merchantId: store.merchantId,
+        storeId: store.storeId,
+        roleId: payload.roleId ?? '',
+      };
+      request.attendanceScope = store;
+      return true;
+    }
+
     // IMPORTANT:
     // Implement this check using your real account-to-merchant/store
     // authorization tables before enabling admin attendance access.
@@ -194,6 +215,25 @@ export class PosEmployeeAttendanceGuard implements CanActivate {
       storeId: session.storeId,
       roleId: payload.roleId ?? '',
     };
+  }
+
+  private async merchantStore(
+    sessionMerchantId: string,
+    requestedMerchantId: string,
+    requestedStoreId: string,
+  ): Promise<{ merchantId: string; storeId: string } | null> {
+    if (!sessionMerchantId) return null;
+    const rows = await this.merchants.requireDataSource().query(
+      `SELECT m.id::text AS "merchantId", s.id::text AS "storeId"
+       FROM public.merchants m
+       JOIN public.stores s ON s.merchant_id = m.id
+       WHERE (m.id::text = $1 OR m.merchant_code = $1)
+         AND (m.id::text = $2 OR m.merchant_code = $2)
+         AND (s.id::text = $3 OR s.store_code = $3)
+       LIMIT 1`,
+      [sessionMerchantId, requestedMerchantId, requestedStoreId],
+    );
+    return rows[0] ?? null;
   }
 
   private async isAdminAuthorizedForStore(

@@ -16,7 +16,7 @@ import {
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
-import { CreateUserDto, UpdateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdateUserDto } from './user.dto';
 import {
   CompletePasswordActionDto,
   CreateAccountDto,
@@ -165,6 +165,19 @@ export class AppController {
     const owner = await this.auth.requireAccountOwner(authorization);
     const users = await this.users.findAll(owner.accountId);
     return { success: true, count: users.length, users };
+  }
+
+  @Get('api/v1/pch-users')
+  async listPchUsers(@Headers('authorization') authorization?: string) {
+    await this.auth.requirePchAdmin(authorization);
+    const users = await this.users.findAllPch();
+    return { success: true, count: users.length, users };
+  }
+
+  @Post('api/v1/pch-users')
+  async createPchUser(@Body() dto: CreatePchUserDto, @Headers('authorization') authorization?: string) {
+    await this.auth.requirePchAdmin(authorization);
+    return { success: true, user: await this.auth.createPchUser(dto) };
   }
 
   @Get('api/v1/users/:id')

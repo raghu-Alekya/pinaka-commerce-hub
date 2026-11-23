@@ -1,5 +1,5 @@
 import { StoreVendorPaymentEntity } from '../../entities/store-vendor-payment.entity';
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Brackets, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { VendorEntity, VendorStatus, VendorType } from '../../entities/vendor.entity';
@@ -117,8 +117,9 @@ export class VendorRepository {
     return vendor;
   }
 
-  async create(dto: CreateVendorDto, actorId: string): Promise<VendorEntity> {
+  async create(dto: CreateVendorDto, actorId: string, merchantId?: string): Promise<VendorEntity> {
     this.assertOrganizerContact(dto.vendorType, dto.contactPerson);
+    const merchantUuid = merchantId ? await this.requireMerchantUuid(merchantId) : null;
     const email = optionalText(dto.email)?.toLowerCase();
     let vendorCode = optionalText(dto.vendorCode);
     try {
@@ -147,6 +148,13 @@ export class VendorRepository {
           status: dto.status || VendorStatus.ACTIVE,
         });
         await repository.insert(entity);
+        if (merchantUuid) {
+          await manager.query(
+            `INSERT INTO public.merchant_vendors (merchant_id, vendor_id, status)
+             VALUES ($1::uuid, $2::uuid, 'ACTIVE')`,
+            [merchantUuid, entity.id],
+          );
+        }
         return repository.findOneByOrFail({ id: entity.id });
       });
     } catch (error: any) {
@@ -221,7 +229,17 @@ export class VendorRepository {
     return uuid;
   }
 
-  async listMerchantVendors(merchantId: string, query: { search?: string; vendorType?: string; status?: string } = {}): Promise<any[]> {
+  async assertMerchantVendor(merchantId: string, vendorId: string): Promise<void> {
+    const merchantUuid = await this.requireMerchantUuid(merchantId);
+    const rows = await this.merchants.requireDataSource().query(
+      `SELECT 1 FROM public.merchant_vendors
+       WHERE merchant_id = $1::uuid AND vendor_id = $2::uuid AND status = 'ACTIVE' LIMIT 1`,
+      [merchantUuid, vendorId],
+    );
+    if (!rows.length) throw new ForbiddenException('You can only access your own merchant vendors');
+  }
+
+  async listMerchantVendors(merchantId: string, query: { search?: string; vendorType?: string; status?: string; includeDeleted?: boolean } = {}): Promise<any[]> {
     const merchantUuid = await this.requireMerchantUuid(merchantId);
     const db = this.merchants.requireDataSource();
     const params: unknown[] = [merchantUuid];
@@ -237,8 +255,10 @@ export class VendorRepository {
       JOIN public.vendors v ON v.id = mv.vendor_id
       WHERE mv.merchant_id = $1
         AND mv.status = 'ACTIVE'
-        AND v.deleted_at IS NULL
     `;
+    sql += query.includeDeleted
+      ? ` AND (v.deleted_at IS NOT NULL OR v.status = 'INACTIVE')`
+      : ` AND v.deleted_at IS NULL`;
     if (query.status) {
       params.push(query.status);
       sql += ` AND v.status = $${params.length}`;

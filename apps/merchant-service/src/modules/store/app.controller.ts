@@ -5,6 +5,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository, DataSyncActor } from '../merchant/merchant.repository';
 import { RequireAuth } from '../shared/session-auth.guard';
+import { isWebConsoleRequest } from '../shared/console-access';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from '../../entities/merchant.entity';
 import { PlanCode } from '../../entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
@@ -1004,7 +1005,7 @@ export class AppController {
   }
 
   private async productCatalogConnection(merchantId: string, storeId: string,
-    actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+    actor?: { id?: string; accountType?: string; merchantId?: string; storeId?: string; role?: string }) {
 
     if (!actor?.id) throw new ForbiddenException('Authentication is required');
     const db = this.merchantRepository.requireDataSource();
@@ -1018,7 +1019,8 @@ export class AppController {
     if ((actor.merchantId && actor.merchantId !== store.merchant_id) || (actor.storeId && actor.storeId !== store.id)) {
       throw new ForbiddenException('Store does not match the authenticated session');
     }
-    if (actor.role !== 'OWNER' && actor.role !== 'POS_EMPLOYEE') {
+    const ownMerchantSession = actor.accountType === 'merchant' && actor.merchantId === store.merchant_id;
+    if (!ownMerchantSession && actor.role !== 'OWNER' && actor.role !== 'POS_EMPLOYEE') {
       const [owner] = await db.query(
         `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
          WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
@@ -1293,14 +1295,23 @@ export class AppController {
   @Post(['stores', 'merchants/:merchantId/stores'])
   async createStore(
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; accountType?: string; merchantId?: string } },
     @Param('merchantId') merchantId?: string,
   ) {
     const bodyMerchantId = body.merchant_id || body.merchantId;
     if (merchantId && bodyMerchantId && merchantId !== bodyMerchantId) {
       throw new BadRequestException('Merchant ID in the URL must match the request body');
     }
-    const ownerId = merchantId || bodyMerchantId;
+    const scoped = isWebConsoleRequest(request) && (request.user?.accountType === 'merchant' || request.user?.accountType === 'employee');
+    const sessionMerchantId = scoped ? request.user?.merchantId : undefined;
+    if (scoped && !sessionMerchantId) throw new ForbiddenException('Merchant scope is required');
+    if (scoped && merchantId && (await this.merchantRepository.resolveMerchantUuid(merchantId)) !== sessionMerchantId) {
+      throw new ForbiddenException('You can only manage your own stores');
+    }
+    if (scoped && bodyMerchantId && (await this.merchantRepository.resolveMerchantUuid(bodyMerchantId)) !== sessionMerchantId) {
+      throw new ForbiddenException('You can only manage your own stores');
+    }
+    const ownerId = sessionMerchantId || merchantId || bodyMerchantId;
     if (!ownerId) throw new BadRequestException('merchant_id is required');
     const { merchant } = await this.merchantRepository.getMerchantById(ownerId);
     if (!merchant) throw new NotFoundException(`Merchant '${ownerId}' not found`);
@@ -1394,8 +1405,10 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { user?: { accountType?: string; merchantId?: string } }) {
-    const consoleMerchant = request?.user?.accountType ? request.user.merchantId : undefined;
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
+    const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
+    const consoleMerchant = scoped ? request?.user?.merchantId : undefined;
+    if (scoped && !consoleMerchant) throw new ForbiddenException('Merchant scope is required');
     const requestedMerchant = consoleMerchant ? (merchantId || consoleMerchant) : merchantId;
     const resolvedMerchantId = !requestedMerchant
       ? undefined
@@ -1494,9 +1507,14 @@ export class AppController {
   }
 
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
-  async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+  async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string,
+    @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(store, merchantId)))) throw new NotFoundException(`Store '${storeId}' not found`);
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || store.merchantId !== request.user.merchantId)) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     const setup = store.onboardingSetup || {};
     let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
@@ -1540,9 +1558,13 @@ export class AppController {
 
   @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
   async updateStore(@Param('storeId') storeId: string, @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: UpdateStoreDto })) body: UpdateStoreDto,
-    @Param('merchantId') merchantId?: string) {
+    @Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const existing = await this.merchantRepository.getStoreById(storeId);
     if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || existing.merchantId !== request.user.merchantId)) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
     const requestedMerchant = body.merchant_id || body.merchantId;
@@ -1592,9 +1614,14 @@ export class AppController {
   }
 
   @Delete(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
-  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string,
+    @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const existing = await this.merchantRepository.getStoreById(storeId);
     if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || existing.merchantId !== request.user.merchantId)) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
     const deleted = await this.merchantRepository.deleteStore(storeId);

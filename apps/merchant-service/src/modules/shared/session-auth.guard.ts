@@ -11,6 +11,7 @@ import { Reflector } from '@nestjs/core';
 import { extractBearerToken, IS_PUBLIC_ROUTE, verifyAccessToken } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { ConsoleAccessService } from './console-access.service';
+import { isWebConsoleRequest } from './console-access';
 
 export const REQUIRE_AUTH_ROUTE = 'requireAuthRoute';
 export const RequireAuth = () => SetMetadata(REQUIRE_AUTH_ROUTE, true);
@@ -24,26 +25,36 @@ export class SessionAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<{ headers?: { authorization?: string }; user?: unknown }>();
+    const request = context.switchToHttp().getRequest<{ headers?: { authorization?: string; 'x-pch-web-console'?: string }; user?: unknown }>();
     const requiresAuth = this.reflector?.getAllAndOverride<boolean>(REQUIRE_AUTH_ROUTE, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (process.env.SKIP_AUTH === 'true') {
+      let bypassPayload: ReturnType<typeof verifyAccessToken> | null = null;
       if (request.headers?.authorization) {
-        try {
-          const payload = verifyAccessToken(extractBearerToken(request.headers.authorization));
-          request.user = {
-            id: payload.sub,
-            accountId: payload.accountId,
-            email: payload.email,
-            role: payload.role,
-            sessionId: payload.jti,
-          };
-          return true;
-        } catch {
-          // Authentication is optional only while the explicit local bypass is enabled.
+        bypassPayload = verifyAccessToken(extractBearerToken(request.headers.authorization));
+      }
+      if (bypassPayload) {
+        request.user = {
+          id: bypassPayload.sub,
+          accountId: bypassPayload.accountId,
+          email: bypassPayload.email,
+          role: bypassPayload.role,
+          sessionId: bypassPayload.jti,
+          accountType: bypassPayload.accountType,
+          merchantId: bypassPayload.merchantId,
+          merchantCode: bypassPayload.merchantCode,
+          employeeId: bypassPayload.employeeId,
+          storeId: bypassPayload.storeId,
+          roleId: bypassPayload.roleId,
+        };
+        if (isWebConsoleRequest(request) && (bypassPayload.accountType === 'merchant' || bypassPayload.accountType === 'employee')) {
+          await this.consoleAccess.assert(request as Parameters<ConsoleAccessService['assert']>[0]);
+        } else if (isWebConsoleRequest(request)) {
+          await this.assertPlatformAccount(request.user as { email?: string; role?: string });
         }
+        return true;
       }
       request.user = {
         id: '11111111-1111-4111-8111-111111111111',
@@ -75,8 +86,6 @@ export class SessionAuthGuard implements CanActivate {
         ?? (payload as typeof payload & { roleCode?: string }).roleCode
         ?? payload.role
         ?? session.role,
-      merchantId: payload.merchantId,
-      storeId: payload.storeId,
       deviceId: payload.deviceId,
       sessionId: session.id,
       merchantId: scopedPayload.merchantId ?? session.merchantId,
@@ -86,10 +95,19 @@ export class SessionAuthGuard implements CanActivate {
       merchantCode: payload.merchantCode,
       roleId: payload.roleId,
     };
-    if (payload.accountType === 'merchant' || payload.accountType === 'employee') {
+    if (isWebConsoleRequest(request) && (payload.accountType === 'merchant' || payload.accountType === 'employee')) {
       await this.consoleAccess.assert(request as Parameters<ConsoleAccessService['assert']>[0]);
+    } else if (isWebConsoleRequest(request)) {
+      await this.assertPlatformAccount(request.user as { email?: string; role?: string });
     }
     return true;
+  }
+
+  private async assertPlatformAccount(user: { email?: string; role?: string }): Promise<void> {
+    const role = String(user.role || '').toUpperCase();
+    if (!['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      throw new ForbiddenException('A merchant or administrator login is required');
+    }
   }
 }
 

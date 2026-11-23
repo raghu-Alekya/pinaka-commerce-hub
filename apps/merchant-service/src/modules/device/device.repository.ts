@@ -106,6 +106,7 @@ export class DeviceRepository {
       // merchant_devices.merchant_id is varchar in databases created by the
       // current schema bootstrap, so compare as text instead of uuid.
       .where('mapping.merchant_id::text = CAST(:merchantId AS text)', { merchantId })
+      .andWhere('device.merchant_id::text = CAST(:merchantId AS text)', { merchantId })
       .andWhere('mapping.isDeleted = false')
       .orderBy('mapping.createdAt', 'DESC')
       .getMany();
@@ -121,6 +122,7 @@ export class DeviceRepository {
         WHERE merchant_device.merchant_id = :merchantId
           AND merchant_device.is_deleted = false
       )`, { merchantId })
+      .andWhere('device.merchant_id::text = CAST(:merchantId AS text)', { merchantId })
       .andWhere('device.is_deleted = false')
       .andWhere(`NOT EXISTS (
         SELECT 1 FROM public.store_devices store_device
@@ -145,12 +147,7 @@ export class DeviceRepository {
     const repository = this.merchants.requireDataSource().getRepository(DeviceEntity);
     const buildQuery = (withFilters: boolean) => {
       const query = repository.createQueryBuilder('device')
-        .innerJoin(
-          MerchantDeviceEntity,
-          'mapping',
-          'mapping.device_id = device.id AND mapping.is_deleted = false',
-        )
-        .where('mapping.merchant_id::text = CAST(:merchantId AS text)', { merchantId: filters.merchantId })
+        .where('device.merchant_id::text = CAST(:merchantId AS text)', { merchantId: filters.merchantId })
         .andWhere('device.is_deleted = false');
 
       if (!withFilters) return query;
@@ -172,7 +169,7 @@ export class DeviceRepository {
     };
 
     const [devices, total] = await buildQuery(true)
-      .orderBy('device.created_at', 'DESC')
+      .orderBy('device.createdAt', 'DESC')
       .skip((filters.page - 1) * filters.limit)
       .take(filters.limit)
       .getManyAndCount();

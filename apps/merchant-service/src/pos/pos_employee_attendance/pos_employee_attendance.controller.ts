@@ -62,6 +62,10 @@ export class PosEmployeeAttendanceController {
     @Req() request: PosEmployeeAttendanceRequest,
     @Query(queryValidation) filters: PosEmployeeAttendanceQueryDto,
   ) {
+    if (request.attendanceScope) {
+      filters.merchantId = request.attendanceScope.merchantId;
+      filters.storeId = request.attendanceScope.storeId;
+    }
     return this.attendance.list(request.posEmployee!, filters);
   }
 

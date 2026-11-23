@@ -1,7 +1,8 @@
 import { WorkforceValidationPipe } from '../../employee/workforce-validation.pipe';
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, Inject, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, NotFoundException, ForbiddenException, Inject, Patch, UseGuards } from '@nestjs/common';
 import { RelationshipOwnerGuard } from '../../shared/relationships.controller';
 import { MerchantRepository } from '../../merchant/merchant.repository';
+import { RelationshipsRepository } from '../../shared/relationships.repository';
 import { CreateMerchantRoleTemplateDto, UpdateMerchantRoleTemplateDto } from './merchant-role-template.dto';
 import { SaveMerchantRoleTemplatesDto } from '../store-setup/store-role-template.dto';
 
@@ -11,7 +12,10 @@ import { SaveMerchantRoleTemplatesDto } from '../store-setup/store-role-template
   'connector/api/v1/merchants/:merchantId/role-templates',
 ])
 export class MerchantRoleTemplateController {
-  constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
+  constructor(
+    @Inject(MerchantRepository) private readonly repository: MerchantRepository,
+    @Inject(RelationshipsRepository) private readonly relationships: RelationshipsRepository,
+  ) {}
 
   @Get()
   async list(@Param('merchantId') merchantId: string, @Query('status') status?: string) {
@@ -24,6 +28,32 @@ export class MerchantRoleTemplateController {
   async available(@Param('merchantId') merchantId: string) {
     const result = await this.repository.listAvailableMerchantRoleTemplates(merchantId);
     return { success: true, ...result };
+  }
+
+  @Get(':idOrCode/features')
+  async features(
+    @Param('merchantId') merchantId: string,
+    @Param('idOrCode') idOrCode: string,
+    @Query('storeTypeIds') storeTypeIds?: string,
+  ) {
+    const available = await this.repository.listAvailableMerchantRoleTemplates(merchantId);
+    const role = available.roleTemplates.find((item) =>
+      String(item.id).toLowerCase() === idOrCode.toLowerCase() && item.selected === true,
+    );
+    const allowedStoreTypeIds = new Set(available.storeTypes.map((item) => item.id.toLowerCase()));
+    const requested = String(storeTypeIds || '').split(',').map((id) => id.trim()).filter(Boolean);
+    if (!role || !requested.length || requested.some((id) => !allowedStoreTypeIds.has(id.toLowerCase()))) {
+      throw new ForbiddenException('Role template is not available to this merchant');
+    }
+    for (const storeTypeId of requested) {
+      const mapped = await this.repository.listRoleTemplatesForStoreType(storeTypeId, { status: 'ACTIVE' });
+      if (!mapped.some((item) => String(item.id).toLowerCase() === idOrCode.toLowerCase())) {
+        throw new ForbiddenException('Role template is not available for this store type');
+      }
+    }
+    return this.relationships.listRoleTemplateAccess(String(role.id), {
+      storeTypeIds: requested.join(','),
+    });
   }
 
   @Get(':idOrCode')

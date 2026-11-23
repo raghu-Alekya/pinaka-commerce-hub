@@ -2082,7 +2082,7 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
+    const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
     const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
     const effectiveStatus = `CASE
@@ -2281,7 +2281,7 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
+    const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
     const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.search || null, criteria.createdAfter || null, criteria.customer || null];
     const effectiveStatus = `CASE
