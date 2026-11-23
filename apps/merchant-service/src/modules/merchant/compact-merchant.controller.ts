@@ -546,7 +546,7 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', String(input.password));
+          setCol('actual_password', encryptMerchantPassword(String(input.password)));
         }
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
@@ -955,12 +955,12 @@ export class CompactMerchantController {
     if (merchant && typeof merchant === 'object') {
       const [saved] = await this.db.query('SELECT actual_password FROM public.merchants WHERE id=$1', [merchant.id]);
       if (saved?.actual_password) {
-        try {
-          merchant.password = decryptMerchantPassword(saved.actual_password);
-        } catch (error) {
-          // A record encrypted with a previous key must not break merchant details.
-          // Keep its existing password hash until an administrator resets it.
-          console.warn('[CompactMerchantController.get] Stored merchant password could not be decrypted', merchant.id);
+        merchant.password = decryptMerchantPassword(saved.actual_password);
+        if (!saved.actual_password.startsWith('enc:v1:')) {
+          await this.db.query(
+            'UPDATE public.merchants SET actual_password=$1 WHERE id=$2 AND actual_password=$3',
+            [encryptMerchantPassword(saved.actual_password), merchant.id, saved.actual_password],
+          );
         }
       }
     }
@@ -1050,7 +1050,7 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', String(input.password));
+          setCol('actual_password', encryptMerchantPassword(String(input.password)));
           await manager.query(
             `UPDATE public.users SET password_hash = $1, updated_at = now()
              WHERE lower(email) = lower($2)`,
