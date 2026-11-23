@@ -262,6 +262,86 @@ export function feeLinesForCalculation(
     : feeLines;
 }
 
+function promotionMinor(lineItems: PosLineItem[] = [], places = 2): number {
+  return lineItems.filter(isMerchandiseLine).reduce((sum, line) => {
+    const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+    const amount = metadata.find((entry) => entry?.key === '_pos_auto_discount')?.value;
+    return sum + Math.max(0, toMinor(amount ?? 0, places));
+  }, 0);
+}
+
+function couponRuleMinor(coupon: PosCouponLine, places: number): number {
+  const record = coupon as PosCouponLine & { amount?: unknown; meta_data?: Array<{ key?: string; value?: unknown }> };
+  const metadata = Array.isArray(record.meta_data) ? record.meta_data : [];
+  const metaAmount = metadata.find((entry) => entry?.key === 'amount')?.value;
+  return Math.max(0, toMinor(record.amount ?? metaAmount ?? 0, places));
+}
+
+/**
+ * The POS gross total already includes the automatic discount.
+ * A coupon figure equal to that automatic discount plus the merchant
+ * discount must not be applied again. The coupon rule amount is the
+ * coupon still to take off the gross total.
+ */
+export function couponToApply(
+  lineItems: PosLineItem[] = [],
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const stated = toMinor(authoritativeCouponDiscount(couponLines, feeLines, places, lineItems), places);
+  const bundle = promotionMinor(lineItems, places) + merchantDiscountMinor(feeLines, places);
+  if (!(bundle > 0) || Math.abs(stated - bundle) > 1) return fromMinor(stated, places);
+  const rule = couponLines
+    .map((coupon) => couponRuleMinor(coupon, places))
+    .find((amount) => amount > 0 && Math.abs(amount - bundle) > 1);
+  return fromMinor(rule ?? 0, places);
+}
+
+/**
+ * Saved orders can have line totals reduced by the automatic discount and
+ * the merchant discount even though the line subtotals are already the POS
+ * selling prices. The list then stored 7.45 instead of the POS payable.
+ * Returns the POS total only for that shape.
+ */
+export function posSellingBill(
+  lineItems: PosLineItem[] = [],
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  taxLines: Array<{ rate_percent?: unknown }> = [],
+  places = 2,
+): { total: number; tax: number; coupon: number } | null {
+  const auto = promotionMinor(lineItems, places);
+  const merchant = merchantDiscountMinor(feeLines, places);
+  const bundle = auto + merchant;
+  if (!(auto > 0) || !(bundle > 0)) return null;
+  if (Math.abs(merchandiseReductionMinor(lineItems, places) - bundle) > 1) return null;
+  const coupon = couponLines.reduce((chosen, line) => {
+    if (chosen > 0) return chosen;
+    const stated = Math.max(0, toMinor(line?.discount ?? 0, places));
+    const rule = couponRuleMinor(line, places);
+    if (stated > 0 && Math.abs(stated - bundle) > 1) return stated;
+    if (rule > 0 && Math.abs(rule - bundle) > 1) return rule;
+    return 0;
+  }, 0);
+  if (!(coupon > 0)) return null;
+  const gross = lineItems.filter(isMerchandiseLine).reduce(
+    (sum, line) => sum + Math.max(0, toMinor(line.subtotal ?? line.total ?? 0, places)),
+    0,
+  );
+  const net = gross - merchant - coupon;
+  if (net < 0) return null;
+  const rate = Number(taxLines.find((line) => Number(line?.rate_percent) > 0)?.rate_percent
+    ?? lineItems.flatMap((line) => line.taxes || []).map((tax) => Number(tax?.rate_percent ?? tax?.id)).find((value) => value > 0 && value <= 100));
+  if (!(rate > 0) || rate > 100) return null;
+  const tax = Math.round(net * rate / 100);
+  return {
+    coupon: fromMinor(coupon, places),
+    tax: fromMinor(tax, places),
+    total: fromMinor(net + tax, places),
+  };
+}
+
 export function representedCouponDiscount(
   lineItems: PosLineItem[] = [],
   feeLines: PosFeeLine[] = [],
