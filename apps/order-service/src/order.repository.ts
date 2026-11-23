@@ -426,7 +426,7 @@ export class OrderRepository implements OnModuleInit {
     const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
     const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
     const tipAmount = Number(orderData.tipAmount || 0);
-    const calculationFees = feeLinesForCalculation(lineItems, feeLines);
+    const calculationFees = feeLinesForCalculation(lineItems, feeLines, 2, couponLines);
     const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
@@ -1172,10 +1172,11 @@ export class OrderRepository implements OnModuleInit {
     }
 
     const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
-    const representedCoupon = representedCouponDiscount(lines, sourceFees, places);
-    const calculationFees = feeLinesForCalculation(lines, sourceFees, places);
+    const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const representedCoupon = representedCouponDiscount(lines, sourceFees, places, sourceCoupons);
+    const calculationFees = feeLinesForCalculation(lines, sourceFees, places, sourceCoupons);
     const authoritativeCoupon = authoritativeCouponDiscount(
-      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
+      sourceCoupons,
       sourceFees,
       places,
       lines,

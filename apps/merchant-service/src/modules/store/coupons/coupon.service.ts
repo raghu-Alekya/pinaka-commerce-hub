@@ -1,7 +1,7 @@
 import { BadGatewayException, BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
-import { postgresConnectionOptions } from '@pinaka-delivery-hub/database';
+import { databaseSchemaChangesAllowed, postgresConnectionOptions } from '@pinaka-delivery-hub/database';
 import { CouponInputDto } from './coupon.dto';
 import { CouponSyncStatus, StoreCouponEntity } from './store-coupon.entity';
 
@@ -16,7 +16,10 @@ export class CouponService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      this.dataSource = new DataSource({ ...postgresConnectionOptions([StoreCouponEntity]), synchronize: true });
+      this.dataSource = new DataSource({
+        ...postgresConnectionOptions([StoreCouponEntity]),
+        synchronize: databaseSchemaChangesAllowed(),
+      });
       await this.dataSource.initialize();
       await this.dataSource.query(`
         DO $$
