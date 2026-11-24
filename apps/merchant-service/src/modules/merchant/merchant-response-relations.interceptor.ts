@@ -1,8 +1,65 @@
-import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
+import { BadRequestException, CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
 import { mergeMap } from 'rxjs';
 import { MerchantRepository } from './merchant.repository';
 import { MerchantResponseRelations } from './merchant-response-relations';
 import { nationalPhone } from './countries';
+
+function camelizeKeys(value: unknown, preserveSnakeKeys: ReadonlySet<string> = new Set()): unknown {
+  if (Array.isArray(value)) return value.map(item => camelizeKeys(item, preserveSnakeKeys));
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const camelKey = preserveSnakeKeys.has(key)
+      ? key
+      : key.replace(/_([a-zA-Z0-9])/g, (_, letter: string) => letter.toUpperCase());
+    result[camelKey] = camelizeKeys(child, preserveSnakeKeys);
+  }
+  return result;
+}
+
+function requireSnakeCaseKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(requireSnakeCaseKeys);
+    return;
+  }
+  if (!value || typeof value !== 'object' || value instanceof Date) return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/[a-z][A-Z]/.test(key)) {
+      throw new BadRequestException(`Use snake_case field '${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}' instead of '${key}'`);
+    }
+    requireSnakeCaseKeys(child);
+  }
+}
+
+function snakeCaseKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snakeCaseKeys);
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  const source = value as Record<string, unknown>;
+  const entries = Object.entries(source);
+  const result: Record<string, unknown> = {};
+  // Keep an existing snake_case key if the same field is also present in camelCase.
+  for (const [key, child] of entries) {
+    if (key.includes('_')) result[key] = snakeCaseKeys(child);
+  }
+  for (const [key, child] of entries) {
+    const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    if (!(snakeKey in result)) result[snakeKey] = snakeCaseKeys(child);
+  }
+  return result;
+}
+
+function usesSnakeCaseContract(path: string): boolean {
+  return /^(?:\/connector)?\/api\/v1\/(?:store-types\/[^/]+\/(?:features(?:\/by-category|\/bulk)?|role-templates(?:\/available)?)(?:\/|$)|permissions(?:\/|$)|role-templates(?:\/|$)|vendors(?:\/|$)|merchants(?:\/[^/]+\/vendors(?:\/(?:all|available))?|\/subscriptions(?:\/active)?|\/[^/]+)?|subscriptions(?:\/active)?|plans\/merchant-form|store-vendor-mappings(?:\/[^/]+)?|store\/store-pos-configuration\/[^/]+\/(?:currency_taxes|cashback_settings)(?:\/value)?|stores(?:\/[^/]+)?|merchants\/[^/]+\/stores(?:\/[^/]+)?|stores\/[^/]+\/pos\/(?:currency-tax|service-charges|cashback|opening-balance|cash-registers))\/?$/.test(path);
+}
+
+function shouldCamelizeBody(path: string): boolean {
+  if (/^(?:\/connector)?\/api\/v1\/(?:stores(?:\/[^/]+)?|merchants\/[^/]+\/stores(?:\/[^/]+)?)\/?$/.test(path)) return false;
+  return !/^(?:\/connector)?\/api\/v1\/(?:store-vendor-mappings|store\/store-pos-configuration\/)/.test(path);
+}
+
+function shouldCamelizeQuery(path: string): boolean {
+  return !/^(?:\/connector)?\/api\/v1\/(?:store-vendor-mappings|store\/store-pos-configuration\/)/.test(path);
+}
 
 function attachMerchantCode(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(attachMerchantCode);
@@ -59,23 +116,41 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
-    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string}>();
+    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string;body?:unknown;query?:Record<string, unknown>}>();
     const path=(request.path || request.url || '').split('?')[0];
+    const snakeCaseContract = usesSnakeCaseContract(path);
+    if (snakeCaseContract) {
+      requireSnakeCaseKeys(request.body);
+      if (shouldCamelizeBody(path)) {
+        const preserveSnakeKeys = /(?:^|\/)pos\/currency-tax\/?$/.test(path)
+          ? new Set(['currency_symbol'])
+          : new Set<string>();
+        request.body = camelizeKeys(request.body, preserveSnakeKeys);
+      }
+      if (shouldCamelizeQuery(path) && request.query && typeof request.query === 'object') {
+        requireSnakeCaseKeys(request.query);
+        const normalizedQuery = camelizeKeys(request.query) as Record<string, unknown>;
+        for (const key of Object.keys(request.query)) delete request.query[key];
+        Object.assign(request.query, normalizedQuery);
+      }
+    }
     const compactSubscriptions = /^(?:\/connector)?\/api\/v1\/(?:subscriptions|merchants\/subscriptions)(?:\/|$)/.test(path);
     if (request.method === 'GET' && compactSubscriptions) {
       return next.handle().pipe(mergeMap(async payload => {
         const named = await featureNames(this.repository.requireDataSource(), payload);
-        return attachMerchantCode(named);
+        const response = attachMerchantCode(named);
+        return snakeCaseContract ? snakeCaseKeys(response) : response;
       }));
     }
     const related=/^(?:\/connector)?\/api\/v1\/(?:merchants|subscriptions|subscription-plans|plans|stores|store-types|store_types|role-templates|role_templates|employees|devices|countries)(?:\/|$)/.test(path);
-    if (!related) return next.handle();
+    if (!related && !snakeCaseContract) return next.handle();
     return next.handle().pipe(mergeMap(async payload => {
       const expanded = request.method==='GET'
         ? await new MerchantResponseRelations(this.repository.requireDataSource()).expand(payload)
         : payload;
       const named = request.method==='GET' ? await featureNames(this.repository.requireDataSource(), expanded) : expanded;
-      return attachMerchantCode(named);
+      const response = attachMerchantCode(named);
+      return snakeCaseContract ? snakeCaseKeys(response) : response;
     }));
   }
 }
