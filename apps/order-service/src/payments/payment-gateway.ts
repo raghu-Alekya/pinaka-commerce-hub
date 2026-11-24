@@ -81,15 +81,11 @@ function credentialText(record: Record<string, unknown>, keys: string[]): string
 }
 
 function readCredentials(provider: Record<string, unknown>): GatewayCredentials {
-  const urls = asRecord(provider.terminalUrls) ?? asRecord(provider.payrocUrls) ?? {};
-  const production = provider.payrocEnvironment === 'production';
   return {
     deviceId: credentialText(provider, ['deviceId', 'device_id']),
     terminalId: credentialText(provider, ['terminalId', 'terminal_id']),
     secretKey: credentialText(provider, ['secretKey', 'secret_key']),
     processorMerchantId: credentialText(provider, ['processorMerchantId', 'processor_merchant_id']),
-    authorizeUrl: credentialText(urls, [production ? 'productionIdentity' : 'uatIdentity']) || (production ? 'https://identity.payroc.com/authorize' : PAYROC_AUTHORIZE_URL),
-    apiUrl: (credentialText(urls, [production ? 'productionApi' : 'uatApi']) || (production ? 'https://api.payroc.com' : PAYROC_API_URL)).replace(/\/+$/, ''),
   };
 }
 
@@ -482,8 +478,6 @@ export interface PayrocChargeInput {
   deviceId: string;
   terminalId: string;
   secretKey: string;
-  authorizeUrl?: string;
-  apiUrl?: string;
   processorMerchantId?: string;
   identityUrl: string;
   apiOrigin: string;
@@ -579,7 +573,7 @@ export async function chargePayroc(
     ...submittedContext,
     instruction: instruction.body,
     paymentInstructionId: instruction.id,
-  }, options?.maxPolls ?? 4, instruction, input.apiUrl);
+  }, options?.maxPolls ?? 4, instruction);
 }
 
 /** Read an instruction that was already submitted. This does not create a charge. */
@@ -606,7 +600,7 @@ export async function continuePayroc(
     provider: 'payroc',
     gateway_submitted: true,
     paymentInstructionId: input.instructionId,
-  }, 1, undefined, input.apiUrl);
+  }, 1);
 }
 
 function payrocCallEndpoints(identityUrl: string, apiOrigin: string): { identityUrl: string; apiOrigin: string } | null {
@@ -633,7 +627,6 @@ async function finishPayrocInstruction(
   context: PayrocContext,
   maxPolls: number,
   initial?: PayrocInstructionView,
-  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   let current = initial;
   let fetches = 0;
@@ -710,7 +703,6 @@ async function readPayrocPayment(
   apiOrigin: string,
   fetchImpl: FetchLike,
   context: PayrocContext,
-  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   const loaded = await requestPayroc(
     `${apiOrigin}/v1/payments/${encodeURIComponent(paymentId)}`,
