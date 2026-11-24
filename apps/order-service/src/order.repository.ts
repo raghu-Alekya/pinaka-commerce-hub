@@ -17,8 +17,10 @@ import {
   applyMerchantDiscountToStoredTax,
   applyPosSaleCalculation,
   adminOrderCounts,
+  assignFixedCartCouponDiscounts,
   calculateDiscountTotal,
   couponToApply,
+  recordAppliedCouponAmount,
   calculateStoreOrder,
   effectiveFeeTotal,
   feeLinesForCalculation,
@@ -251,9 +253,9 @@ export class OrderRepository implements OnModuleInit {
     const order: OrderEntity = {
       id,
       orderNumber,
-      merchantId: orderData.merchantId || 'MCH-1001',
-      storeId: orderData.storeId || 'STR-5001',
-      shiftId: orderData.shiftId || 'SHIFT-8001',
+      merchantId: orderData.merchantId,
+      storeId: orderData.storeId,
+      shiftId: orderData.shiftId,
       localShiftId: orderData.localShiftId,
       clientOrderId,
       offline: Boolean(orderData.offline),
@@ -974,7 +976,9 @@ export class OrderRepository implements OnModuleInit {
     const lines = Array.isArray(sourcePayload?.line_items) ? sourcePayload.line_items : null;
     if (!lines?.length) return;
     if (!this.dataSource || !orderData.storeId) {
-      this.rememberSale(orderData, sourcePayload, applyPosSaleCalculation(lines, sourcePayload, 2));
+      const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, 2);
+      this.recordPreparedCoupon(sourcePayload, sale, lines, 2);
+      this.rememberSale(orderData, sourcePayload, sale);
       return;
     }
 
@@ -982,7 +986,9 @@ export class OrderRepository implements OnModuleInit {
       .map((line: any) => String(line?.product_id ?? '').trim())
       .filter(Boolean))];
     if (!productIds.length) {
-      this.rememberSale(orderData, sourcePayload, applyPosSaleCalculation(lines, sourcePayload, 2));
+      const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, 2);
+      this.recordPreparedCoupon(sourcePayload, sale, lines, 2);
+      this.rememberSale(orderData, sourcePayload, sale);
       return;
     }
 
@@ -1181,7 +1187,7 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
-    const sale = applyPosSaleCalculation(lines, sourcePayload, places);
+    const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, places);
     if (!sale) {
       const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
       const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
@@ -1231,6 +1237,7 @@ export class OrderRepository implements OnModuleInit {
         decimalPlaces: places,
       }).toFixed(places);
     }
+    this.recordPreparedCoupon(sourcePayload, sale, lines, places);
     this.rememberSale(orderData, sourcePayload, sale);
     if (!sale) {
       orderData.subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
@@ -1238,6 +1245,34 @@ export class OrderRepository implements OnModuleInit {
       orderData.totalAmount = Number(sourcePayload.total);
       orderData.requestPayload = sourcePayload;
     }
+  }
+
+  private async calculatePreparedSale(orderData: any, sourcePayload: any, lines: any[], places: number) {
+    await this.applyLocalFixedCartCoupons(orderData, sourcePayload, places);
+    return applyPosSaleCalculation(lines, sourcePayload, places);
+  }
+
+  private async applyLocalFixedCartCoupons(orderData: any, sourcePayload: any, places: number): Promise<void> {
+    const coupons = Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const records = new Map<string, Record<string, unknown> | null>();
+    for (const coupon of coupons) {
+      const code = String(coupon?.code || '').trim();
+      if (!code || /^pos-discount(?:-\d+)?$/i.test(code)) continue;
+      const stated = Number(coupon?.discount ?? coupon?.discount_amount ?? 0);
+      if (Number.isFinite(stated) && stated > 0) continue;
+      const key = code.toLowerCase();
+      if (records.has(key)) continue;
+      const row = orderData?.storeId ? await this.findStoreCoupon(orderData.storeId, code) : null;
+      records.set(key, row);
+    }
+    assignFixedCartCouponDiscounts(sourcePayload, records, places);
+  }
+
+  private recordPreparedCoupon(sourcePayload: any, sale: { coupon: number } | null, lines: any[], places: number): void {
+    const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const fees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+    const applied = sale ? sale.coupon : couponToApply(lines, coupons, fees, places);
+    recordAppliedCouponAmount(sourcePayload, applied, places);
   }
 
   private rememberSale(

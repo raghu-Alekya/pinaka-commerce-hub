@@ -272,6 +272,101 @@ export function couponToApply(
   return authoritativeCouponDiscount(couponLines, feeLines, places, lineItems);
 }
 
+function statedCouponDiscount(coupon: PosCouponLine): number {
+  const record = coupon as PosCouponLine & { discount_amount?: unknown };
+  const amount = Number(record?.discount ?? record?.discount_amount ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function isGeneratedMerchantCoupon(code: string): boolean {
+  return /^pos-discount(?:-\d+)?$/i.test(code);
+}
+
+/**
+ * A local store coupon can fill a missing fixed-cart amount.
+ * Percentage and fixed-product coupons keep their own rules and are not
+ * converted into a cart amount. An expired or missing row supplies nothing.
+ */
+export function fixedCartAmountFromCouponRecord(
+  row: Record<string, unknown> | null | undefined,
+  now = Date.now(),
+): number | null {
+  if (!row) return null;
+  const type = String(row.discount_type ?? row.discountType ?? '').trim().toLowerCase();
+  if (type !== 'fixed_cart' && type !== 'fixed') return null;
+  const expiresAt = row.date_expires ?? row.dateExpires;
+  if (expiresAt !== undefined && expiresAt !== null && String(expiresAt).trim() !== '') {
+    const expires = new Date(String(expiresAt)).getTime();
+    if (Number.isFinite(expires) && expires <= now) return null;
+  }
+  const amount = Number(row.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+/**
+ * Fill coupon lines that have a code but no positive discount from the local
+ * fixed-cart records. When a line cannot be filled, the coupon fee is cleared
+ * so it cannot become the coupon amount.
+ */
+export function assignFixedCartCouponDiscounts(
+  sourcePayload: { coupon_lines?: PosCouponLine[]; fee_lines?: PosFeeLine[] },
+  records: ReadonlyMap<string, Record<string, unknown> | null>,
+  places = 2,
+  now = Date.now(),
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  let blockFeeFallback = false;
+  coupons.forEach((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    if (!code || isGeneratedMerchantCoupon(code) || statedCouponDiscount(coupon) > 0) return;
+    const amount = fixedCartAmountFromCouponRecord(records.get(code.toLowerCase()) ?? null, now);
+    if (amount === null) {
+      blockFeeFallback = true;
+      return;
+    }
+    coupon.discount = amount.toFixed(places);
+  });
+  if (!blockFeeFallback || !Array.isArray(sourcePayload.fee_lines)) return;
+  sourcePayload.fee_lines.forEach((fee) => {
+    if (isCouponDiscountFee(fee)) fee.total = (0).toFixed(places);
+  });
+}
+
+/** Keep the coupon fee and POS coupon meta aligned with the coupon used in the total. */
+export function recordAppliedCouponAmount(
+  sourcePayload: {
+    coupon_lines?: PosCouponLine[];
+    fee_lines?: PosFeeLine[];
+    meta_data?: Array<{ key?: string; value?: unknown }>;
+  },
+  applied: number,
+  places = 2,
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  const hasStoreCoupon = coupons.some((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    return Boolean(code) && !isGeneratedMerchantCoupon(code);
+  });
+  const metadata = Array.isArray(sourcePayload.meta_data) ? sourcePayload.meta_data : [];
+  const meta = metadata.find((entry) => entry?.key === '_pos_coupon_discount');
+  const hasCouponFee = Array.isArray(sourcePayload.fee_lines)
+    && sourcePayload.fee_lines.some((fee) => isCouponDiscountFee(fee));
+  if (!hasStoreCoupon && !hasCouponFee && !meta) return;
+  const text = fromMinor(toMinor(applied, places), places).toFixed(places);
+  if (Array.isArray(sourcePayload.fee_lines)) {
+    sourcePayload.fee_lines.forEach((fee) => {
+      if (isCouponDiscountFee(fee)) fee.total = (-Number(text)).toFixed(places);
+    });
+  }
+  if (!hasStoreCoupon && !meta) return;
+  if (meta) meta.value = text;
+  else {
+    metadata.push({ key: '_pos_coupon_discount', value: text });
+    sourcePayload.meta_data = metadata;
+  }
+}
+
 type SaleLine = PosLineItem & {
   price?: unknown;
   unit_price?: unknown;
