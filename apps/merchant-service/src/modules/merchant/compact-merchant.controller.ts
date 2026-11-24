@@ -27,6 +27,8 @@ import {
 import { SubscriptionPlanChangeController } from '../master/plans/subscription-plan-change.controller';
 import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
+import { decryptMerchantPassword, encryptMerchantPassword } from './merchant-password-crypto';
+import { isWebConsoleRequest } from '../shared/console-access';
 
 const fields = [
   'password',
@@ -247,7 +249,7 @@ export class CompactMerchantController {
   private async getRecord(id: string) {
     try {
       const rows = await this.db.query(
-        `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
+        `SELECT to_jsonb(m) - 'password' - 'actual_password' AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
                 (SELECT COUNT(*)::int FROM public.stores store
                  WHERE store.merchant_id = m.id
                    AND COALESCE(store.is_deleted, false) = false
@@ -289,7 +291,7 @@ export class CompactMerchantController {
       );
     }
     const [row] = await this.db.query(
-      `SELECT row_to_json(m) AS merchant FROM public.merchants m
+      `SELECT to_jsonb(m) - 'password' - 'actual_password' AS merchant FROM public.merchants m
        WHERE COALESCE(to_jsonb(m)->>'merchantId', to_jsonb(m)->>'merchantCode', m.id::text) = $1
           OR m.id::text = $1
           OR m.merchant_code = $1
@@ -557,7 +559,7 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', input.password);
+          setCol('actual_password', encryptMerchantPassword(String(input.password)));
         }
         setCol('businessName', input.businessName);
         const nameParts = String(input.merchantName || '')
@@ -728,7 +730,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list(@Req() request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -806,23 +808,29 @@ export class CompactMerchantController {
     }
   }
 
-  private merchantListResponse(rows: Input[], request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
-    const merchantId = request?.user?.accountType ? request.user.merchantId : undefined;
+  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
+    const merchantId = scoped ? request?.user?.merchantId : undefined;
     const merchantCode = request?.user?.merchantCode;
-    const visible = merchantId
+    const visible = scoped
       ? rows.filter((row) => {
           const merchant = (row.merchant || {}) as Input;
           return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
             .some((value) => {
               const text = String(value || '');
-              return text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase());
+              return Boolean(text) && (text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase()));
             });
         })
       : rows;
     return {
       success: true,
       count: visible.length,
-      merchants: visible.map((row) => this.showMerchantCode(row)),
+      merchants: visible.map((row) => {
+        const merchant = { ...((row.merchant || {}) as Input) };
+        delete merchant.password;
+        delete merchant.actual_password;
+        return this.showMerchantCode({ ...row, merchant });
+      }),
     };
   }
 
@@ -958,18 +966,16 @@ export class CompactMerchantController {
     const record = await this.getRecord(id);
     const merchant = record.merchant;
     if (merchant && typeof merchant === 'object') {
-      // The edit form uses `password`; expose the stored plaintext value from
-      // the dedicated actual_password column rather than the hash in `password`.
-      if (merchant.actual_password !== undefined) {
-        merchant.password = merchant.actual_password;
-      } else if (merchant.actualPassword !== undefined) {
-        merchant.password = merchant.actualPassword;
+      const [saved] = await this.db.query('SELECT actual_password FROM public.merchants WHERE id=$1', [merchant.id]);
+      if (saved?.actual_password) {
+        merchant.password = decryptMerchantPassword(saved.actual_password);
+        if (!saved.actual_password.startsWith('enc:v1:')) {
+          await this.db.query(
+            'UPDATE public.merchants SET actual_password=$1 WHERE id=$2 AND actual_password=$3',
+            [encryptMerchantPassword(saved.actual_password), merchant.id, saved.actual_password],
+          );
+        }
       }
-      merchant.phone = nationalPhone(merchant.phone, merchant.country);
-      merchant.merchantPhoneNumber = nationalPhone(
-        merchant.merchantPhoneNumber ?? merchant.phone,
-        merchant.country,
-      );
     }
     return { success: true, ...record };
   }
@@ -1057,7 +1063,12 @@ export class CompactMerchantController {
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
-          setCol('actual_password', input.password);
+          setCol('actual_password', encryptMerchantPassword(String(input.password)));
+          await manager.query(
+            `UPDATE public.users SET password_hash = $1, updated_at = now()
+             WHERE lower(email) = lower($2)`,
+            [passwordHash, existing.email ?? existing.merchantEmail ?? input.merchantEmail],
+          );
         }
         setCol('businessName', input.businessName ?? existing.businessName);
         setCol(
@@ -1124,12 +1135,8 @@ export class CompactMerchantController {
           'postal_code',
           input.pinCode ?? existing.postal_code ?? existing.pinCode,
         );
-        const phoneValue = nationalPhone(
-          input.merchantPhoneNumber ??
-            existing.merchantPhoneNumber ??
-            existing.phone,
-          phoneCountry,
-        );
+        const phoneValue = input.merchantPhoneNumber ??
+          existing.merchantPhoneNumber ?? existing.phone;
         setCol('merchantPhoneNumber', phoneValue);
         setCol('phone', phoneValue);
         setCol('addressLine1', input.addressLine1 ?? existing.addressLine1);

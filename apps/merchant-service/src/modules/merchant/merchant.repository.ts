@@ -4,6 +4,7 @@ import { StoreVendorPaymentEntity } from '../../entities/store-vendor-payment.en
 import { groupFeaturesByCategory } from '../master/common/master-list';
 import { MerchantOnboardingDto } from './onboarding.dto';
 import { nationalPhone } from './countries';
+import { encryptMerchantPassword } from './merchant-password-crypto';
 import { storeSetup } from '../master/store-setup/store-setup';
 import { withPlanLicenseCounts } from './merchant-crud.service';
 import * as crypto from 'crypto';
@@ -996,6 +997,18 @@ export class MerchantRepository implements OnModuleInit {
       await this.dataSource.query(
         'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
       );
+      const legacyPasswords = await this.dataSource.query(
+        `SELECT id, actual_password FROM public.merchants
+         WHERE actual_password IS NOT NULL AND actual_password <> ''
+           AND actual_password NOT LIKE 'enc:v1:%'
+           AND length(actual_password) <= 128`,
+      );
+      for (const row of legacyPasswords) {
+        await this.dataSource.query(
+          'UPDATE public.merchants SET actual_password=$1 WHERE id=$2 AND actual_password=$3',
+          [encryptMerchantPassword(row.actual_password), row.id, row.actual_password],
+        );
+      }
       await StoreVendorPaymentEntity.ensureConstraints(this.dataSource);
     await ensurePosDataSyncSchema(this.dataSource);
     if (createdTables.length) {

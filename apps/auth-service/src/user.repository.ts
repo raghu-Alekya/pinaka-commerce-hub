@@ -7,7 +7,7 @@ import {
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
-import { CreateUserDto, UpdateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdateUserDto } from './user.dto';
 import { AccountEntity } from './account.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
@@ -48,6 +48,36 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       where: accountId ? { accountId } : {},
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async findAllPch(): Promise<UserEntity[]> {
+    return this.repository.createQueryBuilder('user')
+      .where('user.merchantId IS NULL')
+      .andWhere('user.employeeId IS NULL')
+      .andWhere('user.role IN (:...roles)', { roles: [UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.AGENT] })
+      .orderBy('user.createdAt', 'DESC').getMany();
+  }
+
+  async createPch(dto: CreatePchUserDto, passwordHash: string): Promise<UserEntity> {
+    if (await this.repository.createQueryBuilder('user').where('lower(user.email) = lower(:email)', { email: dto.email }).getExists()) {
+      throw new ConflictException(`A user with email '${dto.email}' already exists`);
+    }
+    const username = dto.username.trim();
+    if (await this.repository.createQueryBuilder('user').where('lower(user.username) = lower(:username)', { username }).getExists()) {
+      throw new ConflictException(`A user with username '${username}' already exists`);
+    }
+    try {
+      return await this.repository.save(this.repository.create({
+        firstName: dto.first_name, lastName: dto.last_name, username,
+        email: dto.email, phoneNumber: dto.phone_number, role: dto.role,
+        status: UserStatus.ACTIVE, passwordHash,
+      }));
+    } catch (error: unknown) {
+      if (error instanceof QueryFailedError && (error.driverError as { code?: string }).code === '23505') {
+        throw new ConflictException('Email or username already exists');
+      }
+      throw error;
+    }
   }
 
   async findById(

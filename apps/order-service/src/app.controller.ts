@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { OrderRepository } from './order.repository';
 import { OrderStatus, OrderType, PaymentMethod, PaymentStatus } from './entities/order.entity';
 import type { StoreOrderCalculationInput } from './calculations/store-order.calculations';
@@ -227,10 +227,15 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
+    @Headers('authorization') authorization?: string,
     @Query('search') search?: string,
     @Query('author') author?: string,
     @Query('created_after') createdAfter?: string,
+    @Headers('x-pch-web-console') webConsole?: string,
   ) {
+    const session = verifyAccessToken(extractBearerToken(authorization));
+    const scoped = webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee');
+    if (scoped && !session.merchantId) throw new ForbiddenException('Merchant scope is required');
     const criteria = this.orderLists.criteria({
       page,
       perPage,
@@ -246,7 +251,7 @@ export class AppController {
     const listed = await this.orderRepository.listOrders({
       ...criteria,
       statuses,
-      merchantId: merchantHeader || undefined,
+      merchantId: scoped ? session.merchantId : merchantHeader || undefined,
       search: search?.trim() || undefined,
       customer: author?.trim() || undefined,
       createdAfter: createdAfterDate,
@@ -316,12 +321,19 @@ export class AppController {
     @Headers('x-store-id') storeHeader?: string,
     @Query('storeId') storeId?: string,
     @Query('store_id') storeIdSnake?: string,
+    @Headers('authorization') authorization?: string,
+    @Headers('x-pch-web-console') webConsole?: string,
   ) {
+    const session = verifyAccessToken(extractBearerToken(authorization));
     if (['completed-orders', 'full-order-refund', 'partial-order-refund', 'get-amt-by-paymethod', 'refund-valid-user', 'health', 'calculations'].includes(id)) {
       throw new NotFoundException(`Endpoint '${id}' not found`);
     }
     const data = await this.orderRepository.getOrderDetails(id, storeHeader || storeId || storeIdSnake);
     if (!data) throw new NotFoundException(`Order '${id}' not found`);
+    if (webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee') &&
+        (!session.merchantId || String(data.order.merchantId).toLowerCase() !== session.merchantId.toLowerCase())) {
+      throw new NotFoundException(`Order '${id}' not found`);
+    }
     const response = this.orderDetails.present(data);
     if (!String(data.storeOrder?.status || data.order.orderStatus || '').toLowerCase().includes('partial')) return response;
     const refunds = await this.orderRepository.getOrderRefunds(data.order.id);
@@ -457,28 +469,23 @@ export class AppController {
         const setMetadata = (key: string, value: unknown) => {
           if (!metadata.some((item) => item?.key === key)) metadata.push({ key, value });
         };
-        const configuredAmount = Number(catalog.amount);
         setMetadata('discount_type', catalog.discount_type || 'fixed_cart');
-        setMetadata(
-          'amount',
-          Number.isFinite(configuredAmount) ? String(configuredAmount) : String(catalog.amount ?? '0'),
-        );
+        if (catalog.amount !== undefined && catalog.amount !== null) {
+          setMetadata('amount', String(catalog.amount));
+        }
         setMetadata('product_ids', Array.isArray(catalog.product_ids) ? catalog.product_ids : []);
         setMetadata(
           'excluded_product_ids',
           Array.isArray(catalog.excluded_product_ids) ? catalog.excluded_product_ids : [],
         );
-        const fallbackDiscount = source.length === 1
-          ? Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0)
-          : 0;
-        const discount = Number.isFinite(configuredAmount)
-          ? configuredAmount
-          : Number(coupon.discount ?? fallbackDiscount);
+        const storedDiscount = coupon.discount ?? coupon.discount_amount;
 
         return {
           ...coupon,
           code,
-          discount: (Number.isFinite(discount) ? discount : 0).toFixed(2),
+          ...(storedDiscount !== undefined && storedDiscount !== null && storedDiscount !== ''
+            ? { discount: Number(storedDiscount).toFixed(2) }
+            : {}),
           discount_tax: Number(coupon.discount_tax || 0).toFixed(2),
           meta_data: metadata,
         };

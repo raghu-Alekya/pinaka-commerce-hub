@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Inject, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Inject, Post, Req } from '@nestjs/common';
 import { CompactMerchantController } from '../../merchant/compact-merchant.controller';
+import { isWebConsoleRequest } from '../../shared/console-access';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 
 type Input = Record<string, unknown>;
@@ -15,10 +16,16 @@ export class SubscriptionPlanChangeController {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   @Post()
-  async change(@Body() body: Input) {
+  async change(@Body() body: Input, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
     const merchantId = String(body?.merchantId || '').trim();
     const planId = String(body?.planId || '').trim();
     if (!merchantId || !planId) throw new BadRequestException('merchantId and planId are required');
+    const user = request?.user;
+    if (isWebConsoleRequest(request) && (user?.accountType === 'merchant' || user?.accountType === 'employee')) {
+      if (![user.merchantId, user.merchantCode].some(value => value?.toLowerCase() === merchantId.toLowerCase())) {
+        throw new ForbiddenException('You can only change your own subscription');
+      }
+    }
 
     const requestedCycle = String(body.billingCycle || 'MONTHLY').trim().toUpperCase();
     const billingCycle = requestedCycle === 'YEARLY' ? 'ANNUAL' : requestedCycle;

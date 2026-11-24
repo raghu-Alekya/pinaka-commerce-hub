@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { RequireAuth } from '../../modules/shared/session-auth.guard';
 import { DiscountService } from './discount.service';
+import { isWebConsoleRequest } from '../../modules/shared/console-access';
 
 @Controller(['api/v1/stores', 'connector/api/v1/stores'])
 @RequireAuth()
@@ -15,7 +16,14 @@ export class DiscountController {
   }
 
   @Post(':storeId/catalog/sync/discounts')
-  sync(@Param('storeId') storeId: string, @Req() request: { user?: { role?: string; storeId?: string } }) {
+  async sync(@Param('storeId') storeId: string, @Req() request: {
+    headers?: { 'x-pch-web-console'?: string };
+    user?: { id?: string; role?: string; storeId?: string; accountType?: string; merchantId?: string };
+  }) {
+    if (isWebConsoleRequest(request) && request.user?.accountType === 'merchant') {
+      const store = await this.discounts.resolveMerchantStore(storeId, request.user);
+      return this.discounts.sync(store.id, 'MERCHANT_ADMIN');
+    }
     this.assertStoreAccess(storeId, request.user);
     return this.discounts.sync(storeId, request.user?.role);
   }
