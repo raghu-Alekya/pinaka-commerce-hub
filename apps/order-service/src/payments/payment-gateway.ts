@@ -361,14 +361,14 @@ const PAYROC_INSTRUCTION_PENDING = new Set(['inprogress', 'in_progress', 'pendin
 const PAYROC_INSTRUCTION_DONE = new Set(['completed', 'complete', 'success', 'successful']);
 const PAYROC_INSTRUCTION_STOP = new Set(['failure', 'failed', 'canceled', 'cancelled', 'declined', 'error']);
 
-/** Stable Payroc Idempotency-Key for one payment attempt. A new attempt needs a new seed. */
+/** Stable Payroc Idempotency-Key for one payment attempt. Payroc accepts only UUID v4. */
 export function payrocIdempotencyKey(seed: string): string {
   const trimmed = seed.trim();
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) {
     return trimmed.toLowerCase();
   }
   const hex = createHash('sha256').update(`payroc:${trimmed}`).digest('hex').slice(0, 32).split('');
-  hex[12] = '5';
+  hex[12] = '4';
   const variant = Number.parseInt(hex[16], 16);
   hex[16] = ((variant & 0x3) | 0x8).toString(16);
   const raw = hex.join('');
