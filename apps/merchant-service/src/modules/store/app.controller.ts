@@ -1409,7 +1409,10 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string } }) {
+    const agent = String(request?.user?.role || '').toUpperCase() === 'AGENT';
+    const assignedRows = agent ? await this.merchantRepository.requireDataSource().query('SELECT id::text AS id FROM public.merchants WHERE agent_user_id=$1', [request?.user?.id]) : [];
+    const assignedMerchantIds = new Set<string>(assignedRows.map((row: { id: string }) => row.id));
     const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
     const consoleMerchant = scoped ? request?.user?.merchantId : undefined;
     if (scoped && !consoleMerchant) throw new ForbiddenException('Merchant scope is required');
@@ -1420,6 +1423,7 @@ export class AppController {
         ? await this.merchantRepository.resolveMerchantUuid(requestedMerchant)
         : await this.merchantRepository.resolveMerchantId(requestedMerchant);
     if (requestedMerchant && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
+    if (agent && requestedMerchant && !assignedMerchantIds.has(String(resolvedMerchantId))) throw new NotFoundException('Merchant not found');
     const [stores, merchants] = await Promise.all([
       this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
@@ -1435,7 +1439,7 @@ export class AppController {
       else throw new NotFoundException('Merchant not found');
     }
     // Listing deliberately excludes activation PINs and channel credentials.
-    const rows = stores.map(s => ({
+    const rows = stores.filter(s => !agent || assignedMerchantIds.has(String(s.merchantId))).map(s => ({
       ...this.toStoreResponse(s),
       id: s.id, storeCode: s.storeCode || s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
       storeName: s.storeName, storeType: s.storeTypeId,

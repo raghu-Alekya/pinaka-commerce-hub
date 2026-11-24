@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
@@ -16,7 +17,7 @@ import {
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
-import { CreatePchUserDto, CreateUserDto, UpdateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdatePchUserDto, UpdateUserDto } from './user.dto';
 import {
   CompletePasswordActionDto,
   CreateAccountDto,
@@ -178,6 +179,41 @@ export class AppController {
   async createPchUser(@Body() dto: CreatePchUserDto, @Headers('authorization') authorization?: string) {
     await this.auth.requirePchAdmin(authorization);
     return { success: true, user: await this.auth.createPchUser(dto) };
+  }
+
+  @Patch('api/v1/pch-users/:id')
+  async updatePchUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdatePchUserDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.auth.requirePchAdmin(authorization);
+    const user = await this.auth.updatePchUser(id, dto);
+    if (!user) throw new NotFoundException(`PCH user '${id}' not found`);
+    return { success: true, user };
+  }
+
+  @Delete('api/v1/pch-users/:id')
+  async disablePchUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor = await this.auth.requirePchAdmin(authorization);
+    if (actor.id === id) throw new BadRequestException('You cannot deactivate your own account');
+    const user = await this.auth.disablePchUser(id);
+    if (!user) throw new NotFoundException(`PCH user '${id}' not found`);
+    return { success: true, user };
+  }
+
+  @Patch('api/v1/pch-users/:id/enable')
+  async enablePchUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.auth.requirePchAdmin(authorization);
+    const user = await this.auth.enablePchUser(id);
+    if (!user) throw new NotFoundException(`PCH user '${id}' not found`);
+    return { success: true, user };
   }
 
   @Get('api/v1/users/:id')

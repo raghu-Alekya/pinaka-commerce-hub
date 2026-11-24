@@ -990,6 +990,12 @@ export class MerchantRepository implements OnModuleInit {
       await this.dataSource.query(
         'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
       );
+      await this.dataSource.query(
+        'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS agent_user_id uuid NULL',
+      );
+      await this.dataSource.query(
+        'CREATE INDEX IF NOT EXISTS merchants_agent_user_id_idx ON public.merchants(agent_user_id) WHERE agent_user_id IS NOT NULL',
+      );
       const legacyPasswords = await this.dataSource.query(
         `SELECT id, actual_password FROM public.merchants
          WHERE actual_password IS NOT NULL AND actual_password <> ''

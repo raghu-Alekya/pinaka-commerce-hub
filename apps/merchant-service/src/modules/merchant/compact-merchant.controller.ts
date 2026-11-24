@@ -59,6 +59,7 @@ const fields = [
   'paymentMethod',
   'autoRenew',
   'createdBy',
+  'agentUserId',
 ] as const;
 const required = [
   'merchantName',
@@ -84,7 +85,7 @@ const removed = [
   'merchantId',
 ] as const;
 type Input = Record<string, unknown>;
-type ActorRequest = { user?: { id?: string } };
+type ActorRequest = { user?: { id?: string; role?: string } };
 const actorUuid =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -162,6 +163,7 @@ export class CompactMerchantController {
     if (input.password !== undefined && (typeof input.password !== 'string' || !input.password.trim() || input.password.length > 128)) {
       throw new BadRequestException('password must be a non-empty string of at most 128 characters');
     }
+    if (input.agentUserId != null && !actorUuid.test(String(input.agentUserId))) throw new BadRequestException('agentUserId must be a UUID');
     const allowed = new Set<string>(fields);
     const blocked = removed.filter((key) =>
       Object.prototype.hasOwnProperty.call(input, key),
@@ -287,6 +289,16 @@ export class CompactMerchantController {
     );
     if (!row) throw new NotFoundException('Merchant not found');
     return this.showMerchantCode(row);
+  }
+
+  private async validateAgentAssignment(agentUserId: unknown): Promise<void> {
+    if (agentUserId == null || agentUserId === '') return;
+    const [agent] = await this.db.query(
+      `SELECT id FROM public.users WHERE id::text=$1 AND upper(role)='AGENT' AND upper(status)='ACTIVE'
+       AND account_id IS NULL AND merchant_id IS NULL AND employee_id IS NULL LIMIT 1`,
+      [String(agentUserId)],
+    );
+    if (!agent) throw new BadRequestException('Select an active PCH agent');
   }
 
   private dateOnly(value: unknown) {
@@ -524,6 +536,11 @@ export class CompactMerchantController {
   async create(@Body() body: Input, @Req() request?: ActorRequest) {
     const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, true);
+    if (String(request?.user?.role || '').toUpperCase() === 'AGENT') {
+      input.agentUserId = request?.user?.id;
+      input.createdBy = request?.user?.id;
+    }
+    await this.validateAgentAssignment(input.agentUserId);
     const createdBy = actorId(input, request?.user?.id);
     let savedId = '';
     try {
@@ -543,6 +560,7 @@ export class CompactMerchantController {
         const rowId = randomUUID();
         savedId = rowId;
         setCol('id', rowId);
+        setCol('agent_user_id', input.agentUserId || null);
         if (input.password !== undefined) {
           const passwordHash = await this.hashMerchantPassword(input.password);
           setCol('password', passwordHash);
@@ -717,7 +735,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -795,11 +813,14 @@ export class CompactMerchantController {
     }
   }
 
-  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const agent = String(request?.user?.role || '').toUpperCase() === 'AGENT';
     const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
     const merchantId = scoped ? request?.user?.merchantId : undefined;
     const merchantCode = request?.user?.merchantCode;
-    const visible = scoped
+    const visible = agent
+      ? rows.filter((row) => String(((row.merchant || {}) as Input).agent_user_id || ((row.merchant || {}) as Input).agentUserId || '') === String(request?.user?.id || ''))
+      : scoped
       ? rows.filter((row) => {
           const merchant = (row.merchant || {}) as Input;
           return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
@@ -949,9 +970,10 @@ export class CompactMerchantController {
   }
 
   @Get(':id')
-  async get(@Param('id') id: string) {
+  async get(@Param('id') id: string, @Req() request?: { user?: { id?: string; role?: string } }) {
     const record = await this.getRecord(id);
     const merchant = record.merchant;
+    if (String(request?.user?.role || '').toUpperCase() === 'AGENT' && String(merchant?.agent_user_id || merchant?.agentUserId || '') !== String(request?.user?.id || '')) throw new NotFoundException('Merchant not found');
     if (merchant && typeof merchant === 'object') {
       const [saved] = await this.db.query('SELECT actual_password FROM public.merchants WHERE id=$1', [merchant.id]);
       if (saved?.actual_password) {
@@ -1011,6 +1033,8 @@ export class CompactMerchantController {
   ) {
     const requestedStoreTypeId = storeTypeIdFromPlan(body);
     const input = this.validate(body, false);
+    if (String(request?.user?.role || '').toUpperCase() === 'AGENT') input.agentUserId = request?.user?.id;
+    await this.validateAgentAssignment(input.agentUserId);
     const createdBy = actorId(input, request?.user?.id);
     if (createdBy) input.createdBy = createdBy;
     if (!Object.keys(input).length)
@@ -1145,6 +1169,7 @@ export class CompactMerchantController {
           input.pinCode ?? existing.postalCode ?? existing.pinCode,
         );
         setCol('country', input.country ?? existing.country);
+        setCol('agent_user_id', input.agentUserId !== undefined ? input.agentUserId : existing.agent_user_id ?? null);
         let previousPlanId: string | undefined;
         if (input.planId !== undefined) {
           const currentPlanId =

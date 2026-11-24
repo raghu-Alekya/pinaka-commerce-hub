@@ -54,6 +54,9 @@ export class MerchantEntity {
   })
   merchantId!: string;
 
+  @Column({ name: 'agent_user_id', type: 'uuid', nullable: true })
+  agentUserId?: string | null;
+
   // =========================================================
   // MERCHANT DETAILS
   // =========================================================

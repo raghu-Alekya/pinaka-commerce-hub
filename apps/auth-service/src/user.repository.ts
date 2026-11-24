@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   OnModuleDestroy,
@@ -7,7 +8,7 @@ import {
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { SessionEntity } from '@pinaka-delivery-hub/auth';
-import { CreatePchUserDto, CreateUserDto, UpdateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdatePchUserDto, UpdateUserDto } from './user.dto';
 import { AccountEntity } from './account.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
@@ -31,6 +32,9 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
     if (createdTables.length) {
       console.log(`🐘 [Auth PostgreSQL] Created missing tables: ${createdTables.join(', ')}`);
     }
+    await this.dataSource.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS username varchar(100)');
+    await this.dataSource.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS actual_password text');
+    await this.dataSource.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_uq ON public.users (lower(username)) WHERE NULLIF(btrim(username), '') IS NOT NULL");
     this.repository = this.dataSource.getRepository(UserEntity);
     this.accountRepository = this.dataSource.getRepository(AccountEntity);
     this.refreshTokenRepository =
@@ -52,13 +56,15 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
 
   async findAllPch(): Promise<UserEntity[]> {
     return this.repository.createQueryBuilder('user')
-      .where('user.merchantId IS NULL')
+      .addSelect('user.actualPassword')
+      .where('user.accountId IS NULL')
+      .andWhere('user.merchantId IS NULL')
       .andWhere('user.employeeId IS NULL')
       .andWhere('user.role IN (:...roles)', { roles: [UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.AGENT] })
       .orderBy('user.createdAt', 'DESC').getMany();
   }
 
-  async createPch(dto: CreatePchUserDto, passwordHash: string): Promise<UserEntity> {
+  async createPch(dto: CreatePchUserDto, passwordHash: string, actualPassword: string): Promise<UserEntity> {
     if (await this.repository.createQueryBuilder('user').where('lower(user.email) = lower(:email)', { email: dto.email }).getExists()) {
       throw new ConflictException(`A user with email '${dto.email}' already exists`);
     }
@@ -70,7 +76,7 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       return await this.repository.save(this.repository.create({
         firstName: dto.first_name, lastName: dto.last_name, username,
         email: dto.email, phoneNumber: dto.phone_number, role: dto.role,
-        status: UserStatus.ACTIVE, passwordHash,
+        status: UserStatus.ACTIVE, passwordHash, actualPassword,
       }));
     } catch (error: unknown) {
       if (error instanceof QueryFailedError && (error.driverError as { code?: string }).code === '23505') {
@@ -78,6 +84,86 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       }
       throw error;
     }
+  }
+
+  private pchUser(id: string) {
+    return this.repository.createQueryBuilder('user')
+      .where('user.id = :id', { id })
+      .andWhere('user.accountId IS NULL')
+      .andWhere('user.merchantId IS NULL')
+      .andWhere('user.employeeId IS NULL')
+      .andWhere('user.role IN (:...roles)', { roles: [UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.AGENT] });
+  }
+
+  async pchActualPassword(id: string): Promise<string | null | undefined> {
+    const user = await this.pchUser(id).addSelect('user.actualPassword').getOne();
+    return user?.actualPassword;
+  }
+
+  async updatePch(id: string, dto: Omit<UpdatePchUserDto, 'password'>, passwordHash?: string, actualPassword?: string): Promise<UserEntity | null> {
+    const user = await this.pchUser(id).getOne();
+    if (!user) return null;
+    const email = dto.email?.toLowerCase();
+    const username = dto.username?.trim();
+    if (email && email !== user.email.toLowerCase() && await this.repository.createQueryBuilder('other')
+      .where('lower(other.email) = :email AND other.id <> :id', { email, id }).getExists()) {
+      throw new ConflictException(`A user with email '${email}' already exists`);
+    }
+    if (username && username.toLowerCase() !== user.username?.toLowerCase() && await this.repository.createQueryBuilder('other')
+      .where('lower(other.username) = lower(:username) AND other.id <> :id', { username, id }).getExists()) {
+      throw new ConflictException(`A user with username '${username}' already exists`);
+    }
+    const credentialsChanged = Boolean(passwordHash || (email && email !== user.email.toLowerCase()) || (dto.role && dto.role !== user.role));
+    Object.assign(user, {
+      ...(dto.first_name !== undefined ? { firstName: dto.first_name } : {}),
+      ...(dto.last_name !== undefined ? { lastName: dto.last_name } : {}),
+      ...(username !== undefined ? { username } : {}),
+      ...(dto.phone_number !== undefined ? { phoneNumber: dto.phone_number } : {}),
+      ...(email !== undefined ? { email } : {}),
+      ...(dto.role !== undefined ? { role: dto.role } : {}),
+      ...(passwordHash !== undefined ? { passwordHash } : {}),
+      ...(actualPassword !== undefined ? { actualPassword } : {}),
+    });
+    try {
+      return await this.dataSource.transaction(async manager => {
+        const saved = await manager.getRepository(UserEntity).save(user);
+        if (credentialsChanged) {
+          const revokedAt = new Date();
+          await manager.getRepository(SessionEntity).update({ userId: id }, { revokedAt });
+          await manager.getRepository(RefreshTokenEntity).update({ userId: id }, { revokedAt });
+        }
+        return saved;
+      });
+    } catch (error: unknown) {
+      if (error instanceof QueryFailedError && (error.driverError as { code?: string }).code === '23505') {
+        throw new ConflictException('Email or username already exists');
+      }
+      throw error;
+    }
+  }
+
+  async disablePch(id: string): Promise<UserEntity | null> {
+    const user = await this.pchUser(id).getOne();
+    if (!user) return null;
+    return this.dataSource.transaction(async manager => {
+      user.status = UserStatus.DISABLED;
+      const saved = await manager.getRepository(UserEntity).save(user);
+      const revokedAt = new Date();
+      await manager.getRepository(SessionEntity).update({ userId: id }, { revokedAt });
+      await manager.getRepository(RefreshTokenEntity).update({ userId: id }, { revokedAt });
+      return saved;
+    });
+  }
+
+  async enablePch(id: string): Promise<UserEntity | null> {
+    const user = await this.pchUser(id).getOne();
+    if (!user) return null;
+    if (user.status === UserStatus.PENDING) throw new BadRequestException('Pending users cannot be enabled with this action');
+    if (user.status !== UserStatus.ACTIVE) {
+      user.status = UserStatus.ACTIVE;
+      return this.repository.save(user);
+    }
+    return user;
   }
 
   async findById(
@@ -226,9 +312,11 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
   async activateWithPassword(
     user: UserEntity,
     passwordHash: string,
+    actualPassword?: string,
   ): Promise<UserEntity> {
     user.status = UserStatus.ACTIVE;
     user.passwordHash = passwordHash;
+    if (actualPassword !== undefined) user.actualPassword = actualPassword;
     user.actionTokenHash = null;
     user.actionTokenType = null;
     user.actionTokenExpiresAt = null;
