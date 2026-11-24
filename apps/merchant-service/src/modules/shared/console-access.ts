@@ -5,6 +5,7 @@ export type ConsoleGrant = { menuKey: string; actions: string[] };
 /** Modules a merchant console account can administer. Platform master data is not included. */
 export const MERCHANT_MODULES = [
   'dashboard',
+  'merchants',
   'stores',
   'subscriptions',
   'pos-configuration',
@@ -28,6 +29,7 @@ export const MERCHANT_MODULES = [
 
 export const MODULE_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
+  merchants: 'Merchants',
   stores: 'Stores',
   subscriptions: 'Subscriptions',
   'pos-configuration': 'POS Configurations',
@@ -49,7 +51,7 @@ export const MODULE_LABELS: Record<string, string> = {
   'access-permissions': 'Access & Permissions',
 };
 
-const VIEW_ONLY = new Set(['dashboard']);
+const VIEW_ONLY = new Set(['dashboard', 'merchants']);
 const RESERVED_MERCHANT_SEGMENTS = new Set(['employees', 'create-merchant']);
 
 const MODULE_RULES: { pattern: RegExp; module: string }[] = [
@@ -72,6 +74,7 @@ const MODULE_RULES: { pattern: RegExp; module: string }[] = [
   { pattern: /\/devices(\/|$)/i, module: 'devices' },
   { pattern: /\/stores(\/|$)/i, module: 'stores' },
   { pattern: /\/subscriptions(\/|$)/i, module: 'subscriptions' },
+  { pattern: /\/merchants(\/|$)/i, module: 'merchants' },
   { pattern: /cash-management|cash_management/i, module: 'cash-management' },
 ];
 
@@ -100,6 +103,10 @@ export function actionForMethod(method?: string): ConsoleAction {
 
 export function requestPath(request: { originalUrl?: string; url?: string; path?: string }): string {
   return String(request.originalUrl || request.url || request.path || '').split('?')[0];
+}
+
+export function isWebConsoleRequest(request?: { headers?: Record<string, string | undefined> }): boolean {
+  return request?.headers?.['x-pch-web-console'] === '1';
 }
 
 export function isProfilePath(path: string): boolean {

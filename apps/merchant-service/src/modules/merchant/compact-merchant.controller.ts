@@ -28,6 +28,7 @@ import { SubscriptionPlanChangeController } from '../master/plans/subscription-p
 import { MerchantRepository } from './merchant.repository';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { decryptMerchantPassword, encryptMerchantPassword } from './merchant-password-crypto';
+import { isWebConsoleRequest } from '../shared/console-access';
 
 const fields = [
   'password',
@@ -82,6 +83,18 @@ const removed = [
   'merchantCode',
   'merchantId',
 ] as const;
+// Plan and period details are returned for display, but are derived from the
+// selected plan/subscription and are not editable merchant fields. Older
+// clients echo these values back when saving a merchant, so discard them
+// before applying the strict editable-field allowlist below.
+const readOnlySubscriptionFields = [
+  'planCode',
+  'planName',
+  'maxStoresAllowed',
+  'trialDays',
+  'currentPeriodStart',
+  'currentPeriodEnd',
+] as const;
 type Input = Record<string, unknown>;
 type ActorRequest = { user?: { id?: string } };
 const actorUuid =
@@ -116,6 +129,7 @@ export class CompactMerchantController {
   private validate(input: Input, create: boolean): Input {
     if (!input || typeof input !== 'object' || Array.isArray(input))
       throw new BadRequestException('Provide a merchant object');
+    for (const key of readOnlySubscriptionFields) delete input[key];
     if (input.ein !== undefined) {
       if (input.taxId !== undefined && input.taxId !== input.ein)
         throw new BadRequestException('Supply either ein or taxId, not conflicting values');
@@ -716,7 +730,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list(@Req() request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -794,23 +808,29 @@ export class CompactMerchantController {
     }
   }
 
-  private merchantListResponse(rows: Input[], request?: { user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
-    const merchantId = request?.user?.accountType ? request.user.merchantId : undefined;
+  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
+    const merchantId = scoped ? request?.user?.merchantId : undefined;
     const merchantCode = request?.user?.merchantCode;
-    const visible = merchantId
+    const visible = scoped
       ? rows.filter((row) => {
           const merchant = (row.merchant || {}) as Input;
           return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
             .some((value) => {
               const text = String(value || '');
-              return text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase());
+              return Boolean(text) && (text === merchantId || Boolean(merchantCode && text.toLowerCase() === merchantCode.toLowerCase()));
             });
         })
       : rows;
     return {
       success: true,
       count: visible.length,
-      merchants: visible.map((row) => this.showMerchantCode(row)),
+      merchants: visible.map((row) => {
+        const merchant = { ...((row.merchant || {}) as Input) };
+        delete merchant.password;
+        delete merchant.actual_password;
+        return this.showMerchantCode({ ...row, merchant });
+      }),
     };
   }
 

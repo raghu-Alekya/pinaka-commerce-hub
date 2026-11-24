@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Inject,
   NotFoundException,
@@ -22,9 +23,10 @@ import { MerchantEntity } from "../../entities/merchant.entity";
 import { DeviceEntity } from "../../entities/device.entity";
 import { RecordStatus } from "../../entities/commerce-enums";
 import { RequireAuth } from "../shared/session-auth.guard";
+import { isWebConsoleRequest } from '../shared/console-access';
 import { DeviceService } from './device.service';
 
-type AuthenticatedRequest = { user?: { id?: string } };
+type AuthenticatedRequest = { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; accountType?: string; merchantId?: string; merchantCode?: string } };
 
 @Controller(["api/v1/devices", "connector/api/v1/devices", "devices"])
 export class DeviceController {
@@ -50,6 +52,7 @@ export class DeviceController {
     const merchant = await this.service.findDeviceMerchant(merchantIdentifier);
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.id;
+    this.assertMerchant(request, merchantId);
     const deviceName = body.device_name || body.deviceName || "POS Terminal";
     const deviceType = body.device_type || body.deviceType || "POS Terminal";
     const rawSerialNumber = (
@@ -83,7 +86,12 @@ export class DeviceController {
   }
 
   @Get()
-  async list(@Query() query: Record<string, string | undefined>) {
+  async list(@Query() query: Record<string, string | undefined>, @Req() request: AuthenticatedRequest) {
+    const scopedMerchantId = this.scopedMerchantId(request);
+    if (scopedMerchantId && query.merchant_id) {
+      const requested = await this.service.findDeviceMerchant(query.merchant_id);
+      this.assertMerchant(request, requested?.id);
+    }
     const page = this.positiveInt(query.page, 1, "page");
     const limit = this.positiveInt(query.limit, 10, "limit");
     if (limit > 100) throw new BadRequestException("limit must not exceed 100");
@@ -107,13 +115,13 @@ export class DeviceController {
           page,
           limit,
           search: query.search?.trim() || undefined,
-          merchantId: query.merchant_id,
+          merchantId: scopedMerchantId || query.merchant_id,
           deviceType: query.device_type,
           status,
           from,
           to,
         })
-      : await this.service.listDevices().then(devices => ({
+      : await (scopedMerchantId ? this.service.listDevicesByMerchantId(scopedMerchantId) : this.service.listDevices()).then(devices => ({
           devices,
           total: devices.length,
           summary: devices.reduce((counts, device) => {
@@ -164,10 +172,11 @@ export class DeviceController {
   }
 
   @Get("merchant/:merchant_id")
-  async listByMerchant(@Param("merchant_id") merchantIdentifier: string) {
+  async listByMerchant(@Param("merchant_id") merchantIdentifier: string, @Req() request: AuthenticatedRequest) {
     const merchant = await this.service.findDeviceMerchant(merchantIdentifier);
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.id;
+    this.assertMerchant(request, merchantId);
     const devices = await this.service.listDevicesByMerchantId(merchantId);
     const storeMap = await this.service.getStoreMappingsForDevices(devices.map((d) => d.id));
     return {
@@ -187,7 +196,8 @@ export class DeviceController {
   }
 
   @Get("available")
-  async listAvailableByMerchant(@Query("merchant_id", new ParseUUIDPipe()) merchantUuid: string) {
+  async listAvailableByMerchant(@Query("merchant_id", new ParseUUIDPipe()) merchantUuid: string, @Req() request: AuthenticatedRequest) {
+    this.assertMerchant(request, merchantUuid);
     const devices = await this.service.findAvailableDevicesByMerchant(merchantUuid);
     if (!devices) throw new NotFoundException("Merchant not found");
     return {
@@ -197,9 +207,10 @@ export class DeviceController {
   }
 
   @Get(":device_id")
-  async get(@Param("device_id", new ParseUUIDPipe()) deviceId: string) {
+  async get(@Param("device_id", new ParseUUIDPipe()) deviceId: string, @Req() request: AuthenticatedRequest) {
     const device = await this.service.getDevice(deviceId);
     if (!device) throw new NotFoundException("Device not found");
+    this.assertMerchant(request, device.merchantId);
     const merchants = await this.service.getAllMerchants();
     const storeMap = await this.service.getStoreMappingsForDevices([device.id]);
     const storeInfo = storeMap.get(device.id);
@@ -237,12 +248,14 @@ export class DeviceController {
     const actor = this.auditUser(request);
     const current = await this.service.getDevice(deviceId);
     if (!current) throw new NotFoundException("Device not found");
+    this.assertMerchant(request, current.merchantId);
     if (!Object.keys(body).length)
       throw new BadRequestException("Provide at least one field to update");
     const requestedMerchantId = body.merchant_id ?? current.merchantId;
     const merchant = await this.service.findDeviceMerchant(requestedMerchantId);
     if (!merchant) throw new NotFoundException("Merchant not found");
     const merchantId = merchant.id;
+    this.assertMerchant(request, merchantId);
     const updated = await this.service.updateDevice(deviceId, {
       deviceName: body.device_name ?? current.deviceName,
       deviceType: body.device_type ?? current.deviceType,
@@ -286,6 +299,9 @@ export class DeviceController {
   @Delete(":device_id")
   @RequireAuth()
   async remove(@Param("device_id", new ParseUUIDPipe()) deviceId: string, @Req() request: AuthenticatedRequest) {
+    const current = await this.service.getDevice(deviceId);
+    if (!current) throw new NotFoundException("Device not found");
+    this.assertMerchant(request, current.merchantId);
     if (!(await this.service.deleteDevice(deviceId, this.auditUser(request))))
       throw new NotFoundException("Device not found");
     return { success: true, message: "Device deleted" };
@@ -327,6 +343,21 @@ export class DeviceController {
       throw new UnauthorizedException("Authenticated user UUID is unavailable");
     }
     return id;
+  }
+
+  private scopedMerchantId(request: AuthenticatedRequest): string | undefined {
+    const user = request.user;
+    if (!isWebConsoleRequest(request)) return undefined;
+    if (user?.accountType !== 'merchant' && user?.accountType !== 'employee') return undefined;
+    if (!user.merchantId) throw new ForbiddenException('Merchant session is missing its merchant ID');
+    return user.merchantId;
+  }
+
+  private assertMerchant(request: AuthenticatedRequest, merchantId?: string): void {
+    const scoped = this.scopedMerchantId(request);
+    if (scoped && (!merchantId || scoped.toLowerCase() !== merchantId.toLowerCase())) {
+      throw new ForbiddenException('You can only access your own devices');
+    }
   }
 
   private positiveInt(

@@ -228,7 +228,7 @@ class StoreInputDto extends AuditInputDto {
   @IsArray()
   @ArrayMaxSize(100)
   @IsObject({ each: true })
-  rolePermissions?: Record<string, unknown>[];
+  role_permissions?: Record<string, unknown>[];
 
   @IsOptional()
   @IsArray()
@@ -408,7 +408,7 @@ export class UpdateStoreDto extends AuditInputDto {
   @IsArray()
   @ArrayMaxSize(100)
   @IsObject({ each: true })
-  rolePermissions?: Record<string, unknown>[];
+  role_permissions?: Record<string, unknown>[];
 
   @IsOptional()
   @IsArray()

@@ -20,6 +20,17 @@ import {
 import type { RelationshipRequest } from '../../shared/relationships.controller';
 import { RelationshipsRepository } from '../../shared/relationships.repository';
 
+function snakeCaseResponse(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snakeCaseResponse);
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`),
+      snakeCaseResponse(nested),
+    ]),
+  );
+}
+
 const roleTemplateStoreTypes = RELATIONSHIPS.find(
   (config) => config.name === 'RoleTemplateStoreTypes',
 )!;
@@ -133,10 +144,11 @@ export class RoleTemplateFeatureAccessController {
   ) {}
 
   @Get()
-  list(
+  async list(
     @Param('roleTemplateId') roleTemplateId: string,
     @Query() query: Record<string, string | string[]>,
   ) {
-    return this.relationships.listRoleTemplateAccess(roleTemplateId, query);
+    const result = await this.relationships.listRoleTemplateAccess(roleTemplateId, query);
+    return snakeCaseResponse(result);
   }
 }
