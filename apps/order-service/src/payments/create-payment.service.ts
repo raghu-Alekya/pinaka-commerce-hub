@@ -16,6 +16,7 @@ import { logPayrocPayment, payrocPaymentLogPath } from './payment-log';
 import {
   isPhpEmpty,
   payrocCardTerminalDeviceId,
+  payrocEnvironmentEndpoints,
   payrocIdempotencyKey,
   payrocOrderReference,
   readPaymentAmount,
@@ -168,12 +169,22 @@ export class CreatePaymentService {
     if (resolved.gateway === 'offline') {
       return this.recordCaptured(tender, { provider: null, transactionId: '', details: null });
     }
-    if (resolved.gateway === 'payroc' && isEbtMethod(tender.paymentMethod) && !resolved.credentials.deviceId) {
-      throw new BadRequestException('Payroc device ID is required');
+    let credentials = resolved.credentials;
+    if (resolved.gateway === 'payroc') {
+      const endpoints = payrocEnvironmentEndpoints(configuration);
+      if (!endpoints.ok) throw new BadRequestException(endpoints.message);
+      credentials = {
+        ...credentials,
+        payrocEnvironment: endpoints.environment,
+        payrocIdentityUrl: endpoints.identityUrl,
+        payrocApiOrigin: endpoints.apiOrigin,
+      };
+      if (isEbtMethod(tender.paymentMethod)) {
+        if (!credentials.deviceId) throw new BadRequestException('Payroc device ID is required');
+      } else {
+        credentials = await this.payrocCredentialsForOrder(tender, configuration, credentials);
+      }
     }
-    const credentials = resolved.gateway === 'payroc' && !isEbtMethod(tender.paymentMethod)
-      ? await this.payrocCredentialsForOrder(tender, configuration, resolved.credentials)
-      : resolved.credentials;
 
     const localId = attemptLocalId(body, context.idempotencyKey);
     const payable = await this.payableTotal(tender.order);
@@ -262,8 +273,12 @@ export class CreatePaymentService {
       || ids.find((id) => /^[0-9a-f]{32}$/i.test(id))
       || '';
     const paymentId = ids.find((id) => id !== instructionId) || '';
+    const endpoints = payrocEnvironmentEndpoints(configuration);
+    if (!endpoints.ok) throw new BadRequestException(endpoints.message);
     const outcome = await this.gateways.continuePayroc({
       secretKey: resolved.credentials.secretKey,
+      identityUrl: endpoints.identityUrl,
+      apiOrigin: endpoints.apiOrigin,
       ...(instructionId ? { instructionId } : {}),
       ...(paymentId ? { paymentId } : {}),
     });
@@ -355,9 +370,14 @@ export class CreatePaymentService {
     const localId = String(attempt.local_id || '');
     const instructionId = textOf(attempt.provider_transaction_id)
       || textOf(metadataRecord(attempt.metadata).payment_instruction_id);
+    if (!credentials.payrocIdentityUrl || !credentials.payrocApiOrigin) {
+      throw new BadRequestException('Payroc environment is required');
+    }
     if (instructionId && gatewayAlreadySubmitted(attempt)) {
       return this.gateways.continuePayroc({
         secretKey: credentials.secretKey,
+        identityUrl: credentials.payrocIdentityUrl,
+        apiOrigin: credentials.payrocApiOrigin,
         instructionId,
       });
     }
@@ -366,12 +386,18 @@ export class CreatePaymentService {
       storeId: tender.order.store_id,
       cardTerminalDeviceId: credentials.deviceId,
       terminalId: credentials.terminalId,
+      payrocEnvironment: credentials.payrocEnvironment,
+      identityUrl: credentials.payrocIdentityUrl,
+      apiOrigin: credentials.payrocApiOrigin,
+      storeDeviceActivationKey: credentials.storeDeviceActivationKey,
     });
     return this.gateways.chargePayroc({
       deviceId: credentials.deviceId,
       terminalId: credentials.terminalId,
       secretKey: credentials.secretKey,
       processorMerchantId: credentials.processorMerchantId,
+      identityUrl: credentials.payrocIdentityUrl,
+      apiOrigin: credentials.payrocApiOrigin,
       amount: tender.amount,
       currency: String(tender.order.currency || 'USD'),
       orderId: payrocOrderReference(body.order_id, tender.order.client_order_id, tender.order.order_id),
@@ -534,6 +560,8 @@ export class CreatePaymentService {
       gateway_device_id: credentials?.deviceId || undefined,
       terminal_id: credentials?.terminalId || undefined,
       processor_merchant_id: credentials?.processorMerchantId || undefined,
+      payroc_environment: credentials?.payrocEnvironment || undefined,
+      store_device_activation_key: credentials?.storeDeviceActivationKey || undefined,
       ...(deviceId ? {} : { device_id_missing_source: true }),
       source_payload: {
         order_id: tender.requestedOrderId,
@@ -617,8 +645,13 @@ export class CreatePaymentService {
       posDeviceId: posDevice.posDeviceId,
       deviceCode: mapped.deviceCode,
       cardTerminalDeviceId: mapped.cardTerminalDeviceId,
+      storeDeviceActivationKey: mapped.storeDeviceActivationKey,
     });
-    return { ...credentials, deviceId: mapped.cardTerminalDeviceId };
+    return {
+      ...credentials,
+      deviceId: mapped.cardTerminalDeviceId,
+      storeDeviceActivationKey: mapped.storeDeviceActivationKey,
+    };
   }
 
   /**
@@ -630,9 +663,15 @@ export class CreatePaymentService {
     tender: TenderInput,
     configuration: unknown,
     posDeviceId: string,
-  ): Promise<{ deviceCode: string; cardTerminalDeviceId: string }> {
+  ): Promise<{ deviceCode: string; cardTerminalDeviceId: string; storeDeviceActivationKey: string }> {
     const direct = payrocCardTerminalDeviceId(configuration, posDeviceId);
-    if (direct.ok) return { deviceCode: posDeviceId, cardTerminalDeviceId: direct.cardTerminalDeviceId };
+    if (direct.ok) {
+      return {
+        deviceCode: posDeviceId,
+        cardTerminalDeviceId: direct.cardTerminalDeviceId,
+        storeDeviceActivationKey: direct.storeDeviceActivationKey,
+      };
+    }
     if (!direct.message.startsWith('No Payroc terminal is mapped')) {
       this.rejectMapping(tender, posDeviceId, direct.message);
     }
@@ -643,7 +682,13 @@ export class CreatePaymentService {
     if (codes.length === 1 && codes[0] !== posDeviceId) {
       const mapped = payrocCardTerminalDeviceId(configuration, codes[0]);
       if (!mapped.ok) this.rejectMapping(tender, posDeviceId, mapped.message, codes[0]);
-      if (mapped.ok) return { deviceCode: codes[0], cardTerminalDeviceId: mapped.cardTerminalDeviceId };
+      if (mapped.ok) {
+        return {
+          deviceCode: codes[0],
+          cardTerminalDeviceId: mapped.cardTerminalDeviceId,
+          storeDeviceActivationKey: mapped.storeDeviceActivationKey,
+        };
+      }
     }
     this.rejectMapping(tender, posDeviceId, direct.message);
   }
