@@ -408,6 +408,17 @@ function itemDiscountParts(line: PosLineItem, places: number): { auto: number; m
   return { auto: shared, multipack: multipackKey, mix: mixKey };
 }
 
+/** Automatic, multipack, and mix-and-match amounts stored on the line. A merchant source is not included. */
+export function recognizedItemDiscountMinor(line: PosLineItem, places = 2): number {
+  const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  const source = String(
+    metadata.find((item) => item?.key === '_pos_discount_source' || item?.key === 'pos_discount_source')?.value || '',
+  ).trim().toLowerCase();
+  if (source === 'merchant' || source === 'merchant_discount' || source === 'pos_discount') return 0;
+  const parts = itemDiscountParts(line, places);
+  return parts.auto + parts.multipack + parts.mix;
+}
+
 function saleLineRate(line: PosLineItem): number {
   if (!isTaxableSaleLine(line)) return 0;
   const taxes = Array.isArray(line.taxes) ? line.taxes : [];

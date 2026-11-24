@@ -1,6 +1,7 @@
 import {
   fromMinor,
   isMerchandiseLine,
+  recognizedItemDiscountMinor,
   toMinor,
   type PosFeeLine,
   type PosLineItem,
@@ -272,7 +273,12 @@ export function merchantDiscountCoverage(
   });
 
   const lineReduction = Math.max(0, subtotalMinor - payableMinor);
-  const unrecorded = Math.max(0, lineReduction - recordedStore - recordedMerchant);
+  const itemMinor = lines
+    .filter((line) => isMerchandiseLine(line))
+    .reduce((sum, line) => sum + recognizedItemDiscountMinor(line, places), 0);
+  // The line gap already contains automatic, multipack, and mix-and-match
+  // discounts. Only the remainder can be an unrecorded merchant discount.
+  const unrecorded = Math.max(0, lineReduction - recordedStore - recordedMerchant - itemMinor);
   const merchantMinor = recordedMerchant + unrecorded;
   const remainingMinor = Math.max(0, subtotalMinor - merchantMinor);
   return {
