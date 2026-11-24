@@ -262,40 +262,14 @@ export function feeLinesForCalculation(
     : feeLines;
 }
 
-function promotionMinor(lineItems: PosLineItem[] = [], places = 2): number {
-  return lineItems.filter(isMerchandiseLine).reduce((sum, line) => {
-    const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
-    const amount = metadata.find((entry) => entry?.key === '_pos_auto_discount')?.value;
-    return sum + Math.max(0, toMinor(amount ?? 0, places));
-  }, 0);
-}
-
-function couponRuleMinor(coupon: PosCouponLine, places: number): number {
-  const record = coupon as PosCouponLine & { amount?: unknown; meta_data?: Array<{ key?: string; value?: unknown }> };
-  const metadata = Array.isArray(record.meta_data) ? record.meta_data : [];
-  const metaAmount = metadata.find((entry) => entry?.key === 'amount')?.value;
-  return Math.max(0, toMinor(record.amount ?? metaAmount ?? 0, places));
-}
-
-/**
- * The POS gross total already includes the automatic discount.
- * A coupon figure equal to that automatic discount plus the merchant
- * discount must not be applied again. The coupon rule amount is the
- * coupon still to take off the gross total.
- */
+/** The coupon amount sent on the order. It is not compared with other discounts. */
 export function couponToApply(
   lineItems: PosLineItem[] = [],
   couponLines: PosCouponLine[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
 ): number {
-  const stated = toMinor(authoritativeCouponDiscount(couponLines, feeLines, places, lineItems), places);
-  const bundle = promotionMinor(lineItems, places) + merchantDiscountMinor(feeLines, places);
-  if (!(bundle > 0) || Math.abs(stated - bundle) > 1) return fromMinor(stated, places);
-  const rule = couponLines
-    .map((coupon) => couponRuleMinor(coupon, places))
-    .find((amount) => amount > 0 && Math.abs(amount - bundle) > 1);
-  return fromMinor(rule ?? 0, places);
+  return authoritativeCouponDiscount(couponLines, feeLines, places, lineItems);
 }
 
 type SaleLine = PosLineItem & {
@@ -474,25 +448,6 @@ export function applyPosSaleCalculation(
       entry.line.taxes = [{ id: rate, rate_percent: rate, total: taxText, subtotal: taxText }];
     }
   });
-
-  if (Math.abs(toMinor(authoritativeCouponDiscount(coupons, fees, places), places) - couponApplied) > 1) {
-    let written = false;
-    coupons.forEach((coupon) => {
-      if (!written) {
-        coupon.discount = fromMinor(couponApplied, places).toFixed(places);
-        written = true;
-      } else {
-        coupon.discount = fromMinor(0, places).toFixed(places);
-      }
-    });
-  }
-  if (Array.isArray(sourcePayload.fee_lines)) {
-    sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee) => (
-      isCouponDiscountFee(fee)
-        ? { ...fee, total: (-fromMinor(couponApplied, places)).toFixed(places) }
-        : fee
-    ));
-  }
 
   const otherMinor = lines.reduce((sum, line) => (
     isMerchandiseLine(line) ? sum : sum + toMinor(line.total ?? line.subtotal ?? 0, places)
