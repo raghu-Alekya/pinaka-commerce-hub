@@ -81,6 +81,18 @@ const removed = [
   'merchantCode',
   'merchantId',
 ] as const;
+// Plan and period details are returned for display, but are derived from the
+// selected plan/subscription and are not editable merchant fields. Older
+// clients echo these values back when saving a merchant, so discard them
+// before applying the strict editable-field allowlist below.
+const readOnlySubscriptionFields = [
+  'planCode',
+  'planName',
+  'maxStoresAllowed',
+  'trialDays',
+  'currentPeriodStart',
+  'currentPeriodEnd',
+] as const;
 type Input = Record<string, unknown>;
 type ActorRequest = { user?: { id?: string } };
 const actorUuid =
@@ -115,6 +127,7 @@ export class CompactMerchantController {
   private validate(input: Input, create: boolean): Input {
     if (!input || typeof input !== 'object' || Array.isArray(input))
       throw new BadRequestException('Provide a merchant object');
+    for (const key of readOnlySubscriptionFields) delete input[key];
     if (input.ein !== undefined) {
       if (input.taxId !== undefined && input.taxId !== input.ein)
         throw new BadRequestException('Supply either ein or taxId, not conflicting values');

@@ -420,7 +420,11 @@ export class AppController {
     @Req() request: { user?: { role?: string } },
   ) {
     const connection = await this.requireWordPressConnection(storeId, request.user?.role);
-    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress(connection);
+    // Fetch the full WooCommerce taxonomy so child categories are included too.
+    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress({
+      ...connection,
+      includeAll: true,
+    });
     let categoryTaxCount = 0;
     try {
       categoryTaxCount = await this.merchantRepository.syncCategoryWithTax(connection);
@@ -1307,7 +1311,7 @@ export class AppController {
     const fields = { ...this.storeCreationFields(body, merchant.country), createdBy: request.user?.id ?? null };
     if (!fields.storeName) throw new BadRequestException('name is required');
     const store = await this.merchantRepository.createStore(ownerId, fields);
-    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.role_permissions || []);
     const employees = await this.attachStoreEmployees(ownerId, store.id, body.employees);
     return { success: true, store: this.toStoreResponse(store), ...(employees ? { employees, count: employees.length } : {}) };
   }
@@ -1495,12 +1499,12 @@ export class AppController {
     if (!store || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(store, merchantId)))) throw new NotFoundException(`Store '${storeId}' not found`);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     const setup = store.onboardingSetup || {};
-    let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+    let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.role_permissions) ? setup.role_permissions : [];
     try {
       const rows = await this.merchantRepository.listStoreWizardRolePermissions(store.merchantId, store.id);
       if (rows.length) rolePermissions = this.groupWizardRolePermissions(rows);
     } catch {
-      rolePermissions = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+      rolePermissions = Array.isArray(setup.role_permissions) ? setup.role_permissions : [];
     }
     return {
       success: true,
@@ -1508,7 +1512,7 @@ export class AppController {
         ...this.toStoreResponse(store),
         hours: Array.isArray(setup.hours) ? setup.hours : [],
         features: Array.isArray(setup.features) ? setup.features : [],
-        rolePermissions,
+        role_permissions: rolePermissions,
       },
       websiteConnection: this.toPublicConnector(connection),
     };
@@ -1578,11 +1582,30 @@ export class AppController {
       country: body.country ?? existing.country,
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(
+      store,
+      body.features,
+      body.role_permissions,
+    );
     const employees = await this.attachStoreEmployees(body.merchantId || merchantId, store.id, body.employees);
+    const setup = store.onboardingSetup || {};
+    let rolePermissions: Array<Record<string, unknown>> = body.role_permissions ??
+      (Array.isArray(setup.role_permissions) ? setup.role_permissions : []);
+    if (body.role_permissions === undefined) {
+      try {
+        const rows = await this.merchantRepository.listStoreWizardRolePermissions(store.merchantId, store.id);
+        if (rows.length) rolePermissions = this.groupWizardRolePermissions(rows);
+      } catch {
+        // The saved onboardingSetup remains the fallback for older schemas.
+      }
+    }
     return {
       success: true,
-      store: this.toStoreResponse(store),
+      store: {
+        ...this.toStoreResponse(store),
+        features: Array.isArray(setup.features) ? setup.features : [],
+        role_permissions: rolePermissions,
+      },
       ...(employees ? { employees, count: employees.length } : {}),
     };
   }

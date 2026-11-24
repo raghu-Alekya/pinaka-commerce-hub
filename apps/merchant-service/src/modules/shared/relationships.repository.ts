@@ -26,6 +26,17 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+function camelizeRelationshipPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(camelizeRelationshipPayload);
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const camelKey = key.replace(/_([a-zA-Z0-9])/g, (_, letter: string) => letter.toUpperCase());
+    result[camelKey] = camelizeRelationshipPayload(child);
+  }
+  return result;
+}
+
 @Injectable()
 export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   private db!: DataSource;
@@ -1223,7 +1234,9 @@ export class RelationshipsRepository implements OnModuleInit, OnModuleDestroy {
   ): { items: Record<string, unknown>[]; skipExisting: boolean } {
     if (!body || typeof body !== 'object' || Array.isArray(body))
       throw new BadRequestException('Provide { items: [...] }');
-    const payload = body as Record<string, unknown>;
+    const payload = (config.name === 'StoreTypeFeatures'
+      ? camelizeRelationshipPayload(body)
+      : body) as Record<string, unknown>;
     const idAlias = `${config.childKey}s`;
     const hasItems = 'items' in payload;
     const hasIds = idAlias in payload || 'ids' in payload;

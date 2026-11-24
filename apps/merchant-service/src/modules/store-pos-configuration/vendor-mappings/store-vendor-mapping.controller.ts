@@ -3,7 +3,7 @@ import { RequireAuth } from '../../shared/session-auth.guard';
 import { CreateStoreVendorMappingDto } from './dto/create-store-vendor-mapping.dto';
 import { StoreVendorMappingService } from './store-vendor-mapping.service';
 
-@Controller('api/v1/store-vendor-mappings')
+@Controller(['api/v1/store-vendor-mappings', 'connector/api/v1/store-vendor-mappings'])
 export class StoreVendorMappingController {
   constructor(@Inject(StoreVendorMappingService) private readonly service: StoreVendorMappingService) {}
 

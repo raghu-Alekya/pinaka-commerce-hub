@@ -697,6 +697,13 @@ export class MerchantRepository implements OnModuleInit {
       } else if (operation === 'create') {
         const newId = crypto.randomUUID();
         const nameVal = String(fields.name || '').trim();
+        const duplicateNames = await this.dataSource.query(
+          'SELECT id FROM public.features WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) LIMIT 1',
+          [nameVal],
+        );
+        if (duplicateNames.length) {
+          throw new ConflictException(`Feature name '${nameVal}' already exists`);
+        }
         const descVal = String(fields.description || '').trim();
         const typeVal = String(
           fields.featureType ?? fields.feature_type ?? fields.type ?? 'TEXT',
@@ -2088,8 +2095,8 @@ export class MerchantRepository implements OnModuleInit {
       merchantUuid?: string;
       storeCode?: string;
     },
-    features: string[] = [],
-    rolePermissions: Array<Record<string, unknown>> = [],
+    features?: string[],
+    rolePermissions?: Array<Record<string, unknown>>,
   ): Promise<void> {
     let storeUuid = store.uuid || (this.isUuid(store.id) ? store.id : undefined);
     let merchantId = store.merchantUuid || store.merchantId;
@@ -2106,45 +2113,43 @@ export class MerchantRepository implements OnModuleInit {
     }
     if (!storeUuid || !merchantId) return;
 
-    const featureNames = [
-      ...new Set(
-        features.map((name) => String(name || '').trim()).filter(Boolean),
-      ),
-    ];
-    await this.dataSource.query(
-      `DELETE FROM public.store_features WHERE store_id = $1::uuid`,
-      [storeUuid],
-    );
-    for (const featureName of featureNames) {
-      const [feature] = await this.dataSource.query(
-        `SELECT id FROM public.features
-         WHERE lower(name) = lower($1)
-            OR lower(COALESCE(to_jsonb(features)->>'featureKey', to_jsonb(features)->>'feature_key', '')) = lower($1)
-         LIMIT 1`,
-        [featureName],
-      );
+    if (features !== undefined) {
+      const featureNames = [
+        ...new Set(
+          features.map((name) => String(name || '').trim()).filter(Boolean),
+        ),
+      ];
       await this.dataSource.query(
-        `INSERT INTO public.store_features
-           (merchant_id, store_id, feature_id, feature_name, enabled)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, true)`,
-        [
-          merchantId,
-          storeUuid,
-          feature?.id || null,
-          featureName,
-        ],
+        `DELETE FROM public.store_features WHERE store_id = $1::uuid`,
+        [storeUuid],
       );
+      for (const featureName of featureNames) {
+        const [feature] = await this.dataSource.query(
+          `SELECT id FROM public.features
+           WHERE lower(name) = lower($1)
+              OR lower(COALESCE(to_jsonb(features)->>'featureKey', to_jsonb(features)->>'feature_key', '')) = lower($1)
+           LIMIT 1`,
+          [featureName],
+        );
+        await this.dataSource.query(
+          `INSERT INTO public.store_features
+             (merchant_id, store_id, feature_id, feature_name, enabled)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, true)`,
+          [merchantId, storeUuid, feature?.id || null, featureName],
+        );
+      }
     }
 
-    await this.dataSource.query(
-      `DELETE FROM public.store_roles_permission WHERE store_id = $1::uuid`,
-      [storeUuid],
-    );
-    const actions = ['View', 'Create', 'Edit', 'Delete'];
-    for (const role of rolePermissions) {
+    if (rolePermissions !== undefined) {
+      await this.dataSource.query(
+        `DELETE FROM public.store_roles_permission WHERE store_id = $1::uuid`,
+        [storeUuid],
+      );
+      const actions = ['View', 'Create', 'Edit', 'Delete'];
+      for (const role of rolePermissions) {
       const roleName = String(role.name || role.roleName || '').trim();
       const roleTemplateId = String(
-        role.roleTemplateId || role.id || '',
+        role.role_template_id || role.roleTemplateId || role.id || '',
       ).trim();
       if (!roleName) continue;
       const templateId = /^[0-9a-f-]{36}$/i.test(roleTemplateId)
@@ -2167,7 +2172,13 @@ export class MerchantRepository implements OnModuleInit {
       for (const featureName of featureKeys) {
         const grants = matrix[featureName] || {};
         for (const action of actions) {
-          if (grants[action] === undefined) continue;
+          const actionKey = Object.keys(grants).find(
+            key => key.toLowerCase() === action.toLowerCase(),
+          );
+          if (actionKey === undefined) continue;
+          const rawAllowed = grants[actionKey];
+          const allowed = rawAllowed === true || rawAllowed === 1 ||
+            (typeof rawAllowed === 'string' && rawAllowed.trim().toLowerCase() === 'true');
           await this.dataSource.query(
             `INSERT INTO public.store_roles_permission
                (merchant_id, store_id, role_template_id, role_name, feature_name, permission_action, allowed)
@@ -2179,10 +2190,11 @@ export class MerchantRepository implements OnModuleInit {
               roleName,
               featureName,
               action,
-              Boolean(grants[action]),
+              allowed,
             ],
           );
         }
+      }
       }
     }
   }
@@ -5314,9 +5326,17 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   }
 
   async createFeature(dto: CreateFeatureDto): Promise<FeatureEntity> {
+    const name = dto.name.trim();
+    const duplicate = await this.featureRepo
+      .createQueryBuilder('feature')
+      .where('LOWER(TRIM(feature.name)) = LOWER(TRIM(:name))', { name })
+      .getOne();
+    if (duplicate) {
+      throw new ConflictException(`Feature name '${name}' already exists`);
+    }
     const entity = this.featureRepo.create({
       featureCode: dto.feature_code.trim().toUpperCase(),
-      name: dto.name.trim(),
+      name,
       description: dto.description?.trim() || '',
       featureType: dto.feature_type,
       status: dto.status || FeatureStatus.ACTIVE,

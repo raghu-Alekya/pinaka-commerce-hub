@@ -48,8 +48,8 @@ export class StoreSetupDto {
   @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) devices?: Record<string, unknown>[];
   @IsOptional() @IsArray() @ArrayMaxSize(200) @IsString({ each: true }) @MaxLength(100, { each: true }) features?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) roles?: Record<string, unknown>[];
-  /** Wizard matrix: { roleTemplateId, name, permissions: { [feature]: { View, Create, Edit, Delete } } } */
-  @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) rolePermissions?: Record<string, unknown>[];
+  /** Wizard matrix: { role_template_id, name, permissions: { [feature]: { View, Create, Edit, Delete } } } */
+  @IsOptional() @IsArray() @ArrayMaxSize(100) @IsObject({ each: true }) role_permissions?: Record<string, unknown>[];
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(500)
