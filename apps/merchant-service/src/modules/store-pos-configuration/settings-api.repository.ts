@@ -47,6 +47,17 @@ export class SettingsApiRepository {
     return typeof email === 'string' && email.trim() ? email.trim() : null;
   }
 
+  async storeName(scope: SettingsScope): Promise<string | null> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT COALESCE(NULLIF(BTRIM(name), ''), store_code) AS "storeName"
+       FROM public.stores WHERE id = $1::uuid LIMIT 1`,
+      [storeId],
+    );
+    const name = rows[0]?.storeName;
+    return typeof name === 'string' && name.trim() ? name.trim() : null;
+  }
+
   async readConfiguration(scope: SettingsScope, configurationName: string): Promise<SettingsJson> {
     const { db, storeId } = await this.resolveScope(scope);
     const rows = await db.query(
