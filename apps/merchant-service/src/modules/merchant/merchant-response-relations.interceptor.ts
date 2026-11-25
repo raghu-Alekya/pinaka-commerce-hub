@@ -1,5 +1,5 @@
 import { BadRequestException, CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
-import { mergeMap } from 'rxjs';
+import { map, mergeMap } from 'rxjs';
 import { MerchantRepository } from './merchant.repository';
 import { MerchantResponseRelations } from './merchant-response-relations';
 import { nationalPhone } from './countries';
@@ -116,7 +116,7 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
-    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string;body?:unknown;query?:Record<string, unknown>}>();
+    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string;body?:unknown;query?:Record<string, unknown>;user?:{id?:string;role?:string;agentMerchantIds?:string[];agentMerchantCodes?:string[];agentStoreIds?:string[]}}>();
     const path=(request.path || request.url || '').split('?')[0];
     const snakeCaseContract = usesSnakeCaseContract(path);
     if (snakeCaseContract) {
@@ -138,19 +138,60 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
     if (request.method === 'GET' && compactSubscriptions) {
       return next.handle().pipe(mergeMap(async payload => {
         const named = await featureNames(this.repository.requireDataSource(), payload);
-        const response = attachMerchantCode(named);
+        const response = this.filterAgent(request, attachMerchantCode(named));
         return snakeCaseContract ? snakeCaseKeys(response) : response;
       }));
     }
     const related=/^(?:\/connector)?\/api\/v1\/(?:merchants|subscriptions|subscription-plans|plans|stores|store-types|store_types|role-templates|role_templates|employees|devices|countries)(?:\/|$)/.test(path);
-    if (!related && !snakeCaseContract) return next.handle();
+    if (!related && !snakeCaseContract) return this.scopeAgent(request, next.handle());
     return next.handle().pipe(mergeMap(async payload => {
       const expanded = request.method==='GET'
         ? await new MerchantResponseRelations(this.repository.requireDataSource()).expand(payload)
         : payload;
       const named = request.method==='GET' ? await featureNames(this.repository.requireDataSource(), expanded) : expanded;
-      const response = attachMerchantCode(named);
+      const response = this.filterAgent(request, attachMerchantCode(named));
       return snakeCaseContract ? snakeCaseKeys(response) : response;
     }));
+  }
+
+  private scopeAgent(request: {user?:{id?:string;role?:string;agentMerchantIds?:string[];agentMerchantCodes?:string[];agentStoreIds?:string[]}}, source: ReturnType<CallHandler['handle']>) {
+    return source.pipe(map(payload => this.filterAgent(request, payload)));
+  }
+
+  private filterAgent(request: {user?:{id?:string;role?:string;agentMerchantIds?:string[];agentMerchantCodes?:string[];agentStoreIds?:string[]}}, payload: unknown): unknown {
+    const user = request.user;
+    if (!user || String(user.role || '').toUpperCase() !== 'AGENT') return payload;
+    const responsePath = ((request as {path?:string;url?:string}).path || (request as {url?:string}).url || '').split('?')[0].replace(/^\/connector(?=\/)/, '');
+    if ((request as {method?:string}).method === 'POST' && /^\/api\/v1\/merchants(?:\/create-merchant)?\/?$/.test(responsePath)) return payload;
+    const merchants = new Set([...(user.agentMerchantIds || []), ...(user.agentMerchantCodes || [])].map(value => value.toLowerCase()));
+    const stores = new Set((user.agentStoreIds || []).map(value => value.toLowerCase()));
+    const ownership = (value: unknown): { marked: boolean; allowed: boolean } => {
+      if (!value || typeof value !== 'object' || Array.isArray(value) || value instanceof Date) return { marked: false, allowed: false };
+      const row = value as Record<string, unknown>;
+      const ids = [row.merchantId,row.merchant_id,row.merchantCode,row.merchant_code,row.merchantUuid,row.merchant_uuid].filter((item): item is string => typeof item === 'string' && Boolean(item));
+      if (ids.length) return { marked: true, allowed: ids.some(item => merchants.has(item.toLowerCase())) };
+      const storeIds = [row.storeId,row.store_id,row.storeCode,row.store_code].filter((item): item is string => typeof item === 'string' && Boolean(item));
+      if (storeIds.length) return { marked: true, allowed: storeIds.some(item => stores.has(item.toLowerCase())) };
+      if (row.merchant && typeof row.merchant === 'object') return ownership(row.merchant);
+      return { marked: false, allowed: false };
+    };
+    const walk = (value: unknown, inherited = false): unknown => {
+      if (Array.isArray(value)) return value.flatMap(item => {
+        const owner = ownership(item);
+        if (owner.marked && !owner.allowed) return [];
+        if (!owner.marked && !inherited) return [];
+        return [walk(item, inherited || owner.allowed)];
+      });
+      if (!value || typeof value !== 'object' || value instanceof Date) return value;
+      const owner = ownership(value);
+      if (owner.marked && !owner.allowed) return null;
+      const next: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) next[key] = walk(child, inherited || owner.allowed);
+      return next;
+    };
+    const requestPath = (request as {path?:string;url?:string}).path || (request as {url?:string}).url || '';
+    if (/^(?:\/connector)?\/api\/v1\/merchants\/(?!(?:subscriptions|countries|employees)(?:\/|$))[^/]+(?:\/|$)/.test(requestPath.split('?')[0])) return payload;
+    if (/\/(?:plans|features|store-types|store_types|tenders|countries|role-templates|role_templates|permissions|feature-permissions)(?:\/|\?|$)/i.test(requestPath)) return payload;
+    return walk(payload);
   }
 }

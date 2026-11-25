@@ -24,7 +24,7 @@ import {
   SignUpDto,
 } from './auth.dto';
 import { MailService } from './mail.service';
-import { CreatePchUserDto, CreateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdatePchUserDto } from './user.dto';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
 import { UserRepository } from './user.repository';
 import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
@@ -147,6 +147,9 @@ export class AuthService {
         await this.users.activateWithPassword(
           user,
           await this.hashPassword(dto.password),
+          !user.accountId && !user.merchantId && !user.employeeId &&
+            [UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.AGENT].includes(user.role)
+            ? dto.password : undefined,
         ),
       ),
     );
@@ -229,18 +232,35 @@ export class AuthService {
     return user;
   }
 
-  async requirePchAdmin(authorization?: string): Promise<void> {
+  async requirePchAdmin(authorization?: string) {
     const { user } = await this.currentSession(authorization);
     if (user.merchantId || user.employeeId ||
       ![UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)) {
       throw new ForbiddenException('Only platform administrators can manage PCH users');
     }
+    return user;
   }
 
   async createPchUser(dto: CreatePchUserDto) {
     const { password, ...publicFields } = dto;
-    const user = await this.users.createPch(publicFields as CreatePchUserDto, await this.hashPassword(password));
+    const user = await this.users.createPch(publicFields as CreatePchUserDto, await this.hashPassword(password), password);
     return this.toPublicUser(user);
+  }
+
+  async updatePchUser(id: string, dto: UpdatePchUserDto) {
+    const { password, ...fields } = dto;
+    const user = await this.users.updatePch(id, fields, password ? await this.hashPassword(password) : undefined, password || undefined);
+    return user ? this.toPublicUser(user) : null;
+  }
+
+  async disablePchUser(id: string) {
+    const user = await this.users.disablePch(id);
+    return user ? this.toPublicUser(user) : null;
+  }
+
+  async enablePchUser(id: string) {
+    const user = await this.users.enablePch(id);
+    return user ? this.toPublicUser(user) : null;
   }
 
   async currentSession(authorization?: string) {

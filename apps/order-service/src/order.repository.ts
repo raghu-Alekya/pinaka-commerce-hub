@@ -59,6 +59,17 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   private isDbConnected = false;
   private isRedisConnected = false;
 
+  async assignedAgentStoreIds(userId: string, merchantId?: string): Promise<string[]> {
+    if (!this.dataSource || !this.isDbConnected) throw new ServiceUnavailableException('Order database is unavailable');
+    const rows = await this.dataSource.query(
+      `SELECT s.id::text AS id FROM public.agent_merchants am JOIN public.merchants m ON m.id=am.merchant_id
+       JOIN public.stores s ON s.merchant_id::text=m.id::text
+       WHERE am.agent_user_id=$1 AND am.status='ACTIVE' AND am.is_deleted=false AND COALESCE(s.is_deleted,false)=false
+         AND ($2::text IS NULL OR m.id::text=$2 OR COALESCE(to_jsonb(m)->>'merchant_code',to_jsonb(m)->>'merchantId')=$2)`, [userId, merchantId || null],
+    );
+    return rows.map((row: { id: string }) => row.id);
+  }
+
   private inMemoryOrders: OrderEntity[] = [];
   private inMemoryItems: OrderItemEntity[] = [];
   private inMemoryHistory: OrderStatusHistoryEntity[] = [];
@@ -2221,6 +2232,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   async getOrderStatusCounts(criteria: {
     merchantId?: string;
     storeId?: string;
+    storeIds?: string[];
     page: number;
     perPage: number;
     statuses: string[];
@@ -2238,7 +2250,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
     const author = criteria.author?.trim() || null;
     const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
-    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
+    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.storeIds || null];
     const effectiveStatus = `CASE
       WHEN upper(COALESCE(sale.order_status, '')) = 'REFUNDED'
         OR lower(COALESCE(sale.status, '')) = 'refunded'
@@ -2273,6 +2285,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
       ) AS payment_state ON true
       WHERE ($1::uuid IS NULL OR sale.merchant_id = $1::uuid)
         AND ($2::uuid IS NULL OR sale.store_id = $2::uuid)
+        AND ($8::uuid[] IS NULL OR sale.store_id = ANY($8::uuid[]))
         AND (
           $3::text[] IS NULL
           OR (${effectiveStatus}) = ANY($3::text[])
@@ -2406,6 +2419,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   async listOrders(criteria: {
     merchantId?: string;
     storeId?: string;
+    storeIds?: string[];
     page: number;
     perPage: number;
     statuses: string[];
@@ -2437,7 +2451,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
     const author = criteria.author?.trim() || null;
     const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
-    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.search || null, criteria.createdAfter || null, criteria.customer || null];
+    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.search || null, criteria.createdAfter || null, criteria.customer || null, criteria.storeIds || null];
     const effectiveStatus = `CASE
       WHEN upper(COALESCE(sale.order_status, '')) = 'REFUNDED'
         OR lower(COALESCE(sale.status, '')) = 'refunded'
@@ -2472,6 +2486,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
       ) AS payment_state ON true
       WHERE ($1::uuid IS NULL OR sale.merchant_id = $1::uuid)
         AND ($2::uuid IS NULL OR sale.store_id = $2::uuid)
+        AND ($11::uuid[] IS NULL OR sale.store_id = ANY($11::uuid[]))
         AND (
           $3::text[] IS NULL
           OR (${effectiveStatus}) = ANY($3::text[])
@@ -2519,7 +2534,7 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
         `SELECT sale.order_id AS id, (${effectiveStatus}) AS effective_status
            ${where}
           ORDER BY ${orderColumn} DESC, sale.order_id DESC
-          LIMIT $11 OFFSET $12`,
+          LIMIT $12 OFFSET $13`,
         [...params, criteria.perPage, (criteria.page - 1) * criteria.perPage],
       );
     } catch (error: unknown) {

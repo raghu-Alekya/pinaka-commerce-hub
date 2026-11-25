@@ -11,6 +11,7 @@ export interface OrderListRequest {
   status?: string;
   createdVia?: string;
   storeId?: string;
+  storeIds?: string[];
 }
 
 @Injectable()
@@ -21,6 +22,7 @@ export class OrderListPresenter {
     if (perPage > 100) throw new BadRequestException('per_page cannot be greater than 100');
     return {
       storeId: request.storeId?.trim() || undefined,
+      storeIds: request.storeIds,
       page,
       perPage,
       statuses: this.statuses(request.status),
