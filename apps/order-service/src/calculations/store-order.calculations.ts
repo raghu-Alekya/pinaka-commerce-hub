@@ -262,40 +262,109 @@ export function feeLinesForCalculation(
     : feeLines;
 }
 
-function promotionMinor(lineItems: PosLineItem[] = [], places = 2): number {
-  return lineItems.filter(isMerchandiseLine).reduce((sum, line) => {
-    const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
-    const amount = metadata.find((entry) => entry?.key === '_pos_auto_discount')?.value;
-    return sum + Math.max(0, toMinor(amount ?? 0, places));
-  }, 0);
-}
-
-function couponRuleMinor(coupon: PosCouponLine, places: number): number {
-  const record = coupon as PosCouponLine & { amount?: unknown; meta_data?: Array<{ key?: string; value?: unknown }> };
-  const metadata = Array.isArray(record.meta_data) ? record.meta_data : [];
-  const metaAmount = metadata.find((entry) => entry?.key === 'amount')?.value;
-  return Math.max(0, toMinor(record.amount ?? metaAmount ?? 0, places));
-}
-
-/**
- * The POS gross total already includes the automatic discount.
- * A coupon figure equal to that automatic discount plus the merchant
- * discount must not be applied again. The coupon rule amount is the
- * coupon still to take off the gross total.
- */
+/** The coupon amount sent on the order. It is not compared with other discounts. */
 export function couponToApply(
   lineItems: PosLineItem[] = [],
   couponLines: PosCouponLine[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
 ): number {
-  const stated = toMinor(authoritativeCouponDiscount(couponLines, feeLines, places, lineItems), places);
-  const bundle = promotionMinor(lineItems, places) + merchantDiscountMinor(feeLines, places);
-  if (!(bundle > 0) || Math.abs(stated - bundle) > 1) return fromMinor(stated, places);
-  const rule = couponLines
-    .map((coupon) => couponRuleMinor(coupon, places))
-    .find((amount) => amount > 0 && Math.abs(amount - bundle) > 1);
-  return fromMinor(rule ?? 0, places);
+  return authoritativeCouponDiscount(couponLines, feeLines, places, lineItems);
+}
+
+function statedCouponDiscount(coupon: PosCouponLine): number {
+  const record = coupon as PosCouponLine & { discount_amount?: unknown };
+  const amount = Number(record?.discount ?? record?.discount_amount ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function isGeneratedMerchantCoupon(code: string): boolean {
+  return /^pos-discount(?:-\d+)?$/i.test(code);
+}
+
+/**
+ * A local store coupon can fill a missing fixed-cart amount.
+ * Percentage and fixed-product coupons keep their own rules and are not
+ * converted into a cart amount. An expired or missing row supplies nothing.
+ */
+export function fixedCartAmountFromCouponRecord(
+  row: Record<string, unknown> | null | undefined,
+  now = Date.now(),
+): number | null {
+  if (!row) return null;
+  const type = String(row.discount_type ?? row.discountType ?? '').trim().toLowerCase();
+  if (type !== 'fixed_cart' && type !== 'fixed') return null;
+  const expiresAt = row.date_expires ?? row.dateExpires;
+  if (expiresAt !== undefined && expiresAt !== null && String(expiresAt).trim() !== '') {
+    const expires = new Date(String(expiresAt)).getTime();
+    if (Number.isFinite(expires) && expires <= now) return null;
+  }
+  const amount = Number(row.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+/**
+ * Fill coupon lines that have a code but no positive discount from the local
+ * fixed-cart records. When a line cannot be filled, the coupon fee is cleared
+ * so it cannot become the coupon amount.
+ */
+export function assignFixedCartCouponDiscounts(
+  sourcePayload: { coupon_lines?: PosCouponLine[]; fee_lines?: PosFeeLine[] },
+  records: ReadonlyMap<string, Record<string, unknown> | null>,
+  places = 2,
+  now = Date.now(),
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  let blockFeeFallback = false;
+  coupons.forEach((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    if (!code || isGeneratedMerchantCoupon(code) || statedCouponDiscount(coupon) > 0) return;
+    const amount = fixedCartAmountFromCouponRecord(records.get(code.toLowerCase()) ?? null, now);
+    if (amount === null) {
+      blockFeeFallback = true;
+      return;
+    }
+    coupon.discount = amount.toFixed(places);
+  });
+  if (!blockFeeFallback || !Array.isArray(sourcePayload.fee_lines)) return;
+  sourcePayload.fee_lines.forEach((fee) => {
+    if (isCouponDiscountFee(fee)) fee.total = (0).toFixed(places);
+  });
+}
+
+/** Keep the coupon fee and POS coupon meta aligned with the coupon used in the total. */
+export function recordAppliedCouponAmount(
+  sourcePayload: {
+    coupon_lines?: PosCouponLine[];
+    fee_lines?: PosFeeLine[];
+    meta_data?: Array<{ key?: string; value?: unknown }>;
+  },
+  applied: number,
+  places = 2,
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  const hasStoreCoupon = coupons.some((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    return Boolean(code) && !isGeneratedMerchantCoupon(code);
+  });
+  const metadata = Array.isArray(sourcePayload.meta_data) ? sourcePayload.meta_data : [];
+  const meta = metadata.find((entry) => entry?.key === '_pos_coupon_discount');
+  const hasCouponFee = Array.isArray(sourcePayload.fee_lines)
+    && sourcePayload.fee_lines.some((fee) => isCouponDiscountFee(fee));
+  if (!hasStoreCoupon && !hasCouponFee && !meta) return;
+  const text = fromMinor(toMinor(applied, places), places).toFixed(places);
+  if (Array.isArray(sourcePayload.fee_lines)) {
+    sourcePayload.fee_lines.forEach((fee) => {
+      if (isCouponDiscountFee(fee)) fee.total = (-Number(text)).toFixed(places);
+    });
+  }
+  if (!hasStoreCoupon && !meta) return;
+  if (meta) meta.value = text;
+  else {
+    metadata.push({ key: '_pos_coupon_discount', value: text });
+    sourcePayload.meta_data = metadata;
+  }
 }
 
 type SaleLine = PosLineItem & {
@@ -337,6 +406,17 @@ function itemDiscountParts(line: PosLineItem, places: number): { auto: number; m
   if (type === 'multipack') return { auto: 0, multipack: multipackKey || shared, mix: mixKey };
   if (mixType) return { auto: 0, multipack: multipackKey, mix: mixKey || shared };
   return { auto: shared, multipack: multipackKey, mix: mixKey };
+}
+
+/** Automatic, multipack, and mix-and-match amounts stored on the line. A merchant source is not included. */
+export function recognizedItemDiscountMinor(line: PosLineItem, places = 2): number {
+  const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  const source = String(
+    metadata.find((item) => item?.key === '_pos_discount_source' || item?.key === 'pos_discount_source')?.value || '',
+  ).trim().toLowerCase();
+  if (source === 'merchant' || source === 'merchant_discount' || source === 'pos_discount') return 0;
+  const parts = itemDiscountParts(line, places);
+  return parts.auto + parts.multipack + parts.mix;
 }
 
 function saleLineRate(line: PosLineItem): number {
@@ -474,25 +554,6 @@ export function applyPosSaleCalculation(
       entry.line.taxes = [{ id: rate, rate_percent: rate, total: taxText, subtotal: taxText }];
     }
   });
-
-  if (Math.abs(toMinor(authoritativeCouponDiscount(coupons, fees, places), places) - couponApplied) > 1) {
-    let written = false;
-    coupons.forEach((coupon) => {
-      if (!written) {
-        coupon.discount = fromMinor(couponApplied, places).toFixed(places);
-        written = true;
-      } else {
-        coupon.discount = fromMinor(0, places).toFixed(places);
-      }
-    });
-  }
-  if (Array.isArray(sourcePayload.fee_lines)) {
-    sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee) => (
-      isCouponDiscountFee(fee)
-        ? { ...fee, total: (-fromMinor(couponApplied, places)).toFixed(places) }
-        : fee
-    ));
-  }
 
   const otherMinor = lines.reduce((sum, line) => (
     isMerchandiseLine(line) ? sum : sum + toMinor(line.total ?? line.subtotal ?? 0, places)

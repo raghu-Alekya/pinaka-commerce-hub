@@ -94,7 +94,7 @@ export class RoleTemplateController {
   @Get() async list(@Query() query: Record<string, string>) { const items = filterMasterList(await this.repository.masterData('role_templates', 'list'), query); return { success: true, count: items.length, roleTemplates: items }; }
   @Get(':id') async get(@Param('id') id: string) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'get', id) }; }
   @Post() async create(@Body(validate(RoleTemplateDto)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'create', undefined, { description: '', status: 'ACTIVE', scopeType: 'STORE', ...defined(body) }) }; }
-  @Put(':id') async replace(@Param('id') id: string, @Body(validate(RoleTemplateDto)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'update', id, { description: '', status: 'ACTIVE', scopeType: 'STORE', ...defined(body) }) }; }
+  @Put(':id') @RequireAuth() async replace(@Param('id') id: string, @Body(validate(RoleTemplateDto)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'update', id, { description: '', status: 'ACTIVE', scopeType: 'STORE', ...defined(body) }) }; }
   @Patch(':id') async patch(@Param('id') id: string, @Body(validate(RoleTemplateDto, true)) body: RoleTemplateDto) { return { success: true, roleTemplate: await this.repository.masterData('role_templates', 'update', id, defined(body)) }; }
   @Delete(':id') async remove(@Param('id') id: string) { await this.repository.masterData('role_templates', 'delete', id); return { success: true, message: 'RoleTemplate deleted' }; }
 }

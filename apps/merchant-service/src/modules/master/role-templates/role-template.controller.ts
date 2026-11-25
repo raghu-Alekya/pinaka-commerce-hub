@@ -18,6 +18,7 @@ import {
   CreateRoleTemplateDto,
   UpdateRoleTemplateDto,
 } from './role-template.dto';
+import { RequireAuth } from '../../shared/session-auth.guard';
 
 @Public()
 @Controller('api/v1/role-templates')
@@ -78,6 +79,7 @@ export class RoleTemplateController {
   }
 
   @Put(':idOrCode')
+  @RequireAuth()
   async update(
     @Param('idOrCode') idOrCode: string,
     @Body() body: UpdateRoleTemplateDto,

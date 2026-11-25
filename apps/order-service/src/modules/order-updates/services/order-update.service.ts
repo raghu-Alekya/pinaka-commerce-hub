@@ -117,13 +117,6 @@ export class OrderUpdateService {
         'A coupon cannot be applied because the merchant discount already covers the order total',
       );
     }
-    if (coverage.merchantDiscount > 0) {
-      const chosen = await this.minimumEligibleCoupon(graph, coverage.remaining);
-      if (chosen) {
-        const saved = await this.persist(graph, this.coupons.sync(graph, [chosen]));
-        return this.presenter.present(saved);
-      }
-    }
     const command = couponFromDto(dto);
     const draft = this.coupons.apply(graph, command);
     const saved = await this.persist(graph, draft);
@@ -174,12 +167,6 @@ export class OrderUpdateService {
     if (!requested.length) return [];
     const lines = this.lines.fromGraph(graph).map((line) => withCouponBase(line));
     const email = this.billingEmail(graph);
-    if (coverage.merchantDiscount > 0) {
-      const chosen = await this.minimumEligibleCoupon(graph, coverage.remaining)
-        ?? await this.minimumResolvedCoupon(graph, requested, lines, email, coverage.remaining);
-      if (!chosen) throw new BadRequestException('No eligible coupon applies to the remaining balance');
-      return [chosen];
-    }
     return Promise.all(requested.map((line) => this.couponCatalog.resolve({
       storeId: graph.order.storeId,
       code: line.code,
@@ -187,34 +174,6 @@ export class OrderUpdateService {
       email,
       couponCount: requested.length,
     })));
-  }
-
-  private async minimumResolvedCoupon(
-    graph: OrderGraph,
-    requested: Array<{ code: string }>,
-    lines: ReturnType<OrderLineMapper['fromGraph']>,
-    email: string | undefined,
-    remaining: number,
-  ): Promise<CouponSpec | undefined> {
-    const resolved: CouponSpec[] = [];
-    let firstError: unknown;
-    for (const line of requested) {
-      try {
-        resolved.push(await this.couponCatalog.resolve({
-          storeId: graph.order.storeId,
-          code: line.code,
-          lines,
-          email,
-          couponCount: 1,
-        }));
-      } catch (error) {
-        if (!firstError) firstError = error;
-      }
-    }
-    const chosen = selectMinimumEligibleCoupon(resolved, remaining);
-    if (chosen) return chosen;
-    if (firstError) throw firstError;
-    return undefined;
   }
 
   private async minimumEligibleCoupon(graph: OrderGraph, remaining: number): Promise<CouponSpec | undefined> {

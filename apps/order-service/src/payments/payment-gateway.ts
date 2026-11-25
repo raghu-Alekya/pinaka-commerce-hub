@@ -2,13 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { logPayrocPayment } from './payment-log';
 
 /**
- * Kickback and Payroc calls follow
- * Pinaka_Payments_Api_Controller::payment_create_callback and get_payroc_token.
- * Existing stores use the WordPress UAT hosts until endpoint settings are saved.
+ * Kickback follows Pinaka_Payments_Api_Controller::payment_create_callback.
+ * Payroc hosts come from the store's card_payment_settings. There is no UAT or
+ * production default.
  */
 export const KICKBACK_SALE_URL = 'https://kicbac.transactiongateway.com/api/transact.php';
-export const PAYROC_AUTHORIZE_URL = 'https://identity.uat.payroc.com/authorize';
-export const PAYROC_API_URL = 'https://api.uat.payroc.com';
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -17,8 +15,10 @@ export interface GatewayCredentials {
   terminalId: string;
   secretKey: string;
   processorMerchantId: string;
-  authorizeUrl?: string;
-  apiUrl?: string;
+  payrocEnvironment?: 'uat' | 'production';
+  payrocIdentityUrl?: string;
+  payrocApiOrigin?: string;
+  storeDeviceActivationKey?: string;
 }
 
 export type GatewayName = 'kickback' | 'payroc';
@@ -81,15 +81,11 @@ function credentialText(record: Record<string, unknown>, keys: string[]): string
 }
 
 function readCredentials(provider: Record<string, unknown>): GatewayCredentials {
-  const urls = asRecord(provider.terminalUrls) ?? asRecord(provider.payrocUrls) ?? {};
-  const production = provider.payrocEnvironment === 'production';
   return {
     deviceId: credentialText(provider, ['deviceId', 'device_id']),
     terminalId: credentialText(provider, ['terminalId', 'terminal_id']),
     secretKey: credentialText(provider, ['secretKey', 'secret_key']),
     processorMerchantId: credentialText(provider, ['processorMerchantId', 'processor_merchant_id']),
-    authorizeUrl: credentialText(urls, [production ? 'productionIdentity' : 'uatIdentity']) || (production ? 'https://identity.payroc.com/authorize' : PAYROC_AUTHORIZE_URL),
-    apiUrl: (credentialText(urls, [production ? 'productionApi' : 'uatApi']) || (production ? 'https://api.payroc.com' : PAYROC_API_URL)).replace(/\/+$/, ''),
   };
 }
 
@@ -225,11 +221,9 @@ export function readPosDeviceId(requestPayload: unknown): { ok: true; posDeviceI
   return { ok: true, posDeviceId: ids[0] };
 }
 
-/** The Payroc device serial for this POS, taken from the store's enabled Payroc deviceMappings. */
-export function payrocCardTerminalDeviceId(
+function enabledPayrocConfiguration(
   configuration: unknown,
-  posDeviceId: string,
-): { ok: true; cardTerminalDeviceId: string } | { ok: false; message: string } {
+): { ok: true; record: Record<string, unknown> } | { ok: false; message: string } {
   const document = asRecord(
     typeof configuration === 'string' ? safeJson(configuration) : configuration,
   );
@@ -247,7 +241,64 @@ export function payrocCardTerminalDeviceId(
   const enabled = payroc.filter((record) => flagEnabled(record));
   if (enabled.length === 0) return { ok: false, message: 'Payroc configuration is disabled' };
   if (enabled.length > 1) return { ok: false, message: 'Multiple Payroc configurations are enabled' };
-  const mappings = Array.isArray(enabled[0].deviceMappings) ? enabled[0].deviceMappings : [];
+  return { ok: true, record: enabled[0] };
+}
+
+/** Identity and payment hosts from the same enabled Payroc card_payment_settings entry. */
+export function payrocEnvironmentEndpoints(configuration: unknown):
+  | { ok: true; environment: 'uat' | 'production'; identityUrl: string; apiOrigin: string }
+  | { ok: false; message: string } {
+  const payroc = enabledPayrocConfiguration(configuration);
+  if (!payroc.ok) return payroc;
+  const environment = credentialText(payroc.record, ['payrocEnvironment', 'payroc_environment']).toLowerCase();
+  if (!environment) return { ok: false, message: 'Payroc environment is required' };
+  if (environment !== 'uat' && environment !== 'production') {
+    return { ok: false, message: 'Payroc environment is invalid' };
+  }
+  const urls = asRecord(payroc.record.terminalUrls) ?? asRecord(payroc.record.terminal_urls);
+  const label = environment === 'uat' ? 'UAT' : 'Production';
+  if (!urls) return { ok: false, message: `Payroc ${label} endpoint is missing` };
+  const identity = credentialText(urls, environment === 'uat'
+    ? ['uatIdentity', 'uat_identity']
+    : ['productionIdentity', 'production_identity']);
+  const api = credentialText(urls, environment === 'uat'
+    ? ['uatApi', 'uat_api']
+    : ['productionApi', 'production_api']);
+  if (!identity) return { ok: false, message: `Payroc ${label} identity URL is missing` };
+  if (!api) return { ok: false, message: `Payroc ${label} payment URL is missing` };
+  const identityUrl = httpsUrl(identity);
+  const apiOrigin = httpsOrigin(api);
+  if (!identityUrl) return { ok: false, message: `Payroc ${label} identity URL is invalid` };
+  if (!apiOrigin) return { ok: false, message: `Payroc ${label} payment URL is invalid` };
+  return { ok: true, environment, identityUrl, apiOrigin };
+}
+
+function httpsUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+function httpsOrigin(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.origin : '';
+  } catch {
+    return '';
+  }
+}
+
+/** The Payroc device serial for this POS, taken from the store's enabled Payroc deviceMappings. */
+export function payrocCardTerminalDeviceId(
+  configuration: unknown,
+  posDeviceId: string,
+): { ok: true; cardTerminalDeviceId: string; storeDeviceActivationKey: string } | { ok: false; message: string } {
+  const payroc = enabledPayrocConfiguration(configuration);
+  if (!payroc.ok) return payroc;
+  const mappings = Array.isArray(payroc.record.deviceMappings) ? payroc.record.deviceMappings : [];
   const matches = mappings.flatMap((item) => {
     const mapping = asRecord(item);
     if (!mapping) return [];
@@ -261,7 +312,11 @@ export function payrocCardTerminalDeviceId(
   if (!cardTerminalDeviceId) {
     return { ok: false, message: `Payroc card terminal device ID is empty for POS device ${posDeviceId}` };
   }
-  return { ok: true, cardTerminalDeviceId };
+  const storeDeviceActivationKey = credentialText(matches[0], ['storeDeviceActivationKey', 'store_device_activation_key']);
+  if (!storeDeviceActivationKey) {
+    return { ok: false, message: `Payroc store device activation key is missing for POS device ${posDeviceId}` };
+  }
+  return { ok: true, cardTerminalDeviceId, storeDeviceActivationKey };
 }
 
 function flagDefault(record: Record<string, unknown>): boolean {
@@ -305,16 +360,15 @@ export function interpretKickback(raw: string): GatewayOutcome {
 const PAYROC_INSTRUCTION_PENDING = new Set(['inprogress', 'in_progress', 'pending', 'processing', 'sent', 'received']);
 const PAYROC_INSTRUCTION_DONE = new Set(['completed', 'complete', 'success', 'successful']);
 const PAYROC_INSTRUCTION_STOP = new Set(['failure', 'failed', 'canceled', 'cancelled', 'declined', 'error']);
-const PAYROC_API_HOSTS = new Set(['api.uat.payroc.com', 'api.payroc.com']);
 
-/** Stable Payroc Idempotency-Key for one payment attempt. A new attempt needs a new seed. */
+/** Stable Payroc Idempotency-Key for one payment attempt. Payroc accepts only UUID v4. */
 export function payrocIdempotencyKey(seed: string): string {
   const trimmed = seed.trim();
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) {
     return trimmed.toLowerCase();
   }
   const hex = createHash('sha256').update(`payroc:${trimmed}`).digest('hex').slice(0, 32).split('');
-  hex[12] = '5';
+  hex[12] = '4';
   const variant = Number.parseInt(hex[16], 16);
   hex[16] = ((variant & 0x3) | 0x8).toString(16);
   const raw = hex.join('');
@@ -424,9 +478,9 @@ export interface PayrocChargeInput {
   deviceId: string;
   terminalId: string;
   secretKey: string;
-  authorizeUrl?: string;
-  apiUrl?: string;
   processorMerchantId?: string;
+  identityUrl: string;
+  apiOrigin: string;
   amount: number;
   currency?: string;
   orderId: string;
@@ -447,7 +501,11 @@ export async function chargePayroc(
   cache: PayrocTokenCache = payrocTokens,
   options?: { maxPolls?: number },
 ): Promise<GatewayOutcome> {
-  const token = await payrocToken(input.secretKey, fetchImpl, cache, input.authorizeUrl);
+  const endpoints = payrocCallEndpoints(input.identityUrl, input.apiOrigin);
+  if (!endpoints) {
+    return { kind: 'failed', statusCode: 400, message: 'Payroc environment is required', uncertain: false };
+  }
+  const token = await payrocToken(input.secretKey, endpoints.identityUrl, fetchImpl, cache);
   if (!token) {
     return { kind: 'failed', statusCode: 500, message: 'Unable to obtain Payroc token', uncertain: false };
   }
@@ -476,13 +534,14 @@ export async function chargePayroc(
     gateway_submitted: false,
   };
   if (input.instructionId) {
-    return finishPayrocInstruction(input.instructionId, token, fetchImpl, context, options?.maxPolls ?? 4, undefined, input.apiUrl);
+    return finishPayrocInstruction(input.instructionId, token, endpoints.apiOrigin, fetchImpl, context, options?.maxPolls ?? 4);
   }
-  const paymentUrl = `${input.apiUrl || PAYROC_API_URL}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`;
+  const paymentUrl = `${endpoints.apiOrigin}/v1/devices/${encodeURIComponent(input.deviceId)}/payment-instructions`;
   logPayrocPayment('payroc_request', {
     orderId: gatewayOrderId,
     cardTerminalDeviceId: input.deviceId,
     terminalId: input.terminalId,
+    identityUrl: endpoints.identityUrl,
     url: paymentUrl,
   });
   const submitted = await requestPayroc(
@@ -510,34 +569,45 @@ export async function chargePayroc(
       details: asRecord(sanitizeGatewayPayload(instruction.body)) ?? {},
     }, submittedContext);
   }
-  return finishPayrocInstruction(instruction.id, token, fetchImpl, {
+  return finishPayrocInstruction(instruction.id, token, endpoints.apiOrigin, fetchImpl, {
     ...submittedContext,
     instruction: instruction.body,
     paymentInstructionId: instruction.id,
-  }, options?.maxPolls ?? 4, instruction, input.apiUrl);
+  }, options?.maxPolls ?? 4, instruction);
 }
 
 /** Read an instruction that was already submitted. This does not create a charge. */
 export async function continuePayroc(
-  input: { secretKey: string; instructionId?: string; paymentId?: string; authorizeUrl?: string; apiUrl?: string },
+  input: { secretKey: string; identityUrl: string; apiOrigin: string; instructionId?: string; paymentId?: string },
   fetchImpl: FetchLike,
   cache: PayrocTokenCache = payrocTokens,
 ): Promise<GatewayOutcome> {
-  const token = await payrocToken(input.secretKey, fetchImpl, cache, input.authorizeUrl);
+  const endpoints = payrocCallEndpoints(input.identityUrl, input.apiOrigin);
+  if (!endpoints) {
+    return { kind: 'failed', statusCode: 400, message: 'Payroc environment is required', uncertain: false };
+  }
+  const token = await payrocToken(input.secretKey, endpoints.identityUrl, fetchImpl, cache);
   if (!token) {
     return { kind: 'failed', statusCode: 500, message: 'Unable to obtain Payroc token', uncertain: false };
   }
   if (input.paymentId && !input.instructionId) {
-    return readPayrocPayment(input.paymentId, token, fetchImpl, { gateway_submitted: true, provider: 'payroc' }, input.apiUrl);
+    return readPayrocPayment(input.paymentId, token, endpoints.apiOrigin, fetchImpl, { gateway_submitted: true, provider: 'payroc' });
   }
   if (!input.instructionId) {
     return { kind: 'failed', statusCode: 400, message: 'Payroc payment identifier is required', uncertain: false };
   }
-  return finishPayrocInstruction(input.instructionId, token, fetchImpl, {
+  return finishPayrocInstruction(input.instructionId, token, endpoints.apiOrigin, fetchImpl, {
     provider: 'payroc',
     gateway_submitted: true,
     paymentInstructionId: input.instructionId,
-  }, 1, undefined, input.apiUrl);
+  }, 1);
+}
+
+function payrocCallEndpoints(identityUrl: string, apiOrigin: string): { identityUrl: string; apiOrigin: string } | null {
+  const identity = httpsUrl(identityUrl);
+  const origin = httpsOrigin(apiOrigin);
+  if (!identity || !origin) return null;
+  return { identityUrl: identity, apiOrigin: origin };
 }
 
 type PayrocContext = Record<string, unknown>;
@@ -552,11 +622,11 @@ interface PayrocInstructionView {
 async function finishPayrocInstruction(
   instructionId: string,
   token: string,
+  apiOrigin: string,
   fetchImpl: FetchLike,
   context: PayrocContext,
   maxPolls: number,
   initial?: PayrocInstructionView,
-  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   let current = initial;
   let fetches = 0;
@@ -564,7 +634,7 @@ async function finishPayrocInstruction(
   while ((!current || current.type === 'pending') && fetches < limit && instructionId) {
     fetches += 1;
     const loaded = await requestPayroc(
-      `${apiUrl}/v1/payment-instructions/${encodeURIComponent(instructionId)}`,
+      `${apiOrigin}/v1/payment-instructions/${encodeURIComponent(instructionId)}`,
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
@@ -615,7 +685,7 @@ async function finishPayrocInstruction(
       details: { instruction: current.body, paymentInstructionId: current.id || instructionId },
     }, withInstruction);
   }
-  const paymentId = payrocLinkedPaymentId(current.body);
+  const paymentId = payrocLinkedPaymentId(current.body, apiOrigin);
   if (!paymentId) {
     return attachPayrocContext({
       kind: 'pending',
@@ -624,18 +694,18 @@ async function finishPayrocInstruction(
       details: { instruction: current.body, paymentInstructionId: current.id || instructionId },
     }, withInstruction);
   }
-  return readPayrocPayment(paymentId, token, fetchImpl, withInstruction, apiUrl);
+  return readPayrocPayment(paymentId, token, apiOrigin, fetchImpl, withInstruction);
 }
 
 async function readPayrocPayment(
   paymentId: string,
   token: string,
+  apiOrigin: string,
   fetchImpl: FetchLike,
   context: PayrocContext,
-  apiUrl: string = PAYROC_API_URL,
 ): Promise<GatewayOutcome> {
   const loaded = await requestPayroc(
-    `${apiUrl}/v1/payments/${encodeURIComponent(paymentId)}`,
+    `${apiOrigin}/v1/payments/${encodeURIComponent(paymentId)}`,
     {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
@@ -721,14 +791,15 @@ function attachPayrocContext(outcome: GatewayOutcome, context: PayrocContext): G
   return { ...outcome, details };
 }
 
-function payrocLinkedPaymentId(instruction: Record<string, unknown>): string {
+function payrocLinkedPaymentId(instruction: Record<string, unknown>, apiOrigin: string): string {
+  const allowedHost = httpsOrigin(apiOrigin) ? new URL(apiOrigin).host : '';
   const links = [instruction.link, ...(Array.isArray(instruction.links) ? instruction.links : [])];
   for (const entry of links) {
     const link = asRecord(entry);
     if (!link || String(link.rel || '') !== 'payment' || typeof link.href !== 'string') continue;
     try {
       const url = new URL(link.href);
-      if (!PAYROC_API_HOSTS.has(url.host)) continue;
+      if (!allowedHost || url.host !== allowedHost) continue;
       const match = url.pathname.match(/\/v1\/payments\/([^/]+)$/);
       if (match) return decodeURIComponent(match[1]);
     } catch {
@@ -834,12 +905,12 @@ async function postGateway(
   }
 }
 
-async function payrocToken(apiKey: string, fetchImpl: FetchLike, cache: PayrocTokenCache, authorizeUrl: string = PAYROC_AUTHORIZE_URL): Promise<string> {
-  const cacheKey = `${authorizeUrl}:${apiKey}`;
+async function payrocToken(apiKey: string, identityUrl: string, fetchImpl: FetchLike, cache: PayrocTokenCache): Promise<string> {
+  const cacheKey = `${identityUrl}\n${apiKey}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) return cached.token;
   try {
-    const response = await fetchImpl(authorizeUrl, {
+    const response = await fetchImpl(identityUrl, {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
