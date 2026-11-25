@@ -3770,27 +3770,23 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     wordpressUrl: string;
     wordpressJwt: string;
   }): Promise<number> {
-    const categories = await this.fetchWooCollection(
-      params.wordpressUrl,
-      params.wordpressJwt,
-      '/wp-json/wc/v3/products/categories',
-      params.includeAll ? { per_page: '100', hide_empty: 'false' } : { per_page: '100', hide_empty: 'true', parent: '0' },
-    );
+    let categories: unknown[];
+    try {
+      categories = await this.fetchWooCollection(
+        params.wordpressUrl,
+        params.wordpressJwt,
+        '/wp-json/wc/v3/products/categories',
+        params.includeAll ? { per_page: '100', hide_empty: 'false' } : { per_page: '100', hide_empty: 'true', parent: '0' },
+      );
+    } catch (error) {
+      if (!(error instanceof BadRequestException) || !/HTTP (401|403)\b/.test(error.message)) throw error;
+      const categoryTax = await this.fetchWordPressCategoriesWithTax(params.wordpressUrl, params.wordpressJwt);
+      await this.saveStoreCategoriesWithTax(params.storeId, categoryTax);
+      categories = this.flattenCategoryTaxList(categoryTax);
+      if (!params.includeAll) categories = categories.filter((item) => (item as { parent: number }).parent === 0);
+    }
     await this.saveStoreCategoryColumn(params.storeId, 'payload', categories);
     return categories.length;
-  }
-
-  async getWordPressSubCategories(params: {
-    wordpressUrl: string;
-    wordpressJwt: string;
-    parentId: number;
-  }): Promise<unknown[]> {
-    return this.fetchWooCollection(
-      params.wordpressUrl,
-      params.wordpressJwt,
-      '/wp-json/wc/v3/products/categories',
-      { per_page: '100', hide_empty: 'true', parent: String(params.parentId) },
-    );
   }
 
   async syncStoreAttributesFromWordPress(params: {
@@ -3833,6 +3829,9 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
       params.wordpressJwt,
     );
     await this.saveStoreCategoriesWithTax(params.storeId, body);
+    const saved = await this.getStoreCategoriesByStoreId(params.storeId);
+    const merged = this.mergeSavedCategoryLists(saved, body);
+    if (merged.length) await this.saveStoreCategories(params.storeId, merged);
     return this.categoryTaxRecordCount(body);
   }
 
@@ -4067,14 +4066,36 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
   async getStoreCategoriesByStoreId(storeId: string): Promise<unknown> {
     await this.ensureStoreCategoriesTable();
     const rows = await this.dataSource.query(
-      `SELECT payload
+      `SELECT payload, categories_with_tax
        FROM public.store_categories
        WHERE store_id = $1::uuid
          AND COALESCE(is_deleted, false) = false
        LIMIT 1`,
       [storeId],
     );
-    return rows[0]?.payload ?? null;
+    const row = rows[0];
+    if (!row) return null;
+    const merged = this.mergeSavedCategoryLists(row.payload, row.categories_with_tax);
+    return merged.length ? merged : row.payload ?? null;
+  }
+
+  async getStoreSubCategoriesByStoreId(storeId: string, parentId: number): Promise<unknown[]> {
+    const categories = await this.getStoreCategoriesByStoreId(storeId);
+    if (!Array.isArray(categories)) return [];
+    const children = categories.filter((category) => {
+      if (!category || typeof category !== 'object') return false;
+      return Number((category as { parent?: unknown }).parent) === parentId;
+    });
+    if (children.length) return children;
+
+    // Older category payloads contain only parents. Read their saved tax tree for children.
+    const rows = await this.dataSource.query(
+      `SELECT categories_with_tax FROM public.store_categories
+       WHERE store_id = $1::uuid AND COALESCE(is_deleted, false) = false LIMIT 1`,
+      [storeId],
+    );
+    return this.flattenCategoryTaxList(rows[0]?.categories_with_tax)
+      .filter((category) => category.parent === parentId);
   }
 
   async getStoreCategoriesWithTax(storeId: string): Promise<{
@@ -4121,6 +4142,37 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     return [];
   }
 
+  private flattenCategoryTaxList(value: unknown): ReturnType<MerchantRepository['presentCategoryWithTax']>[] {
+    const flattened: ReturnType<MerchantRepository['presentCategoryWithTax']>[] = [];
+    const seen = new Set<number>();
+    const visit = (items: unknown[], parentId = 0) => {
+      for (const item of items) {
+        const category = this.presentCategoryWithTax(item);
+        if (parentId && !category.parent) category.parent = parentId;
+        if (category.id != null && !seen.has(category.id)) {
+          flattened.push(category);
+          seen.add(category.id);
+        }
+        const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+        const children = record.subcategories ?? record.sub_categories ?? record.children;
+        if (Array.isArray(children)) visit(children, category.id ?? 0);
+      }
+    };
+    visit(this.categoryTaxList(value));
+    return flattened;
+  }
+
+  private mergeSavedCategoryLists(payload: unknown, taxTree: unknown): unknown[] {
+    const categories = Array.isArray(payload) ? [...payload] : [];
+    const knownIds = new Set(categories.map((item) => Number((item as { id?: unknown })?.id)));
+    for (const category of this.flattenCategoryTaxList(taxTree)) {
+      if (category.id == null || knownIds.has(category.id)) continue;
+      categories.push(category);
+      knownIds.add(category.id);
+    }
+    return categories;
+  }
+
   private presentCategoryWithTax(value: unknown) {
     const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
     const image = record.image;
@@ -4161,7 +4213,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
     );
     const row = rows[0];
     return {
-      categories: Array.isArray(row?.categories) ? row.categories : [],
+      categories: this.mergeSavedCategoryLists(row?.categories, row?.categories_with_tax),
       tags: Array.isArray(row?.tags) ? row.tags : [],
       attributes: Array.isArray(row?.attributes) ? row.attributes : [],
       categoriesWithTax: row?.categories_with_tax ?? null,
