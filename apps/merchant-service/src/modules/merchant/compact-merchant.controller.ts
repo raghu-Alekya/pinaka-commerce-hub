@@ -32,6 +32,7 @@ import { isWebConsoleRequest } from '../shared/console-access';
 
 const fields = [
   'password',
+  'agentUserId',
   'merchantName',
   'merchantEmail',
   'merchantPhoneNumber',
@@ -151,6 +152,14 @@ export class CompactMerchantController {
     if (input.first_name !== undefined && input.firstName === undefined) {
       input.firstName = input.first_name;
       delete input.first_name;
+    }
+    if (input.agent_user_id !== undefined && input.agentUserId === undefined) {
+      input.agentUserId = input.agent_user_id;
+      delete input.agent_user_id;
+    }
+    if (input.agentUserId !== undefined && input.agentUserId !== null && input.agentUserId !== '' &&
+      (typeof input.agentUserId !== 'string' || !actorUuid.test(input.agentUserId))) {
+      throw new BadRequestException('agentUserId must be a UUID');
     }
     if (input.last_name !== undefined && input.lastName === undefined) {
       input.lastName = input.last_name;
@@ -283,7 +292,7 @@ export class CompactMerchantController {
            `,
         [id],
       );
-      if (rows.length) return this.showMerchantCode(rows[0]);
+      if (rows.length) return this.withActiveAgent(this.showMerchantCode(rows[0]));
     } catch (error: unknown) {
       console.error(
         '[CompactMerchantController.getRecord]',
@@ -299,7 +308,19 @@ export class CompactMerchantController {
       [id],
     );
     if (!row) throw new NotFoundException('Merchant not found');
-    return this.showMerchantCode(row);
+    return this.withActiveAgent(this.showMerchantCode(row));
+  }
+
+  private async withActiveAgent<T extends Input>(record: T): Promise<T> {
+    const merchant = record.merchant as Input | undefined;
+    if (!merchant?.id) return record;
+    const [assignment] = await this.db.query(
+      `SELECT agent_user_id FROM public.agent_merchants
+       WHERE merchant_id=$1 AND status='ACTIVE' AND is_deleted=false
+       ORDER BY created_at DESC LIMIT 1`,
+      [merchant.id],
+    );
+    return { ...record, merchant: { ...merchant, agentUserId: assignment?.agent_user_id ?? null } } as T;
   }
 
   private dateOnly(value: unknown) {
@@ -527,6 +548,7 @@ export class CompactMerchantController {
       tax: flat.tax ?? merchant.tax,
       totalDueToday: flat.totalDueToday ?? merchant.totalDueToday,
       paymentMethod: flat.paymentMethod ?? merchant.paymentMethod,
+      agentUserId: flat.agentUserId !== undefined ? flat.agentUserId : merchant.agentUserId,
     };
     for (const key of Object.keys(mapped))
       if (mapped[key] === undefined) delete mapped[key];
@@ -643,6 +665,22 @@ export class CompactMerchantController {
           Object.values(merchantData),
         );
         savedId = String(inserted[0]?.id || inserted[0]?.merchantId || rowId);
+        const [existingOwner] = await manager.query(
+          'SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1',
+          [input.merchantEmail],
+        );
+        if (existingOwner) throw new ConflictException('A user with this merchant email already exists');
+        await manager.query(
+          `INSERT INTO public.users (id, first_name, last_name, email, phone_number, role, status, password_hash, merchant_id, notification_enabled)
+           VALUES ($1,$2,$3,$4,$5,'OWNER','ACTIVE',$6,$7,true)`,
+          [randomUUID(), firstName, lastName, input.merchantEmail, input.merchantPhoneNumber || '', merchantData.password || null, savedId],
+        );
+        if (input.agentUserId) await manager.query(
+          `INSERT INTO public.agent_merchants (agent_user_id, merchant_id, created_by, updated_by)
+           VALUES ($1,$2,$3,$3) ON CONFLICT (agent_user_id, merchant_id)
+           DO UPDATE SET status='ACTIVE', is_deleted=false, ended_at=NULL, updated_at=now(), updated_by=$3`,
+          [input.agentUserId, savedId, createdBy],
+        );
 
         const subColsResult = await manager.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='subscriptions'`,
@@ -730,7 +768,7 @@ export class CompactMerchantController {
   }
 
   @Get()
-  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  async list(@Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string; merchantCode?: string } }) {
     try {
       const rows = await this.db.query(
         `SELECT row_to_json(m) AS merchant, row_to_json(mp) AS plan, row_to_json(s) AS subscription,
@@ -808,11 +846,18 @@ export class CompactMerchantController {
     }
   }
 
-  private merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string; merchantCode?: string } }) {
+  private async merchantListResponse(rows: Input[], request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string; merchantCode?: string } }) {
+    const assignments = await this.db.query(
+      "SELECT merchant_id::text AS merchant_id, agent_user_id::text AS agent_user_id FROM public.agent_merchants WHERE status='ACTIVE' AND is_deleted=false",
+    );
+    const agentByMerchant = new Map<string, string>(assignments.map((row: { merchant_id: string; agent_user_id: string }) => [row.merchant_id, row.agent_user_id]));
+    const agent = String(request?.user?.role || '').toUpperCase() === 'AGENT';
     const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
     const merchantId = scoped ? request?.user?.merchantId : undefined;
     const merchantCode = request?.user?.merchantCode;
-    const visible = scoped
+    const visible = agent
+      ? rows.filter((row) => agentByMerchant.get(String(((row.merchant || {}) as Input).id || '')) === request?.user?.id)
+      : scoped
       ? rows.filter((row) => {
           const merchant = (row.merchant || {}) as Input;
           return [merchant.id, merchant.merchant_code, merchant.merchantId, merchant.merchantCode]
@@ -827,6 +872,7 @@ export class CompactMerchantController {
       count: visible.length,
       merchants: visible.map((row) => {
         const merchant = { ...((row.merchant || {}) as Input) };
+        merchant.agentUserId = agentByMerchant.get(String(merchant.id || '')) ?? null;
         delete merchant.password;
         delete merchant.actual_password;
         return this.showMerchantCode({ ...row, merchant });
@@ -962,9 +1008,13 @@ export class CompactMerchantController {
   }
 
   @Get(':id')
-  async get(@Param('id') id: string) {
+  async get(@Param('id') id: string, @Req() request?: { user?: { id?: string; role?: string } }) {
     const record = await this.getRecord(id);
     const merchant = record.merchant;
+    if (String(request?.user?.role || '').toUpperCase() === 'AGENT' &&
+      String((merchant as Input | undefined)?.agentUserId || '') !== String(request?.user?.id || '')) {
+      throw new NotFoundException('Merchant not found');
+    }
     if (merchant && typeof merchant === 'object') {
       const [saved] = await this.db.query('SELECT actual_password FROM public.merchants WHERE id=$1', [merchant.id]);
       if (saved?.actual_password) {
@@ -1066,8 +1116,8 @@ export class CompactMerchantController {
           setCol('actual_password', encryptMerchantPassword(String(input.password)));
           await manager.query(
             `UPDATE public.users SET password_hash = $1, updated_at = now()
-             WHERE lower(email) = lower($2)`,
-            [passwordHash, existing.email ?? existing.merchantEmail ?? input.merchantEmail],
+             WHERE merchant_id=$2 AND role='OWNER'`,
+            [passwordHash, String(existing.id)],
           );
         }
         setCol('businessName', input.businessName ?? existing.businessName);
@@ -1158,6 +1208,22 @@ export class CompactMerchantController {
           input.pinCode ?? existing.postalCode ?? existing.pinCode,
         );
         setCol('country', input.country ?? existing.country);
+        if (input.agentUserId !== undefined) {
+          await manager.query(
+            `UPDATE public.agent_merchants SET status='INACTIVE', is_deleted=true,
+               ended_at=now(), updated_at=now(), updated_by=$3
+             WHERE merchant_id=$1 AND agent_user_id IS DISTINCT FROM $2::uuid
+               AND status='ACTIVE' AND is_deleted=false`,
+            [existing.id, input.agentUserId || null, createdBy],
+          );
+          if (input.agentUserId) await manager.query(
+            `INSERT INTO public.agent_merchants (agent_user_id, merchant_id, created_by, updated_by)
+             VALUES ($1,$2,$3,$3) ON CONFLICT (agent_user_id, merchant_id)
+             DO UPDATE SET status='ACTIVE', is_deleted=false, ended_at=NULL,
+               updated_at=now(), updated_by=$3`,
+            [input.agentUserId, existing.id, createdBy],
+          );
+        }
         let previousPlanId: string | undefined;
         if (input.planId !== undefined) {
           const currentPlanId =
@@ -1225,6 +1291,41 @@ export class CompactMerchantController {
           `UPDATE public.merchants SET ${assignments.join(', ')} WHERE id = $${values.length}`,
           values,
         );
+        const ownerEmail = String(input.merchantEmail ?? existing.email ?? existing.merchantEmail ?? '').trim();
+        const ownerName = String(input.merchantName ?? existing.merchantName ?? existing.ownerName ?? '').trim().split(/\s+/);
+        const ownerValues = [
+          input.firstName ?? existing.first_name ?? ownerName[0] ?? '',
+          input.lastName ?? existing.last_name ?? ownerName.slice(1).join(' '),
+          ownerEmail,
+          input.merchantPhoneNumber ?? existing.merchantPhoneNumber ?? existing.phone ?? '',
+          String(existing.id),
+        ];
+        const updatedOwner = await manager.query(
+          `UPDATE public.users SET first_name=$1, last_name=$2, email=$3,
+             phone_number=$4, employee_id=NULL, role='OWNER', updated_at=now()
+           WHERE merchant_id=$5 AND role='OWNER' RETURNING id`, ownerValues,
+        );
+        if (!updatedOwner.length && ownerEmail) {
+          const [sameEmail] = await manager.query(
+            'SELECT id, merchant_id FROM public.users WHERE lower(email)=lower($1) LIMIT 1',
+            [ownerEmail],
+          );
+          if (sameEmail && String(sameEmail.merchant_id || '') !== String(existing.id)) {
+            throw new ConflictException('A user with this merchant email already exists');
+          }
+          if (sameEmail) await manager.query(
+            `UPDATE public.users SET role='OWNER', employee_id=NULL, first_name=$1,
+               last_name=$2, phone_number=$3, updated_at=now() WHERE id=$4`,
+            [ownerValues[0], ownerValues[1], ownerValues[3], sameEmail.id],
+          );
+          else await manager.query(
+            `INSERT INTO public.users (id, first_name, last_name, email, phone_number, role, status, password_hash, merchant_id, notification_enabled)
+             VALUES ($1,$2,$3,$4,$5,'OWNER','ACTIVE',$6,$7,true)`,
+            [randomUUID(), ownerValues[0], ownerValues[1], ownerEmail, ownerValues[3],
+              input.password !== undefined ? await this.hashMerchantPassword(input.password) : existing.password ?? null,
+              String(existing.id)],
+          );
+        }
         if (input.planId !== undefined) {
           if (requestedStoreTypeId) input.storeTypeId = requestedStoreTypeId;
           await this.saveSubscription(

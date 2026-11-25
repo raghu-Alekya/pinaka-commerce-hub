@@ -1401,7 +1401,7 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { role?: string; accountType?: string; merchantId?: string; agentMerchantIds?: string[] } }) {
     const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
     const consoleMerchant = scoped ? request?.user?.merchantId : undefined;
     if (scoped && !consoleMerchant) throw new ForbiddenException('Merchant scope is required');
@@ -1427,7 +1427,9 @@ export class AppController {
       else throw new NotFoundException('Merchant not found');
     }
     // Listing deliberately excludes activation PINs and channel credentials.
-    const rows = stores.map(s => ({
+    const agentIds = String(request?.user?.role || '').toUpperCase() === 'AGENT'
+      ? new Set(request?.user?.agentMerchantIds || []) : null;
+    const rows = stores.filter(s => !agentIds || agentIds.has(String(s.merchantId))).map(s => ({
       ...this.toStoreResponse(s),
       id: s.id, storeCode: s.storeCode || s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
       storeName: s.storeName, storeType: s.storeTypeId,

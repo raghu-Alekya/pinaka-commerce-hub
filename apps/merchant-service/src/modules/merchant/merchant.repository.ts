@@ -112,6 +112,7 @@ import { StoreTypeFeatureEntity } from '../../entities/store-type-feature.entity
 import { StoreTypeRoleTemplateEntity } from '../../entities/store-type-role-template.entity';
 import { StoreRoleFeatureEntity } from '../../entities/store-role-feature.entity';
 import { MerchantVendorEntity } from '../../entities/merchant-vendor.entity';
+import { AgentMerchantEntity } from '../../entities/agent-merchant.entity';
 import { MerchantTendorEntity } from '../../entities/merchant-tendor.entity';
 import { ensureVendorSchema } from '../vendor/vendor.schema';
 import { ensureStoreAccessSchema } from '../master/store-setup/store-access.schema';
@@ -984,6 +985,7 @@ export class MerchantRepository implements OnModuleInit {
         StoreTypeRoleTemplateEntity,
         StoreRoleFeatureEntity,
         MerchantVendorEntity,
+        AgentMerchantEntity,
         MerchantTendorEntity,
         StoreEmployeeFastkeyEntity,
       ],
@@ -997,6 +999,43 @@ export class MerchantRepository implements OnModuleInit {
       await this.dataSource.query(
         'ALTER TABLE public.merchants ADD COLUMN IF NOT EXISTS actual_password varchar(255) NULL',
       );
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS public.agent_merchants (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          agent_user_id uuid NOT NULL,
+          merchant_id uuid NOT NULL REFERENCES public.merchants(id) ON DELETE CASCADE,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          created_by varchar(100), updated_by varchar(100),
+          is_deleted boolean NOT NULL DEFAULT false,
+          status varchar(20) NOT NULL DEFAULT 'ACTIVE',
+          ended_at timestamptz,
+          CONSTRAINT agent_merchants_agent_merchant_uq UNIQUE (agent_user_id, merchant_id)
+        )
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS created_by varchar(100);
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS updated_by varchar(100);
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS is_deleted boolean NOT NULL DEFAULT false;
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS status varchar(20) NOT NULL DEFAULT 'ACTIVE';
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS ended_at timestamptz;
+        CREATE UNIQUE INDEX IF NOT EXISTS agent_merchants_agent_merchant_uq
+          ON public.agent_merchants(agent_user_id, merchant_id);
+        CREATE INDEX IF NOT EXISTS agent_merchants_agent_idx ON public.agent_merchants(agent_user_id);
+      `);
+      const legacyAgentColumn = await this.dataSource.query(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='agent_user_id'",
+      );
+      if (legacyAgentColumn.length) {
+        await this.dataSource.query(`
+          INSERT INTO public.agent_merchants (agent_user_id, merchant_id)
+          SELECT agent_user_id, id FROM public.merchants WHERE agent_user_id IS NOT NULL
+          ON CONFLICT (agent_user_id, merchant_id) DO NOTHING
+        `);
+        await this.dataSource.query('ALTER TABLE public.merchants DROP COLUMN agent_user_id');
+      }
       const legacyPasswords = await this.dataSource.query(
         `SELECT id, actual_password FROM public.merchants
          WHERE actual_password IS NOT NULL AND actual_password <> ''
@@ -1023,6 +1062,7 @@ export class MerchantRepository implements OnModuleInit {
     await ensureStoreAccessSchema(this.dataSource);
     await ensureStoreRoleTemplateSchema(this.dataSource);
     await ensureEmployeeStoreSchema(this.dataSource);
+    await this.dataSource.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS actual_password text');
     await this.migrateEncryptedPinsToPlaintext();
     await this.ensureStoreCategoriesTable();
     // Existing merchant_vendors tables may predate this pairwise key. The
@@ -7403,8 +7443,8 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           [dto.merchantId],
         );
         const [user] = await manager.query(
-          `INSERT INTO public.users(account_id,first_name,last_name,email,phone_number,role,notification_enabled,status,password_hash,username,merchant_id,employee_id)
-           VALUES($1,$2,$3,$4,$5,'USER',true,$6,$7,$8,$9,$10) RETURNING id`,
+          `INSERT INTO public.users(account_id,first_name,last_name,email,phone_number,role,notification_enabled,status,password_hash,actual_password,username,merchant_id,employee_id)
+           VALUES($1,$2,$3,$4,$5,'USER',true,$6,$7,$8,$9,$10,$11) RETURNING id`,
           [
             account[0]?.accountId || null,
             employee.firstName,
@@ -7413,6 +7453,7 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
             employee.phone || '',
             employee.status === EmployeeStatus.ACTIVE ? 'ACTIVE' : 'DISABLED',
             this.hashUserPassword(dto.temporaryPassword),
+            dto.temporaryPassword,
             username,
             dto.merchantId,
             employee.id,
@@ -7517,6 +7558,8 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
         if (dto.temporaryPassword !== undefined) {
           values.push(this.hashUserPassword(dto.temporaryPassword));
           updates.push(`password_hash=$${values.length}`);
+          values.push(dto.temporaryPassword);
+          updates.push(`actual_password=$${values.length}`);
         }
         await manager.query(
           `UPDATE public.users SET ${updates.join(',')} WHERE id=$1`,
