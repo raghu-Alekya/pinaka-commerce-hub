@@ -1057,7 +1057,7 @@ export class AppController {
     return this.mutateCatalogTerm('DELETE', storeId, taxonomy, termId, {}, request.user);
   }
 
-  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string; accountType?: string }) {
     if (!['categories', 'tags'].includes(taxonomy)) throw new NotFoundException('Catalog taxonomy must be categories or tags');
     if (method !== 'POST' && (!termId || !/^[1-9]\d*$/.test(termId))) throw new BadRequestException('termId must be a positive WooCommerce ID');
     if (!actor?.id) throw new ForbiddenException('Authentication is required');
@@ -1069,13 +1069,16 @@ export class AppController {
     );
     if (!store) throw new NotFoundException('Store not found');
     if (actor.merchantId && actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
-    if (actor.role !== 'OWNER') {
+    if (actor.storeId && actor.storeId !== store.id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    const merchantIdentity = actor.id === store.merchant_id && actor.merchantId === store.merchant_id
+      && (actor.accountType === undefined || actor.accountType === 'merchant');
+    if (actor.role !== 'OWNER' && !merchantIdentity) {
       const [owner] = await this.merchantRepository.requireDataSource().query(
         `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
          WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
            AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`, [actor.id, store.merchant_id],
       );
-      if (!owner || actor.merchantId !== store.merchant_id || (actor.storeId && actor.storeId !== store.id)) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+      if (!owner || actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
     }
     const allowed = taxonomy === 'categories' ? ['name','slug','description','parent','display','image','menu_order'] : ['name','slug','description'];
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a JSON object');
