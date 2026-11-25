@@ -116,7 +116,7 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
   constructor(@Inject(MerchantRepository) private readonly repository: MerchantRepository) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
-    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string;body?:unknown;query?:Record<string, unknown>}>();
+    const request=context.switchToHttp().getRequest<{method?:string;path?:string;url?:string;body?:unknown;query?:Record<string, unknown>;user?:{role?:string;agentMerchantIds?:string[];agentMerchantCodes?:string[];agentStoreIds?:string[]}}>();
     const path=(request.path || request.url || '').split('?')[0];
     const snakeCaseContract = usesSnakeCaseContract(path);
     if (snakeCaseContract) {
@@ -139,7 +139,8 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
       return next.handle().pipe(mergeMap(async payload => {
         const named = await featureNames(this.repository.requireDataSource(), payload);
         const response = attachMerchantCode(named);
-        return snakeCaseContract ? snakeCaseKeys(response) : response;
+        const scoped = this.scopeAgent(request, response);
+        return snakeCaseContract ? snakeCaseKeys(scoped) : scoped;
       }));
     }
     const related=/^(?:\/connector)?\/api\/v1\/(?:merchants|subscriptions|subscription-plans|plans|stores|store-types|store_types|role-templates|role_templates|employees|devices|countries)(?:\/|$)/.test(path);
@@ -150,7 +151,43 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
         : payload;
       const named = request.method==='GET' ? await featureNames(this.repository.requireDataSource(), expanded) : expanded;
       const response = attachMerchantCode(named);
-      return snakeCaseContract ? snakeCaseKeys(response) : response;
+      const scoped = this.scopeAgent(request, response);
+      return snakeCaseContract ? snakeCaseKeys(scoped) : scoped;
     }));
+  }
+
+  private scopeAgent(request: { path?: string; url?: string; user?: { role?: string; agentMerchantIds?: string[]; agentMerchantCodes?: string[]; agentStoreIds?: string[] } }, payload: unknown): unknown {
+    if (String(request.user?.role || '').toUpperCase() !== 'AGENT') return payload;
+    const path = (request.path || request.url || '').split('?')[0];
+    if (/\/(?:plans|features|store-types|store_types|tenders|countries|role-templates|role_templates|permissions|feature-permissions)(?:\/|$)/i.test(path)) return payload;
+    const merchants = new Set([...(request.user?.agentMerchantIds || []), ...(request.user?.agentMerchantCodes || [])].map(id => id.toLowerCase()));
+    const stores = new Set((request.user?.agentStoreIds || []).map(id => id.toLowerCase()));
+    const allowed = (row: Record<string, unknown>): boolean | null => {
+      const merchantId = row.merchantId ?? row.merchant_id ?? row.merchantCode ?? row.merchant_code;
+      if (typeof merchantId === 'string') return merchants.has(merchantId.toLowerCase());
+      const storeId = row.storeId ?? row.store_id ?? row.storeCode ?? row.store_code;
+      if (typeof storeId === 'string') return stores.has(storeId.toLowerCase());
+      if (row.merchant && typeof row.merchant === 'object') {
+        const merchant = row.merchant as Record<string, unknown>;
+        const id = merchant.id ?? merchant.merchantId ?? merchant.merchant_id ?? merchant.merchantCode ?? merchant.merchant_code;
+        if (typeof id === 'string') return merchants.has(id.toLowerCase());
+      }
+      return null;
+    };
+    const walk = (value: unknown, inherited = false): unknown => {
+      if (Array.isArray(value)) return value.flatMap(item => {
+        const owner = item && typeof item === 'object' ? allowed(item as Record<string, unknown>) : null;
+        if (owner === false || (owner === null && !inherited)) return [];
+        return [walk(item, inherited || owner === true)];
+      });
+      if (!value || typeof value !== 'object' || value instanceof Date) return value;
+      const row = value as Record<string, unknown>;
+      const owner = allowed(row);
+      if (owner === false) return null;
+      const result: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(row)) result[key] = walk(child, inherited || owner === true);
+      return result;
+    };
+    return walk(payload);
   }
 }

@@ -59,6 +59,20 @@ export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   private isDbConnected = false;
   private isRedisConnected = false;
 
+  async assignedAgentStoreIds(userId: string, merchantId?: string): Promise<string[]> {
+    if (!this.dataSource || !this.isDbConnected) throw new ServiceUnavailableException('Order database is unavailable');
+    const rows = await this.dataSource.query(
+      `SELECT s.id::text AS id FROM public.agent_merchants am
+       JOIN public.merchants m ON m.id=am.merchant_id
+       JOIN public.stores s ON s.merchant_id::text=m.id::text
+       WHERE am.agent_user_id=$1 AND am.status='ACTIVE' AND am.is_deleted=false
+         AND COALESCE(s.is_deleted,false)=false
+         AND ($2::text IS NULL OR m.id::text=$2 OR m.merchant_code=$2)`,
+      [userId, merchantId || null],
+    );
+    return rows.map((row: { id: string }) => row.id);
+  }
+
   private inMemoryOrders: OrderEntity[] = [];
   private inMemoryItems: OrderItemEntity[] = [];
   private inMemoryHistory: OrderStatusHistoryEntity[] = [];
