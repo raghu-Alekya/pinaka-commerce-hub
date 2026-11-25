@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnApplicationShutdown, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -11,11 +11,13 @@ import { StoreOrderMetaEntity } from './entities/store-order-meta.entity';
 import { cashChangeReturned, isCashTender } from './calculations/order-change';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
+import { orderDbRequired, orderSchemaChangesOnStartup } from './config/runtime-flags';
 import {
   allocateRoundedTax,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   applyPosSaleCalculation,
+  type SaleTaxConfiguration,
   adminOrderCounts,
   assignFixedCartCouponDiscounts,
   calculateDiscountTotal,
@@ -46,7 +48,7 @@ function paymentTenderFamily(method: unknown): 'card' | 'ebt' | null {
 }
 
 @Injectable()
-export class OrderRepository implements OnModuleInit {
+export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   private dataSource?: DataSource;
   private loyaltyPaymentVoid?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
   private loyaltyOrderCompleted?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
@@ -62,24 +64,38 @@ export class OrderRepository implements OnModuleInit {
   private inMemoryHistory: OrderStatusHistoryEntity[] = [];
 
   async onModuleInit() {
+    // Startup DDL stays on for local dev (default). On ECS set ORDER_SERVICE_SCHEMA_ON_STARTUP=false
+    // and run the one-off migrate task instead, so replicas never race on schema changes.
+    const runSchema = orderSchemaChangesOnStartup();
     try {
-      await this.migrateLegacyOrderIdsBeforeOrm();
-      await this.migrateOrderColumnsToSnakeCase();
+      if (runSchema) {
+        await this.migrateLegacyOrderIdsBeforeOrm();
+        await this.migrateOrderColumnsToSnakeCase();
+      }
       this.dataSource = new DataSource({
         ...postgresConnectionOptions([StoreOrderEntity, StoreOrderMetaEntity, OrderItemEntity, OrderStatusHistoryEntity]),
         synchronize: false,
       });
       await this.dataSource.initialize();
-      await this.ensureOrderUuidSchema();
-      await this.ensurePosOrderColumns();
-      await this.ensureStoreOrdersTable();
-      await ensureStorePosPaymentsSchema(this.dataSource);
-      await ensureStoreOrdersMetaSchema(this.dataSource);
+      if (runSchema) {
+        await this.ensureOrderUuidSchema();
+        await this.ensurePosOrderColumns();
+        await this.ensureStoreOrdersTable();
+        await ensureStorePosPaymentsSchema(this.dataSource);
+        await ensureStoreOrdersMetaSchema(this.dataSource);
+      } else {
+        console.log('ℹ️ [Order Service DB] Startup schema changes skipped (ORDER_SERVICE_SCHEMA_ON_STARTUP=false).');
+      }
       this.storeOrderRepo = this.dataSource.getRepository(StoreOrderEntity);
       this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
       this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
       this.isDbConnected = true;
     } catch (err: any) {
+      if (orderDbRequired()) {
+        // On ECS an in-memory fallback would silently lose orders; fail so the task is replaced.
+        console.error(`❌ [Order Service DB] Unavailable (${err.message}) and ORDER_SERVICE_REQUIRE_DB=true.`);
+        throw err;
+      }
       console.log(`⚠️ [Order Service DB] Offline (${err.message}). Using in-memory store fallback.`);
       this.isDbConnected = false;
     }
@@ -116,6 +132,48 @@ export class OrderRepository implements OnModuleInit {
       console.log(`⚠️ [Order Service Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
+
+  /** Dependency status for GET /ready. Database is required; Redis is an optional cache. */
+  async readiness(timeoutMs = 2000): Promise<{
+    database: { ok: boolean; error?: string };
+    redis: { ok: boolean; status: string };
+  }> {
+    let database: { ok: boolean; error?: string } = { ok: false, error: 'not connected' };
+    if (this.isDbConnected && this.dataSource?.isInitialized) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.dataSource.query('SELECT 1'),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+        database = { ok: true };
+      } catch (err: any) {
+        database = { ok: false, error: err?.message || 'query failed' };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    const redisStatus = this.redisClient?.status || 'not configured';
+    return { database, redis: { ok: this.isRedisConnected && redisStatus === 'ready', status: redisStatus } };
+  }
+
+  async onApplicationShutdown(signal?: string) {
+    if (signal) console.log(`🛑 [Order Service] ${signal} received, closing connections.`);
+    try {
+      if (this.redisClient && this.redisClient.status !== 'end') await this.redisClient.quit();
+    } catch {
+      this.redisClient?.disconnect();
+    }
+    this.isRedisConnected = false;
+    try {
+      if (this.dataSource?.isInitialized) await this.dataSource.destroy();
+    } catch (err: any) {
+      console.error(`[Order Service DB] Error while closing: ${err?.message}`);
+    }
+    this.isDbConnected = false;
   }
 
   async calculate(input: StoreOrderCalculationInput = {}, storeId?: string) {
@@ -169,7 +227,9 @@ export class OrderRepository implements OnModuleInit {
     if (!this.isDbConnected || !this.dataSource || !this.storeOrderRepo) {
       throw new ServiceUnavailableException('Order database is unavailable; the order was not saved');
     }
-    const sourcePayload = JSON.parse(JSON.stringify(orderData.requestPayload || {}));
+    const originalPayload = JSON.parse(JSON.stringify(orderData.requestPayload || {}));
+    orderData.requestPayload = originalPayload;
+    const sourcePayload = JSON.parse(JSON.stringify(originalPayload));
     if (this.isDbConnected && this.dataSource) {
       const stores = await this.dataSource.query(
         `SELECT id, merchant_id, currency, timezone
@@ -1071,7 +1131,7 @@ export class OrderRepository implements OnModuleInit {
             const totalTax = existingTax * customNormalization.quantity;
             line.subtotal_tax = subtotalTax.toFixed(places);
             line.total_tax = totalTax.toFixed(places);
-            line.taxes = rate > 0 ? [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
+            line.taxes = rate > 0 ? [{ id: rate, rate_percent: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
             const taxDeltaMinor = Math.round((totalTax - existingTax) * factor);
             if (taxDeltaMinor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + taxDeltaMinor);
           }
@@ -1139,7 +1199,7 @@ export class OrderRepository implements OnModuleInit {
         entry.line.total_tax = (lineMinor / factor).toFixed(places);
         entry.line.subtotal_tax = (subtotalMinor / factor).toFixed(places);
         entry.line.taxes = lineMinor
-          ? [{ id: rate, total: entry.line.total_tax, subtotal: entry.line.subtotal_tax }]
+          ? [{ id: rate, rate_percent: rate, total: entry.line.total_tax, subtotal: entry.line.subtotal_tax }]
           : [];
       });
       if (minor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + minor);
@@ -1187,7 +1247,7 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
-    const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, places);
+    const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, places, taxSetting);
     if (!sale) {
       const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
       const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
@@ -1243,13 +1303,43 @@ export class OrderRepository implements OnModuleInit {
       orderData.subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
       orderData.taxAmount = Number(sourcePayload.total_tax || 0);
       orderData.totalAmount = Number(sourcePayload.total);
-      orderData.requestPayload = sourcePayload;
     }
   }
 
-  private async calculatePreparedSale(orderData: any, sourcePayload: any, lines: any[], places: number) {
+  private async calculatePreparedSale(
+    orderData: any,
+    sourcePayload: any,
+    lines: any[],
+    places: number,
+    taxConfiguration?: SaleTaxConfiguration | null,
+  ) {
     await this.applyLocalFixedCartCoupons(orderData, sourcePayload, places);
-    return applyPosSaleCalculation(lines, sourcePayload, places);
+    const configuration = taxConfiguration === undefined
+      ? await this.currencyTaxConfiguration(orderData?.storeId)
+      : taxConfiguration || undefined;
+    return applyPosSaleCalculation(lines, sourcePayload, places, configuration);
+  }
+
+  private async currencyTaxConfiguration(storeId: unknown): Promise<SaleTaxConfiguration | undefined> {
+    if (!this.dataSource || !storeId) return undefined;
+    try {
+      const configurations: Array<{ configuration_value?: SaleTaxConfiguration }> = await this.dataSource.query(
+        `SELECT configuration_value
+           FROM public.store_pos_configurations
+          WHERE store_id = $1::uuid
+            AND configuration_name = 'currency_taxes'
+          LIMIT 1`,
+        [storeId],
+      );
+      const configured = configurations[0]?.configuration_value;
+      return configured && typeof configured === 'object' ? configured : undefined;
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code !== '42P01' && code !== '42703') throw error;
+      return undefined;
+    }
   }
 
   private async applyLocalFixedCartCoupons(orderData: any, sourcePayload: any, places: number): Promise<void> {
@@ -1304,7 +1394,6 @@ export class OrderRepository implements OnModuleInit {
     orderData.totalAmount = sale.total;
     orderData.discountAmount = sale.discountTotal;
     orderData.saleCalculated = true;
-    orderData.requestPayload = sourcePayload;
   }
 
   private async cashbackFeeForAmount(storeId: string, amount: number): Promise<number> {
