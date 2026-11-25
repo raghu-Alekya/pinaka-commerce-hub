@@ -39,8 +39,6 @@ export class UserEntity {
   status!: UserStatus;
   @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true, select: false })
   passwordHash?: string | null;
-  @Column({ name: 'actual_password', type: 'text', nullable: true, select: false })
-  actualPassword?: string | null;
   @Column({ name: 'action_token_hash', type: 'varchar', length: 64, nullable: true, select: false })
   actionTokenHash?: string | null;
   @Column({ name: 'action_token_type', type: 'varchar', length: 20, nullable: true, select: false })

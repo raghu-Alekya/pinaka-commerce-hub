@@ -130,7 +130,7 @@ export class ConsoleAccessService {
         id: user.id || merchant.id,
         email: user.email || merchant.email,
         businessDisplayName: merchant.businessName,
-        role: 'OWNER',
+        role: 'Merchant',
         accountType: 'merchant',
         merchantId: merchant.id,
         merchantCode: merchant.code,

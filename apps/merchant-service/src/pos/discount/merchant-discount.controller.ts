@@ -21,7 +21,8 @@ export class MerchantDiscountController {
   @Get()
   @HttpCode(200)
   async list(@Param('storeId') storeId: string, @Query() query: Record<string, string>, @Req() request: MerchantRequest) {
-    return this.discounts.listForMerchant(storeId, request.user, query);
+    const id = await this.storeId(storeId, request);
+    return this.discounts.list(id, 'MERCHANT_ADMIN', query);
   }
 
   @Get(':type/:id')

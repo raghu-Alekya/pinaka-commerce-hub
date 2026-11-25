@@ -127,12 +127,8 @@ export class AppController {
 
   // --- 2. Get All Orders for Store ---
   @Get()
-  async getOrders(@Query('storeId') storeId: string, @Headers('authorization') authorization?: string) {
-    const session = verifyAccessToken(extractBearerToken(authorization));
-    const assignedStores = String(session.role || '').toUpperCase() === 'AGENT'
-      ? await this.orderRepository.assignedAgentStoreIds(String(session.sub || '')) : undefined;
-    const targetStore = storeId || (assignedStores?.[0]) || 'STR-5001';
-    if (assignedStores && !assignedStores.includes(targetStore)) throw new ForbiddenException('This store is not assigned to your account');
+  async getOrders(@Query('storeId') storeId: string) {
+    const targetStore = storeId || 'STR-5001';
     const orders = await this.orderRepository.getOrdersByStore(targetStore);
     return {
       success: true,
@@ -148,19 +144,9 @@ export class AppController {
     @Query('end_date') endDate?: string,
     @Query('store_id') storeId?: string,
     @Headers('x-store-id') storeHeader?: string,
-    @Headers('authorization') authorization?: string,
   ) {
     if (storeId && storeHeader && storeId.trim() !== storeHeader.trim()) throw new BadRequestException('Conflicting store IDs');
-    return this.agentScopedCounts(authorization, storeHeader || storeId, startDate, endDate);
-  }
-
-  private async agentScopedCounts(authorization: string | undefined, storeId: string | undefined, startDate?: string, endDate?: string) {
-    const session = authorization ? verifyAccessToken(extractBearerToken(authorization)) : null;
-    if (String(session?.role || '').toUpperCase() === 'AGENT') {
-      const storeIds = await this.orderRepository.assignedAgentStoreIds(String(session?.sub || ''));
-      if (!storeId || !storeIds.includes(storeId)) throw new ForbiddenException('Select a store assigned to your account');
-    }
-    return this.orderRepository.getAdminOrderCounts(storeId, startDate, endDate);
+    return this.orderRepository.getAdminOrderCounts(storeHeader || storeId, startDate, endDate);
   }
 
   @Get('total-orders')
@@ -174,11 +160,7 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
   ) {
-    const session = verifyAccessToken(extractBearerToken(authorization));
-    const agentStoreIds = String(session.role || '').toUpperCase() === 'AGENT'
-      ? await this.orderRepository.assignedAgentStoreIds(String(session.sub || '')) : undefined;
-    const requestedStore = storeHeader || storeId || storeIdSnake;
-    if (agentStoreIds && requestedStore && !agentStoreIds.includes(requestedStore)) throw new ForbiddenException('This store is not assigned to your account');
+    verifyAccessToken(extractBearerToken(authorization));
     const criteria = this.orderLists.criteria({
       page,
       perPage,
@@ -186,7 +168,6 @@ export class AppController {
       createdVia,
       storeId: storeHeader || storeId || storeIdSnake,
     });
-    if (agentStoreIds) criteria.storeIds = agentStoreIds;
     const listed = await this.orderRepository.listOrders(criteria);
     await this.hydrateCouponLines(listed.orders);
     const storeIds = [...new Set(listed.orders.map((row) => row.order.storeId).filter(Boolean))];
@@ -230,14 +211,8 @@ export class AppController {
     @Query('storeId') storeId?: string,
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
-    @Headers('authorization') authorization?: string,
   ) {
-    const session = authorization ? verifyAccessToken(extractBearerToken(authorization)) : null;
-    const agentStoreIds = String(session?.role || '').toUpperCase() === 'AGENT'
-      ? await this.orderRepository.assignedAgentStoreIds(String(session?.sub || '')) : undefined;
-    const requestedStore = storeHeader || storeId || storeIdSnake;
-    if (agentStoreIds && requestedStore && !agentStoreIds.includes(requestedStore)) throw new ForbiddenException('This store is not assigned to your account');
-    const criteria = this.orderLists.criteria({ status, createdVia, storeId: requestedStore, storeIds: agentStoreIds });
+    const criteria = this.orderLists.criteria({ status, createdVia, storeId: storeHeader || storeId || storeIdSnake });
     const result = await this.orderRepository.getOrderStatusCounts(criteria);
     return { success: true, order_total_count: result.total, status_counts: result.statusCounts };
   }
@@ -260,10 +235,6 @@ export class AppController {
     @Headers('x-pch-web-console') webConsole?: string,
   ) {
     const session = verifyAccessToken(extractBearerToken(authorization));
-    const agentStoreIds = String(session.role || '').toUpperCase() === 'AGENT'
-      ? await this.orderRepository.assignedAgentStoreIds(String(session.sub || ''), merchantHeader) : undefined;
-    const requestedStore = storeHeader || storeId || storeIdSnake;
-    if (agentStoreIds && requestedStore && !agentStoreIds.includes(requestedStore)) throw new ForbiddenException('This store is not assigned to your account');
     const scoped = webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee');
     if (scoped && !session.merchantId) throw new ForbiddenException('Merchant scope is required');
     const criteria = this.orderLists.criteria({
@@ -272,7 +243,6 @@ export class AppController {
       status,
       createdVia,
       storeId: storeHeader || storeId || storeIdSnake,
-      storeIds: agentStoreIds,
     });
     const createdAfterDate = createdAfter ? new Date(createdAfter) : undefined;
     if (createdAfterDate && Number.isNaN(createdAfterDate.getTime())) {
@@ -282,8 +252,7 @@ export class AppController {
     const listed = await this.orderRepository.listOrders({
       ...criteria,
       statuses,
-      merchantId: scoped ? session.merchantId : agentStoreIds ? undefined : merchantHeader || undefined,
-      ...(agentStoreIds ? { storeIds: agentStoreIds } : {}),
+      merchantId: scoped ? session.merchantId : merchantHeader || undefined,
       search: search?.trim() || undefined,
       customer: author?.trim() || undefined,
       createdAfter: createdAfterDate,
@@ -362,10 +331,6 @@ export class AppController {
     }
     const data = await this.orderRepository.getOrderDetails(id, storeHeader || storeId || storeIdSnake);
     if (!data) throw new NotFoundException(`Order '${id}' not found`);
-    if (String(session.role || '').toUpperCase() === 'AGENT') {
-      const assignedStores = await this.orderRepository.assignedAgentStoreIds(String(session.sub || ''));
-      if (!assignedStores.includes(String(data.order.storeId || ''))) throw new NotFoundException(`Order '${id}' not found`);
-    }
     if (webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee') &&
         (!session.merchantId || String(data.order.merchantId).toLowerCase() !== session.merchantId.toLowerCase())) {
       throw new NotFoundException(`Order '${id}' not found`);

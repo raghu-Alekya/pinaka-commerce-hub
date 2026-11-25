@@ -32,13 +32,6 @@ export class PosAuthController {
     return this.posAuthService.merchantPasswordLogin(body);
   }
 
-  @Public()
-  @Post('pch-merchant-login')
-  @HttpCode(HttpStatus.OK)
-  pchMerchantLogin(@Body() body: { email?: string; password?: string }) {
-    return this.posAuthService.pchMerchantLogin(body);
-  }
-
   @Post('merchant-logout')
   @HttpCode(HttpStatus.OK)
   merchantLogout(@Headers('authorization') authorization?: string) {

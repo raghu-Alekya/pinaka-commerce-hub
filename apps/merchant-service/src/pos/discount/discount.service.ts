@@ -53,13 +53,14 @@ export class DiscountService implements OnModuleInit {
   }
 
   async list(storeId: string, role?: string, query: Record<string, string> = {}) {
-    this.requireDiscountRole(role);
+    await this.requireWordPressConnection(storeId, role);
     // Page refreshes must never import remote changes; only sync() refreshes this snapshot.
     return this.listStoredDiscounts(storeId, query, query.type);
   }
 
   async listForMerchant(storeId: string, actor: { id?: string; merchantId?: string; storeId?: string } | undefined, query: Record<string, string> = {}) {
     const store = await this.resolveMerchantStore(storeId, actor);
+    await this.resolveWordPressConnection(store.id);
     return this.listStoredDiscounts(store.id, query, query.type);
   }
 

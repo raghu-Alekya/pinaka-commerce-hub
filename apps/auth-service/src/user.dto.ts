@@ -32,18 +32,8 @@ export class CreatePchUserDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(100) username!: string;
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(30) phone_number!: string;
   @Transform(normalizeEmail) @IsEmail() @MaxLength(255) email!: string;
-  @IsEnum([UserRole.OWNER, UserRole.SUPER_ADMIN, UserRole.AGENT]) role!: UserRole;
+  @IsEnum([UserRole.ADMIN, UserRole.OWNER, UserRole.SUPER_ADMIN, UserRole.AGENT]) role!: UserRole;
   @IsString() @MinLength(8) @MaxLength(128) password!: string;
-}
-
-export class UpdatePchUserDto {
-  @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(100) first_name?: string;
-  @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(100) last_name?: string;
-  @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(100) username?: string;
-  @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(30) phone_number?: string;
-  @IsOptional() @Transform(normalizeEmail) @IsEmail() @MaxLength(255) email?: string;
-  @IsOptional() @IsEnum([UserRole.ADMIN, UserRole.OWNER, UserRole.SUPER_ADMIN, UserRole.AGENT]) role?: UserRole;
-  @IsOptional() @IsString() @MinLength(8) @MaxLength(128) password?: string;
 }
 
 export class UpdateUserDto {

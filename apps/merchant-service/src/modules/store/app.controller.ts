@@ -367,7 +367,7 @@ export class AppController {
   ) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    await this.assertWebsiteConnectorAccess(store, request, false);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     return {
       success: true,
@@ -627,7 +627,7 @@ export class AppController {
       });
     } catch { throw new BadRequestException('Could not confirm the WordPress product operation. Check the product before retrying.'); }
     const data = await response.json().catch(() => null);
-    if (!response.ok || !data) throw new BadRequestException({ message: data?.message || 'WordPress product operation failed', upstreamStatus: response.status, upstreamOperation: `${method} ${path}` });
+    if (!response.ok || !data) throw new BadRequestException({ message: data?.message || 'WordPress product operation failed', upstreamStatus: response.status });
     return data;
   }
 
@@ -671,8 +671,8 @@ export class AppController {
     if (Object.keys(input).some(key => !allowed.includes(key))) throw new BadRequestException('Unsupported product field');
     if (productId) {
       if (!Object.keys(input).length && !image) throw new BadRequestException('Provide at least one field or image to update');
+      const existing = await this.productWriteRequest(params, `products/${productId}`, 'GET');
       if (input.variations !== undefined && Array.isArray(input.variations)) {
-        const existing = await this.productWriteRequest(params, `products/${productId}`, 'GET');
         input = { ...input, type: input.type ?? existing.type, attributes: input.attributes ?? existing.attributes };
         const entries: any[] = [];
         const ids = new Set<number>();
@@ -717,7 +717,7 @@ export class AppController {
       throw new BadRequestException('Could not confirm product save with WordPress. Check the store catalog before retrying to avoid duplicates.');
     }
     let data = await response.json();
-    if (!response.ok) throw new BadRequestException({ message: data?.message || `WordPress product ${productId ? 'update' : 'creation'} failed`, upstreamStatus: response.status, upstreamOperation: `${productId ? 'PUT' : 'POST'} products${productId ? '/' + productId : ''}` });
+    if (!response.ok) throw new BadRequestException({ message: data?.message || 'WordPress product creation failed', upstreamStatus: response.status });
     const variations: any[] = [];
     const variationErrors: { index: number; message: string }[] = [];
     // WooCommerce variation writes are independent. Send small batches in parallel
@@ -1409,10 +1409,7 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; role?: string; accountType?: string; merchantId?: string } }) {
-    const agent = String(request?.user?.role || '').toUpperCase() === 'AGENT';
-    const assignedRows = agent ? await this.merchantRepository.requireDataSource().query("SELECT merchant_id::text AS id FROM public.agent_merchants WHERE agent_user_id=$1 AND status='ACTIVE' AND is_deleted=false", [request?.user?.id]) : [];
-    const assignedMerchantIds = new Set<string>(assignedRows.map((row: { id: string }) => row.id));
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
     const consoleMerchant = scoped ? request?.user?.merchantId : undefined;
     if (scoped && !consoleMerchant) throw new ForbiddenException('Merchant scope is required');
@@ -1423,7 +1420,6 @@ export class AppController {
         ? await this.merchantRepository.resolveMerchantUuid(requestedMerchant)
         : await this.merchantRepository.resolveMerchantId(requestedMerchant);
     if (requestedMerchant && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
-    if (agent && requestedMerchant && !assignedMerchantIds.has(String(resolvedMerchantId))) throw new NotFoundException('Merchant not found');
     const [stores, merchants] = await Promise.all([
       this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
@@ -1439,7 +1435,7 @@ export class AppController {
       else throw new NotFoundException('Merchant not found');
     }
     // Listing deliberately excludes activation PINs and channel credentials.
-    const rows = stores.filter(s => !agent || assignedMerchantIds.has(String(s.merchantId))).map(s => ({
+    const rows = stores.map(s => ({
       ...this.toStoreResponse(s),
       id: s.id, storeCode: s.storeCode || s.id, merchantId: s.merchantId, merchantName: names.get(s.merchantId) || s.merchantId,
       storeName: s.storeName, storeType: s.storeTypeId,
@@ -1702,23 +1698,20 @@ export class AppController {
 
   private requireOwnerRole(role?: string): void {
     if (process.env.SKIP_AUTH === 'true') return;
-    if (!['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(String(role || '').toUpperCase())) {
-      throw new ForbiddenException('Only owners and administrators may manage website connectors');
-    }
+    if (role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
   }
 
   private async assertWebsiteConnectorAccess(
-    store: { merchantId: string }, request: ConnectorRequest, manage = true,
+    store: { merchantId: string }, request: ConnectorRequest,
   ): Promise<void> {
-    if (isWebConsoleRequest(request) && ['merchant', 'employee'].includes(String(request.user?.accountType || ''))) {
-      if (!request.user?.merchantId ||
+    if (isWebConsoleRequest(request) && request.user?.accountType === 'merchant') {
+      if (!request.user.merchantId ||
           !(await this.merchantRepository.storeMatchesMerchant(store, request.user.merchantId))) {
-        throw new ForbiddenException('You can only access connections for your own stores');
+        throw new ForbiddenException('You can only manage connections for your own stores');
       }
-      if (manage && request.user?.accountType !== 'merchant') this.requireOwnerRole(request.user?.role);
       return;
     }
-    if (manage) this.requireOwnerRole(request.user?.role);
+    this.requireOwnerRole(request.user?.role);
   }
 
   private async pingWordPress(wordpressUrl: string, wordpressJwt: string): Promise<{ ok: boolean; message: string }> {
