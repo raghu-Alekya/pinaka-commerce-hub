@@ -17,7 +17,6 @@ import {
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
   applyPosSaleCalculation,
-  type SaleTaxConfiguration,
   adminOrderCounts,
   assignFixedCartCouponDiscounts,
   calculateDiscountTotal,
@@ -31,11 +30,11 @@ import {
   orderTotalWithTax,
   representedCouponDiscount,
   sumCouponDiscounts,
-  type StoreOrderCalculationInput,
   sumLineSubtotals,
   sumLineTotals,
   taxUnitsForMinor,
 } from './calculations/store-order.calculations';
+import type { SaleTaxConfiguration, StoreOrderCalculationInput } from './calculations/store-order.calculations';
 
 const CARD_PAYMENT_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
 const EBT_PAYMENT_METHODS = new Set(['ebt', 'pos-ebt', 'ebt-card']);
