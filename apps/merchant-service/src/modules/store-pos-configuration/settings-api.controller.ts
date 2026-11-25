@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Put, Query, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Put, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RequireAuth } from '../shared/session-auth.guard';
 import {
-  BusinessInfoDto, CashSettingsDto, DeviceSettingsDto, EmailSettingsDto, TestEmailDto, EnableCashbackDto,
+  BusinessInfoDto, CashSettingsDto, DeviceSettingsDto, EnableCashbackDto,
   EnableCouponsDto, EnableLoyaltyPointsDto, EnableSafesDropDto, EnableSafesDto,
   EnableServiceChargeDto, EnableTaxesDto, GeneralSettingsDto, SequentialCouponsDto,
 } from './dto/settings-api.dto';
@@ -82,25 +82,6 @@ export class SettingsApiController {
   getGeneral(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string) {
     return this.settings.getGeneral(this.scope(request, merchantId, storeId));
-  }
-
-  @Get('email-settings')
-  getEmailSettings(@Req() request: AuthenticatedRequest, @Query('template_id') templateId?: string,
-    @Headers('x-merchant-id') merchantId?: string,
-    @Headers('x-store-id') storeId?: string) {
-    return this.settings.getEmailSettings(this.scope(request, merchantId, storeId), templateId);
-  }
-
-  @Post('email-settings') @HttpCode(HttpStatus.OK)
-  saveEmailSettings(@Body() body: EmailSettingsDto, @Req() request: AuthenticatedRequest,
-    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
-    return this.settings.saveEmailSettings(body, this.scope(request, merchantId, storeId));
-  }
-
-  @Post('email-settings/test-email') @HttpCode(HttpStatus.OK)
-  sendTestEmail(@Body() body: TestEmailDto, @Req() request: AuthenticatedRequest,
-    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
-    return this.settings.sendTestEmail(body, this.scope(request, merchantId, storeId));
   }
 
   @Post('printer-settings') @HttpCode(HttpStatus.OK)
