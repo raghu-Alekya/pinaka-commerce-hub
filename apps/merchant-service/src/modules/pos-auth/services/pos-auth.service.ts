@@ -101,6 +101,122 @@ export class PosAuthService {
     return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, user: sessionUser, permissions, count: stores.length, stores };
   }
 
+  async pchMerchantLogin(input: { email?: string; password?: string }) {
+    if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
+      throw new BadRequestException('email and password are required (password maximum 128 characters)');
+    }
+    const db = this.merchantRepository.requireDataSource();
+    const rows = await db.query(
+      `SELECT id, email, first_name AS "firstName", last_name AS "lastName", username,
+              role, status, account_id AS "accountId", merchant_id AS "merchantId",
+              employee_id AS "employeeId", password_hash AS "passwordHash"
+         FROM public.users
+        WHERE lower(email)=lower($1) OR lower(username)=lower($1)
+        LIMIT 2`,
+      [input.email.trim()],
+    );
+    const user = rows.length === 1 ? rows[0] : undefined;
+    if (!user || !(await this.passwordMatches(user.passwordHash, input.password))) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+    if (String(user.status).toUpperCase() !== 'ACTIVE') throw new ForbiddenException('User account is inactive');
+    if (user.employeeId) {
+      if (String(user.role).toUpperCase() !== 'OWNER' || !user.merchantId) {
+        throw new ForbiddenException('Use employee console login');
+      }
+      const linkedMerchant = await db.query(
+        `SELECT id FROM public.merchants
+          WHERE id::text=$1 AND lower(email)=lower($2)
+            AND COALESCE(is_deleted,false)=false LIMIT 1`,
+        [String(user.merchantId), user.email],
+      );
+      if (linkedMerchant.length !== 1) throw new ForbiddenException('Use employee console login');
+      const repaired = await db.query(
+        `UPDATE public.users SET employee_id=NULL, updated_at=now()
+          WHERE id=$1 AND role='OWNER' AND merchant_id=$2 AND employee_id=$3
+          RETURNING id`,
+        [user.id, String(user.merchantId), user.employeeId],
+      );
+      if (repaired.length !== 1) throw new ForbiddenException('Use employee console login');
+      user.employeeId = null;
+    }
+
+    if (['admin@alektasolutions.com', 'admin-kumar@alektasolutions.com'].includes(String(user.email).toLowerCase())
+      && !user.merchantId && !user.employeeId
+      && ['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(String(user.role).toUpperCase())
+      && (user.accountId || String(user.role).toUpperCase() !== 'SUPER_ADMIN')) {
+      const promoted = await db.query(
+        `UPDATE public.users SET role='SUPER_ADMIN', account_id=NULL, updated_at=now()
+          WHERE id=$1 AND lower(email) IN ('admin@alektasolutions.com', 'admin-kumar@alektasolutions.com')
+            AND merchant_id IS NULL AND employee_id IS NULL
+            AND role IN ('OWNER','ADMIN','SUPER_ADMIN')
+          RETURNING id`,
+        [user.id],
+      );
+      if (promoted.length !== 1) throw new ForbiddenException('This user cannot access the PCH console');
+      user.role = 'SUPER_ADMIN';
+      user.accountId = null;
+    }
+    const role = String(user.role || '').toUpperCase();
+    const platformUser = !user.accountId && !user.merchantId;
+    if (platformUser && !['OWNER', 'ADMIN', 'SUPER_ADMIN', 'AGENT'].includes(role)) {
+      throw new ForbiddenException('This user cannot access the PCH console');
+    }
+    if (!platformUser && !user.merchantId) throw new ForbiddenException('This user cannot access the PCH console');
+
+    let merchant: { id: string; merchantCode: string; status: string } | undefined;
+    let stores: Array<{ id: string; storeCode: string; storeName: string; status: string }> = [];
+    if (user.merchantId) {
+      if (role !== 'OWNER') throw new ForbiddenException('Only merchant owners can use this login');
+      const merchants = await db.query(
+        `SELECT id, merchant_code AS "merchantCode", status::text AS status
+           FROM public.merchants
+          WHERE (id::text=$1 OR merchant_code=$1) AND COALESCE(is_deleted,false)=false
+          LIMIT 1`,
+        [String(user.merchantId)],
+      );
+      merchant = merchants[0];
+      if (!merchant || merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+      stores = await db.query(
+        `SELECT id, store_code AS "storeCode", store_name AS "storeName", status::text AS status
+           FROM public.stores WHERE merchant_id=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
+        [merchant.id],
+      );
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = 12 * 60 * 60;
+    const sessionId = randomUUID();
+    const payload = {
+      sub: user.id,
+      accountId: user.accountId ?? null,
+      email: user.email,
+      role,
+      ...(merchant ? { accountType: 'merchant', merchantId: merchant.id, merchantCode: merchant.merchantCode } : {}),
+      type: 'access', jti: sessionId, iat: now, exp: now + expiresIn,
+    };
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
+    const accessToken = `${header}.${body}.${signature}`;
+    await db.getRepository(SessionEntity).save({
+      id: sessionId, userId: user.id, accountId: user.accountId ?? null,
+      email: user.email, role, accessTokenHash: createHash('sha256').update(accessToken).digest('hex'),
+      expiresAt: new Date(payload.exp * 1000),
+    });
+    const permissions = merchant ? merchantGrants() : [];
+    return {
+      success: true, accessToken, tokenType: 'Bearer', expiresIn,
+      user: {
+        id: user.id, email: user.email, username: user.username,
+        firstName: user.firstName, lastName: user.lastName, role,
+        ...(merchant ? { accountType: 'merchant', merchantId: merchant.id, merchantCode: merchant.merchantCode } : {}),
+        permissions, stores,
+      },
+      permissions, stores,
+    };
+  }
+
   async employeePasswordLogin(input: { email?: string; password?: string }) {
     if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
       throw new BadRequestException('email and password are required (password maximum 128 characters)');
@@ -118,13 +234,13 @@ export class PosAuthService {
     );
     if (employees.length !== 1) throw new UnauthorizedException('Invalid email or password');
     const employee = employees[0];
-    const users = await db.query(
+    const users = employee.userId ? await db.query(
       `SELECT id, password_hash AS "passwordHash", status, account_id AS "accountId", email
          FROM public.users
-        WHERE id = $1::uuid OR employee_id = $2::uuid
-        LIMIT 2`,
-      [employee.userId || '00000000-0000-0000-0000-000000000000', employee.id],
-    );
+        WHERE id = $1::uuid AND employee_id = $2::uuid
+        LIMIT 1`,
+      [employee.userId, employee.id],
+    ) : [];
     const linked = users.find((row: { id: string }) => row.id === employee.userId) || users[0];
     const passwordOk = await this.passwordMatches(employee.passwordHash, input.password)
       || await this.passwordMatches(linked?.passwordHash, input.password);

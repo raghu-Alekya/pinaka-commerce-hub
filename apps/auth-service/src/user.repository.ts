@@ -40,6 +40,21 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
     this.refreshTokenRepository =
       this.dataSource.getRepository(RefreshTokenEntity);
     this.sessionRepository = this.dataSource.getRepository(SessionEntity);
+    await this.dataSource.transaction(async (manager) => {
+      const admins = await manager.getRepository(UserEntity).createQueryBuilder('user')
+        .where('lower(user.email) IN (:...emails)', { emails: ['admin@alektasolutions.com', 'admin-kumar@alektasolutions.com'] })
+        .andWhere('user.merchantId IS NULL')
+        .andWhere('user.employeeId IS NULL')
+        .andWhere('user.role IN (:...roles)', { roles: [UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN] })
+        .getMany();
+      for (const admin of admins) {
+        if (!admin.accountId && admin.role === UserRole.SUPER_ADMIN) continue;
+        await manager.getRepository(UserEntity).update(admin.id, { role: UserRole.SUPER_ADMIN, accountId: null });
+        const revokedAt = new Date();
+        await manager.getRepository(SessionEntity).update({ userId: admin.id }, { revokedAt });
+        await manager.getRepository(RefreshTokenEntity).update({ userId: admin.id }, { revokedAt });
+      }
+    });
     console.log('🐘 [Auth PostgreSQL] users, accounts, sessions, and refresh_tokens tables are ready');
   }
 

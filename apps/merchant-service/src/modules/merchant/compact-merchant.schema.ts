@@ -26,7 +26,6 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
         ALTER TABLE public.merchants
           ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
           ADD COLUMN IF NOT EXISTS merchant_code varchar(100),
-          ADD COLUMN IF NOT EXISTS agent_user_id uuid,
           ADD COLUMN IF NOT EXISTS "merchantName" varchar(255),
           ADD COLUMN IF NOT EXISTS "ownerName" varchar(255),
           ADD COLUMN IF NOT EXISTS name varchar(255),
@@ -61,6 +60,41 @@ export async function ensureCompactMerchantSchema(db: DataSource): Promise<void>
         UPDATE public.merchants SET id = gen_random_uuid() WHERE id IS NULL;
         UPDATE public.merchants SET status = COALESCE(status, 'ACTIVE') WHERE status IS NULL;
       `);
+
+      await runner.query(`
+        CREATE TABLE IF NOT EXISTS public.agent_merchants (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          agent_user_id uuid NOT NULL,
+          merchant_id uuid NOT NULL REFERENCES public.merchants(id) ON DELETE CASCADE,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          created_by varchar(100),
+          updated_by varchar(100),
+          is_deleted boolean NOT NULL DEFAULT false,
+          status varchar(20) NOT NULL DEFAULT 'ACTIVE',
+          ended_at timestamptz,
+          CONSTRAINT agent_merchants_agent_merchant_uq UNIQUE (agent_user_id, merchant_id)
+        );
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS status varchar(20) NOT NULL DEFAULT 'ACTIVE';
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS ended_at timestamptz;
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS created_by varchar(100);
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS updated_by varchar(100);
+        ALTER TABLE public.agent_merchants ADD COLUMN IF NOT EXISTS is_deleted boolean NOT NULL DEFAULT false;
+        CREATE INDEX IF NOT EXISTS agent_merchants_agent_idx ON public.agent_merchants(agent_user_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS agent_merchants_agent_merchant_uq ON public.agent_merchants(agent_user_id, merchant_id);
+      `);
+      const legacyAgentColumn = await runner.query(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='merchants' AND column_name='agent_user_id'",
+      );
+      if (legacyAgentColumn.length) {
+        await runner.query(`
+          INSERT INTO public.agent_merchants (agent_user_id, merchant_id, status)
+          SELECT agent_user_id, id, 'ACTIVE' FROM public.merchants WHERE agent_user_id IS NOT NULL
+          ON CONFLICT (agent_user_id, merchant_id) DO NOTHING
+        `);
+        await runner.query('ALTER TABLE public.merchants DROP COLUMN agent_user_id');
+      }
 
       await runner.query(`
         CREATE TABLE IF NOT EXISTS public.subscriptions (

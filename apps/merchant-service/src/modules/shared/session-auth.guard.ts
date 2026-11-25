@@ -109,7 +109,8 @@ export class SessionAuthGuard implements CanActivate {
     if (String(request.user?.role || '').toUpperCase() !== 'AGENT') return;
     const method = String(request.method || '').toUpperCase();
     const rows = await this.merchants.requireDataSource().query(
-      `SELECT id::text AS id, COALESCE(to_jsonb(m)->>'merchant_code', to_jsonb(m)->>'merchantCode') AS code FROM public.merchants m WHERE to_jsonb(m)->>'agent_user_id'=$1`,
+      `SELECT m.id::text AS id, COALESCE(to_jsonb(m)->>'merchant_code', to_jsonb(m)->>'merchantCode') AS code
+       FROM public.agent_merchants am JOIN public.merchants m ON m.id=am.merchant_id WHERE am.agent_user_id=$1 AND am.status='ACTIVE' AND am.is_deleted=false`,
       [request.user?.id],
     );
     const ids = rows.map((row: { id: string }) => row.id);

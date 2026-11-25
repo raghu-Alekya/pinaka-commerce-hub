@@ -170,8 +170,6 @@ export class MerchantResponseRelationsInterceptor implements NestInterceptor {
       const row = value as Record<string, unknown>;
       const ids = [row.merchantId,row.merchant_id,row.merchantCode,row.merchant_code,row.merchantUuid,row.merchant_uuid].filter((item): item is string => typeof item === 'string' && Boolean(item));
       if (ids.length) return { marked: true, allowed: ids.some(item => merchants.has(item.toLowerCase())) };
-      const agentId = row.agent_user_id || row.agentUserId;
-      if (agentId) return { marked: true, allowed: String(agentId) === String(user?.id || '') };
       const storeIds = [row.storeId,row.store_id,row.storeCode,row.store_code].filter((item): item is string => typeof item === 'string' && Boolean(item));
       if (storeIds.length) return { marked: true, allowed: storeIds.some(item => stores.has(item.toLowerCase())) };
       if (row.merchant && typeof row.merchant === 'object') return ownership(row.merchant);

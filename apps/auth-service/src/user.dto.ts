@@ -32,7 +32,7 @@ export class CreatePchUserDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(100) username!: string;
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(30) phone_number!: string;
   @Transform(normalizeEmail) @IsEmail() @MaxLength(255) email!: string;
-  @IsEnum([UserRole.ADMIN, UserRole.OWNER, UserRole.SUPER_ADMIN, UserRole.AGENT]) role!: UserRole;
+  @IsEnum([UserRole.OWNER, UserRole.SUPER_ADMIN, UserRole.AGENT]) role!: UserRole;
   @IsString() @MinLength(8) @MaxLength(128) password!: string;
 }
 
