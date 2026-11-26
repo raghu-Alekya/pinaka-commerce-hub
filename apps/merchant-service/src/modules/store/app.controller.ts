@@ -424,7 +424,7 @@ export class AppController {
     @Param('storeId') storeId: string,
     @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     // Fetch the full WooCommerce taxonomy so child categories are included too.
     const count = await this.merchantRepository.syncStoreCategoriesFromWordPress({
       ...connection,
@@ -1164,15 +1164,7 @@ export class AppController {
     }
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
-    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) {
-      throw new BadRequestException('Connect and validate the WordPress site first');
-    }
-    return this.merchantRepository.getWordPressSubCategories({
-      wordpressUrl: connector.wordpressUrl,
-      wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt),
-      parentId: Number(categoryId),
-    });
+    return this.merchantRepository.getStoreSubCategoriesByStoreId(store.id, Number(categoryId));
   }
 
   @Get('stores/:storeId/catalog/get-categories-with-tax')
@@ -1734,9 +1726,14 @@ export class AppController {
         signal: AbortSignal.timeout(10000),
       });
       if (wooResponse.ok) return { ok: true, message: 'WooCommerce bearer token verified successfully.' };
+      const categoryResponse = await fetch(`${baseUrl}/wp-json/pinaka-pos/v1/categories/get-categories-with-tax`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (categoryResponse.ok) return { ok: true, message: 'WordPress category API token verified successfully.' };
       return {
         ok: false,
-        message: `WordPress JWT check returned HTTP ${response.status}; WooCommerce Coupons API check returned HTTP ${wooResponse.status}. Check the site URL and token.`,
+        message: `WordPress JWT check returned HTTP ${response.status}; WooCommerce Coupons API check returned HTTP ${wooResponse.status}; category API check returned HTTP ${categoryResponse.status}. Check the site URL and token permissions.`,
       };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1807,14 +1804,25 @@ export class AppController {
     if (!connector?.encryptedJwt || !connector.wordpressUrl) {
       throw new BadRequestException('Connect the WordPress site before syncing the catalog');
     }
+    const wordpressJwt = this.decryptConnectorSecret(connector.encryptedJwt);
     if (connector.status !== 'CONNECTED') {
-      throw new BadRequestException('Validate the WordPress connection before syncing.');
+      const validation = await this.pingWordPress(connector.wordpressUrl, wordpressJwt);
+      if (!validation.ok) throw new BadRequestException(validation.message);
+      await this.merchantRepository.saveWebsiteConnection({
+        storeId: store.id,
+        merchantId: store.merchantId,
+        wordpressUrl: connector.wordpressUrl,
+        encryptedJwt: connector.encryptedJwt,
+        status: 'CONNECTED',
+        lastTestedAt: new Date(),
+        lastTestMessage: validation.message,
+      });
     }
     return {
       merchantId: store.merchantId,
       storeId: store.id,
       wordpressUrl: connector.wordpressUrl,
-      wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt),
+      wordpressJwt,
     };
   }
 

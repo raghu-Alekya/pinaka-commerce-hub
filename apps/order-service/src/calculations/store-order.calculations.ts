@@ -5,8 +5,20 @@ export interface PosLineItem {
   subtotal?: number | string;
   total?: number | string;
   tax_status?: string;
+  tax_class?: string;
   meta_data?: Array<{ key?: string; value?: unknown }>;
   taxes?: Array<{ id?: unknown; rate_percent?: unknown; total?: unknown; subtotal?: unknown }>;
+}
+
+export interface SaleTaxConfiguration {
+  taxEnabled?: unknown;
+  defaultTaxRate?: unknown;
+  taxClasses?: Array<{
+    name?: unknown;
+    slug?: unknown;
+    rate?: unknown;
+    rates?: Array<{ id?: unknown; rate?: unknown }>;
+  }>;
 }
 
 export interface PosFeeLine {
@@ -419,11 +431,55 @@ export function recognizedItemDiscountMinor(line: PosLineItem, places = 2): numb
   return parts.auto + parts.multipack + parts.mix;
 }
 
-function saleLineRate(line: PosLineItem): number {
+function taxClassKeys(value: unknown): string[] {
+  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (!key) return [];
+  const keys = [key];
+  if (key.endsWith('rate') && key.length > 4) keys.push(key.slice(0, -4));
+  return keys;
+}
+
+function validTaxPercent(value: unknown): number | null {
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : null;
+}
+
+function configuredTaxPercent(line: PosLineItem, configuration: SaleTaxConfiguration | undefined, taxId: number): number | null {
+  if (configuration?.taxEnabled === false) return null;
+  const classes = Array.isArray(configuration?.taxClasses) ? configuration.taxClasses : [];
+  for (const taxClass of classes) {
+    const rates = Array.isArray(taxClass?.rates) ? taxClass.rates : [];
+    const match = rates.find((entry) => Number(entry?.id) === taxId);
+    const percent = validTaxPercent(match?.rate);
+    if (percent !== null) return percent;
+  }
+  const wanted = new Set(taxClassKeys(line.tax_class));
+  const matched = classes.find((taxClass) => (
+    [...taxClassKeys(taxClass?.name), ...taxClassKeys(taxClass?.slug)].some((key) => wanted.has(key))
+  ));
+  if (matched) {
+    const classRate = validTaxPercent(matched.rate);
+    if (classRate !== null) return classRate;
+    const rates = Array.isArray(matched.rates) ? matched.rates : [];
+    const percents = [...new Set(rates
+      .map((entry) => validTaxPercent(entry?.rate))
+      .filter((rate): rate is number => rate !== null))];
+    if (percents.length === 1) return percents[0];
+  }
+  return validTaxPercent(configuration?.defaultTaxRate);
+}
+
+function saleLineRate(line: PosLineItem, configuration?: SaleTaxConfiguration): number {
   if (!isTaxableSaleLine(line)) return 0;
   const taxes = Array.isArray(line.taxes) ? line.taxes : [];
-  const rate = Number(taxes[0]?.rate_percent ?? taxes[0]?.id);
-  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
+  const stated = taxes[0]?.rate_percent;
+  if (stated !== undefined && stated !== null && String(stated).trim() !== '') {
+    return validTaxPercent(stated) ?? 0;
+  }
+  const id = Number(taxes[0]?.id);
+  if (!Number.isFinite(id) || id <= 0) return 0;
+  if (!Number.isInteger(id)) return validTaxPercent(id) ?? 0;
+  return configuredTaxPercent(line, configuration, id) ?? 0;
 }
 
 /**
@@ -450,6 +506,7 @@ export function applyPosSaleCalculation(
     prices_include_tax?: unknown;
   },
   places = 2,
+  taxConfiguration?: SaleTaxConfiguration,
 ): { subtotal: number; discountTotal: number; tax: number; total: number; coupon: number; merchant: number } | null {
   const merchandise = lines
     .map((line, index) => ({ line, index }))
@@ -510,12 +567,12 @@ export function applyPosSaleCalculation(
   const couponApplied = afterMerchant.reduce((sum, amount) => sum + amount, 0)
     - afterCoupon.reduce((sum, amount) => sum + amount, 0);
 
-  const hadRate = priced.some((entry) => saleLineRate(entry.line) > 0);
+  const hadRate = priced.some((entry) => saleLineRate(entry.line, taxConfiguration) > 0);
   const taxByIndex = new Map<number, number>();
   if (hadRate) {
     const groups = new Map<number, number[]>();
     priced.forEach((entry, index) => {
-      const rate = saleLineRate(entry.line);
+      const rate = saleLineRate(entry.line, taxConfiguration);
       if (rate > 0) groups.set(rate, [...(groups.get(rate) || []), index]);
     });
     groups.forEach((indexes, rate) => {
@@ -545,7 +602,7 @@ export function applyPosSaleCalculation(
     const taxText = text(taxMinor);
     entry.line.total_tax = taxText;
     entry.line.subtotal_tax = taxText;
-    const rate = saleLineRate(entry.line);
+    const rate = saleLineRate(entry.line, taxConfiguration);
     if (Array.isArray(entry.line.taxes) && entry.line.taxes[0]) {
       entry.line.taxes[0].total = taxText;
       entry.line.taxes[0].subtotal = taxText;
@@ -571,7 +628,7 @@ export function applyPosSaleCalculation(
   const subtotalMinor = lines.reduce((sum, line) => sum + toMinor(line.subtotal ?? line.total ?? 0, places), 0);
   const shippingMinor = toMinor(sourcePayload.shipping_total ?? sourcePayload.shippingTotal ?? 0, places);
   const afterItemMinor = afterItem.reduce((sum, amount) => sum + amount, 0);
-  const lineRates = [...new Set(priced.map((entry) => saleLineRate(entry.line)).filter((rate) => rate > 0))];
+  const lineRates = [...new Set(priced.map((entry) => saleLineRate(entry.line, taxConfiguration)).filter((rate) => rate > 0))];
   const feeTaxMinor = hadRate && taxableFeeMinor !== 0 && lineRates.length === 1
     ? allocateRoundedTax([taxUnitsForMinor(taxableFeeMinor, lineRates[0])])[0] || 0
     : 0;
@@ -585,7 +642,7 @@ export function applyPosSaleCalculation(
     const existing = Array.isArray(sourcePayload.tax_lines) ? sourcePayload.tax_lines : [];
     const grouped = new Map<number, number>();
     priced.forEach((entry, index) => {
-      const rate = saleLineRate(entry.line);
+      const rate = saleLineRate(entry.line, taxConfiguration);
       if (rate > 0) grouped.set(rate, (grouped.get(rate) || 0) + (taxByIndex.get(index) || 0));
     });
     if (feeTaxMinor && lineRates.length === 1) {
@@ -764,12 +821,7 @@ function exactTaxForAmounts(
   lines: Array<PosLineItem & { taxes?: unknown }>,
   amounts: number[],
 ): number[] | null {
-  const rates = lines.map((line) => {
-    const taxes = Array.isArray(line.taxes) ? line.taxes : [];
-    const rate = Number((taxes[0] as { rate_percent?: unknown; id?: unknown } | undefined)?.rate_percent
-      ?? (taxes[0] as { id?: unknown } | undefined)?.id);
-    return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
-  });
+  const rates = lines.map((line) => saleLineRate(line));
   const missingRateOnTaxedLine = lines.some((line, index) => {
     if (rates[index] > 0) return false;
     const stored = Number((line as { total_tax?: unknown }).total_tax ?? 0);
@@ -1010,11 +1062,7 @@ export function correctStoredDiscountTax(
     2,
     lineItems as any[],
   );
-  const hasReliableRates = lineItems.some((line: any) => Array.isArray(line?.taxes)
-    && line.taxes.some((tax: any) => {
-      const rate = Number(tax?.rate_percent ?? tax?.id);
-      return Number.isFinite(rate) && rate > 0 && rate <= 100;
-    }));
+  const hasReliableRates = lineItems.some((line: any) => saleLineRate(line) > 0);
   if (hasReliableRates && couponDiscount > 0) {
     feeLines.forEach((fee: any) => {
       const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -1369,4 +1417,41 @@ export function adminOrderCounts(input: { businessName: string; orders: Record<s
     category_subtotal: money(categories.reduce((sum, category) => sum + category.total_sales, 0)),
     category_percentage_total: money(categories.reduce((sum, category) => sum + category.sales_percentage, 0)),
   } };
+}
+
+/** Response and WooCommerce sync view. The stored request body stays unchanged. */
+export function storedOrderRequest(original: unknown, storeOrder?: {
+  lineItems?: unknown;
+  feeLines?: unknown;
+  couponLines?: unknown;
+  taxLines?: unknown;
+  metaData?: unknown;
+  subtotal?: unknown;
+  discountTotal?: unknown;
+  taxTotal?: unknown;
+  total?: unknown;
+  grandTotal?: unknown;
+} | null): unknown {
+  if (!storeOrder) return original;
+  const request = original && typeof original === 'object' && !Array.isArray(original)
+    ? { ...(original as Record<string, unknown>) }
+    : {};
+  const text = (value: unknown) => {
+    const amount = Number(value ?? 0);
+    return (Number.isFinite(amount) ? amount : 0).toFixed(2);
+  };
+  if (Array.isArray(storeOrder.lineItems)) request.line_items = storeOrder.lineItems;
+  if (Array.isArray(storeOrder.feeLines)) request.fee_lines = storeOrder.feeLines;
+  if (Array.isArray(storeOrder.couponLines)) request.coupon_lines = storeOrder.couponLines;
+  if (Array.isArray(storeOrder.taxLines)) request.tax_lines = storeOrder.taxLines;
+  if (Array.isArray(storeOrder.metaData)) request.meta_data = storeOrder.metaData;
+  if (storeOrder.subtotal !== undefined && storeOrder.subtotal !== null) request.subtotal = text(storeOrder.subtotal);
+  if (storeOrder.discountTotal !== undefined && storeOrder.discountTotal !== null) request.discount_total = text(storeOrder.discountTotal);
+  if (storeOrder.taxTotal !== undefined && storeOrder.taxTotal !== null) {
+    request.total_tax = text(storeOrder.taxTotal);
+    request.cart_tax = request.total_tax;
+  }
+  if (storeOrder.total !== undefined && storeOrder.total !== null) request.total = text(storeOrder.total);
+  if (storeOrder.grandTotal !== undefined && storeOrder.grandTotal !== null) request.grand_total = text(storeOrder.grandTotal);
+  return request;
 }

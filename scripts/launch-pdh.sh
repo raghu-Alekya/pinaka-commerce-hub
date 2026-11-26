@@ -6,7 +6,9 @@
 #   bash ./scripts/launch-pdh.sh --restart --skip-docker
 #   bash ./scripts/launch-pdh.sh --force --restart   # clear stuck lock / kill stuck launcher
 set -euo pipefail
-
+# Order Service database safety settings
+export ORDER_SERVICE_REQUIRE_DB="${ORDER_SERVICE_REQUIRE_DB:-true}"
+export ORDER_SERVICE_SCHEMA_ON_STARTUP="${ORDER_SERVICE_SCHEMA_ON_STARTUP:-true}"
 RESTART=0
 SKIP_DOCKER=0
 FORCE=0

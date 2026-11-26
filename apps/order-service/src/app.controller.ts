@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { OrderRepository } from './order.repository';
 import { OrderStatus, OrderType, PaymentMethod, PaymentStatus } from './entities/order.entity';
-import type { StoreOrderCalculationInput } from './calculations/store-order.calculations';
+import { storedOrderRequest, type StoreOrderCalculationInput } from './calculations/store-order.calculations';
 import { OrderUpdatePresenter } from './modules/order-updates/order-update.presenter';
 import { OrderListPresenter } from './responses/order-list.presenter';
 import { OrderResponsePresenter } from './responses/order-response.presenter';
@@ -97,7 +97,7 @@ export class AppController {
         order_id: result.order?.id ?? null,
       })}`);
     }
-    const request = result.order.requestPayload || body;
+    const request = storedOrderRequest(result.order.requestPayload || body, result.storeOrder);
     if (result.duplicate) {
       console.log(`[ORDER_WEBSITE_SYNC] ${JSON.stringify({
         event: 'skipped',
