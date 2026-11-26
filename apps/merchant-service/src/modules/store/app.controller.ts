@@ -57,8 +57,8 @@ export class AppController {
   }
 
   private async requireMasterPlan(code: string) {
-    const plan = await this.merchantRepository.getSubscriptionPlan(this.toPlanCode(code));
-    if (!plan || plan.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
+    const plan = await this.merchantRepository.getPlanByIdOrCode(code);
+    if (!plan || plan.status !== 'ACTIVE' || plan.isDeleted) throw new BadRequestException('Select an active commercial plan');
   }
 
   private toBillingCycle(value?: string): 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL' {

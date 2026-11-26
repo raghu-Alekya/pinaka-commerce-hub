@@ -6,7 +6,7 @@ import { CouponInputDto } from './coupon.dto';
 import { CouponSyncStatus, StoreCouponEntity } from './store-coupon.entity';
 
 type WooCoupon = Record<string, any> & { id: number; code: string; status?: string };
-type Connection = { merchantId: string; storeId: string; storeUrl: string; consumerKey?: string; consumerSecret?: string; bearerToken?: string; webhookSecret?: string };
+type Connection = { merchantId: string; storeId: string; storeUrl: string; bearerToken: string; webhookSecret?: string };
 
 @Injectable()
 export class CouponService implements OnModuleInit {
@@ -318,9 +318,7 @@ export class CouponService implements OnModuleInit {
     const connection = await this.connection(storeId);
     let response: any;
     try {
-      const authorization = connection.bearerToken
-        ? `Bearer ${connection.bearerToken}`
-        : `Basic ${Buffer.from(`${connection.consumerKey}:${connection.consumerSecret}`).toString('base64')}`;
+      const authorization = `Bearer ${connection.bearerToken}`;
       response = await (globalThis as any).fetch(`${connection.storeUrl.replace(/\/+$/, '')}/wp-json/wc/v3/${path}`, {
         method, headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: authorization },
         body: body ? JSON.stringify(body) : undefined,
@@ -333,24 +331,10 @@ export class CouponService implements OnModuleInit {
   }
 
   private async connection(storeId: string): Promise<Connection> {
-    let rows: Connection[] = [];
-    try {
-      rows = await this.repository().manager.query(
-        `SELECT merchant_id AS "merchantId", store_id AS "storeId", store_url AS "storeUrl",
-                consumer_key AS "consumerKey", consumer_secret AS "consumerSecret", webhook_secret AS "webhookSecret"
-           FROM public.woocommerce_connections WHERE store_id = $1 AND sync_status = 'ACTIVE' LIMIT 1`, [storeId]);
-    } catch (error: any) {
-      if (error?.driverError?.code !== '42P01' && error?.code !== '42P01') throw error;
-    }
-    if (rows.length) {
-      if (!rows[0].storeUrl || !rows[0].consumerKey || !rows[0].consumerSecret) throw new BadRequestException('WooCommerce credentials are incomplete');
-      return rows[0];
-    }
-
     const websiteRows = await this.repository().manager.query(
       `SELECT merchant_id AS "merchantId", store_id AS "storeId", wordpress_url AS "wordpressUrl", encrypted_jwt AS "encryptedJwt", status
          FROM public.website_connections WHERE store_id = $1 AND status = 'CONNECTED' LIMIT 1`, [storeId]);
-    if (!websiteRows.length) throw new NotFoundException(`No active WooCommerce or WordPress connection for store '${storeId}'`);
+    if (!websiteRows.length) throw new NotFoundException(`No active WordPress connection for store '${storeId}'`);
     return {
       merchantId: websiteRows[0].merchantId,
       storeId: websiteRows[0].storeId,

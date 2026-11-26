@@ -1,5 +1,4 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { DeliveryChannelEntity, DeliveryChannel } from './entities/delivery-channel.entity';
@@ -7,31 +6,28 @@ import { DeliveryOrderLogEntity, DeliveryOrderStatus } from './entities/delivery
 
 @Injectable()
 export class DeliveryConnectorRepository implements OnModuleInit {
-  private dataSource?: DataSource;
-  private channelRepo?: Repository<DeliveryChannelEntity>;
-  private orderLogRepo?: Repository<DeliveryOrderLogEntity>;
   private redisClient?: Redis;
-  private isDbConnected = false;
   private isRedisConnected = false;
 
   private inMemoryChannels: DeliveryChannelEntity[] = [];
   private inMemoryOrders: DeliveryOrderLogEntity[] = [];
 
   async onModuleInit() {
-    try {
-      this.dataSource = await connectPostgres('Delivery Connector DB', [
-        DeliveryChannelEntity,
-        DeliveryOrderLogEntity,
-      ]);
-      this.channelRepo = this.dataSource.getRepository(DeliveryChannelEntity);
-      this.orderLogRepo = this.dataSource.getRepository(DeliveryOrderLogEntity);
-      this.isDbConnected = true;
-      await this.seedDefaultChannels();
-    } catch (err: any) {
-      console.log(`⚠️ [Delivery Connector DB] Offline (${err.message}). Using in-memory fallback.`);
-      this.isDbConnected = false;
-      this.seedInMemory();
+    const dataSource = await connectPostgres('Delivery Connector DB', [], { synchronize: false })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[Delivery Connector DB] Could not connect to drop retired tables: ${message}`);
+        return undefined;
+      });
+    if (dataSource) {
+      try {
+        await DeliveryChannelEntity.dropLegacyTable(dataSource);
+        await DeliveryOrderLogEntity.dropLegacyTable(dataSource);
+      } finally {
+        await dataSource.destroy();
+      }
     }
+    this.seedInMemory();
 
     try {
       this.redisClient = new Redis({
@@ -46,44 +42,6 @@ export class DeliveryConnectorRepository implements OnModuleInit {
     } catch (err: any) {
       console.log(`⚠️ [Delivery Connector Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
-    }
-  }
-
-  private async seedDefaultChannels() {
-    if (this.channelRepo) {
-      const existing = await this.channelRepo.findOne({ where: { storeId: 'STR-5001' } });
-      if (!existing) {
-        const channels = [
-          {
-            id: 'CHAN-6001',
-            merchantId: 'MCH-1001',
-            storeId: 'STR-5001',
-            channel: DeliveryChannel.DOORDASH,
-            externalStoreId: 'DD-STORE-99',
-            webhookSecret: 'secret_dd_key_882',
-            autoAccept: true,
-            defaultPrepTimeMinutes: 20,
-            isEnabled: true,
-          },
-          {
-            id: 'CHAN-6002',
-            merchantId: 'MCH-1001',
-            storeId: 'STR-5001',
-            channel: DeliveryChannel.UBER_EATS,
-            externalStoreId: 'UBER-STORE-44',
-            webhookSecret: 'secret_uber_key_551',
-            autoAccept: true,
-            defaultPrepTimeMinutes: 15,
-            isEnabled: true,
-          },
-        ];
-
-        for (const ch of channels) {
-          const entity = this.channelRepo.create(ch);
-          await this.channelRepo.save(entity);
-        }
-        console.log('🛵 [Delivery Connector] Seeded default channels for DoorDash & Uber Eats');
-      }
     }
   }
 
@@ -121,9 +79,6 @@ export class DeliveryConnectorRepository implements OnModuleInit {
   }
 
   async getChannelsByStore(storeId: string): Promise<DeliveryChannelEntity[]> {
-    if (this.isDbConnected && this.channelRepo) {
-      return await this.channelRepo.find({ where: { storeId } });
-    }
     return this.inMemoryChannels.filter((c) => c.storeId === storeId);
   }
 
@@ -148,47 +103,22 @@ export class DeliveryConnectorRepository implements OnModuleInit {
       createdAt: new Date(),
     };
 
-    if (this.isDbConnected && this.orderLogRepo) {
-      const entity = this.orderLogRepo.create(orderLog);
-      const saved = await this.orderLogRepo.save(entity);
-      await this.cacheDeliveryOrder(saved);
-      console.log(`🛵 [Delivery Order Ingested] ${channel.toUpperCase()} Order #${saved.id} ($${saved.totalAmount}) for Store ${saved.storeId}`);
-      return saved;
-    } else {
-      this.inMemoryOrders.unshift(orderLog);
-      await this.cacheDeliveryOrder(orderLog);
-      return orderLog;
-    }
+    this.inMemoryOrders.unshift(orderLog);
+    await this.cacheDeliveryOrder(orderLog);
+    return orderLog;
   }
 
   async getDeliveryOrders(storeId: string): Promise<DeliveryOrderLogEntity[]> {
-    if (this.isDbConnected && this.orderLogRepo) {
-      return await this.orderLogRepo.find({ where: { storeId }, order: { createdAt: 'DESC' } });
-    }
     return this.inMemoryOrders.filter((o) => o.storeId === storeId);
   }
 
   async updateOrderStatus(orderId: string, status: DeliveryOrderStatus, prepTimeMinutes?: number): Promise<DeliveryOrderLogEntity | null> {
-    let order: DeliveryOrderLogEntity | null = null;
+    const order = this.inMemoryOrders.find((item) => item.id === orderId);
+    if (!order) return null;
 
-    if (this.isDbConnected && this.orderLogRepo) {
-      order = await this.orderLogRepo.findOne({ where: { id: orderId } });
-      if (order) {
-        order.status = status;
-        if (prepTimeMinutes) order.prepTimeMinutes = prepTimeMinutes;
-        order = await this.orderLogRepo.save(order);
-      }
-    } else {
-      order = this.inMemoryOrders.find((o) => o.id === orderId) || null;
-      if (order) {
-        order.status = status;
-        if (prepTimeMinutes) order.prepTimeMinutes = prepTimeMinutes;
-      }
-    }
-
-    if (order) {
-      await this.cacheDeliveryOrder(order);
-    }
+    order.status = status;
+    if (prepTimeMinutes) order.prepTimeMinutes = prepTimeMinutes;
+    await this.cacheDeliveryOrder(order);
     return order;
   }
 

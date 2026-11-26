@@ -16,27 +16,25 @@ import { UserEntity, UserRole, UserStatus } from './user.entity';
 export class UserRepository implements OnModuleInit, OnModuleDestroy {
   private dataSource!: DataSource;
   private repository!: Repository<UserEntity>;
-  private accountRepository!: Repository<AccountEntity>;
   private refreshTokenRepository!: Repository<RefreshTokenEntity>;
   private sessionRepository!: Repository<SessionEntity>;
 
   async onModuleInit(): Promise<void> {
     this.dataSource = await connectPostgres('Auth PostgreSQL', [
       UserEntity,
-      AccountEntity,
       RefreshTokenEntity,
       SessionEntity,
     ], { synchronize: false });
+    await AccountEntity.dropLegacyTable(this.dataSource);
     const createdTables = await createMissingTables(this.dataSource);
     if (createdTables.length) {
       console.log(`🐘 [Auth PostgreSQL] Created missing tables: ${createdTables.join(', ')}`);
     }
     this.repository = this.dataSource.getRepository(UserEntity);
-    this.accountRepository = this.dataSource.getRepository(AccountEntity);
     this.refreshTokenRepository =
       this.dataSource.getRepository(RefreshTokenEntity);
     this.sessionRepository = this.dataSource.getRepository(SessionEntity);
-    console.log('🐘 [Auth PostgreSQL] users, accounts, sessions, and refresh_tokens tables are ready');
+    console.log('🐘 [Auth PostgreSQL] users, sessions, and refresh_tokens tables are ready');
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -93,39 +91,6 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
       return await this.repository.save(this.repository.create(dto));
     } catch (error: unknown) {
       this.handleUniqueEmailError(error, dto.email);
-      throw error;
-    }
-  }
-
-  async createAccountOwnerFromSignUp(
-    email: string,
-    passwordHash: string,
-  ): Promise<{ account: AccountEntity; user: UserEntity }> {
-    await this.assertEmailAvailable(email);
-    const firstName = email.split('@')[0] || 'User';
-    const accountName = `${firstName}'s Restaurant`;
-    try {
-      return await this.dataSource.transaction(async (manager) => {
-        const account = await manager.save(
-          manager.create(AccountEntity, { accountName }),
-        );
-        const user = await manager.save(
-          manager.create(UserEntity, {
-            accountId: account.id,
-            firstName,
-            lastName: '',
-            email,
-            phoneNumber: '',
-            role: UserRole.OWNER,
-            notificationEnabled: true,
-            status: UserStatus.ACTIVE,
-            passwordHash,
-          }),
-        );
-        return { account, user };
-      });
-    } catch (error: unknown) {
-      this.handleUniqueEmailError(error, email);
       throw error;
     }
   }
@@ -233,12 +198,6 @@ export class UserRepository implements OnModuleInit, OnModuleDestroy {
     user.actionTokenType = null;
     user.actionTokenExpiresAt = null;
     return this.repository.save(user);
-  }
-
-  async createAccount(accountName: string): Promise<AccountEntity> {
-    return this.accountRepository.save(
-      this.accountRepository.create({ accountName }),
-    );
   }
 
   async update(

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  GoneException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -43,12 +44,8 @@ export class AuthService {
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  async signUp(dto: SignUpDto) {
-    const { account, user } = await this.users.createAccountOwnerFromSignUp(
-      dto.email,
-      await this.hashPassword(dto.password),
-    );
-    return { ...this.toAuthResponse(await this.createSession(user)), account };
+  async signUp(_dto: SignUpDto): Promise<never> {
+    throw new GoneException('Account signup has been retired');
   }
 
   async login(dto: LoginDto) {
@@ -152,20 +149,8 @@ export class AuthService {
     );
   }
 
-  async createPosAccount(dto: CreateAccountDto) {
-    const account = await this.users.createAccount(dto.account_name);
-    const accountManager = await this.inviteUser(
-      {
-        firstName: dto.account_manager_firstname,
-        lastName: dto.account_manager_lastname,
-        email: dto.account_manager_email,
-        phoneNumber: dto.account_manager_phone,
-        role: UserRole.OWNER,
-        notificationEnabled: true,
-      },
-      account.id,
-    );
-    return { account, accountManager };
+  async createPosAccount(_dto: CreateAccountDto): Promise<never> {
+    throw new GoneException('POS account creation has been retired');
   }
 
   async refresh(dto: RefreshTokenDto) {
