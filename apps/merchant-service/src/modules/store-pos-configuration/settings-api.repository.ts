@@ -4,7 +4,7 @@ import { MerchantRepository } from '../merchant/merchant.repository';
 export type SettingsJson = Record<string, any>;
 
 export interface SettingsScope {
-  user?: { id?: string; merchantId?: string; storeId?: string };
+  user?: { id?: string; employeeId?: string; merchantId?: string; storeId?: string };
   merchantHeader?: string;
   storeHeader?: string;
 }
@@ -45,6 +45,36 @@ export class SettingsApiRepository {
     );
     const email = rows[0]?.store_email;
     return typeof email === 'string' && email.trim() ? email.trim() : null;
+  }
+
+  async employeeProfileImage(scope: SettingsScope): Promise<string | null> {
+    const { db, storeId, merchantId } = await this.resolveScope(scope);
+    const employeeId = this.text(scope.user?.employeeId || scope.user?.id);
+    if (!this.isUuid(employeeId)) return null;
+    const rows = await db.query(
+      `SELECT e.profile_image_url AS "profileImageUrl"
+       FROM public.employees e
+       WHERE e.id = $1::uuid AND e.merchant_id = $2::uuid
+         AND EXISTS (
+           SELECT 1 FROM public.employee_stores es
+           WHERE es.employee_id = e.id AND es.store_id = $3::uuid
+         )
+       LIMIT 1`,
+      [employeeId, merchantId, storeId],
+    );
+    const image = rows[0]?.profileImageUrl;
+    return typeof image === 'string' && image.trim() ? image.trim() : null;
+  }
+
+  async storeName(scope: SettingsScope): Promise<string | null> {
+    const { db, storeId } = await this.resolveScope(scope);
+    const rows = await db.query(
+      `SELECT COALESCE(NULLIF(BTRIM(store_name), ''), store_code) AS "storeName"
+       FROM public.stores WHERE id = $1::uuid LIMIT 1`,
+      [storeId],
+    );
+    const name = rows[0]?.storeName;
+    return typeof name === 'string' && name.trim() ? name.trim() : null;
   }
 
   async readConfiguration(scope: SettingsScope, configurationName: string): Promise<SettingsJson> {
@@ -232,7 +262,7 @@ export class SettingsApiRepository {
     if (this.isUuid(scope.user?.merchantId) && scope.user?.merchantId !== resolved.merchantId) {
       throw new ForbiddenException('Merchant scope does not match the authenticated session');
     }
-    return { db, storeId: resolved.storeId, actorId };
+    return { db, storeId: resolved.storeId, merchantId: resolved.merchantId, actorId };
   }
 
   private isUuid(value?: string): boolean {

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Put, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Post, Put, Query, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RequireAuth } from '../shared/session-auth.guard';
 import {
-  BusinessInfoDto, CashSettingsDto, DeviceSettingsDto, EnableCashbackDto,
+  BusinessInfoDto, CashSettingsDto, DeviceSettingsDto, EmailSettingsDto, TestEmailDto, TextNotificationDto, WhatsAppNotificationDto, EnableCashbackDto,
   EnableCouponsDto, EnableLoyaltyPointsDto, EnableSafesDropDto, EnableSafesDto,
   EnableServiceChargeDto, EnableTaxesDto, GeneralSettingsDto, SequentialCouponsDto,
 } from './dto/settings-api.dto';
@@ -16,14 +16,14 @@ import { SettingsApiService } from './settings-api.service';
 import { FileStorageService } from '../file-storage/file-storage.service';
 
 type AuthenticatedRequest = {
-  user?: { id?: string; merchantId?: string; storeId?: string };
+  user?: { id?: string; employeeId?: string; merchantId?: string; storeId?: string };
   headers?: Record<string, string | string[] | undefined>;
   protocol?: string;
   get(name: string): string | undefined;
 };
 type UploadedSettingsImage = { buffer: Buffer; mimetype: string };
 type UploadedPromotionalImage = UploadedSettingsImage & { originalname: string };
-type SettingsImageFiles = { image_upload?: UploadedSettingsImage[]; logo_upload?: UploadedSettingsImage[] };
+type SettingsImageFiles = { logo_upload?: UploadedSettingsImage[] };
 const { memoryStorage } = require('multer');
 const promotionalImageDirectory = join(process.cwd(), 'uploads', 'customer-display-promotions');
 mkdirSync(promotionalImageDirectory, { recursive: true });
@@ -38,7 +38,6 @@ const promotionalImagesUpload = FilesInterceptor('files', 20, {
 });
 
 const settingsImageUpload = FileFieldsInterceptor([
-  { name: 'image_upload', maxCount: 1 },
   { name: 'logo_upload', maxCount: 1 },
 ], {
   storage: memoryStorage(),
@@ -65,11 +64,12 @@ export class SettingsApiController {
     @Headers('x-store-id') storeId?: string) {
     const savedPaths: string[] = [];
     try {
-      const image = files?.image_upload?.[0];
       const logo = files?.logo_upload?.[0];
       const scope = this.scope(request, merchantId, storeId);
-      const location = (image || logo) ? await this.settingsRepository.storeFileLocation(scope) : undefined;
-      if (image) body.image_url = await this.saveImage(image, location!, savedPaths);
+      const location = logo ? await this.settingsRepository.storeFileLocation(scope) : undefined;
+      // image_url is sourced from the authenticated employee profile on GET.
+      // Do not accept a client-supplied image URL or image upload here.
+      delete (body as Record<string, unknown>).image_url;
       if (logo) body.logo_url = await this.saveImage(logo, location!, savedPaths);
       return await this.settings.general(body, scope);
     } catch (error) {
@@ -82,6 +82,49 @@ export class SettingsApiController {
   getGeneral(@Req() request: AuthenticatedRequest, @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string) {
     return this.settings.getGeneral(this.scope(request, merchantId, storeId));
+  }
+
+  @Get('email-settings')
+  getEmailSettings(@Req() request: AuthenticatedRequest, @Query('template_id') templateId?: string,
+    @Headers('x-merchant-id') merchantId?: string,
+    @Headers('x-store-id') storeId?: string) {
+    return this.settings.getEmailSettings(this.scope(request, merchantId, storeId), templateId);
+  }
+
+  @Post('email-settings') @HttpCode(HttpStatus.OK)
+  saveEmailSettings(@Body() body: EmailSettingsDto, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.saveEmailSettings(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Post('email-settings/test-email') @HttpCode(HttpStatus.OK)
+  sendTestEmail(@Body() body: TestEmailDto, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.sendTestEmail(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Get('whatsapp-notification-settings')
+  getWhatsAppSettings(@Req() request: AuthenticatedRequest, @Query('template_id') templateId?: string,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.getWhatsAppSettings(this.scope(request, merchantId, storeId), templateId);
+  }
+
+  @Post('whatsapp-notification-settings') @HttpCode(HttpStatus.OK)
+  saveWhatsAppSettings(@Body() body: WhatsAppNotificationDto, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.saveWhatsAppSettings(body, this.scope(request, merchantId, storeId));
+  }
+
+  @Get('text-notification-settings')
+  getTextSettings(@Req() request: AuthenticatedRequest, @Query('template_id') templateId?: string,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.getTextSettings(this.scope(request, merchantId, storeId), templateId);
+  }
+
+  @Post('text-notification-settings') @HttpCode(HttpStatus.OK)
+  saveTextSettings(@Body() body: TextNotificationDto, @Req() request: AuthenticatedRequest,
+    @Headers('x-merchant-id') merchantId?: string, @Headers('x-store-id') storeId?: string) {
+    return this.settings.saveTextSettings(body, this.scope(request, merchantId, storeId));
   }
 
   @Post('printer-settings') @HttpCode(HttpStatus.OK)

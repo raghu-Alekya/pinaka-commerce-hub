@@ -35,6 +35,42 @@ export class GeneralSettingsDto {
   @IsOptional() receipt_footer?: unknown;
 }
 
+export class EmailSettingsDto {
+  @IsOptional() @IsString() @MaxLength(80) template_id?: string;
+  @IsOptional() @IsIn(binaryValues) enabled?: 0 | 1 | '0' | '1' | boolean;
+  @IsOptional() @IsString() @MaxLength(2000) recipients?: string;
+  @IsOptional() @IsString() @MaxLength(500) subject?: string;
+  @IsOptional() @IsString() @MaxLength(500) heading?: string;
+  @IsOptional() @IsString() @MaxLength(10000) additional_content?: string;
+  @IsOptional() @IsString() @MaxLength(500) store_name_display?: string;
+  @IsOptional() @IsString() @MaxLength(2000) intro_text?: string;
+  @IsOptional() @IsString() @MaxLength(500) summary_heading?: string;
+  @IsOptional() @IsIn(['html', 'plain', 'HTML', 'Plain', 'plain_text']) email_type?: string;
+}
+
+export class TestEmailDto {
+  @IsOptional() @IsString() @MaxLength(80) template_id?: string;
+  @IsOptional() @IsEmail() @MaxLength(255) recipient?: string;
+  @IsOptional() @IsIn(binaryValues) enabled?: 0 | 1 | '0' | '1' | boolean;
+  @IsOptional() @IsString() @MaxLength(2000) recipients?: string;
+  @IsOptional() @IsString() @MaxLength(500) subject?: string;
+  @IsOptional() @IsString() @MaxLength(500) heading?: string;
+  @IsOptional() @IsString() @MaxLength(10000) additional_content?: string;
+  @IsOptional() @IsString() @MaxLength(500) store_name_display?: string;
+  @IsOptional() @IsString() @MaxLength(2000) intro_text?: string;
+  @IsOptional() @IsString() @MaxLength(500) summary_heading?: string;
+  @IsOptional() @IsIn(['html', 'plain', 'HTML', 'Plain', 'plain_text']) email_type?: string;
+}
+
+export class WhatsAppNotificationDto {
+  @IsOptional() @IsString() @MaxLength(80) template_id?: string;
+  @IsOptional() @IsIn(binaryValues) enabled?: 0 | 1 | '0' | '1' | boolean;
+  @IsOptional() @IsString() @MaxLength(200) store_name?: string;
+  @IsOptional() @IsString() @MaxLength(4000) message_text?: string;
+}
+
+export class TextNotificationDto extends WhatsAppNotificationDto {}
+
 export class DeviceSettingsDto {
   @IsOptional() @IsString() @MaxLength(255) device_id?: string;
   @IsOptional() @IsString() @MaxLength(255) kot_printer?: string;

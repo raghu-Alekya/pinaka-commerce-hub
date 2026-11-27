@@ -1,10 +1,179 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { SettingsApiRepository, SettingsJson as Json, SettingsScope } from './settings-api.repository';
 
 @Injectable()
 export class SettingsApiService {
   constructor(@Inject(SettingsApiRepository) private readonly repository: SettingsApiRepository) {}
+
+  async getEmailSettings(scope: SettingsScope, templateId?: string) {
+    const saved = await this.repository.readConfiguration(scope, 'email_settings');
+    const data = templateId
+      ? saved.templates?.[templateId] ?? (templateId === 'new-order' ? saved : {})
+      : saved;
+    return { success: true, data: { ...this.normalizeEmailSettings(data, templateId), ...(templateId ? { template_id: templateId } : {}) } };
+  }
+
+  async saveEmailSettings(body: Json, scope: SettingsScope) {
+    const saved = await this.repository.readConfiguration(scope, 'email_settings');
+    const templateId = this.text(body.template_id);
+    const current = templateId
+      ? saved.templates?.[templateId] ?? (templateId === 'new-order' ? saved : {})
+      : saved;
+    const data = this.normalizeEmailSettings({ ...current, ...body }, templateId);
+    if (templateId) {
+      const templates = { ...(saved.templates ?? {}), [templateId]: data };
+      await this.repository.merge(scope, {}, { email_settings: { ...saved, templates } });
+    } else {
+      await this.repository.merge(scope, {}, { email_settings: data });
+    }
+    return { success: true, message: 'Email settings updated successfully', data: { ...data, ...(templateId ? { template_id: templateId } : {}) } };
+  }
+
+  async sendTestEmail(body: Json, scope: SettingsScope) {
+    const saved = await this.repository.readConfiguration(scope, 'email_settings');
+    const templateId = this.text(body.template_id);
+    const current = templateId
+      ? saved.templates?.[templateId] ?? (templateId === 'new-order' ? saved : {})
+      : saved;
+    const settings = this.normalizeEmailSettings({ ...current, ...body }, templateId);
+    const recipient = this.sanitizeEmail(body.recipient)
+      || settings.recipients.split(',').map((email: string) => this.sanitizeEmail(email)).find(Boolean);
+    if (!recipient) throw new BadRequestException('Provide a test recipient or configure a valid recipient email');
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) throw new ServiceUnavailableException('Email delivery is not configured (RESEND_API_KEY is missing)');
+    const storeName = await this.repository.storeName(scope) ?? '';
+    const render = (value: unknown) => String(value ?? '').replace(/\{site_title\}/g, storeName);
+    const storeNameDisplay = render(settings.store_name_display);
+    const subject = render(settings.subject || 'Test email from POS email settings');
+    const heading = render(settings.heading);
+    const introText = render(settings.intro_text);
+    const summaryHeading = render(settings.summary_heading);
+    const additionalContent = render(settings.additional_content);
+    const showOrderSummary = !templateId || templateId === 'new-order';
+    const html = [
+      storeNameDisplay ? `<p>${this.escapeHtml(storeNameDisplay)}</p>` : '',
+      `<h2>${this.escapeHtml(heading)}</h2>`,
+      introText ? `<p>${this.escapeHtml(introText)}</p>` : '',
+      showOrderSummary && summaryHeading ? `<h3>${this.escapeHtml(summaryHeading)}</h3>` : '',
+      settings.email_type === 'plain'
+        ? `<p>${this.escapeHtml(additionalContent).replace(/\n/g, '<br>')}</p>`
+        : `<div>${additionalContent}</div>`,
+    ].filter(Boolean).join('\n');
+    const text = [
+      storeNameDisplay,
+      heading,
+      introText,
+      showOrderSummary ? summaryHeading : '',
+      additionalContent,
+    ].filter(Boolean).join('\n\n');
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: process.env.MAIL_FROM || 'Pinaka Commerce Hub <onboarding@resend.dev>',
+        to: [recipient],
+        subject,
+        html,
+        text,
+        reply_to: process.env.MAIL_REPLY_TO || undefined,
+      }),
+    });
+    if (!response.ok) {
+      const details = await response.text();
+      throw new BadRequestException(`Email provider rejected the test email (${response.status}): ${details}`);
+    }
+    return { success: true, message: 'Test email sent successfully', data: { recipient } };
+  }
+
+  async getWhatsAppSettings(scope: SettingsScope, templateId?: string) {
+    return this.getMessageSettings(scope, 'whatsapp_notification_settings', templateId);
+  }
+
+  async saveWhatsAppSettings(body: Json, scope: SettingsScope) {
+    return this.saveMessageSettings(body, scope, 'whatsapp_notification_settings');
+  }
+
+  async getTextSettings(scope: SettingsScope, templateId?: string) {
+    return this.getMessageSettings(scope, 'text_notification_settings', templateId);
+  }
+
+  async saveTextSettings(body: Json, scope: SettingsScope) {
+    return this.saveMessageSettings(body, scope, 'text_notification_settings');
+  }
+
+  private async getMessageSettings(scope: SettingsScope, configurationName: string, templateId?: string) {
+    const saved = await this.repository.readConfiguration(scope, configurationName);
+    const data = templateId ? saved.templates?.[templateId] ?? {} : saved;
+    const settings = this.normalizeWhatsAppSettings(data);
+    const storeName = settings.store_name || await this.repository.storeName(scope) || 'snowfewall';
+    return { success: true, data: { ...settings, ...this.messagePreview(settings, storeName), ...(templateId ? { template_id: templateId } : {}) } };
+  }
+
+  private async saveMessageSettings(body: Json, scope: SettingsScope, configurationName: string) {
+    const saved = await this.repository.readConfiguration(scope, configurationName);
+    const templateId = this.text(body.template_id);
+    const current = templateId ? saved.templates?.[templateId] ?? {} : saved;
+    const data = this.normalizeWhatsAppSettings({ ...current, ...body });
+    const storeName = data.store_name || await this.repository.storeName(scope) || 'snowfewall';
+    if (templateId) {
+      await this.repository.merge(scope, {}, {
+        [configurationName]: { ...saved, templates: { ...(saved.templates ?? {}), [templateId]: data } },
+      });
+    } else {
+      await this.repository.merge(scope, {}, { [configurationName]: data });
+    }
+    return { success: true, message: 'Notification settings updated successfully', data: { ...data, ...this.messagePreview(data, storeName), ...(templateId ? { template_id: templateId } : {}) } };
+  }
+
+  private messagePreview(settings: Json, storeName: string) {
+    const variables: Record<string, string> = {
+      customer_name: 'Alex',
+      order_number: '1048',
+      store_name: storeName,
+    };
+    const message = settings.message_text.replace(/\{(customer_name|order_number|store_name)\}/g,
+      (_match, key: string) => variables[key] ?? '');
+    return { preview: message, placeholders: ['{customer_name}', '{order_number}', '{store_name}'] };
+  }
+
+  private normalizeWhatsAppSettings(value: Json): Json {
+    return {
+      enabled: this.phpNotEmpty(value.enabled),
+      store_name: String(value.store_name ?? ''),
+      message_text: String(value.message_text ?? 'Hi {customer_name}, your order #{order_number} has been received. Thank you for shopping with {store_name}!'),
+    };
+  }
+
+  private normalizeEmailSettings(value: Json, templateId?: string): Json {
+    const recipients = String(value.recipients ?? '').trim();
+    const parsedRecipients = recipients.split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (parsedRecipients.some((email) => !this.sanitizeEmail(email))) {
+      throw new BadRequestException('recipients must contain valid email addresses separated by commas');
+    }
+    const type = String(value.email_type ?? 'html').toLowerCase();
+    return {
+      enabled: this.phpNotEmpty(value.enabled),
+      recipients: parsedRecipients.join(', '),
+      subject: String(value.subject ?? ''),
+      heading: String(value.heading ?? ''),
+      additional_content: String(value.additional_content ?? ''),
+      store_name_display: String(value.store_name_display ?? '{site_title}'),
+      intro_text: String(value.intro_text ?? (
+        templateId === 'new-user-registration'
+          ? 'A new user has registered on {site_title}.'
+          : 'You’ve received a new order from John Doe.'
+      )),
+      summary_heading: String(value.summary_heading ?? 'Order summary'),
+      email_type: ['plain', 'plain_text'].includes(type) ? 'plain' : 'html',
+    };
+  }
+
+  private escapeHtml(value: string): string {
+    return value.replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character] ?? character);
+  }
 
   async general(body: Json, scope: SettingsScope) {
     const current = (await this.repository.read(scope)).general ?? {};
@@ -32,7 +201,9 @@ export class SettingsApiService {
     }
     if (body.email_notification !== undefined) general.email_notification = this.phpNotEmpty(body.email_notification) ? 1 : 0;
     if (body.sound_notification !== undefined) general.sound_notification = this.phpNotEmpty(body.sound_notification) ? 1 : 0;
-    for (const key of ['image_url', 'logo_url']) {
+    // image_url belongs to the authenticated employee profile and is read-only
+    // through this endpoint. Only logo_url is writable as a setting.
+    for (const key of ['logo_url']) {
       if (body[key] === undefined) continue;
       const rawUrl = this.text(body[key]);
       if (!rawUrl) {
@@ -46,7 +217,7 @@ export class SettingsApiService {
       general[key] = imageUrl;
     }
     const printerSettings: Json = {};
-    for (const key of ['receipt_header', 'receipt_footer', 'address', 'logo_url', 'image_url']) {
+    for (const key of ['receipt_header', 'receipt_footer', 'address', 'logo_url']) {
       if (body[key] !== undefined) printerSettings[key] = general[key] ?? '';
     }
     // Older saves may have used `logo` instead of `logo_url`. Clear both
@@ -76,11 +247,13 @@ export class SettingsApiService {
   }
 
   async getGeneral(scope: SettingsScope) {
-    const [value, storeEmail] = await Promise.all([
+    const [value, storeEmail, employeeImage] = await Promise.all([
       this.repository.read(scope),
       this.repository.storeEmail(scope),
+      this.repository.employeeProfileImage(scope),
     ]);
     const general: Json = { ...(value.general ?? {}) };
+    delete general.image_url;
     if (storeEmail) general.email = storeEmail;
     const printer = await this.repository.readConfiguration(scope, 'printer_settings');
     for (const key of ['receipt_header', 'receipt_footer', 'address']) {
@@ -88,9 +261,8 @@ export class SettingsApiService {
     }
     // Keep the general image and receipt logo independent. Older code copied
     // one printer logo value into both keys, hiding distinct uploaded images.
-    const printerImage = printer.image_url;
     const printerLogo = printer.logo_url || printer.logo;
-    if (typeof printerImage === 'string' && printerImage.trim()) general.image_url = printerImage;
+    if (employeeImage) general.image_url = employeeImage;
     if (typeof printerLogo === 'string' && printerLogo.trim()) general.logo_url = printerLogo;
     const fields = [
       'business_name', 'email', 'language', 'nav_bar_location', 'pos_theme', 'contact_info',
