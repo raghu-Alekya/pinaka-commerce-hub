@@ -118,10 +118,24 @@ async function main() {
   );
 
   const createRepository = new MerchantRepository();
+  let terminalLimit: number | null = 3;
+  let deviceCount = 2;
+  let serialExists = false;
   const transactionDataSource = {
     transaction: async (callback: (manager: any) => Promise<any>) =>
       callback({
-        query: async (sql: string) => {
+        query: async (sql: string, params?: unknown[]) => {
+          if (sql.includes('lower(btrim(serial_number))')) {
+            assert.match(sql, /merchant_id::text = \$1/);
+            assert.equal(params?.[1], 'SN-UNASSIGNED-02');
+            return serialExists && params?.[0] === 'merchant-uuid' ? [{ exists: 1 }] : [];
+          }
+          if (sql.includes('p.terminal_limit')) return terminalLimit === null ? [] : [{ terminalLimit }];
+          if (sql.includes('count(*)')) {
+            assert.match(sql, /status = 'ACTIVE'/);
+            assert.match(sql, /COALESCE\(is_deleted, false\) = false/);
+            return [{ count: deviceCount }];
+          }
           if (sql.includes('MAX(substring')) return [{ maxCode: null }];
           if (sql.includes('SELECT 1 FROM public.devices')) return [];
           return [];
@@ -136,15 +150,28 @@ async function main() {
     requireDataSource: () => transactionDataSource,
   });
   const deviceRepository = new DeviceRepository(createRepository);
-  const created = await deviceRepository.createDeviceWithMerchantMapping({
+  const createDevice = (merchantId = 'merchant-uuid') => deviceRepository.createDeviceWithMerchantMapping({
     id: 'device-uuid-2',
     deviceType: 'POS Terminal',
-    merchantId: 'merchant-uuid',
-    serialNumber: 'SN-UNASSIGNED-02',
+    merchantId,
+    serialNumber: ' SN-UNASSIGNED-02 ',
     createdBy: 'user-uuid',
     updatedBy: 'user-uuid',
   });
+  const created = await createDevice();
   assert.match(created.deviceActiveCode || '', /^PK-\d{6}$/);
+  deviceCount = 3;
+  await assert.rejects(createDevice, /Plan allows 3 devices/);
+  deviceCount = 2;
+  await createDevice();
+  serialExists = true;
+  await assert.rejects(() => createDevice(), /Device serial number already exists for this merchant/);
+  await createDevice('other-merchant');
+  terminalLimit = 0;
+  deviceCount = 0;
+  await assert.rejects(createDevice, /Plan allows 0 devices/);
+  terminalLimit = null;
+  await assert.rejects(createDevice, /Merchant has no active plan/);
 
   console.log(
     'PASS: Device activation persists both identifiers, is idempotent, and creates an activation code',
