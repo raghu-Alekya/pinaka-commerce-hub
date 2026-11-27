@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { MerchantRepository } from '../merchant/merchant.repository';
 import { MerchantDeviceEntity } from '../../entities/merchant-device.entity';
@@ -26,6 +26,39 @@ export class DeviceRepository {
   }): Promise<DeviceEntity> {
     try {
       return await this.merchants.requireDataSource().transaction(async manager => {
+        await manager.query('SELECT id FROM public.merchants WHERE id = $1 FOR UPDATE', [data.merchantId]);
+        const [plan] = await manager.query(`
+          SELECT p.terminal_limit AS "terminalLimit"
+          FROM public.subscriptions s
+          JOIN public.plans p ON p.id::text = COALESCE(to_jsonb(s)->>'plan_id', to_jsonb(s)->>'planId')
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = $1
+            AND s.status = 'ACTIVE'
+          ORDER BY s.created_at DESC NULLS LAST, s.id DESC
+          LIMIT 1
+        `, [data.merchantId]);
+        if (plan?.terminalLimit == null) {
+          throw new BadRequestException('Merchant has no active plan with a terminal limit');
+        }
+        const [{ count }] = await manager.query(`
+          SELECT count(*)::integer AS count
+          FROM public.devices
+          WHERE merchant_id::text = $1 AND status = 'ACTIVE' AND COALESCE(is_deleted, false) = false
+        `, [data.merchantId]);
+        if (Number(count) >= Number(plan.terminalLimit)) {
+          throw new ConflictException(`Plan allows ${plan.terminalLimit} devices; ${count} are already active`);
+        }
+
+        const serialNumber = data.serialNumber?.trim() || null;
+        if (serialNumber) {
+          const [duplicate] = await manager.query(`
+            SELECT 1 FROM public.devices
+            WHERE merchant_id::text = $1 AND COALESCE(is_deleted, false) = false
+              AND lower(btrim(serial_number)) = lower($2)
+            LIMIT 1
+          `, [data.merchantId, serialNumber]);
+          if (duplicate) throw new ConflictException('Device serial number already exists for this merchant');
+        }
+
         // Serialize code allocation so concurrent creates cannot choose the same code.
         await manager.query('SELECT pg_advisory_xact_lock(724621, 56)');
         const rows: Array<{ maxCode: string | null }> = await manager.query(`
@@ -69,7 +102,7 @@ export class DeviceRepository {
           deviceType: data.deviceType,
           merchantId: data.merchantId,
           merchantName: data.merchantName || data.merchantId,
-          serialNumber: data.serialNumber ?? null,
+          serialNumber,
           notes: data.notes ?? null,
           status: data.status || RecordStatus.ACTIVE,
           createdBy: data.createdBy,

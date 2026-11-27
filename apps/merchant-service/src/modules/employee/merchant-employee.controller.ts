@@ -34,7 +34,14 @@ export class MerchantEmployeeController {
     const merchantUuid = await this.requireMerchantId(merchantId);
     const employees = await this.repository.listEmployees(merchantUuid, status);
     const statistics = await this.repository.employeeStatistics(merchantUuid);
-    return { success: true, count: employees.length, statistics, employees };
+    return {
+      success: true,
+      count: employees.length,
+      active_employees_count: employees.filter(employee => !employee.isDeleted && employee.status === 'ACTIVE').length,
+      inactive_employees_count: employees.filter(employee => !employee.isDeleted && employee.status === 'INACTIVE').length,
+      statistics,
+      employees,
+    };
   }
 
   @Get(':idOrCode')

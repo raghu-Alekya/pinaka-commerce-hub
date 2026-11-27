@@ -1888,7 +1888,7 @@ export class MerchantRepository implements OnModuleInit {
     if (!this.deviceRepo) throw new ServiceUnavailableException('Database not connected');
     const result = await this.deviceRepo.update(
       { id, isDeleted: false },
-      { isDeleted: true, status: RecordStatus.INACTIVE, updatedBy, updatedAt: new Date() },
+      { status: RecordStatus.INACTIVE, updatedBy, updatedAt: new Date() },
     );
     return result.affected === 1;
   }
@@ -7224,6 +7224,30 @@ async acknowledgeProductDataChanges(deviceId: string | undefined, version: numbe
           throw new ConflictException(
             'Employee email or username already exists',
           );
+
+        // Hold the merchant lock until the employee and linked user have been saved.
+        await manager.query('SELECT id FROM public.merchants WHERE id = $1 FOR UPDATE', [dto.merchantId]);
+        const [plan] = await manager.query(`
+          SELECT p.employees_limit AS "employeesLimit"
+          FROM public.subscriptions s
+          JOIN public.plans p ON p.id::text = COALESCE(to_jsonb(s)->>'plan_id', to_jsonb(s)->>'planId')
+          WHERE COALESCE(to_jsonb(s)->>'merchant_id', to_jsonb(s)->>'merchantId') = $1
+            AND s.status = 'ACTIVE'
+          ORDER BY s.created_at DESC NULLS LAST, s.id DESC
+          LIMIT 1
+        `, [dto.merchantId]);
+        if (plan?.employeesLimit == null) {
+          throw new BadRequestException('Merchant has no active plan with an employee limit');
+        }
+        const [{ count }] = await manager.query(`
+          SELECT count(*)::integer AS count
+          FROM public.employees
+          WHERE merchant_id::text = $1 AND status = 'ACTIVE' AND COALESCE(is_deleted, false) = false
+        `, [dto.merchantId]);
+        if (Number(count) >= Number(plan.employeesLimit)) {
+          throw new ConflictException(`Plan allows ${plan.employeesLimit} employees; ${count} are already active`);
+        }
+
         const employeeCode = await this.nextEmployeeCode(
           manager,
           dto.merchantId!,

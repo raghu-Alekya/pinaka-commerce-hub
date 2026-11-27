@@ -181,6 +181,8 @@ export class DeviceController {
     const storeMap = await this.service.getStoreMappingsForDevices(devices.map((d) => d.id));
     return {
       count: devices.length,
+      active_devices_count: devices.filter(device => device.status === RecordStatus.ACTIVE).length,
+      inactive_devices_count: devices.filter(device => device.status === RecordStatus.INACTIVE).length,
       devices: devices.map((device) => {
         const storeInfo = storeMap.get(device.id);
         return {
@@ -304,7 +306,7 @@ export class DeviceController {
     this.assertMerchant(request, current.merchantId);
     if (!(await this.service.deleteDevice(deviceId, this.auditUser(request))))
       throw new NotFoundException("Device not found");
-    return { success: true, message: "Device deleted" };
+    return { success: true, message: "Device deactivated" };
   }
 
   private publicDevice(
