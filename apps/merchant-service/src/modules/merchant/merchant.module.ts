@@ -11,6 +11,8 @@ import { SessionAuthGuard } from '../shared/session-auth.guard';
 import { ConsoleAccessService } from '../shared/console-access.service';
 import { PlatformHealthSourceController } from './platform-health-source.controller';
 import { PlatformHealthSourceService } from './platform-health-source.service';
+import { MerchantDashboardController } from './merchant-dashboard.controller';
+import { MerchantDashboardService } from './merchant-dashboard.service';
 
 @Module({
   controllers: [
@@ -19,11 +21,13 @@ import { PlatformHealthSourceService } from './platform-health-source.service';
     OnboardingController,
     ReferenceDataController,
     PlatformHealthSourceController,
+    MerchantDashboardController,
   ],
   providers: [
     MerchantRepository,
     MerchantCrudService,
     PlatformHealthSourceService,
+    MerchantDashboardService,
     ConsoleAccessService,
     SessionAuthGuard,
     {
