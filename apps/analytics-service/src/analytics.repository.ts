@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
+import type { DataSource } from 'typeorm';
 import Redis from 'ioredis';
 import { connectPostgres } from '@pinaka-delivery-hub/database';
 import { AnalyticsSnapshotEntity } from './entities/analytics-snapshot.entity';
@@ -7,12 +7,11 @@ import { AnalyticsSnapshotEntity } from './entities/analytics-snapshot.entity';
 @Injectable()
 export class AnalyticsRepository implements OnModuleInit {
   private dataSource!: DataSource;
-  private snapRepo!: Repository<AnalyticsSnapshotEntity>;
   private redisClient?: Redis;
   isDbConnected = false;
   public isRedisConnected = false;
 
-  private inMemorySnapshot: AnalyticsSnapshotEntity = {
+  private readonly inMemorySnapshot: AnalyticsSnapshotEntity = {
     id: 'SNAP-2026-09-03-STR-5001',
     merchantId: 'MCH-1001',
     storeId: 'STR-5001',
@@ -40,10 +39,9 @@ export class AnalyticsRepository implements OnModuleInit {
   };
 
   async onModuleInit() {
-    this.dataSource = await connectPostgres('Analytics Service DB', [AnalyticsSnapshotEntity]);
-    this.snapRepo = this.dataSource.getRepository(AnalyticsSnapshotEntity);
+    this.dataSource = await connectPostgres('Analytics Service DB', [], { synchronize: false });
+    await AnalyticsSnapshotEntity.dropLegacyTable(this.dataSource);
     this.isDbConnected = true;
-    await this.seedSnapshot();
 
     try {
       this.redisClient = new Redis({
@@ -61,23 +59,8 @@ export class AnalyticsRepository implements OnModuleInit {
     }
   }
 
-  private async seedSnapshot() {
-    if (this.snapRepo) {
-      const existing = await this.snapRepo.findOne({ where: { id: 'SNAP-2026-09-03-STR-5001' } });
-      if (!existing) {
-        const entity = this.snapRepo.create(this.inMemorySnapshot);
-        await this.snapRepo.save(entity);
-        console.log('📈 [Analytics Service] Seeded default daily financial analytics snapshot');
-      }
-    }
-  }
-
-  async getDashboardKpis(storeId: string): Promise<AnalyticsSnapshotEntity> {
-    const snap =
-      (await this.snapRepo.findOne({ where: { storeId } })) ||
-      (await this.snapRepo.findOne({ where: { id: this.inMemorySnapshot.id } }));
-    if (!snap) throw new Error(`No analytics snapshot found for store '${storeId}'`);
-    return snap;
+  async getDashboardKpis(_storeId: string): Promise<AnalyticsSnapshotEntity> {
+    return this.inMemorySnapshot;
   }
 
   async getTopProducts(storeId: string): Promise<any[]> {
