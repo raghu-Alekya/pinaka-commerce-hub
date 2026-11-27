@@ -5,8 +5,20 @@ export interface PosLineItem {
   subtotal?: number | string;
   total?: number | string;
   tax_status?: string;
+  tax_class?: string;
   meta_data?: Array<{ key?: string; value?: unknown }>;
   taxes?: Array<{ id?: unknown; rate_percent?: unknown; total?: unknown; subtotal?: unknown }>;
+}
+
+export interface SaleTaxConfiguration {
+  taxEnabled?: unknown;
+  defaultTaxRate?: unknown;
+  taxClasses?: Array<{
+    name?: unknown;
+    slug?: unknown;
+    rate?: unknown;
+    rates?: Array<{ id?: unknown; rate?: unknown }>;
+  }>;
 }
 
 export interface PosFeeLine {
@@ -147,12 +159,41 @@ export function calculateDiscountTotal(
       merchantCouponDiscount += amount;
     }
   });
-  // Coupon application can rewrite line totals, so the original automatic,
-  // multipack, and mix-and-match amounts must be retained from POS metadata.
-  const representedByLines = Math.max(lineReduction, promotionDiscount + couponDiscount);
   const merchantFeeDiscount = merchantDiscountMinor(feeLines, places);
-  const unrepresentedMerchantFee = Math.max(0, merchantFeeDiscount - merchantCouponDiscount);
-  return fromMinor(representedByLines + unrepresentedMerchantFee, places);
+  const merchantFeeOnly = Math.max(0, merchantFeeDiscount - merchantCouponDiscount);
+  // A promotion amount already covered by the coupon, or already inside the
+  // line gap, is one discount. Adding it again makes discount_total larger
+  // than the money taken off the products.
+  const couponExplainsGap = couponDiscount > 0 && lineReduction > 0 && couponDiscount >= lineReduction;
+  const promotionExplainsGap = !couponExplainsGap && promotionDiscount > 0 && promotionDiscount >= lineReduction;
+  const couponAndMerchantExplainGap = !couponExplainsGap
+    && !promotionExplainsGap
+    && lineReduction > 0
+    && couponDiscount + merchantFeeOnly >= lineReduction;
+  let couponInLines = 0;
+  let promotionInLines = 0;
+  let merchantInLines = 0;
+  if (couponExplainsGap) {
+    couponInLines = lineReduction;
+    promotionInLines = Math.min(promotionDiscount, couponDiscount);
+  } else if (promotionExplainsGap) {
+    promotionInLines = lineReduction;
+  } else if (couponAndMerchantExplainGap) {
+    couponInLines = Math.min(couponDiscount, lineReduction);
+    merchantInLines = Math.min(merchantFeeOnly, lineReduction - couponInLines);
+    promotionInLines = Math.min(promotionDiscount, couponDiscount);
+  } else {
+    let remaining = lineReduction;
+    promotionInLines = Math.min(promotionDiscount, remaining);
+    remaining -= promotionInLines;
+    couponInLines = Math.min(couponDiscount, remaining);
+    remaining -= couponInLines;
+    merchantInLines = Math.min(merchantFeeOnly, remaining);
+  }
+  const couponExtra = Math.max(0, couponDiscount - couponInLines);
+  const promotionExtra = Math.max(0, promotionDiscount - promotionInLines);
+  const merchantExtra = Math.max(0, merchantFeeOnly - merchantInLines);
+  return fromMinor(lineReduction + couponExtra + merchantExtra + promotionExtra, places);
 }
 
 export function sumCouponDiscounts(couponLines: PosCouponLine[] = [], places = 2): number {
@@ -182,45 +223,481 @@ export function authoritativeCouponDiscount(
   return fromMinor(chosen, places);
 }
 
-export function isMerchantDiscountRepresented(
-  lineItems: PosLineItem[] = [],
-  feeLines: PosFeeLine[] = [],
-  places = 2,
-): boolean {
-  const merchantMinor = merchantDiscountMinor(feeLines, places);
-  if (!merchantMinor) return false;
-  const representedMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
+function merchandiseReductionMinor(lineItems: PosLineItem[] = [], places = 2): number {
+  return lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
     sum + Math.max(
       0,
       toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
     )
   ), 0);
-  return representedMinor >= merchantMinor;
+}
+
+function couponAmountMinor(
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  const couponLineMinor = toMinor(sumCouponDiscounts(couponLines, places), places);
+  if (couponLineMinor > 0) return couponLineMinor;
+  return feeLines.reduce((sum, fee) => (
+    isCouponDiscountFee(fee) ? sum + Math.abs(toMinor(fee?.total ?? 0, places)) : sum
+  ), 0);
+}
+
+/**
+ * The line gap is the coupon first. Only the remainder can be a merchant
+ * discount that is already inside the line totals. A larger coupon must not
+ * be treated as the merchant discount.
+ */
+export function isMerchantDiscountRepresented(
+  lineItems: PosLineItem[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+  couponLines: PosCouponLine[] = [],
+): boolean {
+  const merchantMinor = merchantDiscountMinor(feeLines, places);
+  if (!merchantMinor) return false;
+  const lineReductionMinor = merchandiseReductionMinor(lineItems, places);
+  const couponMinor = couponAmountMinor(couponLines, feeLines, places);
+  const leftoverMinor = Math.max(0, lineReductionMinor - Math.min(lineReductionMinor, couponMinor));
+  return leftoverMinor >= merchantMinor;
 }
 
 export function feeLinesForCalculation(
   lineItems: PosLineItem[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
+  couponLines: PosCouponLine[] = [],
 ): PosFeeLine[] {
-  return isMerchantDiscountRepresented(lineItems, feeLines, places)
+  return isMerchantDiscountRepresented(lineItems, feeLines, places, couponLines)
     ? feeLines.filter((fee) => !isMerchantDiscountFee(fee))
     : feeLines;
+}
+
+/** The coupon amount sent on the order. It is not compared with other discounts. */
+export function couponToApply(
+  lineItems: PosLineItem[] = [],
+  couponLines: PosCouponLine[] = [],
+  feeLines: PosFeeLine[] = [],
+  places = 2,
+): number {
+  return authoritativeCouponDiscount(couponLines, feeLines, places, lineItems);
+}
+
+function statedCouponDiscount(coupon: PosCouponLine): number {
+  const record = coupon as PosCouponLine & { discount_amount?: unknown };
+  const amount = Number(record?.discount ?? record?.discount_amount ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function isGeneratedMerchantCoupon(code: string): boolean {
+  return /^pos-discount(?:-\d+)?$/i.test(code);
+}
+
+/**
+ * A local store coupon can fill a missing fixed-cart amount.
+ * Percentage and fixed-product coupons keep their own rules and are not
+ * converted into a cart amount. An expired or missing row supplies nothing.
+ */
+export function fixedCartAmountFromCouponRecord(
+  row: Record<string, unknown> | null | undefined,
+  now = Date.now(),
+): number | null {
+  if (!row) return null;
+  const type = String(row.discount_type ?? row.discountType ?? '').trim().toLowerCase();
+  if (type !== 'fixed_cart' && type !== 'fixed') return null;
+  const expiresAt = row.date_expires ?? row.dateExpires;
+  if (expiresAt !== undefined && expiresAt !== null && String(expiresAt).trim() !== '') {
+    const expires = new Date(String(expiresAt)).getTime();
+    if (Number.isFinite(expires) && expires <= now) return null;
+  }
+  const amount = Number(row.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+/**
+ * Fill coupon lines that have a code but no positive discount from the local
+ * fixed-cart records. When a line cannot be filled, the coupon fee is cleared
+ * so it cannot become the coupon amount.
+ */
+export function assignFixedCartCouponDiscounts(
+  sourcePayload: { coupon_lines?: PosCouponLine[]; fee_lines?: PosFeeLine[] },
+  records: ReadonlyMap<string, Record<string, unknown> | null>,
+  places = 2,
+  now = Date.now(),
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  let blockFeeFallback = false;
+  coupons.forEach((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    if (!code || isGeneratedMerchantCoupon(code) || statedCouponDiscount(coupon) > 0) return;
+    const amount = fixedCartAmountFromCouponRecord(records.get(code.toLowerCase()) ?? null, now);
+    if (amount === null) {
+      blockFeeFallback = true;
+      return;
+    }
+    coupon.discount = amount.toFixed(places);
+  });
+  if (!blockFeeFallback || !Array.isArray(sourcePayload.fee_lines)) return;
+  sourcePayload.fee_lines.forEach((fee) => {
+    if (isCouponDiscountFee(fee)) fee.total = (0).toFixed(places);
+  });
+}
+
+/** Keep the coupon fee and POS coupon meta aligned with the coupon used in the total. */
+export function recordAppliedCouponAmount(
+  sourcePayload: {
+    coupon_lines?: PosCouponLine[];
+    fee_lines?: PosFeeLine[];
+    meta_data?: Array<{ key?: string; value?: unknown }>;
+  },
+  applied: number,
+  places = 2,
+): void {
+  const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+  const hasStoreCoupon = coupons.some((coupon) => {
+    const code = String(coupon?.code || '').trim();
+    return Boolean(code) && !isGeneratedMerchantCoupon(code);
+  });
+  const metadata = Array.isArray(sourcePayload.meta_data) ? sourcePayload.meta_data : [];
+  const meta = metadata.find((entry) => entry?.key === '_pos_coupon_discount');
+  const hasCouponFee = Array.isArray(sourcePayload.fee_lines)
+    && sourcePayload.fee_lines.some((fee) => isCouponDiscountFee(fee));
+  if (!hasStoreCoupon && !hasCouponFee && !meta) return;
+  const text = fromMinor(toMinor(applied, places), places).toFixed(places);
+  if (Array.isArray(sourcePayload.fee_lines)) {
+    sourcePayload.fee_lines.forEach((fee) => {
+      if (isCouponDiscountFee(fee)) fee.total = (-Number(text)).toFixed(places);
+    });
+  }
+  if (!hasStoreCoupon && !meta) return;
+  if (meta) meta.value = text;
+  else {
+    metadata.push({ key: '_pos_coupon_discount', value: text });
+    sourcePayload.meta_data = metadata;
+  }
+}
+
+type SaleLine = PosLineItem & {
+  price?: unknown;
+  unit_price?: unknown;
+  unitPrice?: unknown;
+  total_tax?: unknown;
+  subtotal_tax?: unknown;
+};
+
+function metaAmount(line: PosLineItem, keys: string[], places: number): number {
+  const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  for (const key of keys) {
+    const entry = metadata.find((item) => item?.key === key);
+    if (!entry || entry.value === undefined || entry.value === null || String(entry.value).trim() === '') continue;
+    const amount = Math.max(0, toMinor(entry.value, places));
+    if (amount > 0) return amount;
+  }
+  return 0;
+}
+
+/**
+ * One line carries one POS discount type. `_pos_auto_discount` is the amount
+ * for that type. Dedicated multipack and mix-and-match keys are extra amounts.
+ */
+function itemDiscountParts(line: PosLineItem, places: number): { auto: number; multipack: number; mix: number } {
+  const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  const type = String(
+    metadata.find((item) => item?.key === '_pos_discount_type' || item?.key === 'pos_discount_type')?.value || '',
+  ).trim().toLowerCase();
+  const shared = metaAmount(line, [
+    '_pos_auto_discount', 'pos_auto_discount', '_pos_discount_amount', 'pos_discount_amount',
+  ], places);
+  const multipackKey = metaAmount(line, ['_pos_multipack_discount', 'pos_multipack_discount'], places);
+  const mixKey = metaAmount(line, [
+    '_pos_mix_match_discount', '_pos_mixmatch_discount', 'pos_mix_match_discount', 'pos_mixmatch_discount',
+  ], places);
+  const mixType = type === 'mixmatch' || type === 'mix_match' || type === 'mix-match';
+  if (type === 'multipack') return { auto: 0, multipack: multipackKey || shared, mix: mixKey };
+  if (mixType) return { auto: 0, multipack: multipackKey, mix: mixKey || shared };
+  return { auto: shared, multipack: multipackKey, mix: mixKey };
+}
+
+/** Automatic, multipack, and mix-and-match amounts stored on the line. A merchant source is not included. */
+export function recognizedItemDiscountMinor(line: PosLineItem, places = 2): number {
+  const metadata = Array.isArray(line?.meta_data) ? line.meta_data : [];
+  const source = String(
+    metadata.find((item) => item?.key === '_pos_discount_source' || item?.key === 'pos_discount_source')?.value || '',
+  ).trim().toLowerCase();
+  if (source === 'merchant' || source === 'merchant_discount' || source === 'pos_discount') return 0;
+  const parts = itemDiscountParts(line, places);
+  return parts.auto + parts.multipack + parts.mix;
+}
+
+function taxClassKeys(value: unknown): string[] {
+  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (!key) return [];
+  const keys = [key];
+  if (key.endsWith('rate') && key.length > 4) keys.push(key.slice(0, -4));
+  return keys;
+}
+
+function validTaxPercent(value: unknown): number | null {
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : null;
+}
+
+function configuredTaxPercent(line: PosLineItem, configuration: SaleTaxConfiguration | undefined, taxId: number): number | null {
+  if (configuration?.taxEnabled === false) return null;
+  const classes = Array.isArray(configuration?.taxClasses) ? configuration.taxClasses : [];
+  for (const taxClass of classes) {
+    const rates = Array.isArray(taxClass?.rates) ? taxClass.rates : [];
+    const match = rates.find((entry) => Number(entry?.id) === taxId);
+    const percent = validTaxPercent(match?.rate);
+    if (percent !== null) return percent;
+  }
+  const wanted = new Set(taxClassKeys(line.tax_class));
+  const matched = classes.find((taxClass) => (
+    [...taxClassKeys(taxClass?.name), ...taxClassKeys(taxClass?.slug)].some((key) => wanted.has(key))
+  ));
+  if (matched) {
+    const classRate = validTaxPercent(matched.rate);
+    if (classRate !== null) return classRate;
+    const rates = Array.isArray(matched.rates) ? matched.rates : [];
+    const percents = [...new Set(rates
+      .map((entry) => validTaxPercent(entry?.rate))
+      .filter((rate): rate is number => rate !== null))];
+    if (percents.length === 1) return percents[0];
+  }
+  return validTaxPercent(configuration?.defaultTaxRate);
+}
+
+function saleLineRate(line: PosLineItem, configuration?: SaleTaxConfiguration): number {
+  if (!isTaxableSaleLine(line)) return 0;
+  const taxes = Array.isArray(line.taxes) ? line.taxes : [];
+  const stated = taxes[0]?.rate_percent;
+  if (stated !== undefined && stated !== null && String(stated).trim() !== '') {
+    return validTaxPercent(stated) ?? 0;
+  }
+  const id = Number(taxes[0]?.id);
+  if (!Number.isFinite(id) || id <= 0) return 0;
+  if (!Number.isInteger(id)) return validTaxPercent(id) ?? 0;
+  return configuredTaxPercent(line, configuration, id) ?? 0;
+}
+
+/**
+ * Save-time bill. Starts from the original unit price × quantity, then
+ * automatic, multipack, and mix-and-match discounts, then the merchant
+ * discount, then the coupon, then tax on each line's own rate.
+ * Line subtotal keeps the original extended price. Line total keeps the
+ * amount after the item discounts. Merchant and coupon stay on their own
+ * fee and coupon rows and are included once in the order total.
+ */
+export function applyPosSaleCalculation(
+  lines: SaleLine[] = [],
+  sourcePayload: {
+    coupon_lines?: PosCouponLine[];
+    fee_lines?: PosFeeLine[];
+    tax_lines?: Array<Record<string, unknown>>;
+    total_tax?: unknown;
+    cart_tax?: unknown;
+    subtotal?: unknown;
+    discount_total?: unknown;
+    total?: unknown;
+    shipping_total?: unknown;
+    shippingTotal?: unknown;
+    prices_include_tax?: unknown;
+  },
+  places = 2,
+  taxConfiguration?: SaleTaxConfiguration,
+): { subtotal: number; discountTotal: number; tax: number; total: number; coupon: number; merchant: number } | null {
+  const merchandise = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => isMerchandiseLine(line));
+  if (!merchandise.length) return null;
+
+  const priced = merchandise.map(({ line }) => {
+    const parts = itemDiscountParts(line, places);
+    const requested = parts.auto + parts.multipack + parts.mix;
+    const quantityValue = Number(line.quantity ?? 1);
+    const quantity = Number.isFinite(quantityValue) && quantityValue > 0 ? quantityValue : 1;
+    const rawUnit = line.price ?? line.unit_price ?? line.unitPrice;
+    const hasUnit = rawUnit !== undefined && rawUnit !== null && String(rawUnit).trim() !== '';
+    const subtotal = Math.max(0, toMinor(line.subtotal ?? line.total ?? 0, places));
+    const currentTotal = Math.max(0, toMinor(line.total ?? line.subtotal ?? 0, places));
+    const gap = Math.max(0, subtotal - currentTotal);
+    let original = subtotal;
+    let unit = 0;
+    if (hasUnit) {
+      unit = Math.max(0, toMinor(rawUnit, places));
+      const extended = Math.round(unit * quantity);
+      // A supplied unit price is the original price. A later save can already
+      // have stored a larger original subtotal beside a smaller unit, and that
+      // stored subtotal remains the original extended price.
+      if (subtotal > extended && requested <= gap) {
+        original = subtotal;
+        unit = 0;
+      } else {
+        original = extended;
+      }
+    } else if (requested > gap) {
+      original = subtotal + requested;
+    }
+    let remaining = original;
+    const take = (amount: number) => {
+      const used = Math.min(remaining, Math.max(0, amount));
+      remaining -= used;
+      return used;
+    };
+    const applied = {
+      auto: take(parts.auto),
+      multipack: take(parts.multipack),
+      mix: take(parts.mix),
+    };
+    return { line, quantity, original, unit, applied, afterItem: remaining };
+  });
+
+  const afterItem = priced.map((entry) => entry.afterItem);
+  const coupons = (Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [])
+    .filter((coupon) => !/^pos-discount(?:-\d+)?$/i.test(String(coupon?.code || '').trim()));
+  const fees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+  const merchantRequested = merchantDiscountMinor(fees, places);
+  const afterMerchant = amountsAfterDiscount(afterItem, merchantRequested);
+  const couponRequested = toMinor(couponToApply(priced.map((entry) => entry.line), coupons, fees, places), places);
+  const afterCoupon = amountsAfterDiscount(afterMerchant, couponRequested);
+  const merchantApplied = afterItem.reduce((sum, amount) => sum + amount, 0)
+    - afterMerchant.reduce((sum, amount) => sum + amount, 0);
+  const couponApplied = afterMerchant.reduce((sum, amount) => sum + amount, 0)
+    - afterCoupon.reduce((sum, amount) => sum + amount, 0);
+
+  const hadRate = priced.some((entry) => saleLineRate(entry.line, taxConfiguration) > 0);
+  const taxByIndex = new Map<number, number>();
+  if (hadRate) {
+    const groups = new Map<number, number[]>();
+    priced.forEach((entry, index) => {
+      const rate = saleLineRate(entry.line, taxConfiguration);
+      if (rate > 0) groups.set(rate, [...(groups.get(rate) || []), index]);
+    });
+    groups.forEach((indexes, rate) => {
+      const allocated = allocateRoundedTax(indexes.map((index) => taxUnitsForMinor(afterCoupon[index], rate)));
+      indexes.forEach((index, position) => taxByIndex.set(index, allocated[position]));
+    });
+  }
+
+  let itemApplied = 0;
+  priced.forEach((entry, index) => {
+    itemApplied += entry.applied.auto + entry.applied.multipack + entry.applied.mix;
+    const text = (minor: number) => fromMinor(minor, places).toFixed(places);
+    entry.line.subtotal = text(entry.original);
+    entry.line.total = text(entry.afterItem);
+    const unitMinor = entry.unit > 0
+      ? entry.unit
+      : (Number.isInteger(entry.quantity) && entry.quantity > 0 && entry.original % entry.quantity === 0
+        ? entry.original / entry.quantity
+        : 0);
+    if (unitMinor > 0) {
+      const unitText = text(unitMinor);
+      entry.line.price = unitText;
+      entry.line.unit_price = unitText;
+    }
+    if (!hadRate) return;
+    const taxMinor = taxByIndex.get(index) || 0;
+    const taxText = text(taxMinor);
+    entry.line.total_tax = taxText;
+    entry.line.subtotal_tax = taxText;
+    const rate = saleLineRate(entry.line, taxConfiguration);
+    if (Array.isArray(entry.line.taxes) && entry.line.taxes[0]) {
+      entry.line.taxes[0].total = taxText;
+      entry.line.taxes[0].subtotal = taxText;
+      if (rate > 0 && entry.line.taxes[0].rate_percent === undefined) entry.line.taxes[0].rate_percent = rate;
+    } else if (rate > 0) {
+      entry.line.taxes = [{ id: rate, rate_percent: rate, total: taxText, subtotal: taxText }];
+    }
+  });
+
+  const otherMinor = lines.reduce((sum, line) => (
+    isMerchandiseLine(line) ? sum : sum + toMinor(line.total ?? line.subtotal ?? 0, places)
+  ), 0);
+  // Merchant and coupon are already in the total. Cashback fees, payout fees,
+  // and card charges stay on their own fee rows and are added once here.
+  const otherFeeMinor = fees.reduce((sum, fee) => (
+    isMerchantDiscountFee(fee) || isCouponDiscountFee(fee) ? sum : sum + toMinor(fee?.total ?? 0, places)
+  ), 0);
+  const taxableFeeMinor = fees.reduce((sum, fee) => {
+    if (isMerchantDiscountFee(fee) || isCouponDiscountFee(fee) || isPayoutFee(fee)) return sum;
+    if (String(fee?.tax_status || 'taxable').trim().toLowerCase() === 'none') return sum;
+    return sum + toMinor(fee?.total ?? 0, places);
+  }, 0);
+  const subtotalMinor = lines.reduce((sum, line) => sum + toMinor(line.subtotal ?? line.total ?? 0, places), 0);
+  const shippingMinor = toMinor(sourcePayload.shipping_total ?? sourcePayload.shippingTotal ?? 0, places);
+  const afterItemMinor = afterItem.reduce((sum, amount) => sum + amount, 0);
+  const lineRates = [...new Set(priced.map((entry) => saleLineRate(entry.line, taxConfiguration)).filter((rate) => rate > 0))];
+  const feeTaxMinor = hadRate && taxableFeeMinor !== 0 && lineRates.length === 1
+    ? allocateRoundedTax([taxUnitsForMinor(taxableFeeMinor, lineRates[0])])[0] || 0
+    : 0;
+  const taxMinor = hadRate
+    ? [...taxByIndex.values()].reduce((sum, amount) => sum + amount, 0) + feeTaxMinor
+    : Math.max(0, toMinor(
+      sourcePayload.total_tax ?? lines.reduce((sum, line) => sum + Number(line.total_tax ?? 0), 0),
+      places,
+    ));
+  if (hadRate) {
+    const existing = Array.isArray(sourcePayload.tax_lines) ? sourcePayload.tax_lines : [];
+    const grouped = new Map<number, number>();
+    priced.forEach((entry, index) => {
+      const rate = saleLineRate(entry.line, taxConfiguration);
+      if (rate > 0) grouped.set(rate, (grouped.get(rate) || 0) + (taxByIndex.get(index) || 0));
+    });
+    if (feeTaxMinor && lineRates.length === 1) {
+      grouped.set(lineRates[0], (grouped.get(lineRates[0]) || 0) + feeTaxMinor);
+    }
+    sourcePayload.tax_lines = [...grouped.entries()].map(([rate, minor], index) => {
+      const previous = existing.find((line) => Number(line?.rate_percent) === rate) || {};
+      return {
+        ...previous,
+        id: previous.id ?? index + 1,
+        rate_code: previous.rate_code || `POS-TAX-${index + 1}`,
+        rate_id: previous.rate_id ?? index + 1,
+        label: previous.label || 'Tax',
+        compound: previous.compound ?? false,
+        tax_total: fromMinor(minor, places).toFixed(places),
+        shipping_tax_total: previous.shipping_tax_total || fromMinor(0, places).toFixed(places),
+        rate_percent: rate,
+        meta_data: previous.meta_data || [],
+      };
+    });
+    sourcePayload.total_tax = fromMinor(taxMinor, places).toFixed(places);
+    sourcePayload.cart_tax = sourcePayload.total_tax;
+  }
+  const discountMinor = itemApplied + merchantApplied + couponApplied;
+  const total = orderTotalWithTax({
+    netBeforeTax: fromMinor(
+      afterItemMinor - merchantApplied - couponApplied + otherMinor + otherFeeMinor + shippingMinor,
+      places,
+    ),
+    tax: fromMinor(taxMinor, places),
+    pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
+    decimalPlaces: places,
+  });
+  sourcePayload.subtotal = fromMinor(subtotalMinor, places).toFixed(places);
+  sourcePayload.discount_total = fromMinor(discountMinor, places).toFixed(places);
+  sourcePayload.total = total.toFixed(places);
+  return {
+    subtotal: fromMinor(subtotalMinor, places),
+    discountTotal: fromMinor(discountMinor, places),
+    tax: fromMinor(taxMinor, places),
+    total,
+    coupon: fromMinor(couponApplied, places),
+    merchant: fromMinor(merchantApplied, places),
+  };
 }
 
 export function representedCouponDiscount(
   lineItems: PosLineItem[] = [],
   feeLines: PosFeeLine[] = [],
   places = 2,
+  couponLines: PosCouponLine[] = [],
 ): number {
-  const lineReductionMinor = lineItems.filter(isMerchandiseLine).reduce((sum, line) => (
-    sum + Math.max(
-      0,
-      toMinor(line.subtotal ?? line.total ?? 0, places) - toMinor(line.total ?? line.subtotal ?? 0, places),
-    )
-  ), 0);
-  const representedMerchantMinor = Math.min(lineReductionMinor, merchantDiscountMinor(feeLines, places));
-  return fromMinor(Math.max(0, lineReductionMinor - representedMerchantMinor), places);
+  const lineReductionMinor = merchandiseReductionMinor(lineItems, places);
+  const couponMinor = couponAmountMinor(couponLines, feeLines, places);
+  return fromMinor(Math.min(lineReductionMinor, couponMinor), places);
 }
 
 /**
@@ -344,12 +821,7 @@ function exactTaxForAmounts(
   lines: Array<PosLineItem & { taxes?: unknown }>,
   amounts: number[],
 ): number[] | null {
-  const rates = lines.map((line) => {
-    const taxes = Array.isArray(line.taxes) ? line.taxes : [];
-    const rate = Number((taxes[0] as { rate_percent?: unknown; id?: unknown } | undefined)?.rate_percent
-      ?? (taxes[0] as { id?: unknown } | undefined)?.id);
-    return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0;
-  });
+  const rates = lines.map((line) => saleLineRate(line));
   const missingRateOnTaxedLine = lines.some((line, index) => {
     if (rates[index] > 0) return false;
     const stored = Number((line as { total_tax?: unknown }).total_tax ?? 0);
@@ -583,18 +1055,14 @@ export function correctStoredDiscountTax(
   }));
   const feeLines = storedFees.map((fee: any) => ({ ...fee }));
   const taxLines = storedTaxLines.map((line: any) => ({ ...line }));
-  const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[]);
+  const calculationFees = feeLinesForCalculation(lineItems as any[], feeLines as any[], 2, couponLines as any[]);
   const couponDiscount = authoritativeCouponDiscount(
     couponLines as any[],
     feeLines as any[],
     2,
     lineItems as any[],
   );
-  const hasReliableRates = lineItems.some((line: any) => Array.isArray(line?.taxes)
-    && line.taxes.some((tax: any) => {
-      const rate = Number(tax?.rate_percent ?? tax?.id);
-      return Number.isFinite(rate) && rate > 0 && rate <= 100;
-    }));
+  const hasReliableRates = lineItems.some((line: any) => saleLineRate(line) > 0);
   if (hasReliableRates && couponDiscount > 0) {
     feeLines.forEach((fee: any) => {
       const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -949,4 +1417,41 @@ export function adminOrderCounts(input: { businessName: string; orders: Record<s
     category_subtotal: money(categories.reduce((sum, category) => sum + category.total_sales, 0)),
     category_percentage_total: money(categories.reduce((sum, category) => sum + category.sales_percentage, 0)),
   } };
+}
+
+/** Response and WooCommerce sync view. The stored request body stays unchanged. */
+export function storedOrderRequest(original: unknown, storeOrder?: {
+  lineItems?: unknown;
+  feeLines?: unknown;
+  couponLines?: unknown;
+  taxLines?: unknown;
+  metaData?: unknown;
+  subtotal?: unknown;
+  discountTotal?: unknown;
+  taxTotal?: unknown;
+  total?: unknown;
+  grandTotal?: unknown;
+} | null): unknown {
+  if (!storeOrder) return original;
+  const request = original && typeof original === 'object' && !Array.isArray(original)
+    ? { ...(original as Record<string, unknown>) }
+    : {};
+  const text = (value: unknown) => {
+    const amount = Number(value ?? 0);
+    return (Number.isFinite(amount) ? amount : 0).toFixed(2);
+  };
+  if (Array.isArray(storeOrder.lineItems)) request.line_items = storeOrder.lineItems;
+  if (Array.isArray(storeOrder.feeLines)) request.fee_lines = storeOrder.feeLines;
+  if (Array.isArray(storeOrder.couponLines)) request.coupon_lines = storeOrder.couponLines;
+  if (Array.isArray(storeOrder.taxLines)) request.tax_lines = storeOrder.taxLines;
+  if (Array.isArray(storeOrder.metaData)) request.meta_data = storeOrder.metaData;
+  if (storeOrder.subtotal !== undefined && storeOrder.subtotal !== null) request.subtotal = text(storeOrder.subtotal);
+  if (storeOrder.discountTotal !== undefined && storeOrder.discountTotal !== null) request.discount_total = text(storeOrder.discountTotal);
+  if (storeOrder.taxTotal !== undefined && storeOrder.taxTotal !== null) {
+    request.total_tax = text(storeOrder.taxTotal);
+    request.cart_tax = request.total_tax;
+  }
+  if (storeOrder.total !== undefined && storeOrder.total !== null) request.total = text(storeOrder.total);
+  if (storeOrder.grandTotal !== undefined && storeOrder.grandTotal !== null) request.grand_total = text(storeOrder.grandTotal);
+  return request;
 }

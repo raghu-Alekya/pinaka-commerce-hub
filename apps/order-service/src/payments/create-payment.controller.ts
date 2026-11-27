@@ -9,6 +9,13 @@ import { CreatePaymentService } from './create-payment.service';
 export class CreatePaymentController {
   constructor(@Inject(CreatePaymentService) private readonly payments: CreatePaymentService) {}
 
+  /** Payroc notifies this route. The handler re-reads Payroc before changing the saved attempt. */
+  @Post('payroc/webhook')
+  @HttpCode(HttpStatus.OK)
+  payrocWebhook(@Body() body: Record<string, unknown>) {
+    return this.payments.applyPayrocWebhook(body ?? {});
+  }
+
   @Post('create-payment')
   @HttpCode(HttpStatus.OK)
   create(
@@ -16,6 +23,7 @@ export class CreatePaymentController {
     @Headers('authorization') authorization?: string,
     @Headers('x-merchant-id') merchantId?: string,
     @Headers('x-store-id') storeId?: string,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const token = verifyAccessToken(extractBearerToken(authorization));
     const merchant = String(merchantId || '').trim();
@@ -26,6 +34,7 @@ export class CreatePaymentController {
       merchantId: merchant,
       storeId: store,
       userId: token.sub,
+      idempotencyKey,
     });
   }
 }

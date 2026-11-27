@@ -5,6 +5,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { Public } from '@pinaka-delivery-hub/auth';
 import { MerchantRepository, DataSyncActor } from '../merchant/merchant.repository';
 import { RequireAuth } from '../shared/session-auth.guard';
+import { isWebConsoleRequest } from '../shared/console-access';
 import { BusinessType, RetailSubCategory, KycStatus, MerchantStatus } from '../../entities/merchant.entity';
 import { PlanCode } from '../../entities/subscription.entity';
 import { CreateStoreDto, CreateStoresDto, UpdateStoreDto } from './store.dto';
@@ -14,6 +15,10 @@ import { ProductOptionsService } from './product-options.service';
 import { PosEmployeeCatalogGuard } from './pos-employee-catalog.guard';
 
 type ProductImageUpload = { buffer: Buffer; mimetype: string };
+type ConnectorRequest = {
+  headers?: { 'x-pch-web-console'?: string };
+  user?: { role?: string; accountType?: string; merchantId?: string };
+};
 const productImageUpload = FileInterceptor('image', {
   storage: require('multer').memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -52,8 +57,8 @@ export class AppController {
   }
 
   private async requireMasterPlan(code: string) {
-    const plan = await this.merchantRepository.getSubscriptionPlan(this.toPlanCode(code));
-    if (!plan || plan.status !== 'ACTIVE') throw new BadRequestException('Select an active subscription master plan');
+    const plan = await this.merchantRepository.getPlanByIdOrCode(code);
+    if (!plan || plan.status !== 'ACTIVE' || plan.isDeleted) throw new BadRequestException('Select an active commercial plan');
   }
 
   private toBillingCycle(value?: string): 'MONTHLY' | 'ANNUAL' | 'FREE_TRIAL' {
@@ -290,11 +295,11 @@ export class AppController {
   async saveWebsiteConnector(
     @Param('storeId') storeId: string,
     @Body() body: { wordpressUrl?: string; wordpressJwt?: string; merchantId?: string },
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const existing = await this.merchantRepository.getWebsiteConnection(storeId);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl);
     const replacementJwt = body.wordpressJwt?.trim();
@@ -337,11 +342,11 @@ export class AppController {
   async testWebsiteConnector(
     @Param('storeId') storeId: string,
     @Body() body: { wordpressUrl?: string; wordpressJwt?: string },
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const existing = await this.merchantRepository.getWebsiteConnection(storeId);
     const wordpressUrl = this.validateWordPressUrl(body.wordpressUrl || existing?.wordpressUrl);
     const wordpressJwt = body.wordpressJwt?.trim();
@@ -358,11 +363,11 @@ export class AppController {
   @Get('stores/:storeId/connector')
   async getWebsiteConnector(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     return {
       success: true,
@@ -375,11 +380,11 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync')
   async syncStoreCatalogFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    this.requireOwnerRole(request.user?.role);
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connector = await this.merchantRepository.getWebsiteConnector(storeId);
     if (!connector?.encryptedJwt || !connector.wordpressUrl) {
       throw new BadRequestException('Connect the WordPress site before syncing the catalog');
@@ -402,9 +407,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/products')
   async syncStoreProductsFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreProductsFromWordPress(connection);
     return {
       success: true,
@@ -417,10 +422,14 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/categories')
   async syncStoreCategoriesFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
-    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress(connection);
+    const connection = await this.requireWordPressConnection(storeId, request);
+    // Fetch the full WooCommerce taxonomy so child categories are included too.
+    const count = await this.merchantRepository.syncStoreCategoriesFromWordPress({
+      ...connection,
+      includeAll: true,
+    });
     let categoryTaxCount = 0;
     try {
       categoryTaxCount = await this.merchantRepository.syncCategoryWithTax(connection);
@@ -442,9 +451,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/attributes')
   async syncStoreAttributesFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreAttributesFromWordPress(connection);
     return {
       success: true,
@@ -457,9 +466,9 @@ export class AppController {
   @Post('stores/:storeId/catalog/sync/tags')
   async syncStoreTagsFromWebsite(
     @Param('storeId') storeId: string,
-    @Req() request: { user?: { role?: string } },
+    @Req() request: ConnectorRequest,
   ) {
-    const connection = await this.requireWordPressConnection(storeId, request.user?.role);
+    const connection = await this.requireWordPressConnection(storeId, request);
     const count = await this.merchantRepository.syncStoreTagsFromWordPress(connection);
     return {
       success: true,
@@ -1000,7 +1009,7 @@ export class AppController {
   }
 
   private async productCatalogConnection(merchantId: string, storeId: string,
-    actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+    actor?: { id?: string; accountType?: string; merchantId?: string; storeId?: string; role?: string }) {
 
     if (!actor?.id) throw new ForbiddenException('Authentication is required');
     const db = this.merchantRepository.requireDataSource();
@@ -1014,7 +1023,8 @@ export class AppController {
     if ((actor.merchantId && actor.merchantId !== store.merchant_id) || (actor.storeId && actor.storeId !== store.id)) {
       throw new ForbiddenException('Store does not match the authenticated session');
     }
-    if (actor.role !== 'OWNER' && actor.role !== 'POS_EMPLOYEE') {
+    const ownMerchantSession = actor.accountType === 'merchant' && actor.merchantId === store.merchant_id;
+    if (!ownMerchantSession && actor.role !== 'OWNER' && actor.role !== 'POS_EMPLOYEE') {
       const [owner] = await db.query(
         `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
          WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
@@ -1047,7 +1057,7 @@ export class AppController {
     return this.mutateCatalogTerm('DELETE', storeId, taxonomy, termId, {}, request.user);
   }
 
-  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string }) {
+  private async mutateCatalogTerm(method: 'POST' | 'PUT' | 'DELETE', storeId: string, taxonomy: string, termId: string | undefined, input: Record<string, unknown>, actor?: { id?: string; merchantId?: string; storeId?: string; role?: string; accountType?: string }) {
     if (!['categories', 'tags'].includes(taxonomy)) throw new NotFoundException('Catalog taxonomy must be categories or tags');
     if (method !== 'POST' && (!termId || !/^[1-9]\d*$/.test(termId))) throw new BadRequestException('termId must be a positive WooCommerce ID');
     if (!actor?.id) throw new ForbiddenException('Authentication is required');
@@ -1059,13 +1069,16 @@ export class AppController {
     );
     if (!store) throw new NotFoundException('Store not found');
     if (actor.merchantId && actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
-    if (actor.role !== 'OWNER') {
+    if (actor.storeId && actor.storeId !== store.id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+    const merchantIdentity = actor.id === store.merchant_id && actor.merchantId === store.merchant_id
+      && (actor.accountType === undefined || actor.accountType === 'merchant');
+    if (actor.role !== 'OWNER' && !merchantIdentity) {
       const [owner] = await this.merchantRepository.requireDataSource().query(
         `SELECT u.id FROM public.users u JOIN public.merchants m ON m.id::text=$2
          WHERE u.id::text=$1 AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
            AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`, [actor.id, store.merchant_id],
       );
-      if (!owner || actor.merchantId !== store.merchant_id || (actor.storeId && actor.storeId !== store.id)) throw new ForbiddenException('Store does not belong to the authenticated merchant');
+      if (!owner || actor.merchantId !== store.merchant_id) throw new ForbiddenException('Store does not belong to the authenticated merchant');
     }
     const allowed = taxonomy === 'categories' ? ['name','slug','description','parent','display','image','menu_order'] : ['name','slug','description'];
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Provide a JSON object');
@@ -1151,15 +1164,7 @@ export class AppController {
     }
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    const connector = await this.merchantRepository.getWebsiteConnection(store.id);
-    if (connector?.status !== 'CONNECTED' || !connector.wordpressUrl || !connector.encryptedJwt) {
-      throw new BadRequestException('Connect and validate the WordPress site first');
-    }
-    return this.merchantRepository.getWordPressSubCategories({
-      wordpressUrl: connector.wordpressUrl,
-      wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt),
-      parentId: Number(categoryId),
-    });
+    return this.merchantRepository.getStoreSubCategoriesByStoreId(store.id, Number(categoryId));
   }
 
   @Get('stores/:storeId/catalog/get-categories-with-tax')
@@ -1289,14 +1294,23 @@ export class AppController {
   @Post(['stores', 'merchants/:merchantId/stores'])
   async createStore(
     @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: CreateStoreDto })) body: CreateStoreDto,
-    @Req() request: { user?: { id?: string } },
+    @Req() request: { headers?: { 'x-pch-web-console'?: string }; user?: { id?: string; accountType?: string; merchantId?: string } },
     @Param('merchantId') merchantId?: string,
   ) {
     const bodyMerchantId = body.merchant_id || body.merchantId;
     if (merchantId && bodyMerchantId && merchantId !== bodyMerchantId) {
       throw new BadRequestException('Merchant ID in the URL must match the request body');
     }
-    const ownerId = merchantId || bodyMerchantId;
+    const scoped = isWebConsoleRequest(request) && (request.user?.accountType === 'merchant' || request.user?.accountType === 'employee');
+    const sessionMerchantId = scoped ? request.user?.merchantId : undefined;
+    if (scoped && !sessionMerchantId) throw new ForbiddenException('Merchant scope is required');
+    if (scoped && merchantId && (await this.merchantRepository.resolveMerchantUuid(merchantId)) !== sessionMerchantId) {
+      throw new ForbiddenException('You can only manage your own stores');
+    }
+    if (scoped && bodyMerchantId && (await this.merchantRepository.resolveMerchantUuid(bodyMerchantId)) !== sessionMerchantId) {
+      throw new ForbiddenException('You can only manage your own stores');
+    }
+    const ownerId = sessionMerchantId || merchantId || bodyMerchantId;
     if (!ownerId) throw new BadRequestException('merchant_id is required');
     const { merchant } = await this.merchantRepository.getMerchantById(ownerId);
     if (!merchant) throw new NotFoundException(`Merchant '${ownerId}' not found`);
@@ -1307,7 +1321,7 @@ export class AppController {
     const fields = { ...this.storeCreationFields(body, merchant.country), createdBy: request.user?.id ?? null };
     if (!fields.storeName) throw new BadRequestException('name is required');
     const store = await this.merchantRepository.createStore(ownerId, fields);
-    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.role_permissions || []);
     const employees = await this.attachStoreEmployees(ownerId, store.id, body.employees);
     return { success: true, store: this.toStoreResponse(store), ...(employees ? { employees, count: employees.length } : {}) };
   }
@@ -1390,9 +1404,17 @@ export class AppController {
   }
 
   @Get(['stores', 'merchants/:merchantId/stores'])
-  async listStores(@Param('merchantId') merchantId?: string) {
-    const resolvedMerchantId = merchantId ? await this.merchantRepository.resolveMerchantId(merchantId) : undefined;
-    if (merchantId && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
+  async listStores(@Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
+    const scoped = isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee');
+    const consoleMerchant = scoped ? request?.user?.merchantId : undefined;
+    if (scoped && !consoleMerchant) throw new ForbiddenException('Merchant scope is required');
+    const requestedMerchant = consoleMerchant ? (merchantId || consoleMerchant) : merchantId;
+    const resolvedMerchantId = !requestedMerchant
+      ? undefined
+      : consoleMerchant
+        ? await this.merchantRepository.resolveMerchantUuid(requestedMerchant)
+        : await this.merchantRepository.resolveMerchantId(requestedMerchant);
+    if (requestedMerchant && !resolvedMerchantId) throw new NotFoundException('Merchant not found');
     const [stores, merchants] = await Promise.all([
       this.merchantRepository.listStores(resolvedMerchantId || undefined),
       this.merchantRepository.getAllMerchants(),
@@ -1403,7 +1425,10 @@ export class AppController {
       names.set(merchant.id, label);
       if (merchant.merchantId) names.set(merchant.merchantId, label);
     }
-    if (resolvedMerchantId && !names.has(resolvedMerchantId)) throw new NotFoundException('Merchant not found');
+    if (resolvedMerchantId && !names.has(resolvedMerchantId)) {
+      if (consoleMerchant) names.set(resolvedMerchantId, resolvedMerchantId);
+      else throw new NotFoundException('Merchant not found');
+    }
     // Listing deliberately excludes activation PINs and channel credentials.
     const rows = stores.map(s => ({
       ...this.toStoreResponse(s),
@@ -1481,17 +1506,22 @@ export class AppController {
   }
 
   @Get(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
-  async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+  async getStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string,
+    @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(store, merchantId)))) throw new NotFoundException(`Store '${storeId}' not found`);
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || store.merchantId !== request.user.merchantId)) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
     const connection = await this.merchantRepository.getWebsiteConnection(storeId);
     const setup = store.onboardingSetup || {};
-    let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+    let rolePermissions: Array<Record<string, unknown>> = Array.isArray(setup.role_permissions) ? setup.role_permissions : [];
     try {
       const rows = await this.merchantRepository.listStoreWizardRolePermissions(store.merchantId, store.id);
       if (rows.length) rolePermissions = this.groupWizardRolePermissions(rows);
     } catch {
-      rolePermissions = Array.isArray(setup.rolePermissions) ? setup.rolePermissions : [];
+      rolePermissions = Array.isArray(setup.role_permissions) ? setup.role_permissions : [];
     }
     return {
       success: true,
@@ -1499,7 +1529,7 @@ export class AppController {
         ...this.toStoreResponse(store),
         hours: Array.isArray(setup.hours) ? setup.hours : [],
         features: Array.isArray(setup.features) ? setup.features : [],
-        rolePermissions,
+        role_permissions: rolePermissions,
       },
       websiteConnection: this.toPublicConnector(connection),
     };
@@ -1527,9 +1557,13 @@ export class AppController {
 
   @Put(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
   async updateStore(@Param('storeId') storeId: string, @Body(new ValidationPipe({ transform: true, whitelist: true, expectedType: UpdateStoreDto })) body: UpdateStoreDto,
-    @Param('merchantId') merchantId?: string) {
+    @Param('merchantId') merchantId?: string, @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const existing = await this.merchantRepository.getStoreById(storeId);
     if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || existing.merchantId !== request.user.merchantId)) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
     const requestedMerchant = body.merchant_id || body.merchantId;
@@ -1556,7 +1590,7 @@ export class AppController {
         : ((body.store_email || body.email || '').trim().toLowerCase() || null),
       storeWebsiteUrl: (body.store_website_url ?? body.url)?.trim() ?? existing.storeWebsiteUrl,
       currency: body.currency ?? existing.currency,
-      status: body.status ?? existing.status,
+      ...(body.status !== undefined ? { status: body.status } : {}),
       timezone: body.timezone ?? existing.timezone,
       activationPin: body.activation_pin ?? existing.activationPin,
       operationalStatus: body.operational_status ?? existing.operationalStatus,
@@ -1569,19 +1603,43 @@ export class AppController {
       country: body.country ?? existing.country,
     });
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
-    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(store, body.features || [], body.rolePermissions || []);
+    await this.merchantRepository.saveStoreFeaturesAndRolePermissions(
+      store,
+      body.features,
+      body.role_permissions,
+    );
     const employees = await this.attachStoreEmployees(body.merchantId || merchantId, store.id, body.employees);
+    const setup = store.onboardingSetup || {};
+    let rolePermissions: Array<Record<string, unknown>> = body.role_permissions ??
+      (Array.isArray(setup.role_permissions) ? setup.role_permissions : []);
+    if (body.role_permissions === undefined) {
+      try {
+        const rows = await this.merchantRepository.listStoreWizardRolePermissions(store.merchantId, store.id);
+        if (rows.length) rolePermissions = this.groupWizardRolePermissions(rows);
+      } catch {
+        // The saved onboardingSetup remains the fallback for older schemas.
+      }
+    }
     return {
       success: true,
-      store: this.toStoreResponse(store),
+      store: {
+        ...this.toStoreResponse(store),
+        features: Array.isArray(setup.features) ? setup.features : [],
+        role_permissions: rolePermissions,
+      },
       ...(employees ? { employees, count: employees.length } : {}),
     };
   }
 
   @Delete(['stores/:storeId', 'merchants/:merchantId/stores/:storeId'])
-  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string) {
+  async deleteStore(@Param('storeId') storeId: string, @Param('merchantId') merchantId?: string,
+    @Req() request?: { headers?: { 'x-pch-web-console'?: string }; user?: { accountType?: string; merchantId?: string } }) {
     const existing = await this.merchantRepository.getStoreById(storeId);
     if (!existing || (merchantId && !(await this.merchantRepository.storeMatchesMerchant(existing, merchantId)))) {
+      throw new NotFoundException(`Store '${storeId}' not found`);
+    }
+    if (isWebConsoleRequest(request) && (request?.user?.accountType === 'merchant' || request?.user?.accountType === 'employee') &&
+        (!request.user.merchantId || existing.merchantId !== request.user.merchantId)) {
       throw new NotFoundException(`Store '${storeId}' not found`);
     }
     const deleted = await this.merchantRepository.deleteStore(storeId);
@@ -1638,6 +1696,19 @@ export class AppController {
     if (role !== 'OWNER') throw new ForbiddenException('Only owners may manage website connectors');
   }
 
+  private async assertWebsiteConnectorAccess(
+    store: { merchantId: string }, request: ConnectorRequest,
+  ): Promise<void> {
+    if (isWebConsoleRequest(request) && request.user?.accountType === 'merchant') {
+      if (!request.user.merchantId ||
+          !(await this.merchantRepository.storeMatchesMerchant(store, request.user.merchantId))) {
+        throw new ForbiddenException('You can only manage connections for your own stores');
+      }
+      return;
+    }
+    this.requireOwnerRole(request.user?.role);
+  }
+
   private async pingWordPress(wordpressUrl: string, wordpressJwt: string): Promise<{ ok: boolean; message: string }> {
     const headers = { Accept: 'application/json', Authorization: `Bearer ${wordpressJwt}` };
     const baseUrl = wordpressUrl.replace(/\/+$/, '');
@@ -1655,9 +1726,14 @@ export class AppController {
         signal: AbortSignal.timeout(10000),
       });
       if (wooResponse.ok) return { ok: true, message: 'WooCommerce bearer token verified successfully.' };
+      const categoryResponse = await fetch(`${baseUrl}/wp-json/pinaka-pos/v1/categories/get-categories-with-tax`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (categoryResponse.ok) return { ok: true, message: 'WordPress category API token verified successfully.' };
       return {
         ok: false,
-        message: `WordPress JWT check returned HTTP ${response.status}; WooCommerce Coupons API check returned HTTP ${wooResponse.status}. Check the site URL and token.`,
+        message: `WordPress JWT check returned HTTP ${response.status}; WooCommerce Coupons API check returned HTTP ${wooResponse.status}; category API check returned HTTP ${categoryResponse.status}. Check the site URL and token permissions.`,
       };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1719,23 +1795,34 @@ export class AppController {
     }
   }
 
-  private async requireWordPressConnection(storeId: string, role?: string) {
-    this.requireOwnerRole(role);
+  private async requireWordPressConnection(storeId: string, request: ConnectorRequest) {
     const store = await this.merchantRepository.getStoreById(storeId);
     if (!store) throw new NotFoundException(`Store '${storeId}' not found`);
+    await this.assertWebsiteConnectorAccess(store, request);
     const connector = await this.merchantRepository.getWebsiteConnection(store.id)
       || await this.merchantRepository.getWebsiteConnection(storeId);
     if (!connector?.encryptedJwt || !connector.wordpressUrl) {
       throw new BadRequestException('Connect the WordPress site before syncing the catalog');
     }
+    const wordpressJwt = this.decryptConnectorSecret(connector.encryptedJwt);
     if (connector.status !== 'CONNECTED') {
-      throw new BadRequestException('Validate the WordPress connection before syncing.');
+      const validation = await this.pingWordPress(connector.wordpressUrl, wordpressJwt);
+      if (!validation.ok) throw new BadRequestException(validation.message);
+      await this.merchantRepository.saveWebsiteConnection({
+        storeId: store.id,
+        merchantId: store.merchantId,
+        wordpressUrl: connector.wordpressUrl,
+        encryptedJwt: connector.encryptedJwt,
+        status: 'CONNECTED',
+        lastTestedAt: new Date(),
+        lastTestMessage: validation.message,
+      });
     }
     return {
       merchantId: store.merchantId,
       storeId: store.id,
       wordpressUrl: connector.wordpressUrl,
-      wordpressJwt: this.decryptConnectorSecret(connector.encryptedJwt),
+      wordpressJwt,
     };
   }
 
@@ -1758,4 +1845,5 @@ export class AppController {
       throw new BadRequestException(`Could not sync WordPress catalog: ${message}`);
     }
   }
+
 }

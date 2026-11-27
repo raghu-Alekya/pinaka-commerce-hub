@@ -38,6 +38,19 @@ const patchValidation = new MasterFormValidationPipe({
 
 type AuthenticatedRequest = { user?: { id?: string } };
 
+function toSnakeCaseResponse(value: Record<string, unknown> | Record<string, unknown>[]): Record<string, unknown> {
+  const row = Array.isArray(value) ? value[0] : value;
+  const result: Record<string, unknown> = {};
+  if (!row) return result;
+  for (const [key, item] of Object.entries(row)) {
+    // `code` is a legacy alias for storeTypeCode; expose the canonical key once.
+    if (key === 'code') continue;
+    const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    if (!(snakeKey in result)) result[snakeKey] = item;
+  }
+  return result;
+}
+
 @Public()
 @Controller([
   'api/v1/store-types',
@@ -51,17 +64,25 @@ export class StoreTypeController {
   constructor(@Inject(StoreTypeRepository) private readonly repository: StoreTypeRepository) {}
 
   @Get()
+  @RequireAuth()
   async listStoreTypes(@Query() query: Record<string, string>) {
-    const storeTypes = filterMasterList(await this.repository.list(), query);
+    const storeTypes = filterMasterList(await this.repository.list(), query)
+      .map((storeType: Record<string, unknown>) => toSnakeCaseResponse(storeType));
     const nextStoreTypeCode = await this.repository.previewNextCode();
-    return { success: true, count: storeTypes.length, nextStoreTypeCode, storeTypes };
+    return {
+      success: true,
+      count: storeTypes.length,
+      next_store_type_code: nextStoreTypeCode,
+      store_types: storeTypes,
+    };
   }
 
   @Get(':idOrCode')
+  @RequireAuth()
   async getStoreType(@Param('idOrCode') idOrCode: string) {
     const storeType = await this.repository.findByIdOrCode(idOrCode);
     if (!storeType) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, storeType };
+    return { success: true, store_type: toSnakeCaseResponse(storeType) };
   }
 
   @Post()
@@ -71,7 +92,11 @@ export class StoreTypeController {
     @Req() request: AuthenticatedRequest,
   ) {
     const storeType = await this.repository.create(body, this.loginUserId(request));
-    return { success: true, message: 'Store type created successfully', storeType };
+    return {
+      success: true,
+      message: 'Store type created successfully',
+      store_type: toSnakeCaseResponse(storeType),
+    };
   }
 
   @Put(':idOrCode')
@@ -82,12 +107,17 @@ export class StoreTypeController {
     @Req() request: AuthenticatedRequest,
   ) {
     const updated = await this.repository.update(idOrCode, {
+      storeTypeCode: body.storeTypeCode,
       name: body.name,
       description: body.description,
       status: body.status,
     }, this.loginUserId(request));
     if (!updated) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type updated successfully', storeType: updated };
+    return {
+      success: true,
+      message: 'Store type updated successfully',
+      store_type: toSnakeCaseResponse(updated),
+    };
   }
 
   @Patch(':idOrCode')
@@ -99,7 +129,11 @@ export class StoreTypeController {
   ) {
     const updated = await this.repository.update(idOrCode, body, this.loginUserId(request));
     if (!updated) throw new NotFoundException(`Store type '${idOrCode}' not found`);
-    return { success: true, message: 'Store type updated successfully', storeType: updated };
+    return {
+      success: true,
+      message: 'Store type updated successfully',
+      store_type: toSnakeCaseResponse(updated),
+    };
   }
 
   @Put(':idOrCode/status')
@@ -129,7 +163,7 @@ export class StoreTypeController {
     return {
       success: true,
       message: `Store type status updated to ${updated.status}`,
-      storeType: updated,
+      store_type: toSnakeCaseResponse(updated),
     };
   }
 

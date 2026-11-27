@@ -14,6 +14,8 @@ export interface PosCardPaymentRecord {
   terminalId: string;
   secretKey: string;
   webhookUrl: string;
+  enabled: boolean;
+  isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -112,6 +114,8 @@ export class PosCardPaymentService {
       terminalId: body.provider === 'Payroc' ? (body.terminalId || '').trim() : '',
       secretKey: body.secretKey.trim(),
       webhookUrl: body.webhookUrl.trim(),
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      ...(body.isDefault !== undefined ? { isDefault: body.isDefault } : {}),
     };
   }
 
@@ -126,6 +130,8 @@ export class PosCardPaymentService {
       terminalId: record?.terminalId || '',
       secretKey: record?.secretKey,
       webhookUrl: record?.webhookUrl,
+      enabled: record?.enabled !== false && record?.enabled !== 'false',
+      isDefault: record?.isDefault === true || record?.is_default === true || record?.isDefault === 'true',
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
     };

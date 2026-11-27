@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { PosFeeLine, PosLineItem } from '../../calculations/store-order.calculations';
+import { type PosFeeLine, type PosLineItem } from '../../calculations/store-order.calculations';
 import { loyaltyAmountFromMeta, withLoyaltyDiscountFee } from '../../loyalty/loyalty-line';
 import { OrderResponsePresenter } from '../../responses/order-response.presenter';
 import type { OrderGraph } from './order-update.types';

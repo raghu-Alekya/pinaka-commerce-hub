@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnApplicationShutdown, OnModuleInit, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -11,13 +11,18 @@ import { StoreOrderMetaEntity } from './entities/store-order-meta.entity';
 import { cashChangeReturned, isCashTender } from './calculations/order-change';
 import { ensureStorePosPaymentsSchema } from './schemas/store-pos-payments.schema';
 import { ensureStoreOrdersMetaSchema } from './schemas/store-orders-meta.schema';
+import { orderDbRequired, orderSchemaChangesOnStartup } from './config/runtime-flags';
 import {
   allocateRoundedTax,
-  authoritativeCouponDiscount,
   applyCouponDiscountToStoredLinesAndTax,
   applyMerchantDiscountToStoredTax,
+  applyPosSaleCalculation,
+  type SaleTaxConfiguration,
   adminOrderCounts,
+  assignFixedCartCouponDiscounts,
   calculateDiscountTotal,
+  couponToApply,
+  recordAppliedCouponAmount,
   calculateStoreOrder,
   effectiveFeeTotal,
   feeLinesForCalculation,
@@ -32,8 +37,18 @@ import {
   taxUnitsForMinor,
 } from './calculations/store-order.calculations';
 
+const CARD_PAYMENT_METHODS = new Set(['card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card']);
+const EBT_PAYMENT_METHODS = new Set(['ebt', 'pos-ebt', 'ebt-card']);
+
+function paymentTenderFamily(method: unknown): 'card' | 'ebt' | null {
+  const normalized = String(method || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (CARD_PAYMENT_METHODS.has(normalized)) return 'card';
+  if (EBT_PAYMENT_METHODS.has(normalized)) return 'ebt';
+  return null;
+}
+
 @Injectable()
-export class OrderRepository implements OnModuleInit {
+export class OrderRepository implements OnModuleInit, OnApplicationShutdown {
   private dataSource?: DataSource;
   private loyaltyPaymentVoid?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
   private loyaltyOrderCompleted?: (scope: { merchantId: string; storeId: string; orderId: string }) => Promise<void>;
@@ -49,24 +64,38 @@ export class OrderRepository implements OnModuleInit {
   private inMemoryHistory: OrderStatusHistoryEntity[] = [];
 
   async onModuleInit() {
+    // Startup DDL stays on for local dev (default). On ECS set ORDER_SERVICE_SCHEMA_ON_STARTUP=false
+    // and run the one-off migrate task instead, so replicas never race on schema changes.
+    const runSchema = orderSchemaChangesOnStartup();
     try {
-      await this.migrateLegacyOrderIdsBeforeOrm();
-      await this.migrateOrderColumnsToSnakeCase();
+      if (runSchema) {
+        await this.migrateLegacyOrderIdsBeforeOrm();
+        await this.migrateOrderColumnsToSnakeCase();
+      }
       this.dataSource = new DataSource({
         ...postgresConnectionOptions([StoreOrderEntity, StoreOrderMetaEntity, OrderItemEntity, OrderStatusHistoryEntity]),
         synchronize: false,
       });
       await this.dataSource.initialize();
-      await this.ensureOrderUuidSchema();
-      await this.ensurePosOrderColumns();
-      await this.ensureStoreOrdersTable();
-      await ensureStorePosPaymentsSchema(this.dataSource);
-      await ensureStoreOrdersMetaSchema(this.dataSource);
+      if (runSchema) {
+        await this.ensureOrderUuidSchema();
+        await this.ensurePosOrderColumns();
+        await this.ensureStoreOrdersTable();
+        await ensureStorePosPaymentsSchema(this.dataSource);
+        await ensureStoreOrdersMetaSchema(this.dataSource);
+      } else {
+        console.log('ℹ️ [Order Service DB] Startup schema changes skipped (ORDER_SERVICE_SCHEMA_ON_STARTUP=false).');
+      }
       this.storeOrderRepo = this.dataSource.getRepository(StoreOrderEntity);
       this.itemRepo = this.dataSource.getRepository(OrderItemEntity);
       this.historyRepo = this.dataSource.getRepository(OrderStatusHistoryEntity);
       this.isDbConnected = true;
     } catch (err: any) {
+      if (orderDbRequired()) {
+        // On ECS an in-memory fallback would silently lose orders; fail so the task is replaced.
+        console.error(`❌ [Order Service DB] Unavailable (${err.message}) and ORDER_SERVICE_REQUIRE_DB=true.`);
+        throw err;
+      }
       console.log(`⚠️ [Order Service DB] Offline (${err.message}). Using in-memory store fallback.`);
       this.isDbConnected = false;
     }
@@ -103,6 +132,48 @@ export class OrderRepository implements OnModuleInit {
       console.log(`⚠️ [Order Service Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
+  }
+
+  /** Dependency status for GET /ready. Database is required; Redis is an optional cache. */
+  async readiness(timeoutMs = 2000): Promise<{
+    database: { ok: boolean; error?: string };
+    redis: { ok: boolean; status: string };
+  }> {
+    let database: { ok: boolean; error?: string } = { ok: false, error: 'not connected' };
+    if (this.isDbConnected && this.dataSource?.isInitialized) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.dataSource.query('SELECT 1'),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+        database = { ok: true };
+      } catch (err: any) {
+        database = { ok: false, error: err?.message || 'query failed' };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    const redisStatus = this.redisClient?.status || 'not configured';
+    return { database, redis: { ok: this.isRedisConnected && redisStatus === 'ready', status: redisStatus } };
+  }
+
+  async onApplicationShutdown(signal?: string) {
+    if (signal) console.log(`🛑 [Order Service] ${signal} received, closing connections.`);
+    try {
+      if (this.redisClient && this.redisClient.status !== 'end') await this.redisClient.quit();
+    } catch {
+      this.redisClient?.disconnect();
+    }
+    this.isRedisConnected = false;
+    try {
+      if (this.dataSource?.isInitialized) await this.dataSource.destroy();
+    } catch (err: any) {
+      console.error(`[Order Service DB] Error while closing: ${err?.message}`);
+    }
+    this.isDbConnected = false;
   }
 
   async calculate(input: StoreOrderCalculationInput = {}, storeId?: string) {
@@ -156,7 +227,9 @@ export class OrderRepository implements OnModuleInit {
     if (!this.isDbConnected || !this.dataSource || !this.storeOrderRepo) {
       throw new ServiceUnavailableException('Order database is unavailable; the order was not saved');
     }
-    const sourcePayload = JSON.parse(JSON.stringify(orderData.requestPayload || {}));
+    const originalPayload = JSON.parse(JSON.stringify(orderData.requestPayload || {}));
+    orderData.requestPayload = originalPayload;
+    const sourcePayload = JSON.parse(JSON.stringify(originalPayload));
     if (this.isDbConnected && this.dataSource) {
       const stores = await this.dataSource.query(
         `SELECT id, merchant_id, currency, timezone
@@ -240,9 +313,9 @@ export class OrderRepository implements OnModuleInit {
     const order: OrderEntity = {
       id,
       orderNumber,
-      merchantId: orderData.merchantId || 'MCH-1001',
-      storeId: orderData.storeId || 'STR-5001',
-      shiftId: orderData.shiftId || 'SHIFT-8001',
+      merchantId: orderData.merchantId,
+      storeId: orderData.storeId,
+      shiftId: orderData.shiftId,
       localShiftId: orderData.localShiftId,
       clientOrderId,
       offline: Boolean(orderData.offline),
@@ -304,7 +377,8 @@ export class OrderRepository implements OnModuleInit {
           );
           await this.saveLineItems(manager, id, items, true);
           await this.saveStatusHistory(manager, storeOrder.statusHistory[0] as OrderStatusHistoryEntity);
-          if (paymentRows.length) {
+          const rowsToInsert = await this.withoutDuplicateCardTenders(manager, id, paymentRows);
+          if (rowsToInsert.length) {
             await manager.query(
               `INSERT INTO public.store_pos_payments (
                  order_id, merchant_id, store_id, local_id, client_order_id, device_id,
@@ -312,14 +386,15 @@ export class OrderRepository implements OnModuleInit {
                  amount, order_total, remaining, refundable_remaining, change_amount, refund_amount,
                  currency, status, entry_type, provider,
                  provider_transaction_id, payment_at, metadata
-               ) VALUES ${paymentRows.map((_, index) => {
+               ) VALUES ${rowsToInsert.map((_, index) => {
                  const offset = index * 24;
                  return `(${Array.from({ length: 24 }, (_value, column) => `$${offset + column + 1}`).join(', ')})`;
                }).join(', ')}
                ON CONFLICT DO NOTHING`,
-              paymentRows.flat(),
+              rowsToInsert.flat(),
             );
           }
+          await this.collapseDuplicateCardTenders(manager, id);
           await this.saveStoreOrderMeta(manager, id, storeOrder.metaData);
           return { persistedStoreOrder };
         });
@@ -414,8 +489,10 @@ export class OrderRepository implements OnModuleInit {
     const total = Number(sourcePayload?.total ?? orderData.totalAmount ?? sumLineTotals(lineItems));
     const shippingTotal = Number(sourcePayload?.shipping_total ?? sourcePayload?.shippingTotal ?? 0);
     const tipAmount = Number(orderData.tipAmount || 0);
-    const calculationFees = feeLinesForCalculation(lineItems, feeLines);
-    const discountTotal = calculateDiscountTotal(lineItems, couponLines, feeLines);
+    const calculationFees = feeLinesForCalculation(lineItems, feeLines, 2, couponLines);
+    const discountTotal = orderData.saleCalculated
+      ? Number(orderData.discountAmount || 0)
+      : calculateDiscountTotal(lineItems, couponLines, feeLines);
     const payLaterUserId = metaText('_pay_later_user_id');
     return {
       id: randomUUID(),
@@ -448,7 +525,7 @@ export class OrderRepository implements OnModuleInit {
       payLaterUserId,
       subtotal: sumLineSubtotals(lineItems),
       discountTotal,
-      feeTotal: effectiveFeeTotal(calculationFees),
+      feeTotal: effectiveFeeTotal(orderData.saleCalculated ? feeLines : calculationFees),
       taxTotal,
       total,
       grandTotal: listOrderTotal({
@@ -646,6 +723,162 @@ export class OrderRepository implements OnModuleInit {
     }
   }
 
+  /**
+   * create-payment and the order snapshot both store the same card tender.
+   * The snapshot row is titled POS-CARD and has no gateway payload. Skip it
+   * when that amount was already charged.
+   */
+  private async withoutDuplicateCardTenders(
+    manager: EntityManager,
+    orderId: string,
+    paymentRows: any[][],
+  ): Promise<any[][]> {
+    const gatewayRows = paymentRows.filter((row) => paymentTenderFamily(row[9]));
+    if (!gatewayRows.length) return paymentRows;
+    const existing = await manager.query(
+      `SELECT amount::text AS amount, payment_method, provider_transaction_id, payment_gateway_response
+         FROM public.store_pos_payments
+        WHERE order_id = $1::uuid
+          AND entry_type = 'payment'
+          AND deleted_at IS NULL
+          AND is_void = false`,
+      [orderId],
+    );
+    const taken = existing
+      .map((row: { payment_method?: string; amount: string }) => ({
+        family: paymentTenderFamily(row.payment_method),
+        amount: Number(row.amount),
+      }))
+      .filter((row: { family: 'card' | 'ebt' | null }) => row.family);
+    if (!taken.length) return paymentRows;
+    return paymentRows.filter((row) => {
+      const family = paymentTenderFamily(row[9]);
+      if (!family) return true;
+      const amount = Number(row[11]);
+      const match = taken.findIndex((saved: { family: 'card' | 'ebt' | null; amount: number }) =>
+        saved.family === family && Math.abs(saved.amount - amount) < 0.001);
+      if (match < 0) return true;
+      taken.splice(match, 1);
+      return false;
+    });
+  }
+
+  private async gatewayCardSnapshots(manager: EntityManager, orderId: string): Promise<Array<Record<string, unknown>>> {
+    return manager.query(
+      `SELECT amount::text AS amount, payment_method, provider, provider_transaction_id, payment_gateway_response, metadata
+         FROM public.store_pos_payments
+        WHERE order_id = $1::uuid
+          AND entry_type = 'payment'
+          AND deleted_at IS NULL
+          AND is_void = false
+          AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card', 'ebt', 'pos-ebt', 'ebt-card')
+          AND (
+            payment_gateway_response IS NOT NULL
+            OR NULLIF(btrim(provider_transaction_id), '') IS NOT NULL
+          )`,
+      [orderId],
+    );
+  }
+
+  private async restoreGatewayCardSnapshots(
+    manager: EntityManager,
+    orderId: string,
+    snapshots: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    for (const saved of snapshots) {
+      const response = saved.payment_gateway_response == null
+        ? null
+        : JSON.stringify(saved.payment_gateway_response);
+      await manager.query(
+        `UPDATE public.store_pos_payments AS payment
+            SET provider = COALESCE(payment.provider, $3),
+                provider_transaction_id = COALESCE(NULLIF(btrim(payment.provider_transaction_id), ''), $4),
+                payment_gateway_response = COALESCE(payment.payment_gateway_response, $5::jsonb),
+                metadata = COALESCE(payment.metadata, '{}'::jsonb) || COALESCE($6::jsonb, '{}'::jsonb),
+                updated_at = now()
+          WHERE payment.id = (
+            SELECT id
+              FROM public.store_pos_payments
+             WHERE order_id = $1::uuid
+               AND entry_type = 'payment'
+               AND deleted_at IS NULL
+               AND amount = $2::numeric
+               AND (
+                 ($7 = 'ebt' AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card'))
+                 OR ($7 = 'card' AND lower(replace(replace(payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card'))
+               )
+             ORDER BY payment_gateway_response NULLS LAST, created_at
+             LIMIT 1
+          )`,
+        [
+          orderId,
+          saved.amount,
+          saved.provider ?? null,
+          saved.provider_transaction_id ?? null,
+          response,
+          JSON.stringify(saved.metadata && typeof saved.metadata === 'object' ? saved.metadata : {}),
+          paymentTenderFamily(saved.payment_method) ?? 'card',
+        ],
+      );
+    }
+  }
+
+  private async collapseDuplicateCardTenders(manager: EntityManager, orderId: string): Promise<void> {
+    await manager.query(
+      `UPDATE public.store_pos_payments AS extra
+          SET deleted_at = now(),
+              updated_at = now(),
+              status = 'cancelled',
+              metadata = COALESCE(extra.metadata, '{}'::jsonb)
+                || jsonb_build_object('duplicate_card_tender', true)
+        WHERE extra.order_id = $1::uuid
+          AND extra.entry_type = 'payment'
+          AND extra.deleted_at IS NULL
+          AND extra.is_void = false
+          AND (
+            (
+              lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+              AND EXISTS (
+                SELECT 1
+                  FROM public.store_pos_payments AS charged
+                 WHERE charged.order_id = extra.order_id
+                   AND charged.id <> extra.id
+                   AND charged.deleted_at IS NULL
+                   AND charged.entry_type = 'payment'
+                   AND charged.is_void = false
+                   AND charged.amount = extra.amount
+                   AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('card', 'pos-card', 'credit', 'debit', 'credit-card', 'debit-card')
+                   AND (
+                     charged.payment_gateway_response IS NOT NULL
+                     OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+                   )
+              )
+            )
+            OR (
+              lower(replace(replace(extra.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card')
+              AND EXISTS (
+                SELECT 1
+                  FROM public.store_pos_payments AS charged
+                 WHERE charged.order_id = extra.order_id
+                   AND charged.id <> extra.id
+                   AND charged.deleted_at IS NULL
+                   AND charged.entry_type = 'payment'
+                   AND charged.is_void = false
+                   AND charged.amount = extra.amount
+                   AND lower(replace(replace(charged.payment_method, '_', '-'), ' ', '-')) IN ('ebt', 'pos-ebt', 'ebt-card')
+                   AND (
+                     charged.payment_gateway_response IS NOT NULL
+                     OR NULLIF(btrim(charged.provider_transaction_id), '') IS NOT NULL
+                   )
+              )
+            )
+          )
+          AND extra.payment_gateway_response IS NULL
+          AND NULLIF(btrim(extra.provider_transaction_id), '') IS NULL`,
+      [orderId],
+    );
+  }
+
   private buildStorePosPaymentRows(
     orderId: string,
     order: OrderEntity,
@@ -801,12 +1034,23 @@ export class OrderRepository implements OnModuleInit {
    */
   private async enrichWooCommerceCreateOrder(orderData: any, sourcePayload: any): Promise<void> {
     const lines = Array.isArray(sourcePayload?.line_items) ? sourcePayload.line_items : null;
-    if (!lines || !this.dataSource || !orderData.storeId) return;
+    if (!lines?.length) return;
+    if (!this.dataSource || !orderData.storeId) {
+      const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, 2);
+      this.recordPreparedCoupon(sourcePayload, sale, lines, 2);
+      this.rememberSale(orderData, sourcePayload, sale);
+      return;
+    }
 
     const productIds = [...new Set(lines
       .map((line: any) => String(line?.product_id ?? '').trim())
       .filter(Boolean))];
-    if (!productIds.length) return;
+    if (!productIds.length) {
+      const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, 2);
+      this.recordPreparedCoupon(sourcePayload, sale, lines, 2);
+      this.rememberSale(orderData, sourcePayload, sale);
+      return;
+    }
 
     const productRows: Array<{ id?: string; product?: Record<string, unknown> }> = await this.dataSource.query(
       `SELECT product->>'id' AS id, product
@@ -887,7 +1131,7 @@ export class OrderRepository implements OnModuleInit {
             const totalTax = existingTax * customNormalization.quantity;
             line.subtotal_tax = subtotalTax.toFixed(places);
             line.total_tax = totalTax.toFixed(places);
-            line.taxes = rate > 0 ? [{ id: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
+            line.taxes = rate > 0 ? [{ id: rate, rate_percent: rate, total: line.total_tax, subtotal: line.subtotal_tax }] : [];
             const taxDeltaMinor = Math.round((totalTax - existingTax) * factor);
             if (taxDeltaMinor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + taxDeltaMinor);
           }
@@ -955,7 +1199,7 @@ export class OrderRepository implements OnModuleInit {
         entry.line.total_tax = (lineMinor / factor).toFixed(places);
         entry.line.subtotal_tax = (subtotalMinor / factor).toFixed(places);
         entry.line.taxes = lineMinor
-          ? [{ id: rate, total: entry.line.total_tax, subtotal: entry.line.subtotal_tax }]
+          ? [{ id: rate, rate_percent: rate, total: entry.line.total_tax, subtotal: entry.line.subtotal_tax }]
           : [];
       });
       if (minor) taxGroups.set(rate, (taxGroups.get(rate) || 0) + minor);
@@ -1003,74 +1247,153 @@ export class OrderRepository implements OnModuleInit {
       sourcePayload.tax_lines = existingTaxLines;
     }
 
-    const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
-    const representedCoupon = representedCouponDiscount(lines, sourceFees, places);
-    const calculationFees = feeLinesForCalculation(lines, sourceFees, places);
-    const authoritativeCoupon = authoritativeCouponDiscount(
-      Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [],
-      sourceFees,
-      places,
-      lines,
-    );
-    applyCouponDiscountToStoredLinesAndTax(
-      lines,
-      authoritativeCoupon > 0
-        ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
-        : [],
-      sourcePayload,
-      places,
-      representedCoupon,
-    );
-    applyMerchantDiscountToStoredTax(
-      lines,
-      calculationFees,
-      sourcePayload,
-      places,
-    );
+    const sale = await this.calculatePreparedSale(orderData, sourcePayload, lines, places, taxSetting);
+    if (!sale) {
+      const sourceFees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+      const sourceCoupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+      const representedCoupon = representedCouponDiscount(lines, sourceFees, places, sourceCoupons);
+      const calculationFees = feeLinesForCalculation(lines, sourceFees, places, sourceCoupons);
+      const authoritativeCoupon = couponToApply(lines, sourceCoupons, sourceFees, places);
+      applyCouponDiscountToStoredLinesAndTax(
+        lines,
+        authoritativeCoupon > 0
+          ? [{ code: 'stored-coupon-discount', discount: authoritativeCoupon.toFixed(places) }]
+          : [],
+        sourcePayload,
+        places,
+        representedCoupon,
+      );
+      applyMerchantDiscountToStoredTax(
+        lines,
+        calculationFees,
+        sourcePayload,
+        places,
+      );
 
-    const couponDiscount = authoritativeCoupon;
-    if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
-      sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
-        const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-        return name === 'coupon_discount'
-          ? { ...fee, total: (-couponDiscount).toFixed(places) }
-          : fee;
+      const couponDiscount = authoritativeCoupon;
+      if (couponDiscount > 0 && Array.isArray(sourcePayload.fee_lines)) {
+        sourcePayload.fee_lines = sourcePayload.fee_lines.map((fee: any) => {
+          const name = String(fee?.name || fee?.fee_name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+          return name === 'coupon_discount'
+            ? { ...fee, total: (-couponDiscount).toFixed(places) }
+            : fee;
+        });
+      }
+
+      const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
+      const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
+      const feeTotal = effectiveFeeTotal(
+        calculationFees,
+        places,
+      );
+      const taxTotal = Number(sourcePayload.total_tax || 0);
+      const shippingTotal = Number(sourcePayload.shipping_total || 0);
+      if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
+      const netBeforeTax = lineTotal + feeTotal + shippingTotal;
+      sourcePayload.total = orderTotalWithTax({
+        netBeforeTax,
+        tax: taxTotal,
+        pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
+        decimalPlaces: places,
+      }).toFixed(places);
+    }
+    this.recordPreparedCoupon(sourcePayload, sale, lines, places);
+    this.rememberSale(orderData, sourcePayload, sale);
+    if (!sale) {
+      orderData.subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
+      orderData.taxAmount = Number(sourcePayload.total_tax || 0);
+      orderData.totalAmount = Number(sourcePayload.total);
+    }
+  }
+
+  private async calculatePreparedSale(
+    orderData: any,
+    sourcePayload: any,
+    lines: any[],
+    places: number,
+    taxConfiguration?: SaleTaxConfiguration | null,
+  ) {
+    await this.applyLocalFixedCartCoupons(orderData, sourcePayload, places);
+    const configuration = taxConfiguration === undefined
+      ? await this.currencyTaxConfiguration(orderData?.storeId)
+      : taxConfiguration || undefined;
+    return applyPosSaleCalculation(lines, sourcePayload, places, configuration);
+  }
+
+  private async currencyTaxConfiguration(storeId: unknown): Promise<SaleTaxConfiguration | undefined> {
+    if (!this.dataSource || !storeId) return undefined;
+    try {
+      const configurations: Array<{ configuration_value?: SaleTaxConfiguration }> = await this.dataSource.query(
+        `SELECT configuration_value
+           FROM public.store_pos_configurations
+          WHERE store_id = $1::uuid
+            AND configuration_name = 'currency_taxes'
+          LIMIT 1`,
+        [storeId],
+      );
+      const configured = configurations[0]?.configuration_value;
+      return configured && typeof configured === 'object' ? configured : undefined;
+    } catch (error: unknown) {
+      const code = error && typeof error === 'object'
+        ? (error as { driverError?: { code?: string } }).driverError?.code
+        : undefined;
+      if (code !== '42P01' && code !== '42703') throw error;
+      return undefined;
+    }
+  }
+
+  private async applyLocalFixedCartCoupons(orderData: any, sourcePayload: any, places: number): Promise<void> {
+    const coupons = Array.isArray(sourcePayload?.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const records = new Map<string, Record<string, unknown> | null>();
+    for (const coupon of coupons) {
+      const code = String(coupon?.code || '').trim();
+      if (!code || /^pos-discount(?:-\d+)?$/i.test(code)) continue;
+      const stated = Number(coupon?.discount ?? coupon?.discount_amount ?? 0);
+      if (Number.isFinite(stated) && stated > 0) continue;
+      const key = code.toLowerCase();
+      if (records.has(key)) continue;
+      const row = orderData?.storeId ? await this.findStoreCoupon(orderData.storeId, code) : null;
+      records.set(key, row);
+    }
+    assignFixedCartCouponDiscounts(sourcePayload, records, places);
+  }
+
+  private recordPreparedCoupon(sourcePayload: any, sale: { coupon: number } | null, lines: any[], places: number): void {
+    const coupons = Array.isArray(sourcePayload.coupon_lines) ? sourcePayload.coupon_lines : [];
+    const fees = Array.isArray(sourcePayload.fee_lines) ? sourcePayload.fee_lines : [];
+    const applied = sale ? sale.coupon : couponToApply(lines, coupons, fees, places);
+    recordAppliedCouponAmount(sourcePayload, applied, places);
+  }
+
+  private rememberSale(
+    orderData: any,
+    sourcePayload: any,
+    sale: { subtotal: number; discountTotal: number; tax: number; total: number } | null,
+  ): void {
+    const lines = Array.isArray(sourcePayload?.line_items) ? sourcePayload.line_items : [];
+    if (sale || lines.length) {
+      orderData.items = lines.map((line: any) => {
+        const quantity = Number(line.quantity || 1);
+        const total = Number(line.total ?? line.subtotal ?? 0);
+        const unitPrice = line.price !== undefined && line.price !== null && String(line.price).trim() !== ''
+          ? Number(line.price)
+          : (quantity ? Number(line.subtotal ?? total) / quantity : 0);
+        return {
+          productId: String(line.product_id ?? ''),
+          productName: line.name || 'Sales Item',
+          quantity,
+          unitPrice,
+          totalPrice: total,
+          modifiers: Array.isArray(line.meta_data) ? line.meta_data : [],
+        };
       });
     }
-
-    const subtotal = lines.reduce((sum: number, line: any) => sum + Number(line.subtotal ?? line.total ?? 0), 0);
-    const lineTotal = lines.reduce((sum: number, line: any) => sum + Number(line.total ?? line.subtotal ?? 0), 0);
-    const feeTotal = effectiveFeeTotal(
-      calculationFees,
-      places,
-    );
-    const taxTotal = Number(sourcePayload.total_tax || 0);
-    const shippingTotal = Number(sourcePayload.shipping_total || 0);
-    if (sourcePayload.subtotal === undefined || normalizedCustomItem) sourcePayload.subtotal = subtotal.toFixed(places);
-    const netBeforeTax = lineTotal + feeTotal + shippingTotal;
-    sourcePayload.total = orderTotalWithTax({
-      netBeforeTax,
-      tax: taxTotal,
-      pricesIncludeTax: Boolean(sourcePayload.prices_include_tax),
-      decimalPlaces: places,
-    }).toFixed(places);
-
-    orderData.items = lines.map((line: any) => {
-      const quantity = Number(line.quantity || 1);
-      const total = Number(line.total ?? line.subtotal ?? 0);
-      return {
-        productId: String(line.product_id ?? ''),
-        productName: line.name || 'Sales Item',
-        quantity,
-        unitPrice: quantity ? Number(line.subtotal ?? total) / quantity : 0,
-        totalPrice: total,
-        modifiers: Array.isArray(line.meta_data) ? line.meta_data : [],
-      };
-    });
-    orderData.subtotal = subtotal;
-    orderData.taxAmount = taxTotal;
-    orderData.totalAmount = Number(sourcePayload.total);
-    orderData.requestPayload = sourcePayload;
+    if (!sale) return;
+    orderData.subtotal = sale.subtotal;
+    orderData.taxAmount = sale.tax;
+    orderData.totalAmount = sale.total;
+    orderData.discountAmount = sale.discountTotal;
+    orderData.saleCalculated = true;
   }
 
   private async cashbackFeeForAmount(storeId: string, amount: number): Promise<number> {
@@ -1846,6 +2169,7 @@ export class OrderRepository implements OnModuleInit {
         persisted.lineItems,
       );
       await this.saveLineItems(manager, current.order.id, items, true);
+      const preservedCardCharges = await this.gatewayCardSnapshots(manager, current.order.id);
       await manager.query(
         `DELETE FROM public.store_pos_payments
           WHERE order_id = $1::uuid AND entry_type = 'payment'`,
@@ -1865,6 +2189,8 @@ export class OrderRepository implements OnModuleInit {
           paymentRows.flat(),
         );
       }
+      await this.restoreGatewayCardSnapshots(manager, current.order.id, preservedCardCharges);
+      await this.collapseDuplicateCardTenders(manager, current.order.id);
       await manager.query('DELETE FROM public.store_orders_meta WHERE order_id = $1::uuid', [current.order.id]);
       await this.saveStoreOrderMeta(manager, current.order.id, replacement.metaData);
       if (previousStatus !== String(orderStatus)) {
@@ -1910,7 +2236,7 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
+    const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
     const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
     const effectiveStatus = `CASE
@@ -2085,6 +2411,9 @@ export class OrderRepository implements OnModuleInit {
     statuses: string[];
     createdVia?: string;
     author?: string;
+    search?: string;
+    customer?: string;
+    createdAfter?: Date;
     after?: Date;
     before?: Date;
     orderBy?: 'created' | 'modified';
@@ -2106,9 +2435,9 @@ export class OrderRepository implements OnModuleInit {
     const statuses = criteria.statuses.length ? criteria.statuses : null;
     const createdVia = criteria.createdVia?.trim().toLowerCase() || null;
     const author = criteria.author?.trim() || null;
-    const merchantId = criteria.storeId ? null : criteria.merchantId || null;
+    const merchantId = criteria.merchantId || null;
     const storeId = criteria.storeId || null;
-    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null];
+    const params: unknown[] = [merchantId, storeId, statuses, createdVia, author, criteria.after || null, criteria.before || null, criteria.search || null, criteria.createdAfter || null, criteria.customer || null];
     const effectiveStatus = `CASE
       WHEN upper(COALESCE(sale.order_status, '')) = 'REFUNDED'
         OR lower(COALESCE(sale.status, '')) = 'refunded'
@@ -2175,6 +2504,11 @@ export class OrderRepository implements OnModuleInit {
         )
         AND ($6::timestamptz IS NULL OR sale.updated_at >= $6::timestamptz)
         AND ($7::timestamptz IS NULL OR sale.updated_at <= $7::timestamptz)
+        AND ($8::text IS NULL OR sale.order_number ILIKE '%' || $8::text || '%'
+          OR sale.client_order_id ILIKE '%' || $8::text || '%'
+          OR sale.customer_name ILIKE '%' || $8::text || '%')
+        AND ($9::timestamptz IS NULL OR sale.created_at >= $9::timestamptz)
+        AND ($10::text IS NULL OR sale.customer_name = $10::text)
     `;
     let countRows: Array<{ total?: number }>;
     let idRows: Array<{ id: string; effective_status: string }>;
@@ -2185,7 +2519,7 @@ export class OrderRepository implements OnModuleInit {
         `SELECT sale.order_id AS id, (${effectiveStatus}) AS effective_status
            ${where}
           ORDER BY ${orderColumn} DESC, sale.order_id DESC
-          LIMIT $8 OFFSET $9`,
+          LIMIT $11 OFFSET $12`,
         [...params, criteria.perPage, (criteria.page - 1) * criteria.perPage],
       );
     } catch (error: unknown) {

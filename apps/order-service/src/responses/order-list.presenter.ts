@@ -265,10 +265,12 @@ export class OrderListPresenter {
           : undefined;
       };
       const fallbackDiscount = source.length === 1 ? Number(orderDiscount || 0) : 0;
-      const configuredAmount = merged.amount ?? metadataValue('amount');
-      const discount = Number(configuredAmount ?? merged.discount ?? merged.discount_amount ?? fallbackDiscount);
+      const storedApplied = merged.discount ?? merged.discount_amount;
+      const hasAppliedDiscount = storedApplied !== undefined && storedApplied !== null && storedApplied !== '';
+      const ruleAmount = merged.amount ?? metadataValue('amount');
+      const discount = Number(hasAppliedDiscount ? storedApplied : (ruleAmount ?? fallbackDiscount));
       const safeDiscount = Number.isFinite(discount) ? discount : 0;
-      const amount = configuredAmount ?? 0;
+      const amount = ruleAmount ?? 0;
       const discountType = merged.discount_type ?? metadataValue('discount_type') ?? 'fixed_cart';
       const productIds = merged.product_ids ?? metadataValue('product_ids') ?? [];
       const excludedProductIds = merged.excluded_product_ids ?? metadataValue('excluded_product_ids') ?? [];

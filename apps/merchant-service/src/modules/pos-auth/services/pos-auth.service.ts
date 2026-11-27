@@ -9,6 +9,7 @@ import {
   NotFoundException,
   BadRequestException,
   Inject,
+  Optional,
 } from '@nestjs/common';
 import { MerchantStoreLoginDto } from '../dto/merchant-store-login.dto';
 import { PosLoginDto } from '../dto/pos-login.dto';
@@ -16,6 +17,8 @@ import { PinService } from './pin.service';
 import { PosSessionService } from './pos-session.service';
 import { MerchantRepository } from '../../merchant/merchant.repository';
 import { ProductOptionsService } from '../../store/product-options.service';
+import { ConsoleAccessService } from '../../shared/console-access.service';
+import { merchantGrants } from '../../shared/console-access';
 
 export interface DeviceContext {
   deviceId: string;
@@ -32,6 +35,7 @@ export class PosAuthService {
     @Inject(PosSessionService) private readonly posSessionService: PosSessionService,
     @Inject(MerchantRepository) private readonly merchantRepository: MerchantRepository,
     @Inject(ProductOptionsService) private readonly productOptionsService: ProductOptionsService,
+    @Optional() @Inject(ConsoleAccessService) private readonly consoleAccess?: ConsoleAccessService,
   ) {}
 
   async merchantPasswordLogin(input: { email?: string; password?: string }) {
@@ -50,14 +54,7 @@ export class PosAuthService {
       throw new UnauthorizedException('Invalid merchant email or password');
     }
     if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
-    const users = await db.query(
-      `SELECT id,email,role,account_id AS "accountId" FROM public.users
-       WHERE lower(email)=lower($1) AND status='ACTIVE'
-         AND (merchant_id::text=$2 OR merchant_id::text=$3 OR NULLIF(merchant_id::text,'') IS NULL)
-       LIMIT 2`, [merchant.email, merchant.id, merchant.merchantCode],
-    );
-    if (users.length !== 1) throw new UnauthorizedException('An active linked PCH user account is required for merchant API access');
-    const user = users[0];
+    const user = { id: merchant.id, accountId: null, email: merchant.email, role: 'USER' };
     const stores = await db.query(
       `SELECT id,store_code AS "storeCode",store_name AS "storeName",status
        FROM public.stores WHERE merchant_id::text=$1 AND COALESCE(is_deleted,false)=false ORDER BY store_name,id`,
@@ -66,7 +63,20 @@ export class PosAuthService {
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = 30 * 24 * 60 * 60;
     const sessionId = randomUUID();
-    const payload = { sub: user.id, accountId: user.accountId ?? null, email: user.email, role: user.role, merchantId: merchant.id, type: 'access', jti: sessionId, iat: now, exp: now + expiresIn };
+    const permissions = merchantGrants();
+    const payload = {
+      sub: user.id,
+      accountId: user.accountId ?? null,
+      email: user.email,
+      role: user.role,
+      accountType: 'merchant',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      type: 'access',
+      jti: sessionId,
+      iat: now,
+      exp: now + expiresIn,
+    };
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
@@ -77,7 +87,150 @@ export class PosAuthService {
       expiresAt: new Date(payload.exp * 1000),
     });
     const { password: _password, ...details } = merchant;
-    return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, count: stores.length, stores };
+    const sessionUser = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      accountType: 'merchant',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      businessDisplayName: merchant.businessDisplayName || null,
+      permissions,
+      stores,
+    };
+    return { success: true, accessToken, merchantToken: accessToken, tokenType: 'Bearer', expiresIn, merchant: details, user: sessionUser, permissions, count: stores.length, stores };
+  }
+
+  async employeePasswordLogin(input: { email?: string; password?: string }) {
+    if (typeof input?.email !== 'string' || !input.email.trim() || typeof input?.password !== 'string' || !input.password || input.password.length > 128) {
+      throw new BadRequestException('email and password are required (password maximum 128 characters)');
+    }
+    const db = this.merchantRepository.requireDataSource();
+    const employees = await db.query(
+      `SELECT e.id, e.email, e.first_name AS "firstName", e.last_name AS "lastName",
+              e.merchant_id AS "merchantId", e.user_id AS "userId", e.status::text AS status,
+              e.employee_code AS "employeeCode", e.password_hash AS "passwordHash"
+         FROM public.employees e
+        WHERE lower(e.email) = lower($1)
+          AND COALESCE(e.is_deleted, false) = false
+        LIMIT 2`,
+      [input.email.trim()],
+    );
+    if (employees.length !== 1) throw new UnauthorizedException('Invalid email or password');
+    const employee = employees[0];
+    const users = await db.query(
+      `SELECT id, password_hash AS "passwordHash", status, account_id AS "accountId", email
+         FROM public.users
+        WHERE id = $1::uuid OR employee_id = $2::uuid
+        LIMIT 2`,
+      [employee.userId || '00000000-0000-0000-0000-000000000000', employee.id],
+    );
+    const linked = users.find((row: { id: string }) => row.id === employee.userId) || users[0];
+    const passwordOk = await this.passwordMatches(employee.passwordHash, input.password)
+      || await this.passwordMatches(linked?.passwordHash, input.password);
+    if (!passwordOk) throw new UnauthorizedException('Invalid email or password');
+    if (String(employee.status || '').toUpperCase() !== 'ACTIVE') throw new ForbiddenException('Employee account is inactive');
+    if (linked && String(linked.status || '').toUpperCase() === 'DISABLED') throw new ForbiddenException('Employee account is inactive');
+    const merchants = await db.query(
+      `SELECT id, merchant_code AS "merchantCode", status::text AS status
+         FROM public.merchants
+        WHERE id = $1::uuid AND COALESCE(is_deleted, false) = false
+        LIMIT 1`,
+      [employee.merchantId],
+    );
+    const merchant = merchants[0];
+    if (!merchant || merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');
+    const stores = await db.query(
+      `SELECT s.id, s.store_code AS "storeCode", s.store_name AS "storeName", s.status::text AS status
+         FROM public.employee_stores es
+         JOIN public.stores s ON s.id = es.store_id
+        WHERE es.employee_id = $1
+          AND es.merchant_id = $2
+          AND COALESCE(s.is_deleted, false) = false
+          AND UPPER(COALESCE(es.status::text, 'ACTIVE')) = 'ACTIVE'
+        ORDER BY es.is_primary DESC NULLS LAST, s.store_name`,
+      [employee.id, merchant.id],
+    );
+    const roles = await db.query(
+      `SELECT r.id, r.role_code AS code, r.name
+         FROM public.employee_stores es
+         JOIN public.employee_store_roles esr ON esr.employee_store_id = es.id
+         JOIN public.roles r ON r.id = esr.role_id
+        WHERE es.employee_id = $1
+          AND es.merchant_id = $2
+          AND UPPER(COALESCE(es.status::text, 'ACTIVE')) = 'ACTIVE'
+          AND UPPER(COALESCE(esr.status::text, 'ACTIVE')) = 'ACTIVE'
+          AND UPPER(COALESCE(r.status::text, 'ACTIVE')) = 'ACTIVE'
+        ORDER BY es.is_primary DESC NULLS LAST, r.name
+        LIMIT 1`,
+      [employee.id, merchant.id],
+    );
+    const role = roles[0];
+    const permissions = this.consoleAccess
+      ? await this.consoleAccess.employeeGrants(employee.id, merchant.id)
+      : [{ menuKey: 'dashboard', actions: ['view'] }];
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = 12 * 60 * 60;
+    const sessionId = randomUUID();
+    const subject = linked?.id || employee.id;
+    const payload = {
+      sub: subject,
+      accountId: linked?.accountId ?? null,
+      email: employee.email,
+      role: 'EMPLOYEE',
+      accountType: 'employee',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      employeeId: employee.id,
+      storeId: stores[0]?.id || null,
+      roleId: role?.id || null,
+      roleCode: role?.code || null,
+      roleName: role?.name || null,
+      type: 'access',
+      jti: sessionId,
+      iat: now,
+      exp: now + expiresIn,
+    };
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = createHmac('sha256', jwtSecret()).update(header + '.' + body).digest('base64url');
+    const accessToken = header + '.' + body + '.' + signature;
+    await db.getRepository(SessionEntity).save({
+      id: sessionId,
+      userId: subject,
+      accountId: linked?.accountId ?? null,
+      email: employee.email,
+      role: 'USER',
+      accessTokenHash: createHash('sha256').update(accessToken).digest('hex'),
+      expiresAt: new Date(payload.exp * 1000),
+    });
+    const sessionUser = {
+      id: employee.id,
+      email: employee.email,
+      firstName: employee.firstName,
+      lastName: employee.lastName,
+      role: role?.name || 'Employee',
+      accountType: 'employee',
+      merchantId: merchant.id,
+      merchantCode: merchant.merchantCode,
+      employeeId: employee.id,
+      employeeCode: employee.employeeCode,
+      roleId: role?.id || null,
+      permissions,
+      stores,
+    };
+    return { success: true, accessToken, tokenType: 'Bearer', expiresIn, user: sessionUser, permissions, stores };
+  }
+
+  consoleProfile(user: { accountType?: string; merchantId?: string; employeeId?: string; id?: string; email?: string }) {
+    if (!this.consoleAccess) throw new UnauthorizedException('Console access is not available');
+    return this.consoleAccess.profile(user);
+  }
+
+  async consoleLogout(sessionId?: string) {
+    if (!sessionId) throw new UnauthorizedException('Bearer token is required');
+    await this.merchantRepository.requireDataSource().getRepository(SessionEntity).update(sessionId, { revokedAt: new Date() });
+    return { success: true };
   }
 
   async merchantLogout(authorization?: string) {
@@ -727,7 +880,11 @@ export class PosAuthService {
     merchantHeader?: string,
     storeHeader?: string,
   ) {
-    const scope = await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader);
+    const token = this.extractBearerToken(authorization);
+    const payload = this.posSessionService.verifyAccessToken(token);
+    const scope = String(payload.jti || '').startsWith('sess_')
+      ? await this.authorizeStoreCatalog(authorization, merchantHeader, storeHeader)
+      : await this.authorizeMerchantStoreCatalog(authorization, merchantHeader, storeHeader);
     const products = await this.queryStoreProducts(scope);
     return {
       success: true,
@@ -1080,11 +1237,10 @@ export class PosAuthService {
     const dataSource = this.merchantRepository.requireDataSource();
     const [merchant] = await dataSource.query(
       `SELECT m.id::text AS id,m.merchant_code AS "merchantCode",m.status
-       FROM public.merchants m JOIN public.users u ON u.id::text=$2
-       WHERE m.id::text=$1 AND (m.id::text=$3 OR m.merchant_code=$3 OR lower(m.email)=lower($3))
-         AND COALESCE(m.is_deleted,false)=false AND u.status='ACTIVE' AND lower(u.email)=lower(m.email)
-         AND (u.merchant_id::text=m.id::text OR u.merchant_id::text=m.merchant_code OR NULLIF(u.merchant_id::text,'') IS NULL)`,
-      [payload.merchantId, payload.sub, merchantKey],
+       FROM public.merchants m
+       WHERE m.id::text=$1 AND (m.id::text=$2 OR m.merchant_code=$2 OR lower(m.email)=lower($2))
+         AND COALESCE(m.is_deleted,false)=false`,
+      [payload.merchantId, merchantKey],
     );
     if (!merchant) throw new ForbiddenException('User is not authorized for this merchant');
     if (merchant.status !== 'ACTIVE') throw new ForbiddenException('Merchant account is inactive');

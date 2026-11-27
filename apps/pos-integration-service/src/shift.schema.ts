@@ -173,6 +173,7 @@ export async function ensureShiftSplitSchema(dataSource: DataSource): Promise<vo
     CREATE INDEX IF NOT EXISTS pos_shift_meta_shift_idx ON public.pos_shift_meta (shift_id);
     CREATE INDEX IF NOT EXISTS pos_shift_transactions_shift_type_idx
       ON public.pos_shift_transactions (shift_id, transaction_type);
+    CREATE UNIQUE INDEX IF NOT EXISTS pos_shifts_id_uq ON public.pos_shifts (id);
     CREATE INDEX IF NOT EXISTS pos_shifts_store_status_idx ON public.pos_shifts (store_id, status);
   `);
 

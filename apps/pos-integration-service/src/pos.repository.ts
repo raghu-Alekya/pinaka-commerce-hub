@@ -119,49 +119,6 @@ async function ensurePosShiftSnakeCaseSchema(dataSource: DataSource): Promise<vo
         END LOOP;
       END $$;
     `);
-
-    // 4. Ensure cash_movements table with snake_case columns and drop legacy camelCase columns
-    await dataSource.query(`
-      CREATE TABLE IF NOT EXISTS public.cash_movements (
-        id VARCHAR(100) PRIMARY KEY,
-        shift_id VARCHAR(100) NOT NULL,
-        store_id VARCHAR(100) NOT NULL,
-        movement_type VARCHAR(50) DEFAULT 'SAFE_DROP',
-        amount DECIMAL(10,2) NOT NULL,
-        performed_by VARCHAR(255) NOT NULL,
-        reason VARCHAR(255),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-      );
-      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS shift_id VARCHAR(100);
-      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS store_id VARCHAR(100);
-      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS movement_type VARCHAR(50) DEFAULT 'SAFE_DROP';
-      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS performed_by VARCHAR(255);
-      ALTER TABLE public.cash_movements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-
-      DO $$
-      BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'shiftId') THEN
-          UPDATE public.cash_movements SET shift_id = "shiftId" WHERE shift_id IS NULL AND "shiftId" IS NOT NULL;
-          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "shiftId";
-        END IF;
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'storeId') THEN
-          UPDATE public.cash_movements SET store_id = "storeId" WHERE store_id IS NULL AND "storeId" IS NOT NULL;
-          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "storeId";
-        END IF;
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'movementType') THEN
-          UPDATE public.cash_movements SET movement_type = "movementType" WHERE movement_type IS NULL AND "movementType" IS NOT NULL;
-          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "movementType";
-        END IF;
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'performedBy') THEN
-          UPDATE public.cash_movements SET performed_by = "performedBy" WHERE performed_by IS NULL AND "performedBy" IS NOT NULL;
-          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "performedBy";
-        END IF;
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cash_movements' AND column_name = 'createdAt') THEN
-          UPDATE public.cash_movements SET created_at = "createdAt" WHERE created_at IS NULL AND "createdAt" IS NOT NULL;
-          ALTER TABLE public.cash_movements DROP COLUMN IF EXISTS "createdAt";
-        END IF;
-      END $$;
-    `);
   } catch (err: any) {
     console.error('⚠️ [pos_shifts schema alignment error]:', err.message);
   }
@@ -173,7 +130,6 @@ export class PosRepository implements OnModuleInit {
   private shiftRepo?: Repository<PosShiftEntity>;
   private metaRepo?: Repository<PosShiftMetaEntity>;
   private transactionRepo?: Repository<PosShiftTransactionEntity>;
-  private movementRepo?: Repository<CashMovementEntity>;
   private redisClient?: Redis;
   private isDbConnected = false;
   private isRedisConnected = false;
@@ -181,23 +137,21 @@ export class PosRepository implements OnModuleInit {
   private memoryShifts: PosShiftEntity[] = [];
   private memoryMeta: PosShiftMetaEntity[] = [];
   private memoryTransactions: PosShiftTransactionEntity[] = [];
-  private inMemoryMovements: CashMovementEntity[] = [];
 
   async onModuleInit() {
     this.dataSource = await connectPostgres('POS Integration DB', [
       PosShiftEntity,
       PosShiftMetaEntity,
       PosShiftTransactionEntity,
-      CashMovementEntity,
     ], { synchronize: false });
     await createMissingTables(this.dataSource);
     await ensurePosShiftSnakeCaseSchema(this.dataSource);
     await ensureShiftSplitSchema(this.dataSource);
     await this.ensureSafeTransactionShiftConstraints();
+    await CashMovementEntity.dropLegacyTable(this.dataSource);
     this.shiftRepo = this.dataSource.getRepository(PosShiftEntity);
     this.metaRepo = this.dataSource.getRepository(PosShiftMetaEntity);
     this.transactionRepo = this.dataSource.getRepository(PosShiftTransactionEntity);
-    this.movementRepo = this.dataSource.getRepository(CashMovementEntity);
     this.isDbConnected = true;
 
     try {
@@ -359,30 +313,20 @@ export class PosRepository implements OnModuleInit {
       created_by: movement.performedBy,
     };
 
-    if (this.isDbConnected && this.movementRepo && this.dataSource) {
-      const saved = await this.movementRepo.save(this.movementRepo.create(movement));
-      const shift = await this.shiftRepo?.findOne({ where: { id: shiftId } });
-      if (shift) {
-        await this.dataSource.transaction(async (manager) => {
-          await this.writeTransactions(manager, shiftId, [transaction], movement.performedBy, 'create');
-        });
-        const view = await this.getShiftView(shiftId);
-        if (view) await this.cacheActiveShift(storeId, view);
-      } else {
-        shiftDebug('db-skip', {
-          action: 'recordCashMovement',
-          shift_id: shiftId,
-          movement_id: saved.id,
-          reason: 'cash_movements row saved, but pos_shift_transactions was not written because the shift id was not found',
-        });
-      }
-      return saved;
+    if (this.isDbConnected && this.dataSource) {
+      const shift = await this.shiftRepo?.findOne({ where: { id: shiftId, store_id: storeId } });
+      if (!shift) throw new BadRequestException('Shift not found for this store');
+      await this.dataSource.transaction(async (manager) => {
+        await this.writeTransactions(manager, shiftId, [transaction], movement.performedBy, 'create');
+      });
+      const view = await this.getShiftView(shiftId);
+      if (view) await this.cacheActiveShift(storeId, view);
+      return movement;
     }
 
-    this.inMemoryMovements.unshift(movement);
-    if (this.memoryShifts.some((shift) => shift.id === shiftId)) {
-      this.memoryTransactions.unshift(...this.transactionRows(shiftId, [transaction], movement.performedBy, 'create'));
-    }
+    const shift = this.memoryShifts.find((item) => item.id === shiftId && item.store_id === storeId);
+    if (!shift) throw new BadRequestException('Shift not found for this store');
+    this.memoryTransactions.unshift(...this.transactionRows(shiftId, [transaction], movement.performedBy, 'create'));
     return movement;
   }
 

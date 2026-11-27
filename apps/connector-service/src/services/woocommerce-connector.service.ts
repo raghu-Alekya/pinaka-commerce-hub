@@ -1,33 +1,19 @@
 import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
+import type { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
-import { connectPostgres } from '@pinaka-delivery-hub/database';
+import { connectPostgres, createMissingTables } from '@pinaka-delivery-hub/database';
 import { WooCommerceConnectionEntity } from '../entities/woocommerce-connection.entity';
 import { WooCommerceSyncLogEntity } from '../entities/woocommerce-sync-log.entity';
 
 @Injectable()
 export class WooCommerceConnectorService implements OnModuleInit {
   private dataSource?: DataSource;
-  private connRepo?: Repository<WooCommerceConnectionEntity>;
-  private logRepo?: Repository<WooCommerceSyncLogEntity>;
   private isDbConnected = false;
 
-  private inMemoryConns: WooCommerceConnectionEntity[] = [];
   private inMemoryLogs: WooCommerceSyncLogEntity[] = [];
 
-  async onModuleInit() {
-    try {
-      this.dataSource = await connectPostgres('WooCommerce Connector DB', [
-        WooCommerceConnectionEntity,
-        WooCommerceSyncLogEntity,
-      ]);
-      this.connRepo = this.dataSource.getRepository(WooCommerceConnectionEntity);
-      this.logRepo = this.dataSource.getRepository(WooCommerceSyncLogEntity);
-      this.isDbConnected = true;
-      console.log('🛒 [WooCommerce Engine] Initialized and connected to PostgreSQL');
-    } catch (err: any) {
-      console.warn('⚠️ [WooCommerce Engine DB Warning] ' + err.message);
-    }
+  async onModuleInit(): Promise<void> {
+    await this.ensureDbConnected();
   }
 
   // --- Validate HMAC SHA256 Webhook Signature ---
@@ -51,14 +37,11 @@ export class WooCommerceConnectorService implements OnModuleInit {
       createdAt: new Date(),
     };
 
-    if (this.isDbConnected && this.logRepo) {
-      const entity = this.logRepo.create(log);
-      const saved = await this.logRepo.save(entity);
-      return saved;
-    } else {
-      this.inMemoryLogs.unshift(log);
-      return log;
+    if (await this.ensureDbConnected()) {
+      return this.dataSource!.getRepository(WooCommerceSyncLogEntity).save(log);
     }
+    this.inMemoryLogs.unshift(log);
+    return log;
   }
 
   // --- Fetch Live WordPress Catalog from Merchant's Configured Site ---
@@ -168,20 +151,14 @@ export class WooCommerceConnectorService implements OnModuleInit {
   private async ensureDbConnected(): Promise<boolean> {
     if (this.isDbConnected && this.dataSource?.isInitialized) return true;
     try {
-      if (!this.dataSource) {
-        this.dataSource = new DataSource({
-          type: 'postgres',
-          host: process.env.POSTGRES_HOST || 'localhost',
-          port: Number(process.env.POSTGRES_PORT) || 5432,
-          username: process.env.POSTGRES_USER || 'pdh_user',
-          password: process.env.POSTGRES_PASSWORD || 'pdh_password',
-          database: process.env.POSTGRES_DB || 'pinaka_commerce_hub_new',
-          entities: [WooCommerceConnectionEntity, WooCommerceSyncLogEntity],
-          synchronize: true,
-        });
-      }
-      if (!this.dataSource.isInitialized) {
-        await this.dataSource.initialize();
+      this.dataSource = await connectPostgres('WooCommerce Connector DB', [WooCommerceSyncLogEntity], { synchronize: false });
+      try {
+        await createMissingTables(this.dataSource);
+        await WooCommerceConnectionEntity.dropLegacyTable(this.dataSource);
+      } catch (error) {
+        await this.dataSource.destroy();
+        this.dataSource = undefined;
+        throw error;
       }
       this.isDbConnected = true;
       return true;
@@ -210,36 +187,9 @@ export class WooCommerceConnectorService implements OnModuleInit {
     await this.ensureDbConnected();
     await this.ensureProductTables();
 
-    // 1. Dynamically save or update store connection record in DB
-    if (this.connRepo && targetStore) {
-      try {
-        const existing = await this.connRepo.findOne({ where: { storeId: targetStore } });
-        if (existing) {
-          existing.merchantId = targetMerchant || existing.merchantId;
-          existing.storeUrl = cleanUrl || existing.storeUrl;
-          existing.syncStatus = 'ACTIVE';
-          existing.lastSyncedAt = new Date();
-          await this.connRepo.save(existing);
-        } else if (cleanUrl) {
-          const newConn = this.connRepo.create({
-            id: `WC-CONN-${Date.now()}`,
-            merchantId: targetMerchant,
-            storeId: targetStore,
-            storeUrl: cleanUrl,
-            autoSyncInventory: true,
-            syncStatus: 'ACTIVE',
-            lastSyncedAt: new Date(),
-          });
-          await this.connRepo.save(newConn);
-        }
-      } catch (connErr: any) {
-        console.warn('⚠️ [Connection Record Save Warning] ' + connErr.message);
-      }
-    }
-
     let syncedCount = 0;
 
-    // 2. Fetch live data from the dynamic WordPress URL and persist into DB
+    // Fetch live data from the dynamic WordPress URL and persist into DB
     if (this.dataSource && this.dataSource.isInitialized && cleanUrl) {
       try {
         const liveProducts = await this.fetchLiveWordPressCatalog(cleanUrl, jwtToken);
@@ -282,10 +232,16 @@ export class WooCommerceConnectorService implements OnModuleInit {
     };
   }
 
-  async getConnection(storeId: string): Promise<WooCommerceConnectionEntity | null> {
-    if (this.isDbConnected && this.connRepo) {
-      return await this.connRepo.findOne({ where: { storeId } });
-    }
-    return this.inMemoryConns.find((c) => c.storeId === storeId) || null;
+  async getConnection(storeId: string) {
+    if (!(await this.ensureDbConnected())) return null;
+    const [connection] = await this.dataSource!.query(
+      `SELECT merchant_id AS "merchantId", store_id AS "storeId", wordpress_url AS "storeUrl",
+              status AS "syncStatus"
+         FROM public.website_connections
+        WHERE store_id::text = $1 AND status = 'CONNECTED'
+        LIMIT 1`,
+      [storeId],
+    );
+    return connection ?? null;
   }
 }

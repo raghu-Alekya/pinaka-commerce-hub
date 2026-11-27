@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  GoneException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -24,7 +25,7 @@ import {
   SignUpDto,
 } from './auth.dto';
 import { MailService } from './mail.service';
-import { CreateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto } from './user.dto';
 import { UserEntity, UserRole, UserStatus } from './user.entity';
 import { UserRepository } from './user.repository';
 import { extractBearerToken, verifyAccessToken } from '@pinaka-delivery-hub/auth';
@@ -43,12 +44,8 @@ export class AuthService {
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  async signUp(dto: SignUpDto) {
-    const { account, user } = await this.users.createAccountOwnerFromSignUp(
-      dto.email,
-      await this.hashPassword(dto.password),
-    );
-    return { ...this.toAuthResponse(await this.createSession(user)), account };
+  async signUp(_dto: SignUpDto): Promise<never> {
+    throw new GoneException('Account signup has been retired');
   }
 
   async login(dto: LoginDto) {
@@ -152,20 +149,8 @@ export class AuthService {
     );
   }
 
-  async createPosAccount(dto: CreateAccountDto) {
-    const account = await this.users.createAccount(dto.account_name);
-    const accountManager = await this.inviteUser(
-      {
-        firstName: dto.account_manager_firstname,
-        lastName: dto.account_manager_lastname,
-        email: dto.account_manager_email,
-        phoneNumber: dto.account_manager_phone,
-        role: UserRole.OWNER,
-        notificationEnabled: true,
-      },
-      account.id,
-    );
-    return { account, accountManager };
+  async createPosAccount(_dto: CreateAccountDto): Promise<never> {
+    throw new GoneException('POS account creation has been retired');
   }
 
   async refresh(dto: RefreshTokenDto) {
@@ -227,6 +212,20 @@ export class AuthService {
       throw new ForbiddenException('Only account owners can manage users');
     }
     return user;
+  }
+
+  async requirePchAdmin(authorization?: string): Promise<void> {
+    const { user } = await this.currentSession(authorization);
+    if (user.merchantId || user.employeeId ||
+      ![UserRole.OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)) {
+      throw new ForbiddenException('Only platform administrators can manage PCH users');
+    }
+  }
+
+  async createPchUser(dto: CreatePchUserDto) {
+    const { password, ...publicFields } = dto;
+    const user = await this.users.createPch(publicFields as CreatePchUserDto, await this.hashPassword(password));
+    return this.toPublicUser(user);
   }
 
   async currentSession(authorization?: string) {

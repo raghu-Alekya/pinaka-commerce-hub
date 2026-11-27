@@ -1,11 +1,12 @@
-import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Body, Param, Query, Headers, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { OrderRepository } from './order.repository';
 import { OrderStatus, OrderType, PaymentMethod, PaymentStatus } from './entities/order.entity';
-import type { StoreOrderCalculationInput } from './calculations/store-order.calculations';
+import { storedOrderRequest, type StoreOrderCalculationInput } from './calculations/store-order.calculations';
 import { OrderUpdatePresenter } from './modules/order-updates/order-update.presenter';
 import { OrderListPresenter } from './responses/order-list.presenter';
 import { OrderResponsePresenter } from './responses/order-response.presenter';
 import { OrderWebsiteSyncService } from './website-sync/order-website-sync.service';
+import { extractBearerToken, verifyAccessToken } from '@pch/auth';
 
 @Controller(['api/v1/orders', 'connector/api/v1/orders'])
 export class AppController {
@@ -58,10 +59,12 @@ export class AppController {
   @Post()
   async createOrder(
     @Body() body: any,
+    @Headers('authorization') authorization?: string,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
     @Headers('x-device-id') deviceHeader?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const normalized = this.normalizeCreateOrder(body, storeHeader, merchantHeader, deviceHeader);
     if (!normalized.storeId || !normalized.items.length) {
       throw new BadRequestException('storeId and at least 1 item are required to create an order');
@@ -94,7 +97,7 @@ export class AppController {
         order_id: result.order?.id ?? null,
       })}`);
     }
-    const request = result.order.requestPayload || body;
+    const request = storedOrderRequest(result.order.requestPayload || body, result.storeOrder);
     if (result.duplicate) {
       console.log(`[ORDER_WEBSITE_SYNC] ${JSON.stringify({
         event: 'skipped',
@@ -147,6 +150,7 @@ export class AppController {
 
   @Get('total-orders')
   async listTotalOrders(
+    @Headers('authorization') authorization?: string,
     @Query('page') page?: string,
     @Query('per_page') perPage?: string,
     @Query('status') status?: string,
@@ -155,6 +159,7 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
   ) {
+    verifyAccessToken(extractBearerToken(authorization));
     const criteria = this.orderLists.criteria({
       page,
       perPage,
@@ -222,7 +227,15 @@ export class AppController {
     @Query('store_id') storeIdSnake?: string,
     @Headers('x-store-id') storeHeader?: string,
     @Headers('x-merchant-id') merchantHeader?: string,
+    @Headers('authorization') authorization?: string,
+    @Query('search') search?: string,
+    @Query('author') author?: string,
+    @Query('created_after') createdAfter?: string,
+    @Headers('x-pch-web-console') webConsole?: string,
   ) {
+    const session = verifyAccessToken(extractBearerToken(authorization));
+    const scoped = webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee');
+    if (scoped && !session.merchantId) throw new ForbiddenException('Merchant scope is required');
     const criteria = this.orderLists.criteria({
       page,
       perPage,
@@ -230,7 +243,19 @@ export class AppController {
       createdVia,
       storeId: storeHeader || storeId || storeIdSnake,
     });
-    const listed = await this.orderRepository.listOrders({ ...criteria, merchantId: merchantHeader || undefined });
+    const createdAfterDate = createdAfter ? new Date(createdAfter) : undefined;
+    if (createdAfterDate && Number.isNaN(createdAfterDate.getTime())) {
+      throw new BadRequestException('created_after must be a valid date');
+    }
+    const statuses = status?.trim().toLowerCase() === 'pending payment' ? ['created'] : criteria.statuses;
+    const listed = await this.orderRepository.listOrders({
+      ...criteria,
+      statuses,
+      merchantId: scoped ? session.merchantId : merchantHeader || undefined,
+      search: search?.trim() || undefined,
+      customer: author?.trim() || undefined,
+      createdAfter: createdAfterDate,
+    });
     await this.hydrateCouponLines(listed.orders);
     const orders = listed.orders.map(({ order, storeOrder, effectiveStatus }) => {
       const request = (order.requestPayload || {}) as Record<string, any>;
@@ -296,12 +321,19 @@ export class AppController {
     @Headers('x-store-id') storeHeader?: string,
     @Query('storeId') storeId?: string,
     @Query('store_id') storeIdSnake?: string,
+    @Headers('authorization') authorization?: string,
+    @Headers('x-pch-web-console') webConsole?: string,
   ) {
+    const session = verifyAccessToken(extractBearerToken(authorization));
     if (['completed-orders', 'full-order-refund', 'partial-order-refund', 'get-amt-by-paymethod', 'refund-valid-user', 'health', 'calculations'].includes(id)) {
       throw new NotFoundException(`Endpoint '${id}' not found`);
     }
     const data = await this.orderRepository.getOrderDetails(id, storeHeader || storeId || storeIdSnake);
     if (!data) throw new NotFoundException(`Order '${id}' not found`);
+    if (webConsole === '1' && (session.accountType === 'merchant' || session.accountType === 'employee') &&
+        (!session.merchantId || String(data.order.merchantId).toLowerCase() !== session.merchantId.toLowerCase())) {
+      throw new NotFoundException(`Order '${id}' not found`);
+    }
     const response = this.orderDetails.present(data);
     if (!String(data.storeOrder?.status || data.order.orderStatus || '').toLowerCase().includes('partial')) return response;
     const refunds = await this.orderRepository.getOrderRefunds(data.order.id);
@@ -310,7 +342,8 @@ export class AppController {
 
   // --- 4. Update Order Status (State Machine Transition) ---
   @Patch(':id/status')
-  async updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; changedBy?: string; reason?: string }) {
+  async updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; changedBy?: string; reason?: string }, @Headers('authorization') authorization?: string) {
+    verifyAccessToken(extractBearerToken(authorization));
     if (!body.status) {
       throw new BadRequestException('target status is required');
     }
@@ -436,28 +469,23 @@ export class AppController {
         const setMetadata = (key: string, value: unknown) => {
           if (!metadata.some((item) => item?.key === key)) metadata.push({ key, value });
         };
-        const configuredAmount = Number(catalog.amount);
         setMetadata('discount_type', catalog.discount_type || 'fixed_cart');
-        setMetadata(
-          'amount',
-          Number.isFinite(configuredAmount) ? String(configuredAmount) : String(catalog.amount ?? '0'),
-        );
+        if (catalog.amount !== undefined && catalog.amount !== null) {
+          setMetadata('amount', String(catalog.amount));
+        }
         setMetadata('product_ids', Array.isArray(catalog.product_ids) ? catalog.product_ids : []);
         setMetadata(
           'excluded_product_ids',
           Array.isArray(catalog.excluded_product_ids) ? catalog.excluded_product_ids : [],
         );
-        const fallbackDiscount = source.length === 1
-          ? Number(storeOrder?.discountTotal ?? order.discountAmount ?? 0)
-          : 0;
-        const discount = Number.isFinite(configuredAmount)
-          ? configuredAmount
-          : Number(coupon.discount ?? fallbackDiscount);
+        const storedDiscount = coupon.discount ?? coupon.discount_amount;
 
         return {
           ...coupon,
           code,
-          discount: (Number.isFinite(discount) ? discount : 0).toFixed(2),
+          ...(storedDiscount !== undefined && storedDiscount !== null && storedDiscount !== ''
+            ? { discount: Number(storedDiscount).toFixed(2) }
+            : {}),
           discount_tax: Number(coupon.discount_tax || 0).toFixed(2),
           meta_data: metadata,
         };

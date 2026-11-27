@@ -16,7 +16,7 @@ import {
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
-import { CreateUserDto, UpdateUserDto } from './user.dto';
+import { CreatePchUserDto, CreateUserDto, UpdateUserDto } from './user.dto';
 import {
   CompletePasswordActionDto,
   CreateAccountDto,
@@ -68,7 +68,7 @@ export class AppController {
 
   @Post('api/v1/auth/signup')
   async signUp(@Body() dto: SignUpDto) {
-    return { success: true, ...(await this.auth.signUp(dto)) };
+    return this.auth.signUp(dto);
   }
 
   @Post('api/v1/auth/login')
@@ -157,7 +157,7 @@ export class AppController {
     const configuredKey = process.env.ORDEROUT_POS_API_KEY;
     if (!configuredKey || apiKey !== configuredKey)
       throw new UnauthorizedException('Invalid API key');
-    return { success: true, ...(await this.auth.createPosAccount(dto)) };
+    return this.auth.createPosAccount(dto);
   }
 
   @Get('api/v1/users')
@@ -165,6 +165,19 @@ export class AppController {
     const owner = await this.auth.requireAccountOwner(authorization);
     const users = await this.users.findAll(owner.accountId);
     return { success: true, count: users.length, users };
+  }
+
+  @Get('api/v1/pch-users')
+  async listPchUsers(@Headers('authorization') authorization?: string) {
+    await this.auth.requirePchAdmin(authorization);
+    const users = await this.users.findAllPch();
+    return { success: true, count: users.length, users };
+  }
+
+  @Post('api/v1/pch-users')
+  async createPchUser(@Body() dto: CreatePchUserDto, @Headers('authorization') authorization?: string) {
+    await this.auth.requirePchAdmin(authorization);
+    return { success: true, user: await this.auth.createPchUser(dto) };
   }
 
   @Get('api/v1/users/:id')

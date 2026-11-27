@@ -772,7 +772,6 @@ export class MerchantRepository implements OnModuleInit {
   private merchantRoleTemplateRepo!: Repository<MerchantRoleTemplateEntity>;
   private employeeRepo!: Repository<EmployeeEntity>;
   private subRepo!: Repository<SubscriptionEntity>;
-  private planRepo!: Repository<SubscriptionPlanEntity>;
   private auditRepo!: Repository<OnboardingAuditEntity>;
   private websiteConnectionRepo!: Repository<WebsiteConnectionEntity>;
   private sessionRepo!: Repository<SessionEntity>;
@@ -811,7 +810,6 @@ export class MerchantRepository implements OnModuleInit {
         EmployeeEntity,
         SubscriptionEntity,
         OnboardingAuditEntity,
-        SubscriptionPlanEntity,
         WebsiteConnectionEntity,
         DeviceEntity,
         MerchantDeviceEntity,
@@ -891,7 +889,6 @@ export class MerchantRepository implements OnModuleInit {
     );
     this.employeeRepo = this.dataSource.getRepository(EmployeeEntity);
     this.subRepo = this.dataSource.getRepository(SubscriptionEntity);
-    this.planRepo = this.dataSource.getRepository(SubscriptionPlanEntity);
     this.auditRepo = this.dataSource.getRepository(OnboardingAuditEntity);
     this.websiteConnectionRepo = this.dataSource.getRepository(
       WebsiteConnectionEntity,
@@ -903,7 +900,7 @@ export class MerchantRepository implements OnModuleInit {
     // 2. Safely seed master reference data once all repos are initialized
     await this.seedAllMasterData();
     await this.seedDefaultCommercialPlans();
-    await this.seedDefaultPlans();
+    await SubscriptionPlanEntity.dropLegacyTable(this.dataSource);
 
     // 3. Redis Connection
     try {
@@ -926,75 +923,6 @@ export class MerchantRepository implements OnModuleInit {
       console.log(`⚠️ [PCH Merchant Redis] Offline (${err.message}).`);
       this.isRedisConnected = false;
     }
-  }
-
-  private async seedDefaultPlans() {
-    if (!this.planRepo) return;
-    const existing = await this.planRepo.count();
-    if (existing > 0) return;
-    const now = new Date();
-    await this.planRepo.save([
-      this.planRepo.create({
-        planCode: PlanCode.STARTER,
-        planName: 'Starter',
-        description: 'Single-store starter plan',
-        maxStoresAllowed: 1,
-        entitlements: ['POS'],
-        billingCycle: 'MONTHLY',
-        trialDays: 14,
-        price: 0,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-      this.planRepo.create({
-        planCode: PlanCode.PRO,
-        planName: 'Pro Commerce Plan',
-        description: 'Multi-store commerce plan',
-        maxStoresAllowed: 3,
-        entitlements: [
-          'POS',
-          'BARCODE_SCANNING',
-          'UBER_EATS',
-          'DOORDASH',
-          'PAYROLL',
-          'LOYALTY',
-        ],
-        billingCycle: 'MONTHLY',
-        trialDays: 0,
-        price: 99,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-      this.planRepo.create({
-        planCode: PlanCode.ENTERPRISE,
-        planName: 'Enterprise',
-        description: 'Unlimited stores',
-        maxStoresAllowed: 50,
-        entitlements: [
-          'POS',
-          'BARCODE_SCANNING',
-          'UBER_EATS',
-          'DOORDASH',
-          'PAYROLL',
-          'LOYALTY',
-          'ANALYTICS',
-        ],
-        billingCycle: 'ANNUAL',
-        trialDays: 0,
-        price: 999,
-        currency: 'USD',
-        status: 'ACTIVE',
-        createdAt: now,
-        updatedAt: now,
-      }),
-    ]);
-    console.log(
-      'âœ… [PCH Seed] Seeded subscription_plans (STARTER, PRO, ENTERPRISE)',
-    );
   }
 
   async recordAuditLog(
@@ -2885,66 +2813,6 @@ export class MerchantRepository implements OnModuleInit {
         );
       } catch {}
     }
-  }
-
-  async listSubscriptionPlans(): Promise<SubscriptionPlanEntity[]> {
-    return this.planRepo.find({ order: { planCode: 'ASC' } });
-  }
-
-  async getSubscriptionPlan(
-    planCode: string,
-  ): Promise<SubscriptionPlanEntity | null> {
-    return this.planRepo.findOneBy({ planCode });
-  }
-
-  async createSubscriptionPlan(
-    plan: SubscriptionPlanEntity,
-  ): Promise<SubscriptionPlanEntity> {
-    try {
-      await this.planRepo.insert(plan);
-    } catch (error: any) {
-      if (error.code === '23505' || error.driverError?.code === '23505')
-        throw new ConflictException('Plan code already exists');
-      throw error;
-    }
-    return plan;
-  }
-
-  async updateSubscriptionPlan(
-    planCode: string,
-    fields: Partial<SubscriptionPlanEntity>,
-  ): Promise<SubscriptionPlanEntity | null> {
-    const existing = await this.getSubscriptionPlan(planCode);
-    if (!existing) return null;
-    const plan = {
-      ...existing,
-      ...fields,
-      planCode,
-      createdAt: existing.createdAt,
-      updatedAt: new Date(),
-    };
-    if (
-      !(
-        await this.planRepo.update(
-          { planCode },
-          { ...fields, updatedAt: plan.updatedAt },
-        )
-      ).affected
-    )
-      return null;
-    return plan;
-  }
-
-  async deleteSubscriptionPlan(planCode: string): Promise<boolean> {
-    if (!(await this.getSubscriptionPlan(planCode))) return false;
-    const inUse = await this.subRepo.existsBy({
-      planCode: planCode as PlanCode,
-    });
-    if (inUse)
-      throw new ConflictException(
-        'Plan is assigned to a merchant. Set its status to INACTIVE instead.',
-      );
-    return Boolean((await this.planRepo.delete({ planCode })).affected);
   }
 
   async fetchLiveWordPressCatalog(

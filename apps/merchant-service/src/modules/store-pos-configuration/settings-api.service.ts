@@ -49,6 +49,10 @@ export class SettingsApiService {
     for (const key of ['receipt_header', 'receipt_footer', 'address', 'logo_url', 'image_url']) {
       if (body[key] !== undefined) printerSettings[key] = general[key] ?? '';
     }
+    // Older saves may have used `logo` instead of `logo_url`. Clear both
+    // aliases when the user explicitly removes the logo so GET endpoints do
+    // not resurrect the old value through their compatibility fallback.
+    if (body.logo_url !== undefined && !this.text(body.logo_url)) printerSettings.logo = '';
     const data = await this.repository.merge(scope, { general },
       Object.keys(printerSettings).length ? { printer_settings: printerSettings } : {});
     const responseFields = [
@@ -135,7 +139,11 @@ export class SettingsApiService {
     // Older PCH saves kept receipt branding in the general-settings record,
     // while the printer screen reads the dedicated printer-settings record.
     // Expose the saved image using the names consumed by the printer screen.
-    data.logo_url = printer.logo_url || printer.logo || general.logo_url || general.image_url || '';
+    const logoWasExplicitlyCleared = Object.prototype.hasOwnProperty.call(printer, 'logo_url')
+      && !this.text(printer.logo_url);
+    data.logo_url = logoWasExplicitlyCleared
+      ? ''
+      : printer.logo_url || printer.logo || general.logo_url || general.image_url || '';
     if (!data.image_url && general.image_url) data.image_url = general.image_url;
     return { success: true, data };
   }
